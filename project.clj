@@ -7,6 +7,7 @@
   :dependencies [[com.stuartsierra/component "0.2.2"]
                  [com.taoensso/timbre "3.3.1"]
                  [im.chit/ribol "0.4.0"]
+                 [mvxcvi/puget "0.6.4"]
                  [org.clojure/clojure "1.6.0"]
                  [prismatic/schema "0.3.0"]]
 
