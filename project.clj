@@ -5,7 +5,7 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   ;; TODO: Could I totally pull datomic dependencies out of everything else?
   :dependencies [[com.stuartsierra/component "0.2.2"]
-                 [com.taoensso/timbre "3.3.1"]
+                 [com.taoensso/timbre "3.3.1" :exclusions [org.clojure/tools.reader]]
                  [im.chit/ribol "0.4.0"]
                  [mvxcvi/puget "0.6.4"]
                  [org.clojure/clojure "1.6.0"]
