@@ -1,5 +1,6 @@
 (ns frereth-common.util
-  (:require [puget.printer :as puget]
+  (:require [clojure.string :as string]
+            [puget.printer :as puget]
             [ribol.core :refer (raise)]
             [schema.core :as s])
   (:import [java.lang.reflect Modifier]))
@@ -58,6 +59,13 @@
    :return-type (.getReturnType m)
    :name (.toGenericString m)})
 
+(defn fn-var?
+  [v]
+  (let [f @v]
+    (or (contains? (meta v) :arglists)
+        (fn? f)
+        (instance? clojure.lang.MultiFn f))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -92,3 +100,21 @@
      ;; Definitely deserves more detail...except that this is mostly useless
      ;; in the clojure world
      :type-params (.getTypeParameters k)}))
+
+(defn cheat-sheet
+  "Shamelessly borrowed from https://groups.google.com/forum/#!topic/clojure/j5PmMuhG3d8"
+  [ns]
+  (let [nsname (str ns)
+        vars (vals (ns-publics ns))
+        {funs true
+         defs false} (group-by fn-var? vars)
+        fmeta (map meta funs)
+        dmeta (map meta defs)
+        flen (apply max 0 (map (comp count str :name) fmeta))
+        dnames (map #(str nsname \/ (:name %)) dmeta)
+        fnames (map #(format (str "%s/%-" flen "s %s") nsname (:name %)
+                             (string/join \space (:arglists %)))
+                    fmeta)
+        lines (concat (sort dnames) (sort fnames))]
+    (str ";;; " nsname " {{{1\n\n"
+         (string/join \newline lines))))

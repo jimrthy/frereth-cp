@@ -3,7 +3,7 @@
             [clojure.inspector :as i]
             [clojure.string :as str]
             [clojure.pprint :refer (pprint)]
-            [clojure.repl :refer :all]
+            [clojure.repl :refer :all]  ; dir is very useful
             [clojure.test :as test]
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [com.stuartsierra.component :as component]
