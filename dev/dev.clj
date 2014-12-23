@@ -9,6 +9,7 @@
             [com.stuartsierra.component :as component]
             [frereth-common.config :as cfg]
             [frereth-common.system :as system]
+            [frereth-common.util :as util]
             [ribol.core :refer (raise)]))
 
 (def system nil)
