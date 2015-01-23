@@ -23,7 +23,7 @@
   [as]
   (map #(.toString %) as))
 
-(s/defn interpret-modifiers :- s/Keyword
+(s/defn interpret-modifiers :- [s/Keyword]
   [ms :- s/Int]
   ;; TODO: this implementation sucks
   (let [dict {Modifier/ABSTRACT :abstract
