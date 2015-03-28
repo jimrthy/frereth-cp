@@ -3,7 +3,8 @@
             [puget.printer :as puget]
             [ribol.core :refer (raise)]
             [schema.core :as s])
-  (:import [java.lang.reflect Modifier]))
+  (:import [java.lang.reflect Modifier]
+           [java.util UUID]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; TODO
@@ -118,3 +119,8 @@
         lines (concat (sort dnames) (sort fnames))]
     (str ";;; " nsname " {{{1\n\n"
          (string/join \newline lines))))
+
+(s/defn random-uuid :- UUID
+  "Because remembering the java namespace is annoying"
+  []
+  (UUID/randomUUID))
