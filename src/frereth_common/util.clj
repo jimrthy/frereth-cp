@@ -15,7 +15,9 @@
 ;; most seem to expect
 ;; TODO: Put this inside a component's start
 ;; instead
-(puget/set-color-scheme! :keyword [:bold :green])
+;; Bigger TODO: Figure out what replaced it
+(comment
+  (puget/set-color-scheme! :keyword [:bold :green]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
