@@ -18,22 +18,22 @@
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
                  [com.stuartsierra/component "0.2.3"]
-                 [com.taoensso/timbre "3.4.0" :exclusions [com.taoensso/encore
+                 [com.taoensso/timbre "3.4.0" :exclusions [#_com.taoensso/encore
                                                            org.clojure/tools.reader]]
                  [im.chit/ribol "0.4.0"]
                  [io.aviso/config "0.1.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
-                 [mvxcvi/puget "0.8.1"]
+                 [mvxcvi/puget "0.8.1" :exclusions [org.clojure/clojure]]
                  [org.clojure/clojure "1.7.0-RC1"]
                  [org.clojure/core.async "0.1.346.0-17112a-alpha" :exclusions [org.clojure/clojure]]
-                 [org.clojure/tools.reader "0.9.2"]
+                 [org.clojure/tools.reader "0.9.2" :exclusions [org.clojure/clojure]]
                  #_[org.zeromq/cljzmq "0.1.4"]
                  [prismatic/plumbing "0.4.4"]
                  [prismatic/schema "0.4.3"]]
 
   :profiles {:dev {:source-paths ["dev"]
                    :dependencies [[com.jimrthy/component-dsl "0.1.0"]]
-                   :plugins [[org.clojure/tools.namespace "0.2.10"]
-                             [org.clojure/java.classpath "0.2.2"]]}
+                   :plugins [[org.clojure/tools.namespace "0.2.10" :exclusions [org.clojure/clojure]]
+                             [org.clojure/java.classpath "0.2.2" :exclusions [org.clojure/clojure]]]}
              :uberjar {:aot :all}}
   :repl-options {:init-ns user})
