@@ -1,1 +1,2 @@
-(ns frereth-common.config)
+(ns frereth.common.config
+  "Looks like this should go away")

@@ -1,4 +1,4 @@
-(ns frereth-common.core)
+(ns frereth.common.core)
 
 (defn foo
   "I don't do a whole lot."
