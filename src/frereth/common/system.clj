@@ -1,6 +1,7 @@
 (ns frereth.common.system
   "This is another one that doesn't make a lot of sense"
-  (:require [ribol.core :refer (raise)]
+  (:require [component-dsl.system :as cpt-dsl]  ; At least try to get it included as a dependency
+            [ribol.core :refer (raise)]
             [schema.core :as s]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -13,4 +14,5 @@
 
 (defn build
   []
-  (raise :not-implemented))
+  (raise :not-implemented)
+  cpt-dsl/system-description)

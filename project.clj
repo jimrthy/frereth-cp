@@ -17,6 +17,7 @@
                  [com.jimrthy/cljeromq "0.1.0-SNAPSHOT" :exclusions [com.stuartsierra/component
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
+                 [com.jimrthy/component-dsl "0.1.1-SNAPSHOT"]
                  [com.stuartsierra/component "0.2.3"]
                  [com.taoensso/timbre "3.4.0" :exclusions [#_com.taoensso/encore
                                                            org.clojure/tools.reader]]
