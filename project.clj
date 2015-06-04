@@ -28,12 +28,10 @@
                  [org.clojure/clojure "1.7.0-RC1"]
                  [org.clojure/core.async "0.1.346.0-17112a-alpha" :exclusions [org.clojure/clojure]]
                  [org.clojure/tools.reader "0.9.2" :exclusions [org.clojure/clojure]]
-                 #_[org.zeromq/cljzmq "0.1.4"]
                  [prismatic/plumbing "0.4.4"]
                  [prismatic/schema "0.4.3"]]
 
   :profiles {:dev {:source-paths ["dev"]
-                   :dependencies [[com.jimrthy/component-dsl "0.1.0"]]
                    :plugins [[org.clojure/tools.namespace "0.2.10" :exclusions [org.clojure/clojure]]
                              [org.clojure/java.classpath "0.2.2" :exclusions [org.clojure/clojure]]]}
              :uberjar {:aot :all}}
