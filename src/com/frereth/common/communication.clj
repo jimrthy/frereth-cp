@@ -1,4 +1,4 @@
-(ns frereth.common.communication
+(ns com.frereth.common.communication
   (:require [schema.core :as s]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

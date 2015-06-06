@@ -1,4 +1,4 @@
-(ns frereth.common.util
+(ns com.frereth.common.util
   (:require [clojure.string :as string]
             [puget.printer :as puget]
             [ribol.core :refer (raise)]

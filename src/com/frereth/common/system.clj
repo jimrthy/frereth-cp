@@ -1,4 +1,4 @@
-(ns frereth.common.system
+(ns com.frereth.common.system
   "This is another one that doesn't make a lot of sense"
   (:require [component-dsl.system :as cpt-dsl]  ; At least try to get it included as a dependency
             [ribol.core :refer (raise)]
