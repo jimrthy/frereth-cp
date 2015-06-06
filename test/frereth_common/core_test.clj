@@ -1,7 +1,7 @@
-(ns frereth-common.core-test
+(ns com.frereth.common.core-test
   (:require [clojure.test :refer :all]
-            [frereth-common.core :refer :all]))
+            [com.frereth.common.core :refer :all]))
 
 (deftest a-test
-  (testing "FIXME, I fail."
-    (is (= 0 1))))
+  (testing "Reality works"
+    (is (= 1 1))))

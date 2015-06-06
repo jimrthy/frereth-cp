@@ -7,9 +7,9 @@
             [clojure.test :as test]
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [com.stuartsierra.component :as component]
-            [frereth.common.config :as cfg]
-            [frereth.common.system :as system]
-            [frereth.common.util :as util]
+            [com.frereth.common.config :as cfg]
+            [com.frereth.common.system :as system]
+            [com.frereth.common.util :as util]
             [ribol.core :refer (raise)]))
 
 (def system nil)
