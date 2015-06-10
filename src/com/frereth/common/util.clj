@@ -1,15 +1,20 @@
 (ns com.frereth.common.util
-  (:require [clojure.string :as string]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as string]
             [puget.printer :as puget]
             [ribol.core :refer (raise)]
-            [schema.core :as s])
+            [schema.core :as s]
+            [taoensso.timbre :as log])
   (:import [java.lang.reflect Modifier]
            [java.util UUID]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Schema
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; TODO
 
-;; Global functions like this are bad.
+;; Global function calls like this are bad.
 ;; Especially since I'm looking at a
 ;; white terminal background, as opposed to what
 ;; most seem to expect
@@ -72,9 +77,23 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(defn pretty
-  [& os]
-  (with-out-str (apply puget/cprint os)))
+(defn cheat-sheet
+  "Shamelessly borrowed from https://groups.google.com/forum/#!topic/clojure/j5PmMuhG3d8"
+  [ns]
+  (let [nsname (str ns)
+        vars (vals (ns-publics ns))
+        {funs true
+         defs false} (group-by fn-var? vars)
+        fmeta (map meta funs)
+        dmeta (map meta defs)
+        flen (apply max 0 (map (comp count str :name) fmeta))
+        dnames (map #(str nsname \/ (:name %)) dmeta)
+        fnames (map #(format (str "%s/%-" flen "s %s") nsname (:name %)
+                             (string/join \space (:arglists %)))
+                    fmeta)
+        lines (concat (sort dnames) (sort fnames))]
+    (str ";;; " nsname " {{{1\n\n"
+         (string/join \newline lines))))
 
 (defn dir
   [something]
@@ -104,23 +123,30 @@
      ;; in the clojure world
      :type-params (.getTypeParameters k)}))
 
-(defn cheat-sheet
-  "Shamelessly borrowed from https://groups.google.com/forum/#!topic/clojure/j5PmMuhG3d8"
-  [ns]
-  (let [nsname (str ns)
-        vars (vals (ns-publics ns))
-        {funs true
-         defs false} (group-by fn-var? vars)
-        fmeta (map meta funs)
-        dmeta (map meta defs)
-        flen (apply max 0 (map (comp count str :name) fmeta))
-        dnames (map #(str nsname \/ (:name %)) dmeta)
-        fnames (map #(format (str "%s/%-" flen "s %s") nsname (:name %)
-                             (string/join \space (:arglists %)))
-                    fmeta)
-        lines (concat (sort dnames) (sort fnames))]
-    (str ";;; " nsname " {{{1\n\n"
-         (string/join \newline lines))))
+(s/defn ^:always-validate load-resource
+  [url :- s/Str]
+  (-> url
+      clojure.java.io/resource
+      slurp
+      edn/read-string))
+
+(defn pick-home
+  "Returns the current user's home directory"
+  []
+  (System/getProperty "user.home"))
+
+(defn pretty
+  [& os]
+  #_(with-out-str (apply puget/cprint os))
+  (try
+    (with-out-str (apply puget/pprint os #_o))
+    (catch RuntimeException ex
+      (log/error ex "Pretty printing failed. Falling back to standard:\n")
+      (str os))
+    (catch AbstractMethodError ex
+      ;; Q: Why isn't this a RuntimeException?
+      (log/error ex "WTF is wrong w/ pretty printing? Falling back to standard:\n")
+      (str os))))
 
 (s/defn random-uuid :- UUID
   "Because remembering the java namespace is annoying"
