@@ -17,11 +17,12 @@
                  [com.jimrthy/cljeromq "0.1.0-SNAPSHOT" :exclusions [com.stuartsierra/component
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
-                 [com.jimrthy/component-dsl "0.1.1-SNAPSHOT"]
+                 [com.jimrthy/component-dsl "0.1.1-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [com.stuartsierra/component "0.2.3"]
                  [com.taoensso/timbre "3.4.0" :exclusions [#_com.taoensso/encore
+                                                           org.clojure/clojure
                                                            org.clojure/tools.reader]]
-                 [im.chit/ribol "0.4.0"]
+                 [im.chit/ribol "0.4.0" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.1.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
                  [mvxcvi/puget "0.8.1" :exclusions [org.clojure/clojure]]
