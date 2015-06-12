@@ -14,6 +14,13 @@
                  ;; ...except that very likely means native libraries, so
                  ;; it gets more complicated. Still, we shouldn't be worrying
                  ;; about details like jeromq vs jzmq here.
+                 ;; Q: Does the reference to this really belong in here?
+                 ;; After all, there's a pretty strong chance that "only"
+                 ;; server and client will actually use it.
+                 ;; Then again, if that happens, web will only inherit
+                 ;; this through client. And, if it doesn't, renderer
+                 ;; will need this to talk to the stand-alone "client."
+                 ;; So the short answer is "Yes"
                  [com.jimrthy/cljeromq "0.1.0-SNAPSHOT" :exclusions [com.stuartsierra/component
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]

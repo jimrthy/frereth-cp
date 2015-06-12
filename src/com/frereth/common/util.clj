@@ -5,7 +5,8 @@
             [ribol.core :refer (raise)]
             [schema.core :as s]
             [taoensso.timbre :as log])
-  (:import [java.lang.reflect Modifier]
+  (:import [java.io PushbackReader]
+           [java.lang.reflect Modifier]
            [java.util UUID]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -147,6 +148,12 @@
       ;; Q: Why isn't this a RuntimeException?
       (log/error ex "WTF is wrong w/ pretty printing? Falling back to standard:\n")
       (str os))))
+
+(s/defn pushback-reader :- PushbackReader
+  "Probably belongs under something like utils.
+Yes, it does seem pretty stupid"
+  [reader]
+  (PushbackReader. reader))
 
 (s/defn random-uuid :- UUID
   "Because remembering the java namespace is annoying"
