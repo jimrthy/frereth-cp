@@ -39,6 +39,8 @@
                  [prismatic/plumbing "0.4.4"]
                  [prismatic/schema "0.4.3"]]
 
+  :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
+
   :profiles {:dev {:source-paths ["dev"]
                    :plugins [[org.clojure/tools.namespace "0.2.10" :exclusions [org.clojure/clojure]]
                              [org.clojure/java.classpath "0.2.2" :exclusions [org.clojure/clojure]]]}
