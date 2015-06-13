@@ -49,6 +49,22 @@
   "Really pretty useless, except as an intermediate step"
   (dissoc router-message :socket))
 
+(comment
+  (s/defrecord URI [protocol :- s/Str
+                    address :- s/Str
+                    port :- s/Int]
+    ;; TODO: This could really just as easily
+    ;; be a plain dictionary.
+    ;; More importantly, it conflicts with native
+    ;; Java's URI. This will be confusing
+    component/Lifecycle
+    (start [this] this)
+    (stop [this] this)))
+
+(def URI {:protocol s/Str
+          :address s/Str
+          :port s/Int})
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
@@ -80,6 +96,14 @@ This is almost definitely a bug"
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(s/defn build-url :- s/Str
+  [url :- URI]
+  (str (:protocol url) "://"
+       (:address url)
+       ;; port is meaningless for inproc
+       (when-let [port (:port url)]
+         (str ":" port))))
 
 (s/defn router-recv! :- (s/maybe router-message)
   ([s :- mq/Socket]
