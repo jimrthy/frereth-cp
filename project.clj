@@ -29,6 +29,8 @@
                  [com.taoensso/timbre "3.4.0" :exclusions [#_com.taoensso/encore
                                                            org.clojure/clojure
                                                            org.clojure/tools.reader]]
+                 [fullcontact/full.async "0.4.22" :exclusions [org.clojure/clojure
+                                                               org.clojure/core.async]]
                  [im.chit/ribol "0.4.0" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.1.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]

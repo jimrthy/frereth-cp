@@ -3,12 +3,13 @@
 
 Strongly inspired by lynaghk's zmq-async"
   (require [cljeromq.core :as mq]
-           [clojure.core.async :as async :refer (go <! <!! >! >!! alts!)]
+           [clojure.core.async :as async :refer (>! >!!)]
            [clojure.edn :as edn]
            #_[com.frereth.common.communication :as comm]
            [com.frereth.common.schema :as fr-sch]
            [com.frereth.common.util :as util]
            [com.stuartsierra.component :as component]
+           [full.async :refer (<? <?? alts? go-try)]
            [ribol.core :refer (raise)]
            [schema.core :as s]
            [taoensso.timbre :as log]))
@@ -92,11 +93,11 @@ Their entire purpose in life, really, is to shuffle messages between
         ;; signal the async half of the event loop to exit
         (async/close! ex-chan)
         (log/trace "Waiting for Asynchronous Event Loop to exit")
-        (let [async-result (<!! async-loop)]
+        (let [async-result (<?? async-loop)]
           (log/trace "Asynchronous event loop exited with a status:\n"
                      (util/pretty async-result)))
         (log/trace "Waiting for 0mq Event Loop to exit")
-        (let [zmq-result (<!! zmq-loop)]
+        (let [zmq-result (<?? zmq-loop)]
           (log/trace "0mq Event Loop exited with a status:\n"
                      (util/pretty zmq-result)))
         (log/trace "Final cleanup")
@@ -127,6 +128,7 @@ TODO: Verify that one way or another"
   (-> o pr-str .getBytes))
 
 (s/defn deserialize :- s/Any
+  "Neither does this"
   [bs :- fr-sch/java-byte-array]
   (let [s (String. bs)]
     (try
@@ -140,20 +142,21 @@ TODO: Verify that one way or another"
    ;; twin to the Pair half w/ same name in run-zmq-loop!
    internal-> :- mq/Socket
    ex-chan :- fr-sch/async-channel]
-  (go
-    (loop [[val port] (alts! in-chan ex-chan)]
-      (when val
-        (if (= in-chan port)
-          ;; Have to serialize it here: can't
-          ;; send arbitrary data across 0mq sockets
-          (mq/send! internal-> (serialize val))
-          (do
-            (assert (= ex-chan port))
-            ;; This means that in-chan must be read/write
-            (>! in-chan val)))
-        (recur (alts! in-chan ex-chan))))
-    (log/trace "One of the internal async event loops closed")
-    (mq/send! internal-> internal-close-signal)))
+  (go-try
+   ;; TODO: Catch exceptions?
+   (loop [[val port] (alts? [] in-chan ex-chan)]
+     (when val
+       (if (= in-chan port)
+         ;; Have to serialize it here: can't
+         ;; send arbitrary data across 0mq sockets
+         (mq/send! internal-> (serialize val))
+         (do
+           (assert (= ex-chan port))
+           ;; This means that in-chan must be read/write
+           (>! in-chan val)))
+       (recur (alts! in-chan ex-chan))))
+   (log/trace "One of the internal async event loops closed")
+   (mq/send! internal-> internal-close-signal)))
 
 (s/defn run-zmq-loop! :- fr-sch/async-channel
   [ex-sock :- mq/Socket
@@ -164,7 +167,7 @@ TODO: Verify that one way or another"
   (let [poller (mq/poller 2)]
     (mq/register-socket-in-poller! ex-sock poller)
     (mq/register-socket-in-poller! internal-> poller)
-    (go
+    (go-try
       (try
         (loop [available-sockets (mq/poll poller -1)]
           (let [received-internal?
