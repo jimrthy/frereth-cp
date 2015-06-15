@@ -91,16 +91,18 @@ Their entire purpose in life, really, is to shuffle messages between
                   :zmq-loop zmq-loop)))
   (stop [this]
         ;; signal the async half of the event loop to exit
-        (async/close! ex-chan)
-        (log/trace "Waiting for Asynchronous Event Loop to exit")
+        (if ex-chan
+          (async/close! ex-chan)
+          (log/warn "No ex-chan. This can't be legal"))
+        (log/debug "Waiting for Asynchronous Event Loop to exit")
         (let [async-result (<?? async-loop)]
-          (log/trace "Asynchronous event loop exited with a status:\n"
+          (log/debug "Asynchronous event loop exited with a status:\n"
                      (util/pretty async-result)))
-        (log/trace "Waiting for 0mq Event Loop to exit")
+        (log/debug "Waiting for 0mq Event Loop to exit")
         (let [zmq-result (<?? zmq-loop)]
-          (log/trace "0mq Event Loop exited with a status:\n"
+          (log/debug "0mq Event Loop exited with status:\n"
                      (util/pretty zmq-result)))
-        (log/trace "Final cleanup")
+        (log/debug "Final cleanup")
         (mq/close-internal-pair! in<->ex-sock)
         (assoc this
                :in<->ex-sock nil
@@ -143,20 +145,61 @@ TODO: Verify that one way or another"
    internal-> :- mq/Socket
    ex-chan :- fr-sch/async-channel]
   (go-try
+   (log/debug "Entering Async event thread")
    ;; TODO: Catch exceptions?
-   (loop [[val port] (alts? [] in-chan ex-chan)]
+   (loop [[val port] (alts? [in-chan ex-chan])]
      (when val
+       (log/debug "Incoming async message from" port ":\n"
+                  (util/pretty val))
        (if (= in-chan port)
-         ;; Have to serialize it here: can't
-         ;; send arbitrary data across 0mq sockets
-         (mq/send! internal-> (serialize val))
+         (do
+           (log/debug "From internal. Forwarding to 0mq")
+           ;; Have to serialize it here: can't
+           ;; send arbitrary data across 0mq sockets
+           (mq/send! internal-> (serialize val))
+           (log/debug "Message forwarded"))
          (do
            (assert (= ex-chan port))
+           (log/debug "Message received from 0mq side")
            ;; This means that in-chan must be read/write
            (>! in-chan val)))
-       (recur (alts! in-chan ex-chan))))
+       (recur (alts? [in-chan ex-chan]))))
    (log/trace "One of the internal async event loops closed")
-   (mq/send! internal-> internal-close-signal)))
+   (mq/send! internal-> internal-close-signal)
+   :exited-successfully))
+
+(defn possibly-recv-internal!
+  "Really just refactored to make data flow more clear"
+  [poller internal-> writer ex-sock]
+  ;; Message over internal notifier socket?
+  (if (mq/in-available? poller 1)
+    (let [msg (mq/recv! internal->)]
+      (comment) (log/debug "Forwarding message through\n" (util/pretty writer))
+      ;; Forward it
+      ;; TODO: Probably shouldn't forward the
+      ;; exit signal, but consider this a test
+      ;; of the robustness on the other side,
+      ;; for now.
+      ;; After all, both sides really have to be
+      ;; able to cope with gibberish
+      (writer ex-sock (serialize msg))
+      (log/debug "Message forwarded")
+      ;; Do we continue?
+      msg)))
+
+(defn possibly-forward-msg-from-outside!
+  [poller reader ex-sock ex-chan]
+  ;; Message coming in from outside?
+  (when (mq/in-available? poller 0)
+    ;; TODO: Would arguably be more
+    ;; efficient to loop over all available
+    ;; messages in case several arrive at once.
+    ;; The most obvious downside to that approach
+    ;; is a DDoS that locks us into that forever
+    (let [raw (reader ex-sock)
+          msg (deserialize raw)]
+      ;; Forward it along
+      (>! ex-chan msg))))
 
 (s/defn run-zmq-loop! :- fr-sch/async-channel
   [ex-sock :- mq/Socket
@@ -165,43 +208,36 @@ TODO: Verify that one way or another"
    reader :- (s/=> fr-sch/java-byte-array mq/Socket)
    writer :- (s/=> s/Any mq/Socket fr-sch/java-byte-array)]
   (let [poller (mq/poller 2)]
-    (mq/register-socket-in-poller! ex-sock poller)
-    (mq/register-socket-in-poller! internal-> poller)
+    (mq/register-socket-in-poller! poller ex-sock)
+    (mq/register-socket-in-poller! poller internal->)
     (go-try
-      (try
-        (loop [available-sockets (mq/poll poller -1)]
-          (let [received-internal?
-                ;; Message over internal notifier socket?
-                (if (mq/in-available? poller 1)
-                  (let [msg (mq/recv! internal->)]
-                    ;; Forward it
-                    ;; TODO: Probably shouldn't forward the
-                    ;; exit signal, but consider this a test
-                    ;; of the robustness on the other side,
-                    ;; for now.
-                    ;; After all, both sides really have to be
-                    ;; able to cope with gibberish
-                    (writer ex-sock (serialize msg))
-                    ;; Do we continue?
-                    msg))]
-            (when-not (= received-internal? internal-close-signal)
-              ;; Message coming in from outside?
-              (when (mq/in-available? poller 0)
-                ;; TODO: Would arguably be more
-                ;; efficient to loop over all available
-                ;; messages in case several arrive at once.
-                ;; The most obvious downside to that approach
-                ;; is a DDoS that locks us into that forever
-                (let [raw (reader ex-sock)
-                      msg (deserialize raw)]
-                  ;; Forward it along
-                  (>! ex-chan msg)))
-              (recur (mq/poll poller -1)))))
-        (finally
-          ;; This is probably pointless, but might
-          ;; as well do whatever cleanup I can
-          (mq/unregister-socket-in-poller! ex-sock)
-          (mq/unregister-socket-in-poller! ))))))
+     (log/debug "Entering 0mq event thread")
+     (try
+       (loop [available-sockets (mq/poll poller -1)]
+         (let [received-internal? (possibly-recv-internal! poller internal-> writer ex-sock)]
+           (log/debug (if received-internal?
+                        (str "Received-Internal:\n" (util/pretty received-internal?))
+                        "Must have been external"))
+           (when-not (= received-internal? internal-close-signal)
+             (log/debug "Wasn't the kill message. Continuing.")
+             (possibly-forward-msg-from-outside! poller reader ex-sock ex-chan)
+             (recur (mq/poll poller -1)))))
+       (log/debug "Cleaning up 0mq Event Loop")
+       (catch NullPointerException ex
+         (let [tb (->> ex .getStackTrace vec (map #(str % "\n")))
+               msg (.getMessage ex)]
+           (log/error ex msg "\n" tb)))
+       (finally
+         ;; This is probably pointless, but might
+         ;; as well do whatever cleanup I can
+         (mq/unregister-socket-in-poller! poller ex-sock)
+         (mq/unregister-socket-in-poller! poller internal->)
+         (log/debug "Exiting 0mq Event Loop")
+         :exited-successfully)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(s/defn ctor :- EventPair
+  [cfg]
+  (map->EventPair cfg))

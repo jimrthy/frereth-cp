@@ -1,7 +1,9 @@
 (ns dev
   "TODO: Really should figure out a way to share all the common pieces
   (hint, hint)"
-  (:require [clojure.edn :as edn]
+  (:require [cljeromq.core :as mq]
+            [clojure.core.async :as async]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.inspector :as i]
             [clojure.string :as str]
@@ -11,7 +13,7 @@
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [com.stuartsierra.component :as component]
             [com.frereth.common.config :as cfg]
-            [com.frereth.common.system :as system]
+            [com.frereth.common.system :as sys]
             [com.frereth.common.util :as util]
             [ribol.core :refer (raise)]))
 
@@ -22,9 +24,24 @@
   []
   (set! *print-length* 50)
 
-  (let [config {}]
+  (let [ctx (mq/context 4)
+        socket-pair (mq/build-internal-pair! ctx)
+        reader (fn [sock]
+                 (println "Fake system reading")
+                 (mq/raw-recv! sock))
+        writer (fn [sock msg]
+                 (println "Fake system sending")
+                 (mq/send! sock msg))
+        parameters-tree {:event-loop {:mq-ctx ctx
+                                      :ex-sock (:lhs socket-pair)
+                                      :in-chan (async/chan)
+                                      :external-reader reader
+                                      :external-writer writer}}
+        config {:structure '{:event-loop com.frereth.common.async-zmq/ctor}
+                :dependencies []}]
     (alter-var-root #'system
-                    (constantly (system/build config)))))
+                    (constantly (assoc (sys/build config parameters-tree)
+                                       :fake-external (:rhs socket-pair))))))
 
 (defn start
   "Starts the current development system."
