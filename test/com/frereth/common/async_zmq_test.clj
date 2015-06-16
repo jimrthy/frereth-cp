@@ -18,9 +18,9 @@
         ;; as defaults, but they really won't be useful
         ;; very often
         reader (fn [sock]
-                 (println "Mock Reader triggered")
+                 (comment (println "Mock Reader triggered"))
                  (let [read (mq/raw-recv! sock)]
-                   (println "Mock Reader Received:\n" (util/pretty read))
+                   (comment (println "Mock Reader Received:\n" (util/pretty read)))
                    read))
         generic-writer (fn [receiver sock msg]
                   ;; Q: if we're going to do this,
@@ -31,7 +31,7 @@
                                      (println "Mock writer's background thread listener received:\n"
                                               (util/pretty result))
                                      result))]
-                    (mq/send! sock msg)
+                    (mq/send! sock msg :dont-wait)
                     (async/<!! listener)))
         writer1 (partial generic-writer (:rhs one-pair))
         writer2 (partial generic-writer (:rhs two-pair))
@@ -45,18 +45,56 @@
                                   :in-chan (async/chan)
                                   :external-reader reader
                                   :external-writer writer2}}]
-    (cpt-dsl/build {:structure descr
-                    :dependencies {}}
-                   configuration-tree)))
+    (assoc (cpt-dsl/build {:structure descr
+                           :dependencies {}}
+                          configuration-tree)
+           :other-sides {:one (:rhs one-pair)
+                         :two (:rhs two-pair)})))
 
 (defn started-mock-up
   "For scenarios where the default behavior is fine
 Probably won't be very useful: odds are, we'll want to
 customize the reader/writer to create useful tests"
   []
-  (component/start (mock-up)))
+  (let [inited (mock-up)
+        other (:other-sides inited)]
+    (assoc (component/start (dissoc inited :other-sides))
+           :other-sides other)))
 
 (deftest basic-loops []
   (testing "Manage start/stop"
     (let [system (started-mock-up)]
       (component/stop system))))
+
+(deftest message-from-outside
+  []
+  (let [system (started-mock-up)]
+    (try
+      (let [dst (-> system :one :in-chan)
+            receive-thread (async/go
+                             (async/<! dst))
+            src (-> system :other-sides :one)
+            msg (-> (gensym) name .getBytes)]
+        (mq/send! src msg)
+        (let [[v c] (async/alts!! [(async/timeout 1000) dst])]
+          (testing "From outside in"
+            (is (= c dst))
+            (is (= msg v)))))
+      (finally
+        (component/stop system)))))
+
+(deftest message-to-outside []
+  (let [system (started-mock-up)]
+    (try
+      (let [src (-> system :one :in-chan)
+            dst (-> system :other-sides :one)
+            msg (-> (gensym) name .getBytes)]
+        (let [[v c] (async/alts!! [(async/timeout 1000)
+                                   [src msg]])]
+          (testing "Message submitted to async loop"
+            (is (= src c)))
+          (testing "Message made it to other side"
+            ;; TODO: Really should set up a retry loop instead
+            (Thread/sleep 250)
+            (let [result (mq/raw-recv! dst :dont-wait)]
+              (is (= msg result)))))))))
