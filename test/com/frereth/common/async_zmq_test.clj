@@ -95,22 +95,33 @@ customize the reader/writer to create useful tests"
       (finally
         (component/stop system)))))
 
-(comment)
+(comment
+  (let [mock (started-mock-up)
+        src (-> mock :one :in-chan)
+        dst (-> mock :other-sides :one)
+        [v c] (async/alts!! [(async/timeout 1000)
+                             [src "Who goes there?"]])
+        result (mq/recv! dst :dont-wait)]
+    (component/stop mock)
+    result)
+)
+
 (deftest message-to-outside []
   (let [system (started-mock-up)]
     (try
       (let [src (-> system :one :in-chan)
             dst (-> system :other-sides :one)
-            msg-string (-> (gensym) name)
-            msg (.getBytes msg-string)]
-        (let [result (async/thread (mq/raw-recv! dst :wait))
+            ;;msg-string (-> (gensym) name)
+            ;;msg (.getBytes msg-string)
+            msg (gensym)]
+        (let [result (async/thread (mq/recv! dst :wait))
               [v c] (async/alts!! [(async/timeout 1000)
-                                   [src msg-string]])]
+                                   [src msg]])]
           (testing "Message submitted to async loop"
             (is (= src c))
             (is v))
           (testing "Message made it to other side"
             (let [[v c] (async/alts!! [(async/timeout 1000) result])]
-              (is (= msg v))
+              (is (= msg v) "Received doesn't match actual")
               (is (= (String. msg) (String. v)))
               (is (= result c)))))))))

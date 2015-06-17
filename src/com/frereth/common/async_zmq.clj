@@ -162,7 +162,7 @@ Their entire purpose in life, really, is to shuffle messages between
                    (util/pretty s))))))
 
 (s/defn run-async-loop! :- fr-sch/async-channel
-  [{:keys [async->sock in-chan #_in<->ex-sock #_ex-chan stopper]} :- EventPair]
+  [{:keys [async->sock in-chan stopper]} :- EventPair]
   (let [internal-> async->sock]
     (go-try
      (comment) (log/debug "Entering Async event thread")
