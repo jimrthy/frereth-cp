@@ -93,15 +93,17 @@ Their entire purpose in life, really, is to shuffle messages between
         (if ex-chan
           (async/close! ex-chan)
           (log/warn "No ex-chan. This can't be legal"))
-        (log/debug "Waiting for Asynchronous Event Loop to exit")
+        ;; N.B. These status updates are really pretty vital
+        ;; and should be logged at the warning level, at the very least
+        (comment (log/debug "Waiting for Asynchronous Event Loop to exit"))
         (let [async-result (<?? async-loop)]
-          (log/debug "Asynchronous event loop exited with a status:\n"
-                     (util/pretty async-result)))
-        (log/debug "Waiting for 0mq Event Loop to exit")
+          (comment (log/debug "Asynchronous event loop exited with a status:\n"
+                              (util/pretty async-result))))
+        (comment (log/debug "Waiting for 0mq Event Loop to exit"))
         (let [zmq-result (<?? zmq-loop)]
-          (log/debug "0mq Event Loop exited with status:\n"
-                     (util/pretty zmq-result)))
-        (log/debug "Final cleanup")
+          (comment (log/debug "0mq Event Loop exited with status:\n"
+                              (util/pretty zmq-result))))
+        (comment (log/debug "Final cleanup"))
         (mq/close-internal-pair! in<->ex-sock)
         (assoc this
                :in<->ex-sock nil
@@ -120,7 +122,10 @@ a 0mq socket
 Actually, it probably needs to be a byte-array,
 since that's really what I'm using at this level.
 
-TODO: Verify that one way or another"
+TODO: Make this part of the top-level Component instead
+of effectively a global.
+
+This approach is probably safe enough, but it's still wrong."
   (name (gensym)))
 
 (s/defn serialize :- fr-sch/java-byte-array
@@ -142,11 +147,11 @@ TODO: Verify that one way or another"
   [{:keys [in-chan in<->ex-sock ex-chan]} :- EventPair]
   (let [internal-> (:lhs in<->ex-sock)]
     (go-try
-     (log/debug "Entering Async event thread")
+     (comment (log/debug "Entering Async event thread"))
      ;; TODO: Catch exceptions?
      (loop [[val port] (alts? [in-chan ex-chan])]
        (when val
-         (log/debug "Incoming async message from" port ":\n"
+         (log/debug "Incoming async message:\n"
                     (util/pretty val))
          (if (= in-chan port)
            (do
@@ -159,9 +164,10 @@ TODO: Verify that one way or another"
              (assert (= ex-chan port))
              (log/debug "Message received from 0mq side")
              ;; This means that in-chan must be read/write
-             (>! in-chan val)))
+             (>! in-chan val)
+             (log/debug "Forwarded to receiver")))
          (recur (alts? [in-chan ex-chan]))))
-     (log/trace "One of the internal async event loops closed")
+     (comment (log/trace "One of the internal async event loops closed"))
      (mq/send! internal-> internal-close-signal)
      :exited-successfully)))
 
@@ -196,7 +202,7 @@ TODO: Verify that one way or another"
         (catch RuntimeException ex
           (log/error ex)
           (throw)))
-      (log/debug "Message forwarded")
+      (comment) (log/debug "Message forwarded")
       ;; Do we continue?
       msg)))
 
@@ -231,7 +237,7 @@ TODO: Verify that one way or another"
     (mq/register-socket-in-poller! poller ex-sock)
     (mq/register-socket-in-poller! poller ->zmq-sock)
     (go-try
-     (log/debug "Entering 0mq event thread")
+     (comment (log/debug "Entering 0mq event thread"))
      (try
        (loop [available-sockets (mq/poll poller -1)]
          (let [received-internal? (possibly-recv-internal! component poller)]
@@ -243,7 +249,7 @@ TODO: Verify that one way or another"
              #_(possibly-forward-msg-from-outside! poller external-reader ex-sock ex-chan)
              (possibly-forward-msg-from-outside! component poller)
              (recur (mq/poll poller -1)))))
-       (log/debug "Cleaning up 0mq Event Loop")
+       (comment (log/debug "Cleaning up 0mq Event Loop"))
        :exited-successfully
        (catch NullPointerException ex
          (let [tb (->> ex .getStackTrace vec (map #(str % "\n")))
@@ -255,7 +261,7 @@ TODO: Verify that one way or another"
          ;; as well do whatever cleanup I can
          (mq/unregister-socket-in-poller! poller ex-sock)
          (mq/unregister-socket-in-poller! poller ->zmq-sock)
-         (log/debug "Exiting 0mq Event Loop"))))))
+         (comment (log/debug "Exiting 0mq Event Loop")))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
