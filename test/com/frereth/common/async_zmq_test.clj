@@ -61,18 +61,23 @@ customize the reader/writer to create useful tests"
     (assoc (component/start (dissoc inited :other-sides))
            :other-sides other)))
 
-(comment
-  (deftest basic-loops []
-    (testing "Manage start/stop"
-      (let [system (started-mock-up)]
-        (component/stop system)))))
+(comment)
+(deftest basic-loops []
+  (testing "Manage start/stop"
+    (let [system (started-mock-up)]
+      (component/stop system))))
 
+(comment
+  #_(require '[com.frereth.common.async-zmq-test :as azt])
+  (def mock (#_azt/started-mock-up started-mock-up))
+  (mq/send! (-> mock :other-sides :one) (pr-str {:a 1 :b 2 :c 3}) :dont-wait)
+  (async/alts!! [(async/timeout 1000) (-> mock :one :ex-chan)])
+  (component/stop mock))
 (deftest message-from-outside
-  "This is frustrating because it works sometimes"
   []
   (let [system (started-mock-up)]
     (try
-      (let [dst (-> system :one :in-chan)
+      (let [dst (-> system :one :ex-chan)
             receive-thread (async/go
                              (async/<! dst))
             src (-> system :other-sides :one)
@@ -90,20 +95,22 @@ customize the reader/writer to create useful tests"
       (finally
         (component/stop system)))))
 
-(comment
-  (deftest message-to-outside []
-    (let [system (started-mock-up)]
-      (try
-        (let [src (-> system :one :in-chan)
-              dst (-> system :other-sides :one)
-              msg (-> (gensym) name .getBytes)]
-          (let [result (async/thread (mq/raw-recv! dst :dont-wait))
-                [v c] (async/alts!! [(async/timeout 1000)
-                                     [src msg]])]
-            (testing "Message submitted to async loop"
-              (is (= src c))
-              (is v))
-            (testing "Message made it to other side"
-              (let [[v c] (async/alts!! [(async/timeout 1000) result])]
-                (is (= msg v))
-                (is (= result c))))))))))
+(comment)
+(deftest message-to-outside []
+  (let [system (started-mock-up)]
+    (try
+      (let [src (-> system :one :in-chan)
+            dst (-> system :other-sides :one)
+            msg-string (-> (gensym) name)
+            msg (.getBytes msg-string)]
+        (let [result (async/thread (mq/raw-recv! dst :wait))
+              [v c] (async/alts!! [(async/timeout 1000)
+                                   [src msg-string]])]
+          (testing "Message submitted to async loop"
+            (is (= src c))
+            (is v))
+          (testing "Message made it to other side"
+            (let [[v c] (async/alts!! [(async/timeout 1000) result])]
+              (is (= msg v))
+              (is (= (String. msg) (String. v)))
+              (is (= result c)))))))))

@@ -19,13 +19,28 @@ Strongly inspired by lynaghk's zmq-async"
 
 (declare run-async-loop! run-zmq-loop!)
 (s/defrecord EventPair
-  [mq-ctx :- mq/Context             ; required for building internal inproc sockets
-   ex-sock :- mq/Socket     ; faces outside world. Caller provides
+  [;; Important for public API
+   ;; send messages to this to get them to 0mq. Supplied by caller
+   in-chan :- fr-sch/async-channel
+   ;; faces outside world.
+   ;; Caller provides, because binding/connecting is really not in scope here
+   ex-sock :- mq/Socket
+   ;; 0mq puts messages onto here when they come in from outside
+   ;; Owned by this
+   ex-chan :- fr-sch/async-channel
+
+   ;; Important to know about, since you have to supply it
+   mq-ctx :- mq/Context             ; required for building internal inproc sockets
+
+   ;; Really, these are implementation details
+
+   ;; feed this into loops to stop them. Very important  when everything hangs
+   ;; Unless you just enjoy sitting around waiting for the JVM to
+   ;; restart, of course
+   stopper :- s/Symbol
    in<->ex-sock :- mq/InternalPair     ; messages from in-chan to ex-sock flow across these
    async->sock :- mq/Socket  ; async half of in<->ex-sock
    ->zmq-sock :- mq/Socket ; 0mq half of in<->ex-sock
-   ex-chan :- fr-sch/async-channel  ; messages from 0mq side travel over this to reach in-chan
-   in-chan :- fr-sch/async-channel  ; faces interior. Caller provides
    async-loop :- fr-sch/async-channel  ; thread where the async event loop is running
    zmq-loop :- fr-sch/async-channel  ; thread where the 0mq event loop is running
    ;; external-reader and -writer should be simple for
@@ -69,9 +84,11 @@ Their entire purpose in life, really, is to shuffle messages between
          ;; These can't be in-chan: the entire point to this
          ;; architecture is to do the heavy lifting of both reading
          ;; and writing.
-         (let [in<->ex-sock (mq/build-internal-pair! mq-ctx)
+         (let [stopper (gensym)
+               in<->ex-sock (mq/build-internal-pair! mq-ctx)
                ex-chan (async/chan)
                almost-started (assoc this
+                                     :stopper stopper
                                      :in<->ex-sock in<->ex-sock
                                      :->zmq-sock (:rhs in<->ex-sock)
                                      :async->sock (:lhs in<->ex-sock)
@@ -90,22 +107,37 @@ Their entire purpose in life, really, is to shuffle messages between
                   :zmq-loop zmq-loop)))
   (stop [this]
         ;; signal the async half of the event loop to exit
+        (when async-loop
+          (if in-chan
+            (let [[v c] (async/alts!! [in-chan (async/timeout 750)])]
+              (when-not v
+                (log/error "Failed to deliver stop message to async channel. Attempting brute force")
+                ;; Q: What does this even do?
+                (async/close! async-loop)))
+            (do
+              (log/error "No channel for stopping async loop. Attempting brute force")
+              (async/close! async-loop))))
+
         (if ex-chan
           (async/close! ex-chan)
-          (log/warn "No ex-chan. This can't be legal"))
+          (log/info "No ex-chan. Assume this means we weren't actually started"))
+
         ;; N.B. These status updates are really pretty vital
         ;; and should be logged at the warning level, at the very least
-        (comment (log/debug "Waiting for Asynchronous Event Loop to exit"))
+        (comment) (log/debug "Waiting for Asynchronous Event Loop to exit")
         (let [async-result (<?? async-loop)]
-          (comment (log/debug "Asynchronous event loop exited with a status:\n"
-                              (util/pretty async-result))))
-        (comment (log/debug "Waiting for 0mq Event Loop to exit"))
-        (let [zmq-result (<?? zmq-loop)]
-          (comment (log/debug "0mq Event Loop exited with status:\n"
-                              (util/pretty zmq-result))))
-        (comment (log/debug "Final cleanup"))
+          (comment) (log/debug "Asynchronous event loop exited with a status:\n"
+                               (util/pretty async-result)))
+        (log/debug "Assuming that async loop failed to signal 0mq loop to exit")
+        (mq/send! async->sock stopper :dont-wait)
+        (comment) (log/debug "Waiting for 0mq Event Loop to exit")
+        (let [zmq-result (async/alts!! [zmq-loop (async/timeout 150)])]
+          (comment) (log/debug "0mq Event Loop exited with status:\n"
+                               (util/pretty zmq-result)))
+        (comment) (log/debug "Final cleanup")
         (mq/close-internal-pair! in<->ex-sock)
         (assoc this
+               :stopper nil
                :in<->ex-sock nil
                :ex-chan nil
                :async-loop nil
@@ -113,20 +145,6 @@ Their entire purpose in life, really, is to shuffle messages between
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
-
-(def internal-close-signal
-  "Tell the 0mq event loop to exit
-Need to be a string because it's travelling over
-a 0mq socket
-
-Actually, it probably needs to be a byte-array,
-since that's really what I'm using at this level.
-
-TODO: Make this part of the top-level Component instead
-of effectively a global.
-
-This approach is probably safe enough, but it's still wrong."
-  (name (gensym)))
 
 (s/defn serialize :- fr-sch/java-byte-array
   "TODO: This absolutely does not belong in here"
@@ -144,31 +162,23 @@ This approach is probably safe enough, but it's still wrong."
                    (util/pretty s))))))
 
 (s/defn run-async-loop! :- fr-sch/async-channel
-  [{:keys [in-chan in<->ex-sock ex-chan]} :- EventPair]
-  (let [internal-> (:lhs in<->ex-sock)]
+  [{:keys [async->sock in-chan #_in<->ex-sock #_ex-chan stopper]} :- EventPair]
+  (let [internal-> async->sock]
     (go-try
-     (comment (log/debug "Entering Async event thread"))
+     (comment) (log/debug "Entering Async event thread")
      ;; TODO: Catch exceptions?
-     (loop [[val port] (alts? [in-chan ex-chan])]
+     (loop [[val port] (<? in-chan)]
        (when val
          (log/debug "Incoming async message:\n"
                     (util/pretty val))
-         (if (= in-chan port)
-           (do
-             (log/debug "From internal. Forwarding to 0mq")
-             ;; Have to serialize it here: can't
-             ;; send arbitrary data across 0mq sockets
-             (mq/send! internal-> (serialize val))
-             (log/debug "Message forwarded"))
-           (do
-             (assert (= ex-chan port))
-             (log/debug "Message received from 0mq side")
-             ;; This means that in-chan must be read/write
-             (>! in-chan val)
-             (log/debug "Forwarded to receiver")))
-         (recur (alts? [in-chan ex-chan]))))
-     (comment (log/trace "One of the internal async event loops closed"))
-     (mq/send! internal-> internal-close-signal)
+         (log/debug "From internal. Forwarding to 0mq")
+         ;; Have to serialize it here: can't
+         ;; send arbitrary data across 0mq sockets
+         (mq/send! internal-> (serialize val))
+         (log/debug "Message forwarded")
+         (when (not= val stopper)
+           (recur (<? in-chan)))))
+     (comment) (log/trace "Received stop signal")
      :exited-successfully)))
 
 (s/defn possibly-recv-internal!
@@ -228,10 +238,15 @@ This approach is probably safe enough, but it's still wrong."
       ;; inside the function that calls this one,
       ;; so there's no way for this one to know
       ;; that we're in it.
-      (>!! ex-chan msg))))
+      ;; N.B. This blocks the entire message loop
+      ;; TODO: Switch to using alts!! and some sort
+      ;; of timeout for scenarios where the other
+      ;; end can't keep up
+      (>!! ex-chan msg)
+      (log/debug "Message forwarded"))))
 
 (s/defn run-zmq-loop! :- fr-sch/async-channel
-  [{:keys [ex-sock ->zmq-sock ex-chan external-reader externalwriter]
+  [{:keys [ex-sock ->zmq-sock ex-chan external-reader externalwriter stopper]
     :as component} :- EventPair]
   (let [poller (mq/poller 2)]
     (mq/register-socket-in-poller! poller ex-sock)
@@ -244,9 +259,8 @@ This approach is probably safe enough, but it's still wrong."
            (log/debug (if received-internal?
                         (str "Received-Internal:\n" (util/pretty received-internal?))
                         "Must have been external"))
-           (when-not (= received-internal? internal-close-signal)
+           (when-not (= received-internal? stopper)
              (log/debug "Wasn't the kill message. Continuing.")
-             #_(possibly-forward-msg-from-outside! poller external-reader ex-sock ex-chan)
              (possibly-forward-msg-from-outside! component poller)
              (recur (mq/poll poller -1)))))
        (comment (log/debug "Cleaning up 0mq Event Loop"))
