@@ -22,19 +22,14 @@
                  (let [read (mq/raw-recv! sock)]
                    (comment (println "Mock Reader Received:\n" (util/pretty read)))
                    read))
-        generic-writer (fn [receiver sock msg]
-                  ;; Q: if we're going to do this,
-                  ;; does the event loop need access to the socket at all?
-                  ;; A: Yes. Because it spends most of its time polling on that socket
-                  (let [listener (async/thread
-                                   (let [result (mq/raw-recv! receiver)]
-                                     (println "Mock writer's background thread listener received:\n"
-                                              (util/pretty result))
-                                     result))]
-                    (mq/send! sock msg :dont-wait)
-                    (async/<!! listener)))
-        writer1 (partial generic-writer (:rhs one-pair))
-        writer2 (partial generic-writer (:rhs two-pair))
+        generic-writer (fn [which sock msg]
+                         ;; Q: if we're going to do this,
+                         ;; does the event loop need access to the socket at all?
+                         ;; A: Yes. Because it spends most of its time polling on that socket
+                         (println "Mock writer sending" msg "on Pair" which)
+                         (mq/send! sock msg :dont-wait))
+        writer1 (partial generic-writer "one")
+        writer2 (partial generic-writer "two")
         configuration-tree {:one {:mq-ctx ctx
                                   :ex-sock (:lhs one-pair)
                                   :in-chan (async/chan)
@@ -61,11 +56,11 @@ customize the reader/writer to create useful tests"
     (assoc (component/start (dissoc inited :other-sides))
            :other-sides other)))
 
-(comment)
-(deftest basic-loops []
-  (testing "Manage start/stop"
-    (let [system (started-mock-up)]
-      (component/stop system))))
+(comment
+  (deftest basic-loops []
+    (testing "Manage start/stop"
+      (let [system (started-mock-up)]
+        (component/stop system)))))
 
 (comment
   #_(require '[com.frereth.common.async-zmq-test :as azt])
@@ -83,15 +78,12 @@ customize the reader/writer to create useful tests"
             src (-> system :other-sides :one)
             sym (gensym)
             msg (-> sym name .getBytes)]
-        ;; Sleeping to give the event loops a chance to stabilize
-        ;; just makes things worse
-        (comment (Thread/sleep 100))
         (mq/send! src msg :dont-wait)
         (testing "From outside in"
           (comment (Thread/sleep 100))
-          (let [[v c] (async/alts!! [(async/timeout 1000) dst])]
+          (let [[v c] (async/alts!! [(async/timeout 1000) receive-thread])]
             (is (= sym v))
-            (is (= dst c)))))
+            (is (= receive-thread c)))))
       (finally
         (component/stop system)))))
 
@@ -99,29 +91,59 @@ customize the reader/writer to create useful tests"
   (let [mock (started-mock-up)
         src (-> mock :one :in-chan)
         dst (-> mock :other-sides :one)
+        _ (println "Kicking everything off")
         [v c] (async/alts!! [(async/timeout 1000)
-                             [src "Who goes there?"]])
-        result (mq/recv! dst :dont-wait)]
-    (component/stop mock)
-    result)
+                             [src "Who goes there?"]])]
+    (println "Let's see how that worked")
+    (if-let [serialized
+             (loop [serialized (mq/raw-recv! dst :dont-wait)
+                    attempts 5]
+               ;; Note that, if a PAIR socket tries to send
+               ;; a message when there's no peer, it blocks.
+               ;; So this really should work.
+               (if serialized
+                 serialized
+                 (do
+                   (Thread/sleep 100)
+                   (when (< 0 attempts))
+                   (recur (mq/raw-recv! dst :dont-wait)
+                          (dec attempts)))))]
+      (let [result (deserialize serialized)]
+        (assert v "Channel submission failed")
+        (component/stop mock)
+        [v result])
+      ["Nothing came out" v]))
 )
 
 (deftest message-to-outside []
+  (println "Starting mock for testing message-to-outside")
   (let [system (started-mock-up)]
+    (println "mock loops started")
     (try
       (let [src (-> system :one :in-chan)
             dst (-> system :other-sides :one)
             ;;msg-string (-> (gensym) name)
             ;;msg (.getBytes msg-string)
-            msg (gensym)]
-        (let [result (async/thread (mq/recv! dst :wait))
-              [v c] (async/alts!! [(async/timeout 1000)
+            msg #_(gensym) {:action :login
+                            :user "#1"
+                            :auth-token (gensym)
+                            :character-set "utf-8"}]
+        (println "Submitting message to internal channel")
+        (let [[v c] (async/alts!! [(async/timeout 1000)
                                    [src msg]])]
           (testing "Message submitted to async loop"
-            (is (= src c))
+            (is (= src c) "Timed out trying to send")
             (is v))
+          (println "Pausing to let message get through loop pairs")
+          (Thread/sleep 100)  ; give it time to get through the loop
           (testing "Message made it to other side"
-            (let [[v c] (async/alts!! [(async/timeout 1000) result])]
-              (is (= msg v) "Received doesn't match actual")
-              (is (= (String. msg) (String. v)))
-              (is (= result c)))))))))
+            (if-let [;; Note that we're dealing with raw edn
+                     serialized (mq/recv! dst :dont-wait)]
+              (let [result (deserialize serialized)]
+                (is (= msg result))
+                (println "message-to-outside delivered" result)
+                result)
+              (is false "Message swallowed")))))
+      (finally
+        (component/stop system)))
+    (println "message-to-outside exiting")))

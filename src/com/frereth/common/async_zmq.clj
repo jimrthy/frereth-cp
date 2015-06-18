@@ -125,11 +125,12 @@ Their entire purpose in life, really, is to shuffle messages between
         ;; N.B. These status updates are really pretty vital
         ;; and should be logged at the warning level, at the very least
         (comment) (log/debug "Waiting for Asynchronous Event Loop to exit")
-        (let [async-result (<?? async-loop)]
+        (let [async-result (async/alts!! [async-loop (async/timeout 1500)])]
           (comment) (log/debug "Asynchronous event loop exited with a status:\n"
-                               (util/pretty async-result)))
-        (log/debug "Assuming that async loop failed to signal 0mq loop to exit")
-        (mq/send! async->sock stopper :dont-wait)
+                               (util/pretty async-result))
+          (when-not async-result
+            (log/debug "Async loop didn't exit. Assume that it failed to signal 0mq loop to exit")
+            (mq/send! async->sock stopper :dont-wait)))
         (comment) (log/debug "Waiting for 0mq Event Loop to exit")
         (let [zmq-result (async/alts!! [zmq-loop (async/timeout 150)])]
           (comment) (log/debug "0mq Event Loop exited with status:\n"
@@ -167,7 +168,7 @@ Their entire purpose in life, really, is to shuffle messages between
     (go-try
      (comment) (log/debug "Entering Async event thread")
      ;; TODO: Catch exceptions?
-     (loop [[val port] (<? in-chan)]
+     (loop [[val port] (async/<! in-chan)]
        (when val
          (log/debug "Incoming async message:\n"
                     (util/pretty val))
@@ -257,8 +258,8 @@ Their entire purpose in life, really, is to shuffle messages between
        (loop [available-sockets (mq/poll poller -1)]
          (let [received-internal? (possibly-recv-internal! component poller)]
            (log/debug (if received-internal?
-                        (str "Received-Internal:\n" (util/pretty received-internal?))
-                        "Must have been external"))
+                        (str "0mq: Received Internal:\n" (util/pretty received-internal?))
+                        "0mq: received from external"))
            (when-not (= received-internal? stopper)
              (log/debug "Wasn't the kill message. Continuing.")
              (possibly-forward-msg-from-outside! component poller)
@@ -275,6 +276,7 @@ Their entire purpose in life, really, is to shuffle messages between
          ;; as well do whatever cleanup I can
          (mq/unregister-socket-in-poller! poller ex-sock)
          (mq/unregister-socket-in-poller! poller ->zmq-sock)
+         (mq/terminate! poller)
          (comment (log/debug "Exiting 0mq Event Loop")))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
