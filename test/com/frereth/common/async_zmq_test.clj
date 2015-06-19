@@ -78,6 +78,7 @@ customize the reader/writer to create useful tests"
             src (-> system :other-sides :one)
             sym (gensym)
             msg (-> sym name .getBytes)]
+        (println "Pretending to send" msg "from the outside world")
         (mq/send! src msg :dont-wait)
         (testing "From outside in"
           (comment (Thread/sleep 100))
@@ -112,8 +113,7 @@ customize the reader/writer to create useful tests"
         (assert v "Channel submission failed")
         (component/stop mock)
         [v result])
-      ["Nothing came out" v]))
-)
+      ["Nothing came out" v])))
 
 (deftest message-to-outside []
   (println "Starting mock for testing message-to-outside")
@@ -128,22 +128,33 @@ customize the reader/writer to create useful tests"
                             :user "#1"
                             :auth-token (gensym)
                             :character-set "utf-8"}]
-        (println "Submitting message to internal channel")
+        (comment (Thread/sleep 500))
+        (println "Submitting" msg "to internal channel")
         (let [[v c] (async/alts!! [(async/timeout 1000)
                                    [src msg]])]
+          ;; We are sending this message successfully
           (testing "Message submitted to async loop"
             (is (= src c) "Timed out trying to send")
             (is v))
           (println "Pausing to let message get through loop pairs")
-          (Thread/sleep 100)  ; give it time to get through the loop
-          (testing "Message made it to other side"
-            (if-let [;; Note that we're dealing with raw edn
-                     serialized (mq/recv! dst :dont-wait)]
-              (let [result (deserialize serialized)]
-                (is (= msg result))
-                (println "message-to-outside delivered" result)
-                result)
-              (is false "Message swallowed")))))
+          (Thread/sleep 1500)  ; give it time to get through the loop
+          (testing "Did message make it to other side?"
+            (let [result
+                  (loop [retries 5
+                         serialized (mq/recv! dst :dont-wait)]
+                    (if serialized
+                      (let [result (deserialize serialized)]
+                        (is (= msg result))
+                        (println "message-to-outside delivered" result)
+                        result)
+                      (when (< 0 retries)
+                        (let [n (- 6 retries)]
+                          (println "Retry # " n)
+                          (Thread/sleep (* 100 n))
+                          (recur (dec retries)
+                                 (mq/recv! dst :dont-wait))))))]
+              (when-not result
+                (is false "Message swallowed"))))))
       (finally
         (component/stop system)))
     (println "message-to-outside exiting")))
