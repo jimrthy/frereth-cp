@@ -8,6 +8,8 @@
             [component-dsl.system :as cpt-dsl]))
 
 (defn mock-up
+  "The second half of this seems pretty pointless
+  FIXME: Make it go away"
   []
   (let [descr '{:one com.frereth.common.async-zmq/ctor
                 :two com.frereth.common.async-zmq/ctor}

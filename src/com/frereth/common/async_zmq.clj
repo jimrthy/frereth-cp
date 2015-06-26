@@ -2,17 +2,17 @@
   "Communicate among 0mq sockets and async channels.
 
 Strongly inspired by lynaghk's zmq-async"
-  (require [cljeromq.core :as mq]
-           [clojure.core.async :as async :refer (>! >!!)]
-           [clojure.edn :as edn]
-           #_[com.frereth.common.communication :as comm]
-           [com.frereth.common.schema :as fr-sch]
-           [com.frereth.common.util :as util]
-           [com.stuartsierra.component :as component]
-           [full.async :refer (<? <?? alts? go-try)]
-           [ribol.core :refer (raise)]
-           [schema.core :as s]
-           [taoensso.timbre :as log]))
+  (:require [cljeromq.core :as mq]
+            [clojure.core.async :as async :refer (>! >!!)]
+            [clojure.edn :as edn]
+            #_[com.frereth.common.communication :as comm]
+            [com.frereth.common.schema :as fr-sch]
+            [com.frereth.common.util :as util]
+            [com.stuartsierra.component :as component]
+            [full.async :refer (<? <?? alts? go-try)]
+            [ribol.core :refer (raise)]
+            [schema.core :as s]
+            [taoensso.timbre :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
