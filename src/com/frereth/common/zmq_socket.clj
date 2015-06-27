@@ -12,12 +12,13 @@
                           :pub :sub
                           :router :dealer))
 
-(s/defrecord Socket [ctx :- mq/Context
-                     url :- mq/zmq-url
-                     sock-type :- socket-types
-                     direction :- (s/enum :bind :connect)
-                     socket :- mq/Socket]
-  ;; Why can't I include a docstring?
+(s/defrecord SocketDescription
+    [ctx :- mq/Context
+     url :- mq/zmq-url
+     sock-type :- socket-types
+     direction :- (s/enum :bind :connect)
+     socket :- mq/Socket]
+  ;; Q: Why can't I include a docstring?
   ;; "Describe a 0mq socket"
   component/Lifecycle
   (start
@@ -38,9 +39,11 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+;;; TODO: Really need to add wrappers for everything interesting,
+;;; esp. send/recv
 
-(s/defn ctor :- Socket
+(s/defn ctor :- SocketDescription
   [{:keys [url direction sock-type]
     :or {direction :connect}
     :as options}]
-  (map->Socket options))
+  (map->SocketDescription options))

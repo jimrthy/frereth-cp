@@ -8,11 +8,13 @@ Strongly inspired by lynaghk's zmq-async"
             #_[com.frereth.common.communication :as comm]
             [com.frereth.common.schema :as fr-sch]
             [com.frereth.common.util :as util]
+            [com.frereth.common.zmq-socket :as zmq-socket]
             [com.stuartsierra.component :as component]
             [full.async :refer (<? <?? alts? go-try)]
             [ribol.core :refer (raise)]
             [schema.core :as s]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log])
+  (:import [com.frereth.common.zmq_socket SocketDescription]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
@@ -24,13 +26,16 @@ Strongly inspired by lynaghk's zmq-async"
    in-chan :- fr-sch/async-channel
    ;; faces outside world.
    ;; Caller provides, because binding/connecting is really not in scope here
-   ex-sock :- mq/Socket
+   ex-sock :- SocketDescription
    ;; 0mq puts messages onto here when they come in from outside
    ;; Owned by this
    ex-chan :- fr-sch/async-channel
 
    ;; Important to know about, since you have to supply it
-   mq-ctx :- mq/Context             ; required for building internal inproc sockets
+   ;; required for building internal inproc sockets
+   ;; TODO: Just use the context attached to ex-sock
+   ;; Q: Will there ever be a scenario where that's a bad idea?
+   mq-ctx :- mq/Context
 
    ;; Really, these are implementation details
 
@@ -39,6 +44,10 @@ Strongly inspired by lynaghk's zmq-async"
    ;; restart, of course
    stopper :- s/Symbol
    in<->ex-sock :- mq/InternalPair     ; messages from in-chan to ex-sock flow across these
+   ;; It's tempting to make these zmq-socket/Socket instances
+   ;; instead.
+   ;; But mq/InternalPair was pretty much custom-written for this
+   ;; scenario.
    async->sock :- mq/Socket  ; async half of in<->ex-sock
    ->zmq-sock :- mq/Socket ; 0mq half of in<->ex-sock
    async-loop :- fr-sch/async-channel  ; thread where the async event loop is running

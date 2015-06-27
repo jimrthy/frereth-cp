@@ -22,25 +22,38 @@
   ([description :- cpt-dsl/system-description]
    (build description {})))
 
-(defn build-library
-  "For running as an integrated library inside the Renderer"
-  [{:keys [:ctx-thread-count
-           :socket-type
-           :direction
-           :url]
-    :or {:ctx-thread-count 1
-         :socket-type :dealer
-         :direction :connect
+(defn build-event-loop
+  "For running as an integrated library inside the Renderer
+
+Note that I was really jumping the gun on this one.
+It provides a decent example, but it really belongs inside
+frereth.client.
+
+And frereth.server. And, if there's ever a 'real' stand-alone
+frereth.renderer, there.
+
+So this abstraction absolutely belongs here in common.
+
+It seems to make less sense under system, but I'm not sure which
+alternatives make more sense."
+  [{:keys [ctx-thread-count
+           socket-type
+           direction
+           ;; TODO: Further destructure the URL?
+           url]
+    :or {ctx-thread-count 1
+         socket-type :dealer
+         direction :connect
          ;; Just pick something arbitrary
-         :url "tcp://localhost:9182"}}]
-  (raise :not-implemented)
+         url {:protocol :tcp
+              :address [127 0 0 1]
+              :port 9182}}}]
   (let [context (mq/context ctx-thread-count)
-        socket (mq/socket! socket-type)
-        description {:structure '{:event-loop com.frereth.common.async-zmq/ctor}
-                     :dependencies {}}]
-    (if (= :bind direction)
-      (mq/bind! socket url)
-      (mq/connect! socket url))
-    (cpt-dsl/build description {:event-loop {:mq-ctx context
-                                             :ex-sock socket
-                                             :in-chan (async/chan)}})))
+        description {:structure '{:event-loop com.frereth.common.async-zmq/ctor
+                                  :ex-sock com.frereth.common.zmq-socket/ctor}
+                     :dependencies {:event-loop [:ex-sock]}}]
+    (cpt-dsl/build description
+                   {:event-loop {:in-chan (async/chan)}
+                    :ex-sock {:url url
+                              :direction direction
+                              :sock-type socket-type}})))
