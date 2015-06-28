@@ -96,6 +96,10 @@
     (str ";;; " nsname " {{{1\n\n"
          (string/join \newline lines))))
 
+(s/defn core-count :- s/Int
+  []
+  (.availableProcessors (Runtime/getRuntime)))
+
 (defn dir
   [something]
   (let [k (class something)

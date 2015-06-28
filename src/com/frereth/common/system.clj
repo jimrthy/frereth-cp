@@ -39,7 +39,9 @@ alternatives make more sense."
   [{:keys [ctx-thread-count
            socket-type
            direction
-           ;; TODO: Further destructure the URL?
+           ;; TODO: Further destructure the URL
+           ;; It'd be really nice to just be able to override
+           ;; the default port
            url]
     :or {ctx-thread-count 1
          socket-type :dealer
@@ -48,12 +50,18 @@ alternatives make more sense."
          url {:protocol :tcp
               :address [127 0 0 1]
               :port 9182}}}]
-  (let [context (mq/context ctx-thread-count)
-        description {:structure '{:event-loop com.frereth.common.async-zmq/ctor
+  (let [description {:structure '{:zmq-context com.frereth.common.zmq-socket/ctx-ctor
+                                  :event-loop com.frereth.common.async-zmq/ctor
                                   :ex-sock com.frereth.common.zmq-socket/ctor}
-                     :dependencies {:event-loop [:ex-sock]}}]
+                     :dependencies {:event-loop {:ex-sock :ex-sock
+                                                 ;; TODO: Missing external
+                                                 ;; reader and writer
+                                                 :mq-ctx :zmq-context}
+                                    :ex-sock {:ctx :zmq-context}}}]
+    (throw RuntimeException. "Start Here")
     (cpt-dsl/build description
-                   {:event-loop {:in-chan (async/chan)}
+                   {:zmq-context {:thread-count ctx-thread-count}
+                    :event-loop {:in-chan (async/chan)}
                     :ex-sock {:url url
                               :direction direction
                               :sock-type socket-type}})))

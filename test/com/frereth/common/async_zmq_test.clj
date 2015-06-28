@@ -3,6 +3,7 @@
             [clojure.core.async :as async]
             [clojure.test :refer (deftest is testing)]
             [com.frereth.common.async-zmq :refer :all]
+            [com.frereth.common.zmq-socket :as common-mq]
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
             [component-dsl.system :as cpt-dsl]))
@@ -13,7 +14,8 @@
   []
   (let [descr '{:one com.frereth.common.async-zmq/ctor
                 :two com.frereth.common.async-zmq/ctor}
-        ctx (mq/context 1)
+        context (common-mq/ctx-ctor {:thread-count 2})
+        ctx (:ctx context)
         one-pair (mq/build-internal-pair! ctx)
         two-pair (mq/build-internal-pair! ctx)
         ;; TODO: It's tempting to set these built-ins
@@ -32,12 +34,12 @@
                          (mq/send! sock msg :dont-wait))
         writer1 (partial generic-writer "one")
         writer2 (partial generic-writer "two")
-        configuration-tree {:one {:mq-ctx ctx
+        configuration-tree {:one {:mq-ctx context
                                   :ex-sock (:lhs one-pair)
                                   :in-chan (async/chan)
                                   :external-reader reader
                                   :external-writer writer1}
-                            :two {:mq-ctx ctx
+                            :two {:mq-ctx context
                                   :ex-sock (:lhs two-pair)
                                   :in-chan (async/chan)
                                   :external-reader reader

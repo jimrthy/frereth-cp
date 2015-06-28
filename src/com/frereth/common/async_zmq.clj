@@ -14,7 +14,9 @@ Strongly inspired by lynaghk's zmq-async"
             [ribol.core :refer (raise)]
             [schema.core :as s]
             [taoensso.timbre :as log])
-  (:import [com.frereth.common.zmq_socket SocketDescription]))
+  (:import [com.frereth.common.zmq_socket
+            ContextWrapper
+            SocketDescription]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
@@ -35,7 +37,7 @@ Strongly inspired by lynaghk's zmq-async"
    ;; required for building internal inproc sockets
    ;; TODO: Just use the context attached to ex-sock
    ;; Q: Will there ever be a scenario where that's a bad idea?
-   mq-ctx :- mq/Context
+   mq-ctx :- ContextWrapper
 
    ;; Really, these are implementation details
 
@@ -94,7 +96,7 @@ Their entire purpose in life, really, is to shuffle messages between
          ;; architecture is to do the heavy lifting of both reading
          ;; and writing.
          (let [stopper (gensym)
-               in<->ex-sock (mq/build-internal-pair! mq-ctx)
+               in<->ex-sock (mq/build-internal-pair! (:ctx mq-ctx))
                ex-chan (async/chan)
                almost-started (assoc this
                                      :stopper stopper
@@ -178,18 +180,20 @@ Their entire purpose in life, really, is to shuffle messages between
   [{:keys [async->sock in-chan stopper]} :- EventPair]
   (let [internal-> async->sock]
     (async/go
-     (comment) (log/debug "Entering Async event thread")
+     (comment) (log/debug "Entering Async event thread, based on:" in-chan)
      ;; TODO: Catch exceptions?
      (loop [val (async/<! in-chan)]
        (try
-         (when val
-           (log/debug "Incoming async message:\n"
-                      (util/pretty val) "a" (class val)
-                      "\nFrom internal. Forwarding to 0mq")
-           ;; Have to serialize it here: can't
-           ;; send arbitrary data across 0mq sockets
-           (mq/send! internal-> (serialize val))
-           (log/debug "Message forwarded"))
+         (if (-> val nil? not)
+           (do
+             (log/debug "Incoming async message:\n"
+                        (util/pretty val) "a" (class val)
+                        "\nFrom internal. Forwarding to 0mq")
+             ;; Have to serialize it here: can't
+             ;; send arbitrary data across 0mq sockets
+             (mq/send! internal-> (serialize val))
+             (log/debug "Message forwarded"))
+           (log/info "in-chan closed"))
          (catch RuntimeException ex
            (log/error ex "Unexpected error in async loop"))
          (catch Exception ex
@@ -198,7 +202,6 @@ Their entire purpose in life, really, is to shuffle messages between
            (log/error ex "Things have gotten really bad in the async loop")))
        (when (and val (not= val stopper))
          (recur (<? in-chan)))))
-    (comment)
     (log/debug "We either received the stop signal or the internal channel closed")
     :exited-successfully))
 
@@ -235,7 +238,7 @@ Their entire purpose in life, really, is to shuffle messages between
       ;; TODO: Rename this to proxy and split the
       ;; two halves.
       (try
-        (external-writer ex-sock msg)
+        (external-writer (:socket ex-sock) msg)
         (catch RuntimeException ex
           (log/error ex)
           (throw)))
@@ -253,7 +256,7 @@ Their entire purpose in life, really, is to shuffle messages between
     ;; messages in case several arrive at once.
     ;; The most obvious downside to that approach
     ;; is a DDoS that locks us into that forever
-    (let [raw (external-reader ex-sock)
+    (let [raw (external-reader (:socket ex-sock))
           msg (deserialize raw)]
       ;; Forward it along
       (log/debug "0mq Loop: Forwarding\n"
@@ -277,7 +280,7 @@ Their entire purpose in life, really, is to shuffle messages between
   [{:keys [ex-sock ->zmq-sock ex-chan external-reader externalwriter stopper]
     :as component} :- EventPair]
   (let [poller (mq/poller 2)]
-    (mq/register-socket-in-poller! poller ex-sock)
+    (mq/register-socket-in-poller! poller (:socket ex-sock))
     (mq/register-socket-in-poller! poller ->zmq-sock)
     (go-try
      (comment (log/debug "Entering 0mq event thread"))
@@ -313,7 +316,7 @@ Their entire purpose in life, really, is to shuffle messages between
        (finally
          ;; This is probably pointless, but might
          ;; as well do whatever cleanup I can
-         (mq/unregister-socket-in-poller! poller ex-sock)
+         (mq/unregister-socket-in-poller! poller (:socket ex-sock))
          (mq/unregister-socket-in-poller! poller ->zmq-sock)
          (comment (log/debug "Exiting 0mq Event Loop")))))))
 
