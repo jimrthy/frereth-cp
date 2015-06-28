@@ -135,6 +135,14 @@
       slurp
       edn/read-string))
 
+(defmacro make-runner
+  "Ran across this on the clojure mailing list
+
+Idiom for converting expression(s) to a callable"
+  [expr]
+  (eval `(fn []
+           ~expr)))
+
 (defn pick-home
   "Returns the current user's home directory"
   []
