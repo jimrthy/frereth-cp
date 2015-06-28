@@ -8,17 +8,17 @@
             [com.stuartsierra.component :as component]
             [component-dsl.system :as cpt-dsl]))
 
-(defn mock-up
-  "The second half of this seems pretty pointless
-  FIXME: Make it go away"
+(defn mock-structure
   []
-  (let [descr '{:one com.frereth.common.async-zmq/ctor
-                :two com.frereth.common.async-zmq/ctor}
-        context (common-mq/ctx-ctor {:thread-count 2})
-        ctx (:ctx context)
-        one-pair (mq/build-internal-pair! ctx)
-        two-pair (mq/build-internal-pair! ctx)
-        ;; TODO: It's tempting to set these built-ins
+  '{:one com.frereth.common.async-zmq/ctor
+    :two com.frereth.common.async-zmq/ctor
+    :ex-one com.frereth.common.zmq-socket/ctor
+    :ex-two com.frereth.common.zmq-socket/ctor
+    :ctx com.frereth.common.zmq-socket/ctx-ctor})
+
+(defn mock-cfg
+  []
+  (let [;; TODO: It's tempting to set these built-ins
         ;; as defaults, but they really won't be useful
         ;; very often
         reader (fn [sock]
@@ -34,37 +34,52 @@
                          (mq/send! sock msg :dont-wait))
         writer1 (partial generic-writer "one")
         writer2 (partial generic-writer "two")
-        configuration-tree {:one {:mq-ctx context
-                                  :ex-sock (:lhs one-pair)
-                                  :in-chan (async/chan)
-                                  :external-reader reader
-                                  :external-writer writer1}
-                            :two {:mq-ctx context
-                                  :ex-sock (:lhs two-pair)
-                                  :in-chan (async/chan)
-                                  :external-reader reader
-                                  :external-writer writer2}}]
-    (assoc (cpt-dsl/build {:structure descr
-                           :dependencies {}}
-                          configuration-tree)
-           :other-sides {:one (:rhs one-pair)
-                         :two (:rhs two-pair)})))
+        internal-url (gensym)]
+    {:one {:in-chan (async/chan)
+           :external-reader reader
+           :external-writer writer1}
+     :two {:in-chan (async/chan)
+           :external-reader reader
+           :external-writer writer2}
+     :ex-one {:url {:protocol :inproc
+                    :address internal-url}
+              :sock-type :pair
+              :direction :bind}
+     :ex-two {:url {:protocol :inproc
+                    :address internal-url}
+              :sock-type :pair
+              :direction :connect}}))
+
+(defn mock-depends
+  []
+  {:one {:mq-ctx :ctx
+         :ex-sock :ex-one}
+   :two {:mq-ctx :ctx
+         :ex-sock :ex-two}
+   :ex-one [:ctx]
+   :ex-two [:ctx]})
+
+(defn mock-up
+  "TODO: Need tests that work with both EventEair instances"
+  []
+  (let [descr (mock-structure)
+        dependencies (mock-depends)
+        configuration-tree (mock-cfg)]
+    (cpt-dsl/build {:structure descr
+                    :dependencies dependencies}
+                   configuration-tree)))
 
 (defn started-mock-up
   "For scenarios where the default behavior is fine
 Probably won't be very useful: odds are, we'll want to
 customize the reader/writer to create useful tests"
   []
-  (let [inited (mock-up)
-        other (:other-sides inited)]
-    (assoc (component/start (dissoc inited :other-sides))
-           :other-sides other)))
+  (component/start (mock-up)))
 
-(comment
-  (deftest basic-loops []
+(deftest basic-loops []
     (testing "Manage start/stop"
       (let [system (started-mock-up)]
-        (component/stop system)))))
+        (component/stop system))))
 
 (comment
   #_(require '[com.frereth.common.async-zmq-test :as azt])
@@ -74,12 +89,20 @@ customize the reader/writer to create useful tests"
   (component/stop mock))
 (deftest message-from-outside
   []
-  (let [system (started-mock-up)]
+  (let [system (started-mock-up)
+        ;; For purposes of this test (which is more low-level
+        ;; building block than realistic usage), we don't
+        ;; want the "other half" EventPair stealing the message:
+        ;; we just want to verify that it should have been sent.
+        ;; This is more than a little ridiculous, but it *is*
+        ;; a very low-level test
+        src (-> system :two :ex-sock)
+        stopped (component/stop (:two system))
+        system (assoc system :two stopped)]
     (try
       (let [dst (-> system :one :ex-chan)
             receive-thread (async/go
                              (async/<! dst))
-            src (-> system :other-sides :one)
             sym (gensym)
             msg (-> sym name .getBytes)]
         (println "Pretending to send" msg "from the outside world")
@@ -121,22 +144,24 @@ customize the reader/writer to create useful tests"
 
 (deftest message-to-outside []
   (println "Starting mock for testing message-to-outside")
-  (let [system (started-mock-up)]
+  (let [system (started-mock-up)
+        ;; Again, we don't want the "other half" EventPair
+        ;; stealing the messages that we're trying to verify
+        ;; reach it.
+        ;; Yes, this test is pretty silly.
+        dst (-> system :two :ex-sock)
+        stopped (component/stop (:two system))
+        system (assoc :two stopped)]
     (println "mock loops started")
     (try
       (let [src (-> system :one :in-chan)
-            dst (-> system :other-sides :one)
-            ;;msg-string (-> (gensym) name)
-            ;;msg (.getBytes msg-string)
-            msg #_(gensym) {:action :login
-                            :user "#1"
-                            :auth-token (gensym)
-                            :character-set "utf-8"}]
-        (comment (Thread/sleep 500))
+            msg {:action :login
+                 :user "#1"
+                 :auth-token (gensym)
+                 :character-set "utf-8"}]
         (println "Submitting" msg "to internal channel")
         (let [[v c] (async/alts!! [(async/timeout 1000)
                                    [src msg]])]
-          ;; We are sending this message successfully
           (testing "Message submitted to async loop"
             (is (= src c) "Timed out trying to send")
             (is v))

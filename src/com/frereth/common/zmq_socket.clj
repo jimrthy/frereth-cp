@@ -1,7 +1,9 @@
 (ns com.frereth.common.zmq-socket
   (:require [cljeromq.core :as mq]
+            [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
-            [schema.core :as s]))
+            [schema.core :as s]
+            [taoensso.timbre :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
@@ -44,6 +46,10 @@
   (start
    [this]
    (when-not socket
+     (assert ctx "Can't do anything without a Messaging Context")
+     (log/debug "Getting ready to try to start a socket based on context\n"
+                (util/pretty ctx)
+                "a" (class ctx))
      (let [sock (mq/socket! (:ctx ctx) sock-type)
          uri (mq/connection-string url)]
      (if (= direction :bind)

@@ -58,7 +58,6 @@ alternatives make more sense."
                                                  ;; reader and writer
                                                  :mq-ctx :zmq-context}
                                     :ex-sock {:ctx :zmq-context}}}]
-    (throw RuntimeException. "Start Here")
     (cpt-dsl/build description
                    {:zmq-context {:thread-count ctx-thread-count}
                     :event-loop {:in-chan (async/chan)}

@@ -25,6 +25,8 @@ Strongly inspired by lynaghk's zmq-async"
 (s/defrecord EventPair
   [;; Important for public API
    ;; send messages to this to get them to 0mq. Supplied by caller
+   ;; (that's where the messages come from, so that's what's responsible
+   ;; for opening/closing)
    in-chan :- fr-sch/async-channel
    ;; faces outside world.
    ;; Caller provides, because binding/connecting is really not in scope here
@@ -88,34 +90,52 @@ Their entire purpose in life, really, is to shuffle messages between
          ;; It only makes sense that that's where it gets created
          (assert in-chan "Missing internal async channel")
 
-         ;; TODO: Still need the functions to call to read/write
-         ;; from/to ex-sock
-         ;; TODO: Need channel(s) to write to for handling incoming
-         ;; messages.
-         ;; These can't be in-chan: the entire point to this
-         ;; architecture is to do the heavy lifting of both reading
-         ;; and writing.
-         (let [stopper (gensym)
-               in<->ex-sock (mq/build-internal-pair! (:ctx mq-ctx))
-               ex-chan (async/chan)
-               almost-started (assoc this
-                                     :stopper stopper
-                                     :in<->ex-sock in<->ex-sock
-                                     :->zmq-sock (:rhs in<->ex-sock)
-                                     :async->sock (:lhs in<->ex-sock)
-                                     :ex-chan ex-chan)
-               ;; The choice between lhs and rhs for who gets
-               ;; which of the internal pairs is completely
-               ;; and deliberately arbitrary.
-               ;; Well, I'm thinking in terms of writing left
-               ;; to right and messages originating from the
-               ;; interior more often, but that isn't even
-               ;; vaguely realistic.
-               zmq-loop (run-zmq-loop! almost-started)
-               async-loop (run-async-loop! almost-started)]
-           (assoc almost-started
-                  :async-loop async-loop
-                  :zmq-loop zmq-loop)))
+         ;; Set up default readers/writers
+         (let [this (as-> (if external-reader
+                            this
+                            (assoc this
+                                   :external-reader
+                                   (fn [sock]
+                                     ;; It's tempting to default
+                                     ;; to :dont-wait
+                                     ;; But we shouldn't ever
+                                     ;; try reading this unless
+                                     ;; a Poller just verified
+                                     ;; that messages are waiting.
+                                     (mq/raw-recv! sock :wait))))
+                        this
+                      (if external-writer
+                        this
+                        (assoc this
+                               :external-writer
+                               (fn [sock array-of-bytes]
+                                 (mq/send! sock array-of-bytes)))))]
+           ;; TODO: Need channel(s) to write to for handling incoming
+           ;; messages.
+           ;; These can't be in-chan: the entire point to this
+           ;; architecture is to do the heavy lifting of both reading
+           ;; and writing.
+           (let [stopper (gensym)
+                 in<->ex-sock (mq/build-internal-pair! (:ctx mq-ctx))
+                 ex-chan (async/chan)
+                 almost-started (assoc this
+                                       :stopper stopper
+                                       :in<->ex-sock in<->ex-sock
+                                       :->zmq-sock (:rhs in<->ex-sock)
+                                       :async->sock (:lhs in<->ex-sock)
+                                       :ex-chan ex-chan)
+                 ;; The choice between lhs and rhs for who gets
+                 ;; which of the internal pairs is completely
+                 ;; and deliberately arbitrary.
+                 ;; Well, I'm thinking in terms of writing left
+                 ;; to right and messages originating from the
+                 ;; interior more often, but that isn't even
+                 ;; vaguely realistic.
+                 zmq-loop (run-zmq-loop! almost-started)
+                 async-loop (run-async-loop! almost-started)]
+             (assoc almost-started
+                    :async-loop async-loop
+                    :zmq-loop zmq-loop))))
   (stop [this]
         ;; signal the async half of the event loop to exit
         (when async-loop
