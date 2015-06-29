@@ -32,13 +32,14 @@ frereth.client.
 And frereth.server. And, if there's ever a 'real' stand-alone
 frereth.renderer, there.
 
-So this abstraction absolutely belongs here in common.
+So this abstraction absolutely belongs in common.
 
-It seems to make less sense under system, but I'm not sure which
-alternatives make more sense."
+It seems to make less sense under the system namespace, but
+I'm not sure which alternatives make more sense."
   [{:keys [ctx-thread-count
            socket-type
            direction
+           event-loop-name
            ;; TODO: Further destructure the URL
            ;; It'd be really nice to just be able to override
            ;; the default port
@@ -60,7 +61,8 @@ alternatives make more sense."
                                     :ex-sock {:ctx :zmq-context}}}]
     (cpt-dsl/build description
                    {:zmq-context {:thread-count ctx-thread-count}
-                    :event-loop {:in-chan (async/chan)}
+                    :event-loop {:_name event-loop-name
+                                 :in-chan (async/chan)}
                     :ex-sock {:url url
                               :direction direction
                               :sock-type socket-type}})))

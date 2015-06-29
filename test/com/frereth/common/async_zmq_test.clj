@@ -34,11 +34,13 @@
                          (mq/send! sock msg :dont-wait))
         writer1 (partial generic-writer "one")
         writer2 (partial generic-writer "two")
-        internal-url (gensym)]
-    {:one {:in-chan (async/chan)
+        internal-url (name (gensym))]
+    {:one {:_name "Event Loop One"
+           :in-chan (async/chan)
            :external-reader reader
            :external-writer writer1}
-     :two {:in-chan (async/chan)
+     :two {:_name "Event Loop Two"
+           :in-chan (async/chan)
            :external-reader reader
            :external-writer writer2}
      :ex-one {:url {:protocol :inproc
@@ -101,16 +103,30 @@ customize the reader/writer to create useful tests"
         system (assoc system :two stopped)]
     (try
       (let [dst (-> system :one :ex-chan)
+            ;; Because of the way this is wired up,
+            ;; we need to read the message that stopped the
+            ;; event loop
+            original-killer (async/<!! dst)
             receive-thread (async/go
                              (async/<! dst))
             sym (gensym)
             msg (-> sym name .getBytes)]
-        (println "Pretending to send" msg "from the outside world")
-        (mq/send! src msg :dont-wait)
+        (println "Pretending to send" msg
+                 "(" sym
+                 ") from the outside world")
+        (mq/send! (:socket src) msg :dont-wait)
         (testing "From outside in"
           (comment (Thread/sleep 100))
           (let [[v c] (async/alts!! [(async/timeout 1000) receive-thread])]
-            (is (= sym v))
+            ;; Apparently a gensym can't = the symbol we just pulled
+            ;; back, even though it really is the same
+            ;; Actually, it isn't. I'm getting back a different
+            ;; value.
+            (is (= (class sym) (class v))
+                (str "v should have the same class as sym. Instead it's a"
+                               (class v)))
+            (is (= (name sym) (name v))
+                "Response doesn't even resemble the source gensym")
             (is (= receive-thread c)))))
       (finally
         (component/stop system)))))
@@ -151,7 +167,8 @@ customize the reader/writer to create useful tests"
         ;; Yes, this test is pretty silly.
         dst (-> system :two :ex-sock)
         stopped (component/stop (:two system))
-        system (assoc :two stopped)]
+        stop-signal (async/<!! (-> system :one :ex-chan))      ; flush the buffer
+        system (assoc system :two stopped)]
     (println "mock loops started")
     (try
       (let [src (-> system :one :in-chan)
@@ -165,14 +182,26 @@ customize the reader/writer to create useful tests"
           (testing "Message submitted to async loop"
             (is (= src c) "Timed out trying to send")
             (is v))
-          (println "Pausing to let message get through loop pairs")
-          (Thread/sleep 1500)  ; give it time to get through the loop
+
+          ;; give it time to get through the loop
+          ;; This shouldn't matter. If there isn't a listener
+          ;; ready, the sender should block
+          (comment (println "Pausing to let message get through loop pairs")
+                   (Thread/sleep 1500))
+
           (testing "Did message make it to other side?"
             (let [result
                   (loop [retries 5
-                         serialized (mq/recv! dst :dont-wait)]
+                         serialized (mq/recv! (:socket dst) :dont-wait)]
                     (if serialized
                       (let [result (deserialize serialized)]
+                        (println "Received"
+                                 serialized
+                                 "a"
+                                 (class serialized)
+                                 "\naka"
+                                 result "a"
+                                 (class result))
                         (is (= msg result))
                         (println "message-to-outside delivered" result)
                         result)
@@ -181,9 +210,8 @@ customize the reader/writer to create useful tests"
                           (println "Retry # " n)
                           (Thread/sleep (* 100 n))
                           (recur (dec retries)
-                                 (mq/recv! dst :dont-wait))))))]
-              (when-not result
-                (is false "Message swallowed"))))))
+                                 (mq/recv! (:socket dst) :dont-wait))))))]
+              (is result "Message swallowed")))))
       (finally
         (component/stop system)))
     (println "message-to-outside exiting")))
