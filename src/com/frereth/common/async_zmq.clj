@@ -210,31 +210,31 @@ Send a duplicate stopper ("
   [{:keys [async->sock in-chan _name stopper]} :- EventPair]
   (let [internal-> async->sock]
     (async/go
-     (comment) (log/debug "Entering "
-                          _name
-                          " Async event thread, based on:"
-                          in-chan)
-     (loop [val (async/<! in-chan)]
-       (try
-         (if (-> val nil? not)
-           (do
-             (log/debug _name " Incoming async message:\n"
-                        (util/pretty val) "a" (class val)
-                        "\nFrom internal. Forwarding to 0mq")
-             ;; Have to serialize it here: can't
-             ;; send arbitrary data across 0mq sockets
-             (mq/send! internal-> (serialize val))
-             (log/debug _name ": Message forwarded"))
-           (log/info _name ": in-chan closed -- this will end loop"))
-         (catch RuntimeException ex
-           (log/error ex "Unexpected error in async loop"))
-         (catch Exception ex
-           (log/error ex "Unexpected bad error in async loop"))
-         (catch Throwable ex
-           (log/error ex "Things have gotten really bad in the async loop")))
-       (when (and val (not= val stopper))
-         (recur (<? in-chan)))))
-    (log/debug "We either received the stop signal or the internal channel closed")
+      (log/debug "Entering "
+                 _name
+                 " Async event thread, based on:"
+                 in-chan)
+      (loop [val (async/<! in-chan)]
+        (try
+          (if (-> val nil? not)
+            (do
+              (log/debug _name " Incoming async message:\n"
+                         (util/pretty val) "a" (class val)
+                         "\nFrom internal. Forwarding to 0mq")
+              ;; Have to serialize it here: can't
+              ;; send arbitrary data across 0mq sockets
+              (mq/send! internal-> (serialize val))
+              (log/debug _name ": Message forwarded"))
+            (log/info _name ": in-chan closed -- this will end loop"))
+          (catch RuntimeException ex
+            (log/error ex "Unexpected error in async loop"))
+          (catch Exception ex
+            (log/error ex "Unexpected bad error in async loop"))
+          (catch Throwable ex
+            (log/error ex "Things have gotten really bad in the async loop")))
+        (when (and val (not= val stopper))
+          (recur (<? in-chan))))
+      (log/debug "We either received the stop signal or the internal channel closed"))
     :exited-successfully))
 
 (s/defn possibly-recv-internal!
