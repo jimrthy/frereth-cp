@@ -54,10 +54,8 @@
 
 (defn mock-depends
   []
-  {:one {:mq-ctx :ctx
-         :ex-sock :ex-one}
-   :two {:mq-ctx :ctx
-         :ex-sock :ex-two}
+  {:one {:ex-sock :ex-one}
+   :two {:ex-sock :ex-two}
    :ex-one [:ctx]
    :ex-two [:ctx]})
 
