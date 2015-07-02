@@ -6,7 +6,9 @@
             [com.frereth.common.zmq-socket :as common-mq]
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
-            [component-dsl.system :as cpt-dsl]))
+            [component-dsl.system :as cpt-dsl]
+            [schema.core :as s])
+  (:import [com.stuartsierra.component SystemMap]))
 
 (defn mock-structure
   []
@@ -75,6 +77,22 @@ Probably won't be very useful: odds are, we'll want to
 customize the reader/writer to create useful tests"
   []
   (component/start (mock-up)))
+
+(s/defn with-mock
+  "This really isn't a good way to handle this, but it seems like an obvious lazy starter approach
+
+To be fair, the 'proper' approach here is starting to look like a macro.
+
+I've already been down that path with midje.
+
+I'd like to pretend that the results would be happier with macros that
+I write, but I know better."
+  [f :- (s/=> s/Any SystemMap)]
+  (let [system (started-mock-up)]
+    (try
+      (f system)
+      (finally
+        (component/stop system)))))
 
 (deftest basic-loops []
     (testing "Manage start/stop"
@@ -213,3 +231,64 @@ customize the reader/writer to create useful tests"
       (finally
         (component/stop system)))
     (println "message-to-outside exiting")))
+
+(deftest echo
+  []
+  (testing "Can send a request and get an echo back"
+    (let [test (fn [system]
+                 (let [left-chan (-> system :one :in-chan)
+                       ex-left (-> system :one :ex-chan)
+                       right-chan (-> system :two :in-chan)
+                       ex-right (-> system :two :ex-chan)
+                       msg {:op :echo
+                            :payload "The quick red fox"}]
+                   (testing "\n\tRequest sent"
+                     (let [[v c] (async/alts!! [[left-chan msg] (async/timeout 150)])]
+                       (is (= c left-chan))
+                       (is v)))
+                   (let [[v c] (async/alts!! [ex-right (async/timeout 750)])]
+                     (testing "\n\tInitial request received"
+                       (is (= c ex-right))
+                       (is (= msg v))))
+                   (let [[v c] (async/alts!! [[right-chan msg] (async/timeout 150)])]
+                     (testing "\n\tResponse sent"
+                       (is (= c right-chan))
+                       (is v)))
+                   (let [[v c] (async/alts!! [ex-left (async/timeout 750)])]
+                     (testing "\n\tEcho received"
+                       (is (= c ex-left))
+                       (is (= msg v))))))]
+      (with-mock test))))
+
+(deftest evaluate
+  []
+  (testing "Can send a request and get an echo back"
+    (let [test (fn [system]
+                 (let [left-chan (-> system :one :in-chan)
+                       ex-left (-> system :one :ex-chan)
+                       right-chan (-> system :two :in-chan)
+                       ex-right (-> system :two :ex-chan)
+                       x (rand-int 1000)
+                       y (rand-int 1000)
+                       msg {:op :eval
+                            :payload (list '* x y)}]
+                   (testing "\n\tRequest sent"
+                     (let [[v c] (async/alts!! [[left-chan msg] (async/timeout 150)])]
+                       (is (= c left-chan))
+                       (is v)))
+                   (let [[v c] (async/alts!! [ex-right (async/timeout 750)])]
+                     (testing "\n\tInitial request received"
+                       (is (= c ex-right))
+                       (is (= msg v)))
+                     (let [read (:payload v)
+                           op (first read)
+                           result (apply op (rest read))
+                           [v c] (async/alts!! [[right-chan result] (async/timeout 150)])]
+                       (testing "\n\tResponse sent"
+                         (is (= c right-chan))
+                         (is v))))
+                   (let [[v c] (async/alts!! [ex-left (async/timeout 750)])]
+                     (testing "\n\tEcho received"
+                       (is (= c ex-left))
+                       (is (= (* x y) v))))))]
+      (with-mock test))))

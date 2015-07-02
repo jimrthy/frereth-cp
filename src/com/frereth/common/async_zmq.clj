@@ -210,9 +210,9 @@ Send a duplicate stopper ("
   [{:keys [async->sock in-chan _name stopper]} :- EventPair]
   (let [internal-> async->sock]
     (async/go
-      (log/debug "Entering "
+      (log/debug "Entering"
                  _name
-                 " Async event thread, based on:"
+                 "Async event thread, based on:"
                  in-chan)
       (loop [val (async/<! in-chan)]
         (try
