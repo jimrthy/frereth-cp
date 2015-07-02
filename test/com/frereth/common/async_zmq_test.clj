@@ -281,7 +281,7 @@ I write, but I know better."
                        (is (= c ex-right))
                        (is (= msg v)))
                      (let [read (:payload v)
-                           op (first read)
+                           op (-> read first resolve)
                            result (apply op (rest read))
                            [v c] (async/alts!! [[right-chan result] (async/timeout 150)])]
                        (testing "\n\tResponse sent"
