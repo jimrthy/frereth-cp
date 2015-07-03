@@ -369,5 +369,6 @@ Send a duplicate stopper ("
 ;;; Public
 
 (s/defn ctor :- EventPair
-  [cfg]
+  [{:keys [_name in-chan]
+    :as  cfg}]
   (map->EventPair cfg))

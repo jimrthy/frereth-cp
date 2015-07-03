@@ -26,8 +26,7 @@
                                                                      prismatic/schema]]
                  [com.jimrthy/component-dsl "0.1.1-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [com.stuartsierra/component "0.2.3"]
-                 [com.taoensso/timbre "3.4.0" :exclusions [#_com.taoensso/encore
-                                                           org.clojure/clojure
+                 [com.taoensso/timbre "3.4.0" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
                  [fullcontact/full.async "0.4.22" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]

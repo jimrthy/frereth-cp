@@ -78,7 +78,7 @@
   (map->ContextWrapper options))
 
 (s/defn ctor :- SocketDescription
-  [{:keys [ctx url direction sock-type]
+  [{:keys [direction sock-type url]
     :or {direction :connect}
     :as options}]
   (map->SocketDescription options))
