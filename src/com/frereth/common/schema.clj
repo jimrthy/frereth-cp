@@ -6,6 +6,7 @@
   (:import [java.util Date]))
 
 (def async-channel (class (async/chan)))
+(def atom-type (class (atom nil)))
 (def java-byte-array mq/byte-array-class)
 (def korks
   "I hated this name the first few times I ran across it in argument lists.
