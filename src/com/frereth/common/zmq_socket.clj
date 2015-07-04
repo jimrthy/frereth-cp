@@ -3,7 +3,8 @@
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
             [schema.core :as s]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log])
+  (:import [org.zeromq ZMQException]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
@@ -20,19 +21,22 @@
   component/Lifecycle
   (start
    [this]
-   (when-not ctx
+   (if-not ctx
      (let [thread-count (or thread-count 1)
            ctx (mq/context thread-count)]
        (assoc this
               :ctx ctx
-              :thread-count thread-count))))
+              :thread-count thread-count))
+     this))
   (stop
    [this]
-   (when ctx
-     ;; Note that this is going to hang until
-     ;; all sockets are closed
-     (mq/terminate! ctx)
-     (assoc this :ctx nil))))
+   (if ctx
+     (do
+       ;; Note that this is going to hang until
+       ;; all sockets are closed
+       (mq/terminate! ctx)
+       (assoc this :ctx nil))
+     this)))
 
 (s/defrecord SocketDescription
     [ctx :- ContextWrapper
@@ -45,25 +49,35 @@
   component/Lifecycle
   (start
    [this]
-   (when-not socket
-     (assert ctx "Can't do anything without a Messaging Context")
-     (log/debug "Getting ready to try to start a"
-                sock-type
-                "socket based on context\n"
-                (util/pretty ctx)
-                "a" (class ctx))
-     (let [sock (mq/socket! (:ctx ctx) sock-type)
-           uri (mq/connection-string url)]
-     (if (= direction :bind)
-       (mq/bind! sock uri)
-       (mq/connect! sock uri))
-     (assoc this :socket sock))))
+   (if-not socket
+     (do
+       (assert ctx "Can't do anything without a Messaging Context")
+       (log/debug "Getting ready to try to start a"
+                  sock-type
+                  "socket based on context\n"
+                  (util/pretty ctx)
+                  "a" (class ctx))
+       (let [sock (mq/socket! (:ctx ctx) sock-type)
+             uri (mq/connection-string url)]
+         (if (= direction :bind)
+           (mq/bind! sock uri)
+           (mq/connect! sock uri))
+         (assoc this :socket sock)))
+     this))
   (stop
    [this]
-   (when socket
-     (mq/set-linger! socket 0)
-     (mq/close! socket)
-     (assoc this :socket nil))))
+   (if socket
+     (do
+       (try
+         (mq/set-linger! socket 0)
+         (mq/close! socket)
+         (catch ZMQException ex
+           (log/error ex "Trying to close socket:" socket
+                      "\nAre you trying to stop this a second time?"
+                      "\n(if so, you probably have a bug where you should"
+                      " be using the result of the first call to stop)")))
+       (assoc this :socket nil))
+     this)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

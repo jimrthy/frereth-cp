@@ -14,6 +14,8 @@
   []
   '{:one com.frereth.common.async-zmq/ctor
     :two com.frereth.common.async-zmq/ctor
+    :iface-one com.frereth.common.async-zmq/interface-ctor
+    :iface-two com.frereth.common.async-zmq/interface-ctor
     :ex-one com.frereth.common.zmq-socket/ctor
     :ex-two com.frereth.common.zmq-socket/ctor
     :ctx com.frereth.common.zmq-socket/ctx-ctor})
@@ -56,8 +58,10 @@
 
 (defn mock-depends
   []
-  {:one {:ex-sock :ex-one}
-   :two {:ex-sock :ex-two}
+  {:one {:interface :iface-one}
+   :two {:interface :iface-two}
+   :iface-one {:ex-sock :ex-one}
+   :iface-two {:ex-sock :ex-two}
    :ex-one [:ctx]
    :ex-two [:ctx]})
 
@@ -94,7 +98,7 @@ I write, but I know better."
       (finally
         (component/stop system)))))
 
-(deftest basic-loops []
+(deftest basic-loops
     (testing "Manage start/stop"
       (let [system (started-mock-up)]
         (component/stop system))))
@@ -102,55 +106,58 @@ I write, but I know better."
 (comment
   #_(require '[com.frereth.common.async-zmq-test :as azt])
   (def mock (#_azt/started-mock-up started-mock-up))
-  (mq/send! (-> mock :other-sides :one) (pr-str {:a 1 :b 2 :c 3}) :dont-wait)
+  (mq/send! (-> mock :two :interface :ex-sock :socket)
+
+            ;; TODO: Shouldn't I be using something like
+            ;; pr-dup instead?
+            (pr-str {:a 1 :b 2 :c 3}) :dont-wait)
   (async/alts!! [(async/timeout 1000) (-> mock :one :ex-chan)])
   (component/stop mock))
 (deftest message-from-outside
-  []
-  (let [system (started-mock-up)
-        ;; For purposes of this test (which is more low-level
-        ;; building block than realistic usage), we don't
-        ;; want the "other half" EventPair stealing the message:
-        ;; we just want to verify that it should have been sent.
-        ;; This is more than a little ridiculous, but it *is*
-        ;; a very low-level test
-        src (-> system :two :ex-sock)
-        stopped (component/stop (:two system))
-        system (assoc system :two stopped)]
-    (try
-      (let [dst (-> system :one :ex-chan)
-            ;; Because of the way this is wired up,
-            ;; we need to read the message that stopped the
-            ;; event loop
-            original-killer (async/<!! dst)
-            receive-thread (async/go
-                             (async/<! dst))
-            sym (gensym)
-            msg (-> sym name .getBytes)]
-        (println "Pretending to send" msg
-                 "(" sym
-                 ") from the outside world")
-        (mq/send! (:socket src) msg :dont-wait)
-        (testing "From outside in"
-          (comment (Thread/sleep 100))
-          (let [[v c] (async/alts!! [(async/timeout 1000) receive-thread])]
-            ;; Apparently a gensym can't = the symbol we just pulled
-            ;; back, even though it really is the same
-            ;; Actually, it isn't. I'm getting back a different
-            ;; value.
-            (is (= (class sym) (class v))
-                (str "v should have the same class as sym. Instead it's a"
-                               (class v)))
-            (is (= (name sym) (name v))
-                "Response doesn't even resemble the source gensym")
-            (is (= receive-thread c)))))
-      (finally
-        (component/stop system)))))
+  (testing "Message From Outside"
+    (let [system (started-mock-up)
+          ;; For purposes of this test (which is more low-level
+          ;; building block than realistic usage), we don't
+          ;; want the "other half" EventPair stealing the message:
+          ;; we just want to verify that it should have been sent.
+          ;; This is more than a little ridiculous, but it *is*
+          ;; a very low-level test
+          src (-> system :two :interface :ex-sock)
+          stopped (component/stop (:two system))
+          system (assoc system :two stopped)]
+      (try
+        (let [dst (-> system :one :ex-chan)
+              ;; Because of the way this is wired up,
+              ;; we need to read the message that stopped the
+              ;; event loop
+              original-killer (async/<!! dst)
+              receive-thread (async/go
+                               (async/<! dst))
+              sym (gensym)
+              msg (-> sym name .getBytes)]
+          (println "Pretending to send" msg
+                   "(" sym
+                   ") from the outside world")
+          (mq/send! (:socket src) msg :dont-wait)
+          (testing "From outside in"
+            (let [[v c] (async/alts!! [(async/timeout 1000) receive-thread])]
+              ;; Apparently a gensym can't = the symbol we just pulled
+              ;; back, even though it really is the same
+              ;; Actually, it isn't. I'm getting back a different
+              ;; value.
+              (is (= (class sym) (class v))
+                  (str "v should have the same class as sym. Instead it's a"
+                       (class v)))
+              (is (= (name sym) (name v))
+                  "Response doesn't even resemble the source gensym")
+              (is (= receive-thread c)))))
+        (finally
+          (component/stop system))))))
 
 (comment
   (let [mock (started-mock-up)
-        src (-> mock :one :in-chan)
-        dst (-> mock :other-sides :one)
+        src (-> mock :one :interface :in-chan)
+        dst (-> mock :two :interface :ex-sock :socket)
         _ (println "Kicking everything off")
         [v c] (async/alts!! [(async/timeout 1000)
                              [src "Who goes there?"]])]
@@ -181,13 +188,13 @@ I write, but I know better."
         ;; stealing the messages that we're trying to verify
         ;; reach it.
         ;; Yes, this test is pretty silly.
-        dst (-> system :two :ex-sock)
+        dst (-> system :two :interface :ex-sock)
         stopped (component/stop (:two system))
         stop-signal (async/<!! (-> system :one :ex-chan))      ; flush the buffer
         system (assoc system :two stopped)]
     (println "mock loops started")
     (try
-      (let [src (-> system :one :in-chan)
+      (let [src (-> system :one :interface :in-chan)
             msg {:action :login
                  :user "#1"
                  :auth-token (gensym)
@@ -236,9 +243,9 @@ I write, but I know better."
   []
   (testing "Can send a request and get an echo back"
     (let [test (fn [system]
-                 (let [left-chan (-> system :one :in-chan)
+                 (let [left-chan (-> system :one :interface :in-chan)
                        ex-left (-> system :one :ex-chan)
-                       right-chan (-> system :two :in-chan)
+                       right-chan (-> system :two :interface :in-chan)
                        ex-right (-> system :two :ex-chan)
                        msg {:op :echo
                             :payload "The quick red fox"}]
@@ -264,9 +271,9 @@ I write, but I know better."
   []
   (testing "Can send a request and get an echo back"
     (let [test (fn [system]
-                 (let [left-chan (-> system :one :in-chan)
+                 (let [left-chan (-> system :one :interface :in-chan)
                        ex-left (-> system :one :ex-chan)
-                       right-chan (-> system :two :in-chan)
+                       right-chan (-> system :two :interface :in-chan)
                        ex-right (-> system :two :ex-chan)
                        x (rand-int 1000)
                        y (rand-int 1000)
