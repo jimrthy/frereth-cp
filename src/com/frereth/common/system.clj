@@ -53,7 +53,7 @@ I'm not sure which alternatives make more sense."
               :port 9182}}}]
   (let [description {:structure '{:zmq-context com.frereth.common.zmq-socket/ctx-ctor
                                   :event-loop com.frereth.common.async-zmq/ctor
-                                  :evt-iface com.frereth.common.async-zmq/interface-ctor
+                                  :evt-iface com.frereth.common.async-zmq/ctor-interface
                                   :ex-sock com.frereth.common.zmq-socket/ctor}
                      :dependencies {:evt-iface [:ex-sock]
                                     :event-loop {:interface :evt-iface}

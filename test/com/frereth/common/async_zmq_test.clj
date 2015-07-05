@@ -14,8 +14,8 @@
   []
   '{:one com.frereth.common.async-zmq/ctor
     :two com.frereth.common.async-zmq/ctor
-    :iface-one com.frereth.common.async-zmq/interface-ctor
-    :iface-two com.frereth.common.async-zmq/interface-ctor
+    :iface-one com.frereth.common.async-zmq/ctor-interface
+    :iface-two com.frereth.common.async-zmq/ctor-interface
     :ex-one com.frereth.common.zmq-socket/ctor
     :ex-two com.frereth.common.zmq-socket/ctor
     :ctx com.frereth.common.zmq-socket/ctx-ctor})
@@ -130,6 +130,7 @@ I write, but I know better."
               ;; Because of the way this is wired up,
               ;; we need to read the message that stopped the
               ;; event loop
+              ;; Except that it shouldn't have arrived here.
               original-killer (async/<!! dst)
               receive-thread (async/go
                                (async/<! dst))
