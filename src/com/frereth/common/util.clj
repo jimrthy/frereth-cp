@@ -171,3 +171,27 @@ Yes, it does seem pretty stupid"
   "Because remembering the java namespace is annoying"
   []
   (UUID/randomUUID))
+
+(s/defn thread-count :- s/Int
+  "Rough estimate of how many threads are currently being used
+Probably doesn't mean much, considering thread pools. But it can't hurt
+to know and have available
+
+Note that this should *not* be used for monitoring. It's pretty heavy-
+weight.
+
+c.f. stackoverflow.com/questions/1323408/get-a-list-of-all-threads-currently-running-in-java
+for a more complex-looking example which would be much more appropriate for that
+sort of scenario"
+  []
+  (count (Thread/getAllStackTraces)))
+
+;;; Named constants for timeouts
+;;; TODO: These really don't belong in here
+;;; Aside from being grossly inaccurate
+(defn seconds [] 1000)  ; avoid collision w/ built-in second
+(defn minute [] (* 60 (seconds)))
+(defn hour [] (* 60 (minute)))
+(defn day [] (* 24 (hour)))
+(defn week [] (* 7 (day)))
+(defn year [] (* 365 day))

@@ -182,6 +182,13 @@ I write, but I know better."
         [v result])
       ["Nothing came out" v])))
 
+(comment
+  ;; Because I've managed to really screw up my REPL key bindings
+  ;; I'm tired of scrolling around trying to find these
+  (count (Thread/getAllStackTraces))
+  (def started (azt/started-mock-up))
+  (def started (component/stop started)))
+
 (deftest message-to-outside []
   (println "Starting mock for testing message-to-outside")
   (let [system (started-mock-up)
