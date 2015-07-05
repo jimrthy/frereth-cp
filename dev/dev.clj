@@ -17,6 +17,11 @@
             [com.frereth.common.util :as util]
             [ribol.core :refer (raise)]))
 
+;; Because this seems to be the only namespace I ever actually
+;; use in here, and I'm tired of typing it out because it's
+;; ridiculously long
+(require '[com.frereth.common.async-zmq-test :as azt])
+
 (def system nil)
 
 (defn init
