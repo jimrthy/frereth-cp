@@ -75,7 +75,8 @@
            (log/error ex "Trying to close socket:" socket
                       "\nAre you trying to stop this a second time?"
                       "\n(if so, you probably have a bug where you should"
-                      " be using the result of the first call to stop)")))
+                      " be using the result of the first call to stop)")
+           (assoc this :socket nil)))
        (assoc this :socket nil))
      this)))
 

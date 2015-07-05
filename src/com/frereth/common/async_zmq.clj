@@ -397,7 +397,7 @@ Send a duplicate stopper ("
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(s/defn interface-ctor :- EventPairInterface
+(s/defn ctor-interface :- EventPairInterface
   [{:keys [ex-sock in-chan
            external-reader external-writer]
     :as cfg}]
