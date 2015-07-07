@@ -183,14 +183,14 @@ Their entire purpose in life, really, is to shuffle messages between
   (stop [this]
         (when async-loop
           (do-signal-async-loop-exit async-loop
-                                     interface stopper _name))
+                                     interface stopper _name)
+          (log/debug _name ": Waiting for Async Loop " async-loop " to exit")
+          (do-wait-for-async-loop-to-exit _name async-loop stopper async->sock)
+          (log/debug _name ": async loop exited"))
 
         (if ex-chan
           (async/close! ex-chan)
           (log/info _name ": No ex-chan. Assume this means we weren't actually started"))
-
-        (log/debug "Waiting for Async Loop " async-loop " to exit")
-        (do-wait-for-async-loop-to-exit _name async-loop stopper async->sock)
 
         (log/debug _name ": Waiting for 0mq Event Loop to exit")
         (when zmq-loop
@@ -204,6 +204,7 @@ Their entire purpose in life, really, is to shuffle messages between
         (when in<->ex-sock
           (comment) (log/debug _name ": Final cleanup")
           (mq/close-internal-pair! in<->ex-sock))
+        (log/debug _name ": finished cleaning up")
         (assoc this
                :stopper nil
                :in<->ex-sock nil

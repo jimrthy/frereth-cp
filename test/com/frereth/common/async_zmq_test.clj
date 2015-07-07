@@ -99,9 +99,10 @@ I write, but I know better."
         (component/stop system)))))
 
 (deftest basic-loops
-    (testing "Manage start/stop"
-      (let [system (started-mock-up)]
-        (component/stop system))))
+  (println "\n\n\tbasic-loops")
+  (testing "Manage start/stop"
+    (let [system (started-mock-up)]
+      (component/stop system))))
 
 (comment
   #_(require '[com.frereth.common.async-zmq-test :as azt])
@@ -114,6 +115,7 @@ I write, but I know better."
   (async/alts!! [(async/timeout 1000) (-> mock :one :ex-chan)])
   (component/stop mock))
 (deftest message-from-outside
+  (println "\n\n\tMessage from Outside")
   (testing "Message From Outside"
     (let [system (started-mock-up)
           ;; For purposes of this test (which is more low-level
@@ -125,13 +127,14 @@ I write, but I know better."
           src (-> system :two :interface :ex-sock)
           stopped (component/stop (:two system))
           system (assoc system :two stopped)]
+      (println "Everything's set up, ready to start the test")
       (try
         (let [dst (-> system :one :ex-chan)
               ;; Because of the way this is wired up,
               ;; we need to read the message that stopped the
               ;; event loop
               ;; Except that it shouldn't have arrived here.
-              original-killer (async/<!! dst)
+              ;;original-killer (async/<!! dst)
               receive-thread (async/go
                                (async/<! dst))
               sym (gensym)
@@ -190,7 +193,7 @@ I write, but I know better."
   (def started (component/stop started)))
 
 (deftest message-to-outside []
-  (println "Starting mock for testing message-to-outside")
+  (println "\n\n\tStarting mock for testing message-to-outside")
   (let [system (started-mock-up)
         ;; Again, we don't want the "other half" EventPair
         ;; stealing the messages that we're trying to verify
@@ -198,7 +201,6 @@ I write, but I know better."
         ;; Yes, this test is pretty silly.
         dst (-> system :two :interface :ex-sock)
         stopped (component/stop (:two system))
-        stop-signal (async/<!! (-> system :one :ex-chan))      ; flush the buffer
         system (assoc system :two stopped)]
     (println "mock loops started")
     (try
@@ -213,12 +215,6 @@ I write, but I know better."
           (testing "Message submitted to async loop"
             (is (= src c) "Timed out trying to send")
             (is v))
-
-          ;; give it time to get through the loop
-          ;; This shouldn't matter. If there isn't a listener
-          ;; ready, the sender should block
-          (comment (println "Pausing to let message get through loop pairs")
-                   (Thread/sleep 1500))
 
           (testing "Did message make it to other side?"
             (let [result
@@ -249,6 +245,7 @@ I write, but I know better."
 
 (deftest echo
   []
+  (println "\n\n\techo test")
   (testing "Can send a request and get an echo back"
     (let [test (fn [system]
                  (let [left-chan (-> system :one :interface :in-chan)
@@ -277,6 +274,7 @@ I write, but I know better."
 
 (deftest evaluate
   []
+  (println "\n\n\tEvaluate")
   (testing "Can send a request and get an echo back"
     (let [test (fn [system]
                  (let [left-chan (-> system :one :interface :in-chan)
