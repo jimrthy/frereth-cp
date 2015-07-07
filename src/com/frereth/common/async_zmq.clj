@@ -319,7 +319,7 @@ Send a duplicate stopper ("
         internal-> async->sock
         minutes-5 (partial async/timeout (* 5 (util/minute)))]
     (async/go
-      (log/debug "Entering"
+      (log/debug "Top of"
                  _name
                  "Async event thread, based on:"
                  in-chan)
@@ -372,6 +372,12 @@ Send a duplicate stopper ("
             (external-writer (:socket ex-sock) msg)
             (catch RuntimeException ex
               (log/error ex)
+              ;; this shouldn't disturb the overall system
+              ;; operation...but this really does indicate a
+              ;; fatal error that should have been caught during
+              ;; development.
+              ;; This indicates a pretty thoroughly broken
+              ;; foundation.
               (throw)))
           (comment) (log/debug _name "Message forwarded from 0mq"))
         deserialized))))
@@ -414,25 +420,24 @@ Send a duplicate stopper ("
         five-minutes (* 1000 60 5)  ; in milliseconds
         _name (:_name component)]
     (try
-      ;; TODO: Add a timeout so I can log a heartbeat
       (loop [available-sockets (mq/poll poller five-minutes)]
         (if (< 0 available-sockets)
           (let [received-internal? (possibly-recv-internal! component poller)]
-          ;; TODO: Query the poller first, to find out
-          (log/error _name ": Incoming Message at Top of actual-zmq-loop")
-          (log/debug (if received-internal?
-                       (str (:_name component) " 0mq: Received Internal:\n"
-                            (util/pretty received-internal?))
-                       (str (:_name component)
-                            " 0mq: must have been a message from external")))
-          (if-not (= received-internal? stopper)
-            (do
-              (log/debug (:_name component) "Wasn't the kill message. Continuing.")
-              (possibly-forward-msg-from-outside! component poller)
-              (recur (mq/poll poller five-minutes)))
-            (do
-              (log/info (:_name component) "Killed by" received-internal?)
-              :exited-successfully)))
+            ;; TODO: Query the poller first, to find out
+            (log/error _name ": Incoming Message at Top of actual-zmq-loop")
+            (log/debug (if received-internal?
+                         (str (:_name component) " 0mq: Received Internal:\n"
+                              (util/pretty received-internal?))
+                         (str (:_name component)
+                              " 0mq: must have been a message from external")))
+            (if-not (= received-internal? stopper)
+              (do
+                (log/debug (:_name component) "Wasn't the kill message. Continuing.")
+                (possibly-forward-msg-from-outside! component poller)
+                (recur (mq/poll poller five-minutes)))
+              (do
+                (log/info (:_name component) "Killed by" received-internal?)
+                :exited-successfully)))
           (do
             (log/debug _name ": 0mq Event Loop: Heartbeat")
             (recur (mq/poll poller five-minutes)))))
