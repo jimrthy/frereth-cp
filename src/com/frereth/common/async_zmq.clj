@@ -211,6 +211,16 @@ Their entire purpose in life, really, is to shuffle messages between
                :async-loop nil
                :zmq-loop nil)))
 
+(def event-loopless-pair
+  "This is the almost-constructed EventPair that gets passed in to the messaging loops"
+  (dissoc (map->EventPair {:interface EventPairInterface
+                           :stopper s/Symbol
+                           :async-sock mq/Socket
+                           :->zmq-sock mq/Socket
+                           :_name s/Str
+                           :ex-chan fr-sch/async-channel
+                           :in<->ex-sock mq/InternalPair}) :async-loop :zmq-loop))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
@@ -313,8 +323,8 @@ Send a duplicate stopper ("
    (and val (not= val stopper))  ; got a message that wasn't stopper
    (and (not= c in-chan) (not= c status-chan))))
 
-(s/defn run-async-loop! :- fr-sch/async-channel
-  [{:keys [async->sock interface _name stopper]} :- EventPair]
+(s/defn ^:always-validate run-async-loop! :- fr-sch/async-channel
+  [{:keys [async->sock interface _name stopper]}]
   (let [{:keys [in-chan status-chan status-out]} interface
         internal-> async->sock
         minutes-5 (partial async/timeout (* 5 (util/minute)))]
@@ -447,9 +457,9 @@ Send a duplicate stopper ("
         (log/error ex "Unhandled 0mq Exception. 0mq loop exiting")
         :unhandled-0mq-exception))))
 
-(s/defn run-zmq-loop! :- fr-sch/async-channel
+(s/defn ^:always-validate run-zmq-loop! :- fr-sch/async-channel
   [{:keys [interface ->zmq-sock ex-chan]
-    :as component} :- EventPair]
+    :as component}]
   (let [{:keys [ex-sock external-reader externalwriter]} interface
         poller (mq/poller 2)]
     (mq/register-socket-in-poller! poller (:socket ex-sock))
