@@ -301,13 +301,15 @@ Send a duplicate stopper ("
             (log/debug _name ": Message forwarded from Async side"))
           (if (= status-chan c)
             (do
-              (let [msg (str _name " Async Status Request received on" c
-                             "\n(which should be" status-chan
+              (let [msg (str _name " Async Status Request received on " c
+                             "\n(which should be " status-chan
                              ")\nTODO: Something more useful"
                              "\nThe 0mq side is really much more interesting")]
                 (log/debug msg))
               ;; Don't want to risk this blocking for very long
-              (async/alts! [(async/timeout 1) [status-out :everythings-fine]])))))
+              ;; Note that we aren't technically inside a go block here, because
+              ;; of macro scope
+              (async/alts!! [(async/timeout 1) [status-out :everythings-fine]])))))
       (log/debug _name " Async Event Loop: Heartbeat"))
     ;; Exit when input channel closes or someone sends the 'stopper' gensym
     (catch RuntimeException ex
@@ -459,7 +461,7 @@ Send a duplicate stopper ("
         :unhandled-0mq-exception))))
 
 (s/defn ^:always-validate run-zmq-loop! :- fr-sch/async-channel
-  [{:keys [interface ->zmq-sock ex-chan]
+  [{:keys [interface ->zmq-sock ex-chan _name]
     :as component}]
   (let [{:keys [ex-sock external-reader externalwriter]} interface
         poller (mq/poller 2)]
@@ -493,9 +495,14 @@ Send a duplicate stopper ("
        (finally
          ;; This is probably pointless, but might
          ;; as well do whatever cleanup I can
-         (mq/unregister-socket-in-poller! poller (:socket ex-sock))
-         (mq/unregister-socket-in-poller! poller ->zmq-sock)
-         (comment (log/debug "Exiting 0mq Event Loop")))))))
+         (try
+           (println _name " Cleaning up at end of 0mq Event Loop")
+           (mq/unregister-socket-in-poller! poller (:socket ex-sock))
+           (mq/unregister-socket-in-poller! poller ->zmq-sock)
+           (catch RuntimeException ex
+             (log/error ex _name " 0mq Event Loop cleanup failed"))
+           (finally
+             (log/debug "Exiting 0mq Event Loop"))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

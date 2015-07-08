@@ -32,11 +32,17 @@
    [this]
    (if ctx
      (do
+       (log/debug "Terminating context")
        ;; Note that this is going to hang until
        ;; all sockets are closed
-       (mq/terminate! ctx)
-       (assoc this :ctx nil))
-     this)))
+       (try
+         (mq/terminate! ctx)
+         (finally
+           (log/debug "Context terminated, one way or another")
+           (assoc this :ctx nil))))
+     (do
+       (log/debug "No 0mq messaging context to terminate")
+       this))))
 
 (s/defrecord SocketDescription
     [ctx :- ContextWrapper
@@ -66,18 +72,19 @@
      this))
   (stop
    [this]
+   (log/debug "Possibly closing socket...")
    (if socket
      (do
        (try
          (mq/set-linger! socket 0)
          (mq/close! socket)
          (catch ZMQException ex
-           (log/error ex "Trying to close socket:" socket
+           (log/error ex "Failed to close socket:" socket
                       "\nAre you trying to stop this a second time?"
                       "\n(if so, you probably have a bug where you should"
-                      " be using the result of the first call to stop)")
-           (assoc this :socket nil)))
-       (assoc this :socket nil))
+                      " be using the result of the first call to stop)"))
+         (finally
+           (assoc this :socket nil))))
      this)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
