@@ -12,7 +12,8 @@ Strongly inspired by lynaghk's zmq-async"
             [full.async :refer (<? <?? alts? go-try)]
             [ribol.core :refer (raise)]
             [schema.core :as s]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log])
+  (:import [com.frereth.common.zmq_socket SocketDescription]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
@@ -68,12 +69,22 @@ Strongly inspired by lynaghk's zmq-async"
                            ;; try reading this unless
                            ;; a Poller just verified
                            ;; that messages are waiting.
+                           ;; Note that we probably never want this
+                           ;; default behavior.
+                           ;; This really needs to demarshall
+                           ;; the message and analyze it before
+                           ;; tagging it with whatever info
+                           ;; really needs to be done.
+                           ;; Still, there might be some
+                           ;; apps where this is enough.
                            (mq/raw-recv! sock :wait))))
                 (if external-writer
                   this
                   (assoc this
                          :external-writer
                          (fn [sock array-of-bytes]
+                           ;; Same comments re: over-simplicity
+                           ;; in the default reader apply here
                            (mq/send! sock array-of-bytes)))))]
      this))
   (stop
@@ -203,8 +214,11 @@ Their entire purpose in life, really, is to shuffle messages between
           (async/close! ex-chan)
           (do
             (log/info _name ": No ex-chan. Assume this means we weren't actually started")
+            ;; Closing ex-chan should signal the async half of the event loop to
+            ;; send this signal.
             ;; I don't think this will do any good at all
-            (mq/send! async->sock "exiting")))
+            (when async->sock
+              (mq/send! async->sock "exiting"))))
         (if in<->ex-chan
           (async/close! in<->ex-chan)
           (log/info _name ": No in<->ex-chan. Assume this means we weren't actually started"))
@@ -227,6 +241,9 @@ Their entire purpose in life, really, is to shuffle messages between
         (assoc this
                :stopper nil
                :in<->ex-sock nil
+               :async->sock nil
+               :->zmq-sock nil
+               :in<->ex-chan nil
                :ex-chan nil
                :async-loop nil
                :zmq-loop nil)))
@@ -244,6 +261,8 @@ Their entire purpose in life, really, is to shuffle messages between
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
+;;; TODO: Move these next two elsewhere
+;;; Maybe into utils?
 (s/defn serialize :- fr-sch/java-byte-array
   "TODO: This absolutely does not belong in here"
   [o :- s/Any]
@@ -265,7 +284,7 @@ Their entire purpose in life, really, is to shuffle messages between
   (if-let [in-chan (:in-chan interface)]
     (let [[v c] (async/alts!! [[in-chan stopper] (async/timeout 750)])]
       (if v
-        (log/debug "Close signal submitted on" in-chan)
+        (log/debug _name ": Close signal submitted on" in-chan)
         (do
           (log/error _name ": Failed to deliver stop message to async channel. Attempting brute force")
           ;; Q: What does this even do?
@@ -316,15 +335,18 @@ Send a duplicate stopper ("
                        (util/pretty val) "a" (class val)
                        "\nFrom internal. Forwarding to 0mq")
             (mq/send! internal-> "outgoing")
+            (log/debug "0mq loop notified")
             ;; Q: Send via offer! instead?
             ;; TODO: Make this more granular to allow batch sends when
             ;; they make sense
+            ;; TODO: 100 ms is far too long to wait here
             (let [[v c] (async/alts!! [[in<->ex-chan val] (async/timeout 100)])]
               (log/debug _name": Message" (if v
                                             "sent"
                                             "didn't get sent"))
               (when-not v
-                (log/error _name ": Forwarding message timed out")
+                (log/error _name ": Forwarding message timed out\nExpected channel:"
+                           in<->ex-chan "\nTimeout channel:" c)
                 ;; FIXME: Debug only
                 (raise [:be-smarter])))
 
@@ -391,33 +413,34 @@ Send a duplicate stopper ("
       ;; Which probably kills whatever performance gain
       ;; I might hope for.
       ;; TODO: Find a profiler!
-      (let [msg (mq/recv! ->zmq-sock)
-            ;; Do we continue?
-            deserialized (edn/read-string msg)]
-        (when-not (= deserialized stopper)
+      (let [exited (atom false)
+            ;; Don't really care about the payload. This was just a
+            ;; notification that there is at least one message pending on
+            ;; the async channel.
+            ;; Or, at least, there will be very soon.
+            msg (mq/recv! ->zmq-sock)
+            deserialized (deserialize msg)]
+        (log/debug _name ": from internal -- " msg "\naka\n" deserialized "\na" (class deserialized))
 
-          (log/debug "Internal messages ready to forward")
-          ;; This should really just be a signal that messages
-          ;; are available on a currently non-existent (?)
-          ;; async channel.
-          ;; TODO: Be smarter about not spending too much time here.
-          ;; Remember: I'm not processing any incoming requests
-          ;; TODO: update to poll! when there's a core.async release
-          ;; that supports it
-          (loop [#_msg [msg c] #_(async/poll! in<->ex-chan) (async/alts!! [(async/timeout 10) in<->ex-chan])]
-            (when msg
-              (let [binary (serialize msg)]
-                ;; Forward it
-                ;; After all, both sides really have to be
-                ;; able to cope with gibberish
-                ;; Handling this in here breaks separation
-                ;; of concerns and leaves a recv! function
-                ;; doing both recv and send.
-                ;; TODO: Rename this to proxy and split the
-                ;; two halves.
+        ;; That's just a signal that messages
+        ;; are available async channel.
+        ;; TODO: Be smarter about not spending too much time here.
+        ;; Remember: I'm not processing any incoming requests while this loops
+        ;; TODO: update to poll! when there's a core.async release
+        ;; that supports it
+        ;; TODO: Split the read/write threads. Don't want a misbehaving client
+        ;; to keep the server from communicating with all the rest.
+        ;; Then again, since sockets aren't thread safe, that would mean
+        ;; two different sockets. Which I don't think I want.
+        (loop [[msg c] (async/alts!! [(async/timeout 100) in<->ex-chan])]
+          (when msg
+            (reset! exited msg)
+            (when (not= msg stopper)
+              (do
+                (log/debug _name ": Not stopper. Forwarding\n" msg)
                 (try
-                  (external-writer (:socket ex-sock) binary)
-                  (log/debug _name "Message forwarded from 0mq")
+                  (external-writer (:socket ex-sock) msg)
+                  (log/debug _name "Message forwarded to 0mq")
                   (catch RuntimeException ex
                     (log/error ex)
                     ;; this shouldn't disturb the overall system
@@ -426,11 +449,10 @@ Send a duplicate stopper ("
                     ;; development.
                     ;; This indicates a pretty thoroughly broken
                     ;; foundation.
-                    (throw))))
-              ;; TODO: Update this part when we get a core.async that supports poll!
-              (recur #_(async/poll! in<->ex-chan)
-                     (async/alts!! [(async/timeout 10) in<->ex-chan])))))
-        deserialized))))
+                    (throw)))
+                ;; TODO: Update this part when we get a core.async that supports poll!
+                (recur (async/alts!! [(async/timeout 100) in<->ex-chan]))))))
+        @exited))))
 
 (s/defn possibly-forward-msg-from-outside!
   [{:keys [interface ex-chan _name]
@@ -486,6 +508,8 @@ Send a duplicate stopper ("
               (do
                 (log/debug (:_name component) "Wasn't the kill message. Continuing.")
                 (possibly-forward-msg-from-outside! component poller)
+                ;; This seems to be failing. Q: What's going on?
+                (log/debug "Polling on" poller "a" (class poller) "again")
                 (recur (mq/poll poller five-minutes)))
               (do
                 (log/info (:_name component) "Killed by" received-internal?)

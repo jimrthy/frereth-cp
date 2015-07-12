@@ -3,12 +3,14 @@
             [clojure.core.async :as async]
             [clojure.test :refer (deftest is testing)]
             [com.frereth.common.async-zmq :refer :all]
-            [com.frereth.common.zmq-socket :as common-mq]
             [com.frereth.common.util :as util]
+            [com.frereth.common.zmq-socket :as common-mq]
             [com.stuartsierra.component :as component]
             [component-dsl.system :as cpt-dsl]
-            [schema.core :as s])
-  (:import [com.stuartsierra.component SystemMap]))
+            [schema.core :as s]
+            [taoensso.timbre :as log])
+  (:import [com.stuartsierra.component SystemMap]
+           [org.zeromq ZMQException]))
 
 (defn mock-structure
   []
@@ -26,10 +28,8 @@
         ;; as defaults, but they really won't be useful
         ;; very often
         reader (fn [sock]
-                 (comment)  (println "Mock Reader triggered")
                  (let [read (mq/raw-recv! sock)]
-                   (comment ) (println "Mock Reader Received:\n" (util/pretty read))
-                   (throw (RuntimeException. "Am I getting here?"))
+                   (comment) (println "Mock Reader Received:\n" (util/pretty read))
                    (deserialize read)))
         generic-writer (fn [which sock msg]
                          ;; Q: if we're going to do this,
@@ -41,13 +41,9 @@
         writer2 (partial generic-writer "two")
         internal-url (name (gensym))]
     {:one {:_name "Event Loop One"
-           :in-chan (async/chan)
-           :external-reader reader
-           :external-writer writer1}
+           :in-chan (async/chan)}
      :two {:_name "Event Loop Two"
-           :in-chan (async/chan)
-           :external-reader reader
-           :external-writer writer2}
+           :in-chan (async/chan)}
      :ex-one {:url {:protocol :inproc
                     :address internal-url}
               :sock-type :pair
@@ -55,7 +51,11 @@
      :ex-two {:url {:protocol :inproc
                     :address internal-url}
               :sock-type :pair
-              :direction :connect}}))
+              :direction :connect}
+     :iface-one {:external-reader reader
+                 :external-writer writer1}
+     :iface-two {:external-reader reader
+                 :external-writer writer2}}))
 
 (defn mock-depends
   []
@@ -157,7 +157,11 @@ I write, but I know better."
                   "Response doesn't even resemble the source gensym")
               (is (= receive-thread c)))))
         (finally
-          (component/stop system))))))
+          (try
+            (component/stop system)
+            (catch ZMQException ex
+              (log/error ex "Failed to shut down the system at the end of the message-from-outside test")
+              (is (not ex)))))))))
 
 (comment
   (let [mock (started-mock-up)
@@ -199,7 +203,9 @@ I write, but I know better."
         ;; Again, we don't want the "other half" EventPair
         ;; stealing the messages that we're trying to verify
         ;; reach it.
-        ;; Yes, this test is pretty silly.
+        ;; Yes, this test is pretty silly. It seems like it
+        ;; should involve a lot of wishful thinking on my part,
+        ;; but it did work at one point.
         dst (-> system :two :interface :ex-sock)
         stopped (component/stop (:two system))
         system (assoc system :two stopped)]
@@ -276,7 +282,7 @@ I write, but I know better."
 (deftest evaluate
   []
   (println "\n\n\tEvaluate")
-  (testing "Can send a request and get an echo back"
+  (testing "Can send an op and get its evaluation back"
     (let [test (fn [system]
                  (let [left-chan (-> system :one :interface :in-chan)
                        ex-left (-> system :one :ex-chan)
@@ -285,24 +291,36 @@ I write, but I know better."
                        x (rand-int 1000)
                        y (rand-int 1000)
                        msg {:op :eval
-                            :payload (list '* x y)}]
+                            :payload (list '* x y)
+                            :id (util/random-uuid)}]
                    (testing "\n\tRequest sent"
-                     (let [[v c] (async/alts!! [[left-chan msg] (async/timeout 150)])]
+                     ;; This shouldn't need a timeout anywhere near this high. 150 was far too short
+                     ;; when running from `lein test` (although it worked fine in REPL...that was
+                     ;; frustrating)
+                     (let [[v c] (async/alts!! [[left-chan msg] (async/timeout 1500)])]
                        (is (= c left-chan))
                        (is v)))
                    (let [[v c] (async/alts!! [ex-right (async/timeout 750)])]
                      (testing "\n\tInitial request received"
                        (is (= c ex-right))
                        (is (= msg v)))
-                     (let [read (:payload v)
-                           op (-> read first resolve)
-                           result (apply op (rest read))
-                           [v c] (async/alts!! [[right-chan result] (async/timeout 150)])]
-                       (testing "\n\tResponse sent"
-                         (is (= c right-chan))
-                         (is v))))
+                     (let [read (:payload v)]
+                       (testing (str "\n\tReceived Valid Response: " read))
+                       (try
+                         (let [op (-> read first resolve)]
+                           (try
+                             (let [result {:id (:id v)
+                                           :return-value (apply op (rest read))}
+                                 [v c] (async/alts!! [[right-chan result] (async/timeout 150)])]
+                               (testing "\n\tResponse sent"
+                                 (is (= c right-chan))
+                                 (is v)))
+                             (catch RuntimeException ex
+                               (is (not ex) (str "Trying to apply " op " to " (rest read))))))
+                         (catch NullPointerException ex
+                               (is (not ex) (str "Trying to resolve op in " read))))))
                    (let [[v c] (async/alts!! [ex-left (async/timeout 750)])]
-                     (testing "\n\tEcho received"
+                     (testing "\n\tEval'd received"
                        (is (= c ex-left))
-                       (is (= (* x y) v))))))]
+                       (is (= (* x y) (:return-value v)))))))]
       (with-mock test))))

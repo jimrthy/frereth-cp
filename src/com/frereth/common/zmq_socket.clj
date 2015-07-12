@@ -1,4 +1,5 @@
 (ns com.frereth.common.zmq-socket
+  "This should be a wrapper interface that hides as many low-level queue implementation details as possible"
   (:require [cljeromq.core :as mq]
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
@@ -72,7 +73,7 @@
      this))
   (stop
    [this]
-   (log/debug "Possibly closing socket...")
+   (log/debug "Possibly closing socket" socket)
    (if socket
      (do
        (try
