@@ -1,4 +1,5 @@
 (ns com.frereth.common.communication
+  "This is really about higher-level messaging abstractions"
   (:require [cljeromq.core :as mq]
             [com.frereth.common.schema :as fr-sch]
             [ribol.core :refer (raise)]
@@ -49,18 +50,8 @@
   "Really pretty useless, except as an intermediate step"
   (dissoc router-message :socket))
 
-(comment
-  (s/defrecord URI [protocol :- s/Str
-                    address :- s/Str
-                    port :- s/Int]
-    ;; TODO: This could really just as easily
-    ;; be a plain dictionary.
-    ;; More importantly, it conflicts with native
-    ;; Java's URI. This will be confusing
-    component/Lifecycle
-    (start [this] this)
-    (stop [this] this)))
-
+;; More importantly, it conflicts with native
+;; Java's URI. This will be confusing
 (def URI {:protocol s/Str
           :address s/Str
           :port s/Int})

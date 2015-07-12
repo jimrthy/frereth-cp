@@ -369,11 +369,12 @@ Send a duplicate stopper ("
                                "a" (class msg)
                                "\nfrom 0mq through\n"
                                (util/pretty external-writer))
+          ;; This should really just be a signal that messages
+          ;; are available on a currently non-existent (?)
+          ;; async channel.
+          ;; FIXME: Start here
+          (raise {:not-implemented "Just a flag"})
           ;; Forward it
-          ;; TODO: Probably shouldn't forward the
-          ;; exit signal, but consider this a test
-          ;; of the robustness on the other side,
-          ;; for now.
           ;; After all, both sides really have to be
           ;; able to cope with gibberish
           ;; Handling this in here breaks separation
@@ -407,8 +408,7 @@ Send a duplicate stopper ("
       ;; messages in case several arrive at once.
       ;; The most obvious downside to that approach
       ;; is a DDoS that locks us into that forever
-      (let [raw (external-reader (:socket ex-sock))
-            msg (deserialize raw)]
+      (let [msg (external-reader (:socket ex-sock))]
         ;; Forward it along
         (log/debug _name " 0mq Loop: Forwarding\n"
                    (util/pretty msg)
@@ -514,6 +514,6 @@ Send a duplicate stopper ("
   (map->EventPairInterface cfg))
 
 (s/defn ctor :- EventPair
-  [{:keys [_name in-chan]
+  [{:keys [_name]
     :as  cfg}]
   (map->EventPair cfg))

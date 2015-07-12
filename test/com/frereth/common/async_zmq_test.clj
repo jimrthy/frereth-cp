@@ -29,7 +29,7 @@
                  (comment (println "Mock Reader triggered"))
                  (let [read (mq/raw-recv! sock)]
                    (comment (println "Mock Reader Received:\n" (util/pretty read)))
-                   read))
+                   (deserialize read)))
         generic-writer (fn [which sock msg]
                          ;; Q: if we're going to do this,
                          ;; does the event loop need access to the socket at all?
