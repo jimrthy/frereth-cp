@@ -26,16 +26,17 @@
         ;; as defaults, but they really won't be useful
         ;; very often
         reader (fn [sock]
-                 (comment (println "Mock Reader triggered"))
+                 (comment)  (println "Mock Reader triggered")
                  (let [read (mq/raw-recv! sock)]
-                   (comment (println "Mock Reader Received:\n" (util/pretty read)))
+                   (comment ) (println "Mock Reader Received:\n" (util/pretty read))
+                   (throw (RuntimeException. "Am I getting here?"))
                    (deserialize read)))
         generic-writer (fn [which sock msg]
                          ;; Q: if we're going to do this,
                          ;; does the event loop need access to the socket at all?
                          ;; A: Yes. Because it spends most of its time polling on that socket
                          (println "Mock writer sending" msg "on Pair" which)
-                         (mq/send! sock msg :dont-wait))
+                         (mq/send! sock (serialize msg) :dont-wait))
         writer1 (partial generic-writer "one")
         writer2 (partial generic-writer "two")
         internal-url (name (gensym))]

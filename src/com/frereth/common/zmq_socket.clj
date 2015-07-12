@@ -58,11 +58,11 @@
    (if-not socket
      (do
        (assert ctx "Can't do anything without a Messaging Context")
-       (log/debug "Getting ready to try to start a"
+       (comment (log/debug "Getting ready to try to start a"
                   sock-type
                   "socket based on context\n"
                   (util/pretty ctx)
-                  "a" (class ctx))
+                  "a" (class ctx)))
        (let [sock (mq/socket! (:ctx ctx) sock-type)
              uri (mq/connection-string url)]
          (if (= direction :bind)
