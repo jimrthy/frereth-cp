@@ -31,12 +31,13 @@
               ;; And sticking GET params in the URL has always seemed pretty suspect
               (s/optional-key :body) s/Str})
 
-(def byte-arrays [fr-sch/java-byte-array])
-
 (def router-message
+  "The contents are byte-arrays? Really??
+Q: Is there ever any imaginable scenario where I
+wouldn't want this to handle the marshalling?"
   {:id fr-sch/java-byte-array
-   :addresses byte-arrays
-   :contents byte-arrays
+   :addresses fr-sch/byte-arrays
+   :contents fr-sch/byte-arrays
    ;; Without this, the message is useless
    ;; It seems like a waste of memory, but...
    ;; without this, the socket just has to be passed
@@ -52,14 +53,15 @@
 
 ;; More importantly, it conflicts with native
 ;; Java's URI. This will be confusing
-(def URI {:protocol s/Str
-          :address s/Str
-          :port s/Int})
+(comment
+  (def URI {:protocol s/Str
+            :address s/Str
+            :port s/Int}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
-(s/defn read-all! :- (s/maybe byte-arrays)
+(s/defn read-all! :- (s/maybe fr-sch/byte-arrays)
   "N.B. Pretty much by definition, this is non-blocking, as-written.
 This is almost definitely a bug"
   [s :- mq/Socket
@@ -72,7 +74,7 @@ This is almost definitely a bug"
       (seq acc))))
 
 (s/defn extract-router-message :- generic-router-message
-  [frames :- byte-arrays]
+  [frames :- fr-sch/byte-arrays]
   (when-let [identity-frame (first frames)]
      (if-let [remainder (next frames)]
        ;; No, this approach isn't particularly efficient.
@@ -88,13 +90,14 @@ This is almost definitely a bug"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(s/defn build-url :- s/Str
-  [url :- URI]
-  (str (:protocol url) "://"
-       (:address url)
-       ;; port is meaningless for inproc
-       (when-let [port (:port url)]
-         (str ":" port))))
+(comment
+  (s/defn build-url :- s/Str
+     [url :- URI]
+     (str (:protocol url) "://"
+          (:address url)
+          ;; port is meaningless for inproc
+          (when-let [port (:port url)]
+            (str ":" port)))))
 
 (s/defn router-recv! :- (s/maybe router-message)
   ([s :- mq/Socket]
@@ -104,7 +107,7 @@ This is almost definitely a bug"
    (when-let [all-frames (read-all! s flags)]
      (assoc (extract-router-message) :socket s))))
 
-(s/defn dealer-recv! :- byte-arrays
+(s/defn dealer-recv! :- fr-sch/byte-arrays
   "Really only for the simplest possible case"
   ([s :- mq/Socket]
    (dealer-recv! s :dont-wait))
@@ -117,7 +120,7 @@ This is almost definitely a bug"
 (s/defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
   [s :- mq/Socket
-   frames :- byte-arrays
+   frames :- fr-sch/byte-arrays
    flags :- fr-sch/korks]
   (let [more-flags (conj flags :send-more)]
     ;; Separator frame

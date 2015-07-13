@@ -7,6 +7,7 @@
             [taoensso.timbre :as log])
   (:import [java.io PushbackReader]
            [java.lang.reflect Modifier]
+           [java.net InetAddress]
            [java.util UUID]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -142,6 +143,13 @@ Idiom for converting expression(s) to a callable"
   [expr]
   (eval `(fn []
            ~expr)))
+
+(defn my-ip
+  "What is my IP address?
+
+Totally fails on multi-home systems. But it's worthwhile as a starting point"
+  []
+  (.getHostAddress (InetAddress/getLocalHost)))
 
 (defn pick-home
   "Returns the current user's home directory"
