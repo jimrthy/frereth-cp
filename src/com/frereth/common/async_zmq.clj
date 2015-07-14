@@ -442,7 +442,7 @@ Send a duplicate stopper ("
                   (external-writer (:socket ex-sock) msg)
                   (log/debug _name "Message forwarded to 0mq")
                   (catch RuntimeException ex
-                    (log/error ex)
+                    (log/error ex "Trying to forward to 0mq socket")
                     ;; this shouldn't disturb the overall system
                     ;; operation...but this really does indicate a
                     ;; fatal error that should have been caught during
@@ -498,7 +498,6 @@ Send a duplicate stopper ("
         (if (< 0 available-sockets)
           (let [received-internal? (possibly-recv-internal! component poller)]
             ;; TODO: Query the poller first, to find out
-            (log/error _name ": Incoming Message at Top of actual-zmq-loop")
             (log/debug (if received-internal?
                          (str (:_name component) " 0mq: Received Internal:\n"
                               (util/pretty received-internal?))

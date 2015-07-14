@@ -3,7 +3,8 @@
   (:require [cljeromq.core :as mq]
             [com.frereth.common.schema :as fr-sch]
             [ribol.core :refer (raise)]
-            [schema.core :as s]))
+            [schema.core :as s]
+            [taoensso.timbre :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
@@ -66,15 +67,22 @@ wouldn't want this to handle the marshalling?"
 This is almost definitely a bug"
   [s :- mq/Socket
    flags :- fr-sch/korks]
-  (loop [acc []
+  (log/debug "read-all3: Top")
+  (loop [acc [mq/recv! s :dont-wait]
          more? (mq/has-more? s)]
     (if more?
-      (recur (conj acc (mq/raw-recv! s flags))
-             (mq/has-more? s))
-      (seq acc))))
+      (do
+        (log/debug "read-all: Reading more")
+        (recur (conj acc (mq/raw-recv! s flags))
+               (mq/has-more? s)))
+      (do
+        (log/debug "read-all: Done. Incoming:\n" acc)
+        (seq acc)))))
 
 (s/defn extract-router-message :- generic-router-message
   [frames :- fr-sch/byte-arrays]
+  (log/debug "Extracting Router Message from "
+             (count frames) " frames")
   (when-let [identity-frame (first frames)]
      (if-let [remainder (next frames)]
        ;; No, this approach isn't particularly efficient.
@@ -105,7 +113,7 @@ This is almost definitely a bug"
   ([s :- mq/Socket
     flags :- fr-sch/korks]
    (when-let [all-frames (read-all! s flags)]
-     (assoc (extract-router-message) :socket s))))
+     (assoc (extract-router-message all-frames) :socket s))))
 
 (s/defn dealer-recv! :- fr-sch/byte-arrays
   "Really only for the simplest possible case"
@@ -119,6 +127,7 @@ This is almost definitely a bug"
 
 (s/defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
+  ;; TODO: Add an arity that defaults to nil flags
   [s :- mq/Socket
    frames :- fr-sch/byte-arrays
    flags :- fr-sch/korks]
@@ -138,13 +147,50 @@ This is almost definitely a bug"
    (router-send! msg nil))
   ([msg :- router-message
     flags :- fr-sch/korks]
-   (let [s (:socket msg)
-         more-flags (conj flags :send-more)
-         addresses (:addresses msg)]
-     (mq/send! s (:id msg) more-flags)
-     (if (seq? addresses)
-       (doseq [addr addresses]
-         (mq/send! s addr more-flags))
-       ;; Empty address frame
-       (mq/send! s (byte-array 0) more-flags))
-     (dealer-send! s (:contents msg) flags))))
+   (when-let [contents (:contents msg)]
+     (let [s (:socket msg)
+           more-flags (conj flags :send-more)
+           addresses (:addresses msg)]
+       (mq/send! s (:id msg) more-flags)
+       (if (seq? addresses)
+         (doseq [addr addresses]
+           (mq/send! s addr more-flags))
+         ;; Empty address frame
+         (mq/send! s (byte-array 0) more-flags))
+       ;; This doesn't match schema.
+       ;; This assumes :contents is a single frame
+       ;; Schema declares it to be a seq of frames
+       (dealer-send! s contents flags)))))
+
+(comment
+  (let [ctx (mq/context 3)
+        sock (mq/socket! ctx :router)
+        url "tcp://127.0.0.1:7843"
+        _ (mq/bind! sock url)]
+    (try
+      (Thread/sleep 5000)
+      (let [incoming (router-recv! sock)]
+        (log/debug incoming)
+        (router-send! (assoc incoming :contents "PONG"))
+        incoming)
+      (finally
+        (mq/unbind! sock url)
+        (mq/set-linger! sock 0)
+        (mq/close! sock)
+        (mq/terminate! ctx)))))
+
+(raise {:not-implemented "Start here"})
+(comment
+  (def ctx (mq/context 3))
+  (def sock (mq/socket! ctx :router))
+  (def url "tcp://127.0.0.1:7843")
+  (mq/bind! sock url)
+
+  (def incoming (router-recv! sock))
+  incoming
+  (router-send! (assoc incoming :contents "PONG"))
+
+  (mq/unbind! sock url)
+  (mq/set-linger! sock 0)
+  (mq/close! sock)
+  (mq/terminate! ctx))

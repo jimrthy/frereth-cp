@@ -38,6 +38,7 @@
        ;; all sockets are closed
        (try
          (mq/terminate! ctx)
+         (assoc this :ctx nil)
          (finally
            (log/debug "Context terminated, one way or another")
            (assoc this :ctx nil))))
