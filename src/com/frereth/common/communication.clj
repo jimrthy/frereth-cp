@@ -68,16 +68,25 @@ This is almost definitely a bug"
   [s :- mq/Socket
    flags :- fr-sch/korks]
   (log/debug "read-all3: Top")
-  (loop [acc [mq/recv! s :dont-wait]
-         more? (mq/has-more? s)]
-    (if more?
-      (do
-        (log/debug "read-all: Reading more")
-        (recur (conj acc (mq/raw-recv! s flags))
-               (mq/has-more? s)))
-      (do
-        (log/debug "read-all: Done. Incoming:\n" acc)
-        (seq acc)))))
+  ;; It's very tempting to just do recv! here,
+  ;; but callers may not need/want to take the time
+  ;; to do the string conversion.
+  ;; Besides, that's pretty silly for the initial
+  ;; address/identifier frame(s)
+  (when-let [initial-frame (mq/raw-recv! s :dont-wait)]
+    (loop [acc [initial-frame]
+           more? (mq/has-more? s)]
+      (if more?
+        (do
+          (log/debug "read-all: Reading more")
+          (recur (conj acc (mq/raw-recv! s flags))
+                 (mq/has-more? s)))
+        (do
+          (when-let [result (seq acc)]
+            (println "Incoming: " result)
+            (println "has: " (count result) "entries")
+            (log/debug "read-all: Done. Incoming:\n" (map #(String. %) result))
+            result))))))
 
 (s/defn extract-router-message :- generic-router-message
   [frames :- fr-sch/byte-arrays]
@@ -89,7 +98,7 @@ This is almost definitely a bug"
        ;; But we really shouldn't be dealing with many frames
        (let [address-frames (take-while #(< 0 (count %)) remainder)
              address-size (count address-frames)
-             message-frames (drop (+ 2 address-size) remainder)]
+             message-frames (drop (inc address-size) remainder)]
          {:id identity-frame
           :addresses address-frames
           :contents message-frames})
@@ -140,11 +149,13 @@ This is almost definitely a bug"
     (mq/send! s (byte-array 0) more-flags)
     (doseq [frame (butlast frames)]
       (mq/send! s frame more-flags))
+    (log/debug "Wrapping up dealer send w/ final frame:\n" (last frames)
+               "\na " (class (last frames)))
     (mq/send! s (last frames) flags)))
 
 (s/defn router-send!
   ([msg :- router-message]
-   (router-send! msg nil))
+   (router-send! msg []))
   ([msg :- router-message
     flags :- fr-sch/korks]
    (when-let [contents (:contents msg)]
@@ -157,10 +168,11 @@ This is almost definitely a bug"
            (mq/send! s addr more-flags))
          ;; Empty address frame
          (mq/send! s (byte-array 0) more-flags))
-       ;; This doesn't match schema.
-       ;; This assumes :contents is a single frame
-       ;; Schema declares it to be a seq of frames
-       (dealer-send! s contents flags)))))
+       (if (string? contents)
+         (dealer-send! s [contents] flags)
+         (if (or (seq? contents) (vector? contents))
+           (dealer-send! s contents flags)
+           (dealer-send! s [contents] flags)))))))
 
 (comment
   (let [ctx (mq/context 3)
@@ -179,7 +191,6 @@ This is almost definitely a bug"
         (mq/close! sock)
         (mq/terminate! ctx)))))
 
-(raise {:not-implemented "Start here"})
 (comment
   (def ctx (mq/context 3))
   (def sock (mq/socket! ctx :router))
@@ -189,6 +200,9 @@ This is almost definitely a bug"
   (def incoming (router-recv! sock))
   incoming
   (router-send! (assoc incoming :contents "PONG"))
+
+  (def raw-frames (read-all! sock :dont-wait))
+  raw-frames
 
   (mq/unbind! sock url)
   (mq/set-linger! sock 0)
