@@ -4,7 +4,9 @@
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   ;; TODO: Could I totally pull datomic dependencies out of everything else?
-  :dependencies [;; Q: Does this make any sense in production?
+  :dependencies [;; Q: Do I really want to choose this over clj-time?
+                 [clojure.joda-time "0.6.0"]
+                 ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
                  ;; is the primary goal.
                  [com.cemerick/pomegranate "0.3.0" :exclusions [org.codehaus.plexus/plexus-utils]]
@@ -28,10 +30,10 @@
                  [com.stuartsierra/component "0.2.3"]
                  [com.taoensso/timbre "3.4.0" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
-                 [fullcontact/full.async "0.4.22" :exclusions [org.clojure/clojure
-                                                               org.clojure/core.async]]
-                 [im.chit/ribol "0.4.0" :exclusions [org.clojure/clojure]]
-                 [io.aviso/config "0.1.1" :exclusions [org.clojure/clojure
+                 [fullcontact/full.async "0.7.0" :exclusions [org.clojure/clojure
+                                                              org.clojure/core.async]]
+                 [im.chit/ribol "0.4.1" :exclusions [org.clojure/clojure]]
+                 [io.aviso/config "0.1.6" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
                  [mvxcvi/puget "0.8.1" :exclusions [org.clojure/clojure]]
                  [org.clojure/clojure "1.7.0"]
@@ -47,6 +49,6 @@
   :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.2"
                                    :exclusions [org.clojure/clojure]]]
                    :source-paths ["dev"]
-                   :plugins [[org.clojure/tools.namespace "0.2.10" :exclusions [org.clojure/clojure]]]}
+                   :plugins [[org.clojure/tools.namespace "0.2.11" :exclusions [org.clojure/clojure]]]}
              :uberjar {:aot :all}}
   :repl-options {:init-ns user})
