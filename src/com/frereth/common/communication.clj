@@ -137,21 +137,24 @@ This is almost definitely a bug"
 (s/defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
   ;; TODO: Add an arity that defaults to nil flags
-  [s :- mq/Socket
-   frames :- fr-sch/byte-arrays
-   flags :- fr-sch/korks]
-  (let [more-flags (conj flags :send-more)]
-    ;; Separator frame
-    ;; In theory, this could just be acting as a
-    ;; proxy and forwarding along messages.
-    ;; In practice, I don't see that use case
-    ;; ever happening here.
-    (mq/send! s (byte-array 0) more-flags)
-    (doseq [frame (butlast frames)]
-      (mq/send! s frame more-flags))
-    (log/debug "Wrapping up dealer send w/ final frame:\n" (last frames)
-               "\na " (class (last frames)))
-    (mq/send! s (last frames) flags)))
+  ([s :- mq/Socket
+    frames :- fr-sch/byte-arrays
+    flags :- fr-sch/korks]
+   (let [more-flags (conj flags :send-more)]
+     ;; Separator frame
+     ;; In theory, this could just be acting as a
+     ;; proxy and forwarding along messages.
+     ;; In practice, I don't see that use case
+     ;; ever happening here.
+     (mq/send! s (byte-array 0) more-flags)
+     (doseq [frame (butlast frames)]
+       (mq/send! s frame more-flags))
+     (log/debug "Wrapping up dealer send w/ final frame:\n" (last frames)
+                "\na " (class (last frames)))
+     (mq/send! s (last frames) flags)))
+  ([s :- mq/Socket
+    frames :- fr-sch/byte-arrays]
+   (dealer-send! s frames [])))
 
 (s/defn router-send!
   ([msg :- router-message]
