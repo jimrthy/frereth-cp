@@ -348,6 +348,7 @@ Send a duplicate stopper ("
                 (log/error _name ": Forwarding message timed out\nExpected channel:"
                            in<->ex-chan "\nTimeout channel:" c)
                 ;; FIXME: Debug only
+                ;; TODO: Catch this!
                 (raise [:be-smarter])))
 
             (log/debug _name ": Message forwarded from Async side"))

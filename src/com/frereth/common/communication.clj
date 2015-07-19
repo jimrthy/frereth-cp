@@ -107,15 +107,10 @@ This is almost definitely a bug"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(comment
-  (s/defn build-url :- s/Str
-     [url :- URI]
-     (str (:protocol url) "://"
-          (:address url)
-          ;; port is meaningless for inproc
-          (when-let [port (:port url)]
-            (str ":" port)))))
-
+;;;; Pretty much everything that follows that takes an mq/Socket
+;;;; parameter should be refactored to accept a zmq-socket/SocketDescription
+;;;; instead
+;;;; TODO: Make that so.
 (s/defn router-recv! :- (s/maybe router-message)
   ([s :- mq/Socket]
    (router-recv! s :wait))
