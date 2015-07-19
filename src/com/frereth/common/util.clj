@@ -158,15 +158,14 @@ Totally fails on multi-home systems. But it's worthwhile as a starting point"
 
 (defn pretty
   [& os]
-  #_(with-out-str (apply puget/cprint os))
   (try
-    (with-out-str (apply puget/pprint os #_o))
+    (with-out-str (apply puget/pprint os))
     (catch RuntimeException ex
       (log/error ex "Pretty printing failed. Falling back to standard:\n")
       (str os))
     (catch AbstractMethodError ex
       ;; Q: Why isn't this a RuntimeException?
-      (log/error ex "WTF is wrong w/ pretty printing? Falling back to standard:\n")
+      (log/error ex "Something seriously wrong w/ pretty printing? Falling back to standard:\n")
       (str os))))
 
 (s/defn pushback-reader :- PushbackReader

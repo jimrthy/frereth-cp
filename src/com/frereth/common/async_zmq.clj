@@ -486,7 +486,9 @@ Send a duplicate stopper ("
         (let [[sent? c] (async/alts!! [[ex-chan msg] (async/timeout 250)])]
           (when-not sent?
             (raise {:q "How can I debug this?"
-                    :problem "0mq loop: forwarding message from outside to async loop timed out"})))
+                    :problem "0mq loop: forwarding message from outside to async loop timed out"
+                    :details {:component component
+                              :dst ex-chan}})))
         (log/debug _name "0mq loop: Message forwarded")))))
 
 (defn actual-zmq-loop
