@@ -2,6 +2,7 @@
   "This is really about higher-level messaging abstractions"
   (:require [cljeromq.core :as mq]
             [com.frereth.common.schema :as fr-sch]
+            [com.frereth.common.util :as util]
             [ribol.core :refer (raise)]
             [schema.core :as s]
             [taoensso.timbre :as log]))
@@ -38,26 +39,7 @@ Q: Is there ever any imaginable scenario where I
 wouldn't want this to handle the marshalling?"
   {:id fr-sch/java-byte-array
    :addresses fr-sch/byte-arrays
-   :contents fr-sch/byte-arrays
-   ;; Without this, the message is useless
-   ;; It seems like a waste of memory, but...
-   ;; without this, the socket just has to be passed
-   ;; into every function that uses it.
-   ;; Realistically, that part's sitting inside an event loop.
-   ;; So this gains us nothing.
-   ;; TODO: Make this go away.
-   :socket mq/Socket})
-
-(def generic-router-message
-  "Really pretty useless, except as an intermediate step"
-  (dissoc router-message :socket))
-
-;; More importantly, it conflicts with native
-;; Java's URI. This will be confusing
-(comment
-  (def URI {:protocol s/Str
-            :address s/Str
-            :port s/Int}))
+   :contents s/Any})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -88,7 +70,8 @@ This is almost definitely a bug"
             (log/debug "read-all: Done. Incoming:\n" (map #(String. %) result))
             result))))))
 
-(s/defn extract-router-message :- generic-router-message
+(s/defn extract-router-message :- router-message
+  "Note that this limits the actual message to 1 frame of EDN"
   [frames :- fr-sch/byte-arrays]
   (log/debug "Extracting Router Message from "
              (count frames) " frames")
@@ -96,12 +79,20 @@ This is almost definitely a bug"
      (if-let [remainder (next frames)]
        ;; No, this approach isn't particularly efficient.
        ;; But we really shouldn't be dealing with many frames
+       ;; The address frames are the ones between the identifier and the NULL separator
        (let [address-frames (take-while #(< 0 (count %)) remainder)
              address-size (count address-frames)
              message-frames (drop (inc address-size) remainder)]
-         {:id identity-frame
-          :addresses address-frames
-          :contents message-frames})
+         (when (not= 1 (count message-frames))
+           (raise {:problem :multi-frame-message
+                   :details {:id identity-frame
+                             :addresses address-frames
+                             :address-size address-size
+                             :contents message-frames}}))
+         (let [contents (-> message-frames first util/deserialize)]
+           {:id identity-frame
+            :addresses address-frames
+            :contents contents}))
        (raise {:how-did-this-happen? "We shouldn't be able to get an empty vector here, much less falsey"}))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -117,9 +108,9 @@ This is almost definitely a bug"
   ([s :- mq/Socket
     flags :- fr-sch/korks]
    (when-let [all-frames (read-all! s flags)]
-     (assoc (extract-router-message all-frames) :socket s))))
+     (extract-router-message all-frames))))
 
-(s/defn dealer-recv! :- fr-sch/byte-arrays
+(s/defn dealer-recv! :- s/Any
   "Really only for the simplest possible case"
   ([s :- mq/Socket]
    (dealer-recv! s :dont-wait))
@@ -127,7 +118,9 @@ This is almost definitely a bug"
    flags :- fr-sch/korks]
    (when-let [frames (read-all! s flags)]
      ;; Assume we aren't proxying. Drop the NULL separator
-     (drop 1 frames))))
+     (let [content (drop 1 frames)]
+       (assert (= 1 (count content)))
+       (-> content first util/deserialize)))))
 
 (s/defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
@@ -146,7 +139,7 @@ This is almost definitely a bug"
        (mq/send! s frame more-flags))
      (log/debug "Wrapping up dealer send w/ final frame:\n" (last frames)
                 "\na " (class (last frames)))
-     (mq/send! s (last frames) flags)))
+     (mq/send! s (util/serialize (last frames)) flags)))
   ([s :- mq/Socket
     frames :- fr-sch/byte-arrays]
    (dealer-send! s frames [])))
@@ -163,9 +156,8 @@ This is almost definitely a bug"
        (mq/send! s (:id msg) more-flags)
        (if (seq? addresses)
          (doseq [addr addresses]
-           (mq/send! s addr more-flags))
-         ;; Empty address frame
-         (mq/send! s (byte-array 0) more-flags))
+           (mq/send! s addr more-flags)))
+       ;; Note that dealer-send will account for the NULL separator
        (if (string? contents)
          (dealer-send! s [contents] flags)
          (if (or (seq? contents) (vector? contents))

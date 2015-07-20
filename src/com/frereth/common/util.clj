@@ -1,6 +1,7 @@
 (ns com.frereth.common.util
   (:require [clojure.edn :as edn]
             [clojure.string :as string]
+            [com.frereth.common.schema :as fr-sch]
             [puget.printer :as puget]
             [ribol.core :refer (raise)]
             [schema.core :as s]
@@ -178,6 +179,20 @@ Yes, it does seem pretty stupid"
   "Because remembering the java namespace is annoying"
   []
   (UUID/randomUUID))
+
+(s/defn deserialize :- s/Any
+  "Out of alphaetical order because it uses pretty"
+  [bs :- fr-sch/java-byte-array]
+  (let [s (String. bs)]
+    (try
+      (edn/read-string s)
+      (catch RuntimeException ex
+        (log/error ex "Failed reading incoming string:\n"
+                   (pretty s))))))
+
+(s/defn serialize :- fr-sch/java-byte-array
+  [o :- s/Any]
+  (-> o pr-str .getBytes))
 
 (s/defn thread-count :- s/Int
   "Rough estimate of how many threads are currently being used

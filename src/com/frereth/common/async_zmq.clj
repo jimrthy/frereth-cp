@@ -261,23 +261,6 @@ Their entire purpose in life, really, is to shuffle messages between
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
-;;; TODO: Move these next two elsewhere
-;;; Maybe into utils?
-(s/defn serialize :- fr-sch/java-byte-array
-  "TODO: This absolutely does not belong in here"
-  [o :- s/Any]
-  (-> o pr-str .getBytes))
-
-(s/defn deserialize :- s/Any
-  "Neither does this"
-  [bs :- fr-sch/java-byte-array]
-  (let [s (String. bs)]
-    (try
-      (edn/read-string s)
-      (catch RuntimeException ex
-        (log/error ex "Failed reading incoming string:\n"
-                   (util/pretty s))))))
-
 (defn do-signal-async-loop-exit
   "signal the async half of the event loop to exit"
   [async-loop interface stopper _name]
@@ -420,7 +403,7 @@ Send a duplicate stopper ("
             ;; the async channel.
             ;; Or, at least, there will be very soon.
             msg (mq/recv! ->zmq-sock)
-            deserialized (deserialize msg)]
+            deserialized (util/deserialize msg)]
         (log/debug _name ": from internal -- " msg "\naka\n" deserialized "\na" (class deserialized))
 
         ;; That's just a signal that messages

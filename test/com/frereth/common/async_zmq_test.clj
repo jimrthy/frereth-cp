@@ -30,13 +30,13 @@
         reader (fn [sock]
                  (let [read (mq/raw-recv! sock)]
                    (comment) (println "Mock Reader Received:\n" (util/pretty read))
-                   (deserialize read)))
+                   (util/deserialize read)))
         generic-writer (fn [which sock msg]
                          ;; Q: if we're going to do this,
                          ;; does the event loop need access to the socket at all?
                          ;; A: Yes. Because it spends most of its time polling on that socket
                          (println "Mock writer sending" msg "on Pair" which)
-                         (mq/send! sock (serialize msg) :dont-wait))
+                         (mq/send! sock (util/serialize msg) :dont-wait))
         writer1 (partial generic-writer "one")
         writer2 (partial generic-writer "two")
         internal-url (name (gensym))]
@@ -184,7 +184,7 @@ I write, but I know better."
                    (when (< 0 attempts))
                    (recur (mq/raw-recv! dst :dont-wait)
                           (dec attempts)))))]
-      (let [result (deserialize serialized)]
+      (let [result (util/deserialize serialized)]
         (assert v "Channel submission failed")
         (component/stop mock)
         [v result])
@@ -228,7 +228,7 @@ I write, but I know better."
                   (loop [retries 5
                          serialized (mq/recv! (:socket dst) :dont-wait)]
                     (if serialized
-                      (let [result (deserialize serialized)]
+                      (let [result (util/deserialize serialized)]
                         (println "Received"
                                  serialized
                                  "a"
