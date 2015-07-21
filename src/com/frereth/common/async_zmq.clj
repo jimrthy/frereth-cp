@@ -383,7 +383,7 @@ Send a duplicate stopper ("
       :exited-successfully)))
 
 (s/defn possibly-recv-internal!
-  "Really just refactored to make data flow more clear"
+  "Really just refactored to make data flow less opaque"
   [{:keys [_name ->zmq-sock interface stopper in<->ex-chan]
     :as component} :- EventPair
    poller :- mq/Poller]
@@ -426,14 +426,18 @@ Send a duplicate stopper ("
                   (external-writer (:socket ex-sock) msg)
                   (log/debug _name "Message forwarded to 0mq")
                   (catch RuntimeException ex
-                    (log/error ex "Trying to forward to 0mq socket")
+                    (log/error ex "Trying to forward to 0mq socket:" ex-sock)
                     ;; this shouldn't disturb the overall system
                     ;; operation...but this really does indicate a
                     ;; fatal error that should have been caught during
                     ;; development.
                     ;; This indicates a pretty thoroughly broken
                     ;; foundation.
-                    (throw)))
+                    (raise {:problem ex
+                            :details {:socket-wrapper ex-sock
+                                      :message msg
+                                      :external-writer external-writer
+                                      :component component}})))
                 ;; TODO: Update this part when we get a core.async that supports poll!
                 (recur (async/alts!! [(async/timeout 100) in<->ex-chan]))))))
         @exited))))

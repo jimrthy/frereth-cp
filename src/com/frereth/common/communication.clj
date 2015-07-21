@@ -153,7 +153,12 @@ This is almost definitely a bug"
      (let [s (:socket msg)
            more-flags (conj flags :send-more)
            addresses (:addresses msg)]
-       (mq/send! s (:id msg) more-flags)
+       (try
+         (mq/send! s (:id msg) more-flags)
+         (catch NullPointerException ex
+           (log/error ex "Trying to send " (:id msg) "\nacross " s
+                      "\nusing flags: " more-flags)))
+
        (if (seq? addresses)
          (doseq [addr addresses]
            (mq/send! s addr more-flags)))
