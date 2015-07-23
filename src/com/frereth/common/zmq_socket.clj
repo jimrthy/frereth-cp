@@ -5,7 +5,8 @@
             [com.stuartsierra.component :as component]
             [schema.core :as s]
             [taoensso.timbre :as log])
-  (:import [org.zeromq ZMQException]))
+  (:import [clojure.lang ExceptionInfo]
+           [org.zeromq ZMQException]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
@@ -65,11 +66,16 @@
                   "socket based on context\n"
                   (util/pretty ctx)
                   "a" (class ctx)))
-       (let [sock (mq/socket! (:ctx ctx) sock-type)
-             uri (mq/connection-string url)]
-         (if (= direction :bind)
-           (mq/bind! sock uri)
-           (mq/connect! sock uri))
+       (let [sock (mq/socket! (:ctx ctx) sock-type)]
+         (try
+           (let [uri (mq/connection-string url)]
+             (if (= direction :bind)
+               (mq/bind! sock uri)
+               (mq/connect! sock uri)))
+           (catch ExceptionInfo ex
+             (log/error ex "Problem w/ connection to\n"
+                        (util/pretty url)
+                        "\nAre you having internet issues?")))
          (assoc this :socket sock)))
      this))
   (stop

@@ -1,8 +1,9 @@
 (ns com.frereth.common.util
   (:require [clojure.edn :as edn]
+            [clojure.pprint :as pprint]
             [clojure.string :as string]
             [com.frereth.common.schema :as fr-sch]
-            [puget.printer :as puget]
+            #_[puget.printer :as puget]
             [ribol.core :refer (raise)]
             [schema.core :as s]
             [taoensso.timbre :as log])
@@ -160,7 +161,7 @@ Totally fails on multi-home systems. But it's worthwhile as a starting point"
 (defn pretty
   [& os]
   (try
-    (with-out-str (apply puget/pprint os))
+    (with-out-str (apply pprint/pprint os))
     (catch RuntimeException ex
       (log/error ex "Pretty printing failed. Falling back to standard:\n")
       (str os))
@@ -192,7 +193,9 @@ Yes, it does seem pretty stupid"
 
 (s/defn serialize :- fr-sch/java-byte-array
   [o :- s/Any]
-  (-> o pr-str .getBytes))
+  (if (= (class o) fr-sch/java-byte-array)
+    o
+    (-> o pr-str .getBytes)))
 
 (s/defn thread-count :- s/Int
   "Rough estimate of how many threads are currently being used

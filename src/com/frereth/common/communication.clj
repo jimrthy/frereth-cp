@@ -89,10 +89,17 @@ This is almost definitely a bug"
                              :addresses address-frames
                              :address-size address-size
                              :contents message-frames}}))
-         (let [contents (-> message-frames first util/deserialize)]
-           {:id identity-frame
-            :addresses address-frames
-            :contents contents}))
+         (try
+           (let [contents (-> message-frames first util/deserialize)]
+             {:id identity-frame
+              :addresses address-frames
+              :contents contents})
+           (catch RuntimeException ex
+             (log/error ex
+                        "\nCaused by:\n"
+                        (util/pretty message-frames)
+                        "\n\nVery tempting to make this fatal during dev time"
+                        "\nBut a misbehaving client should not be able to disrupt the server"))))
        (raise {:how-did-this-happen? "We shouldn't be able to get an empty vector here, much less falsey"}))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -145,29 +152,30 @@ This is almost definitely a bug"
    (dealer-send! s frames [])))
 
 (s/defn router-send!
-  ([msg :- router-message]
-   (router-send! msg []))
-  ([msg :- router-message
+  ([sock :- mq/Socket
+    msg :- router-message]
+   (router-send! sock msg []))
+  ([sock :- mq/Socket
+    msg :- router-message
     flags :- fr-sch/korks]
    (when-let [contents (:contents msg)]
-     (let [s (:socket msg)
-           more-flags (conj flags :send-more)
+     (let [more-flags (conj flags :send-more)
            addresses (:addresses msg)]
        (try
-         (mq/send! s (:id msg) more-flags)
+         (mq/send! sock (:id msg) more-flags)
          (catch NullPointerException ex
-           (log/error ex "Trying to send " (:id msg) "\nacross " s
+           (log/error ex "Trying to send " (:id msg) "\nacross " sock
                       "\nusing flags: " more-flags)))
 
        (if (seq? addresses)
          (doseq [addr addresses]
-           (mq/send! s addr more-flags)))
+           (mq/send! sock addr more-flags)))
        ;; Note that dealer-send will account for the NULL separator
        (if (string? contents)
-         (dealer-send! s [contents] flags)
+         (dealer-send! sock [contents] flags)
          (if (or (seq? contents) (vector? contents))
-           (dealer-send! s contents flags)
-           (dealer-send! s [contents] flags)))))))
+           (dealer-send! sock contents flags)
+           (dealer-send! sock[contents] flags)))))))
 
 (comment
   (let [ctx (mq/context 3)
@@ -178,7 +186,7 @@ This is almost definitely a bug"
       (Thread/sleep 5000)
       (let [incoming (router-recv! sock)]
         (log/debug incoming)
-        (router-send! (assoc incoming :contents "PONG"))
+        (router-send! sock (assoc incoming :contents "PONG"))
         incoming)
       (finally
         (mq/unbind! sock url)
@@ -194,7 +202,7 @@ This is almost definitely a bug"
 
   (def incoming (router-recv! sock))
   incoming
-  (router-send! (assoc incoming :contents "PONG"))
+  (router-send! sock (assoc incoming :contents "PONG"))
 
   (def raw-frames (read-all! sock :dont-wait))
   raw-frames

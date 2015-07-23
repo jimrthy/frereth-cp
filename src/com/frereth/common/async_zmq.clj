@@ -311,41 +311,40 @@ Send a duplicate stopper ("
    _name internal-> stopper in<->ex-chan]
   (try
     (if-not (nil? val)
-      (do
-        (if (= in-chan c)
-          (do
-            (log/debug _name " Incoming async message:\n"
-                       (util/pretty val) "a" (class val)
-                       "\nFrom internal. Forwarding to 0mq")
-            (mq/send! internal-> "outgoing")
-            (log/debug "0mq loop notified")
-            ;; Q: Send via offer! instead?
-            ;; TODO: Make this more granular to allow batch sends when
-            ;; they make sense
-            ;; TODO: 100 ms is far too long to wait here
-            (let [[v c] (async/alts!! [[in<->ex-chan val] (async/timeout 100)])]
-              (log/debug _name": Message" (if v
-                                            "sent"
-                                            "didn't get sent"))
-              (when-not v
-                (log/error _name ": Forwarding message timed out\nExpected channel:"
-                           in<->ex-chan "\nTimeout channel:" c)
-                ;; FIXME: Debug only
-                ;; TODO: Catch this!
-                (raise [:be-smarter])))
+      (if (= in-chan c)
+        (do
+          (log/debug _name " Incoming async message:\n"
+                     (util/pretty val) "a" (class val)
+                     "\nFrom internal. Forwarding to 0mq")
+          (mq/send! internal-> "outgoing")
+          (log/debug "0mq loop notified")
+          ;; Q: Send via offer! instead?
+          ;; TODO: Make this more granular to allow batch sends when
+          ;; they make sense
+          ;; TODO: 100 ms is far too long to wait here
+          (let [[v c] (async/alts!! [[in<->ex-chan val] (async/timeout 100)])]
+            (log/debug _name": Message" (if v
+                                          "sent"
+                                          "didn't get sent"))
+            (when-not v
+              (log/error _name ": Forwarding message timed out\nExpected channel:"
+                         in<->ex-chan "\nTimeout channel:" c)
+              ;; FIXME: Debug only
+              ;; TODO: Catch this!
+              (raise [:be-smarter])))
 
-            (log/debug _name ": Message forwarded from Async side"))
-          (if (= status-chan c)
-            (do
-              (let [msg (str _name " Async Status Request received on " c
-                             "\n(which should be " status-chan
-                             ")\nTODO: Something more useful"
-                             "\nThe 0mq side is really much more interesting")]
-                (log/debug msg))
-              ;; Don't want to risk this blocking for very long
-              ;; Note that we aren't technically inside a go block here, because
-              ;; of macro scope
-              (async/alts!! [(async/timeout 1) [status-out :everythings-fine]])))))
+          (log/debug _name ": Message forwarded from Async side"))
+        (if (= status-chan c)
+          (do
+            (let [msg (str _name " Async Status Request received on " c
+                           "\n(which should be " status-chan
+                           ")\nTODO: Something more useful"
+                           "\nThe 0mq side is really much more interesting")]
+              (log/debug msg))
+            ;; Don't want to risk this blocking for very long
+            ;; Note that we aren't technically inside a go block here, because
+            ;; of macro scope
+            (async/alts!! [(async/timeout 1) [status-out :everythings-fine]]))))
       (log/debug _name " Async Event Loop: Heartbeat"))
     ;; Exit when input channel closes or someone sends the 'stopper' gensym
     (catch RuntimeException ex
@@ -363,6 +362,7 @@ Send a duplicate stopper ("
    (and (not= c in-chan) (not= c status-chan))))
 
 (s/defn ^:always-validate run-async-loop! :- fr-sch/async-channel
+  "TODO: Convert this to a pipeline"
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
   (let [{:keys [in-chan status-chan status-out]} interface
         internal-> async->sock

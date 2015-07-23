@@ -35,7 +35,10 @@
                  [im.chit/ribol "0.4.1" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.1.6" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
-                 [mvxcvi/puget "0.8.1" :exclusions [org.clojure/clojure]]
+                 ;; This is screwing up EDN serialization
+                 ;; In particular dates.
+                 ;; TODO: Make it ignore thase
+                 #_[mvxcvi/puget "0.8.1" :exclusions [org.clojure/clojure]]
                  [org.clojure/clojure "1.7.0"]
                  [org.clojure/core.async "0.1.346.0-17112a-alpha" :exclusions [org.clojure/clojure]]
                  ;; Desperately want something like this version for offer!
