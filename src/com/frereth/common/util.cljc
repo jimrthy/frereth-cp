@@ -1,6 +1,10 @@
 (ns com.frereth.common.util
   (:require [clojure.edn :as edn]
-            [clojure.pprint :as pprint]
+            [#?
+             (:clj
+              clojure.pprint
+              :cljs cljs.pprint
+              :clr clojure.pprint) :as pprint]
             [clojure.string :as string]
             [com.frereth.common.schema :as fr-sch]
             #_[puget.printer :as puget]
