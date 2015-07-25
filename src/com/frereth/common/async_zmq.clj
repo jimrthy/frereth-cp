@@ -512,7 +512,10 @@ Send a duplicate stopper ("
         (log/error ex "Unhandled 0mq Exception. 0mq loop exiting")
         :unhandled-0mq-exception))))
 
-(s/defn ^:always-validate run-zmq-loop! :- fr-sch/async-channel
+(s/defn
+  ^:always-validate
+  run-zmq-loop!
+  :- fr-sch/async-channel
   [{:keys [interface ->zmq-sock ex-chan _name]
     :as component}]
   (let [{:keys [ex-sock external-reader externalwriter]} interface
@@ -523,7 +526,8 @@ Send a duplicate stopper ("
      (comment (log/debug "Entering 0mq event thread"))
      (try
        ;; Move the actual functionality into its own function
-       ;; so that it isn't buried here
+       ;; so that it isn't buried here in the middle of all this
+       ;; error handling
        (let [result (actual-zmq-loop component poller)]
          (comment) (log/debug "Cleaning up 0mq Event Loop")
          result)

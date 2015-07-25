@@ -86,12 +86,12 @@
        (try
          (mq/set-linger! socket 0)
          (mq/close! socket)
+         (assoc this :socket nil)
          (catch ZMQException ex
            (log/error ex "Failed to close socket:" socket
                       "\nAre you trying to stop this a second time?"
                       "\n(if so, you probably have a bug where you should"
-                      " be using the result of the first call to stop)"))
-         (finally
+                      " be using the result of the first call to stop)")
            (assoc this :socket nil))))
      this)))
 

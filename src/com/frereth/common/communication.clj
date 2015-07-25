@@ -49,7 +49,7 @@ wouldn't want this to handle the marshalling?"
 This is almost definitely a bug"
   [s :- mq/Socket
    flags :- fr-sch/korks]
-  (log/debug "read-all3: Top")
+  (log/debug "read-all: Top")
   ;; It's very tempting to just do recv! here,
   ;; but callers may not need/want to take the time
   ;; to do the string conversion.

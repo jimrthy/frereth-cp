@@ -30,7 +30,7 @@
                  [com.stuartsierra/component "0.2.3"]
                  [com.taoensso/timbre "3.4.0" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
-                 [fullcontact/full.async "0.7.0" :exclusions [org.clojure/clojure
+                 [fullcontact/full.async "0.7.1" :exclusions [org.clojure/clojure
                                                               org.clojure/core.async]]
                  [im.chit/ribol "0.4.1" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.1.6" :exclusions [org.clojure/clojure

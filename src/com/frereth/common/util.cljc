@@ -1,10 +1,10 @@
 (ns com.frereth.common.util
+  "Utilities to try to make my life easier
+This approach really can't work: much/most of this is
+JVM-specific
+
+Besides. In order to use it from web, I'd need to cljsbuild it"
   (:require [clojure.edn :as edn]
-            [#?
-             (:clj
-              clojure.pprint
-              :cljs cljs.pprint
-              :clr clojure.pprint) :as pprint]
             [clojure.string :as string]
             [com.frereth.common.schema :as fr-sch]
             #_[puget.printer :as puget]
@@ -15,6 +15,17 @@
            [java.lang.reflect Modifier]
            [java.net InetAddress]
            [java.util UUID]))
+
+;;; I was having issues with this in the ns form.
+;;; This was an attempt at hacking around it.
+;;; Looks like the "real" problem was that this got
+;;; copied back to util.clj.
+;;; TODO: Move this back where it belongs.
+(require [ #? (:clj 'clojure.pprint
+                    :cljs 'cljs.pprint
+                    :clr 'clojure.pprint
+                    :default (throw (ex-info "Unknown platform" {})))
+          :as 'pprint])
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
