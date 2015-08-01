@@ -44,7 +44,7 @@
                  ;; Desperately want something like this version for offer!
                  ;; Q: Where can I find it?
                  #_[org.clojure/core.async "0.1.0-SNAPSHOT" :exclusions [org.clojure/clojure]]
-                 [org.clojure/tools.reader "0.9.2" :exclusions [org.clojure/clojure]]
+                 [org.clojure/tools.reader "0.10.0-alpha1" :exclusions [org.clojure/clojure]]
                  [prismatic/plumbing "0.4.4"]
                  [prismatic/schema "0.4.3"]]
 
