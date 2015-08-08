@@ -28,9 +28,9 @@
                                                                      prismatic/schema]]
                  [com.jimrthy/component-dsl "0.1.1-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [com.stuartsierra/component "0.2.3"]
-                 [com.taoensso/timbre "3.4.0" :exclusions [org.clojure/clojure
+                 [com.taoensso/timbre "4.1.0" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
-                 [fullcontact/full.async "0.7.1" :exclusions [org.clojure/clojure
+                 [fullcontact/full.async "0.8.2" :exclusions [org.clojure/clojure
                                                               org.clojure/core.async]]
                  [im.chit/ribol "0.4.1" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.1.6" :exclusions [org.clojure/clojure
@@ -43,6 +43,8 @@
                  [org.clojure/core.async "0.1.346.0-17112a-alpha" :exclusions [org.clojure/clojure]]
                  ;; Desperately want something like this version for offer!
                  ;; Q: Where can I find it?
+                 ;; A: So far, you have to clone it from github and install it locally.
+                 ;; I'm not quite ready to inflict that on anyone who might be willing to test this sucker
                  #_[org.clojure/core.async "0.1.0-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [org.clojure/tools.reader "0.10.0-alpha1" :exclusions [org.clojure/clojure]]
                  [prismatic/plumbing "0.4.4"]
