@@ -178,7 +178,8 @@ Totally fails on multi-home systems. But it's worthwhile as a starting point"
   (try
     (with-out-str (apply pprint/pprint os))
     (catch RuntimeException ex
-      (log/error ex "Pretty printing failed. Falling back to standard:\n")
+      (log/error ex "Pretty printing failed (there should be a stack trace about this failure).
+Falling back to standard")
       (str os))
     (catch AbstractMethodError ex
       ;; Q: Why isn't this a RuntimeException?
