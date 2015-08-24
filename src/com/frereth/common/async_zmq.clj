@@ -345,8 +345,7 @@ Send a duplicate stopper ("
             ;; Note that we aren't technically inside a go block here, because
             ;; of macro scope
             (async/alts!! [(async/timeout 1) [status-out :everythings-fine]]))))
-      (log/debug _name " Async Event Loop: Heartbeat
-"))
+      (log/debug _name " Async Event Loop: Heartbeat\n"))
     ;; Exit when input channel closes or someone sends the 'stopper' gensym
     (catch RuntimeException ex
       (log/error ex "Unexpected error in async loop"))
