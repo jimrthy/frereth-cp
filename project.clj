@@ -48,8 +48,7 @@
                  #_[org.clojure/core.async "0.1.0-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [org.clojure/tools.reader "0.10.0-alpha1" :exclusions [org.clojure/clojure]]
                  [prismatic/plumbing "0.4.4"]
-                 ;; TODO: bump to 1.0.0-alpha1
-                 [prismatic/schema "0.4.3"]]
+                 [prismatic/schema "1.0.1"]]
 
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
 
