@@ -32,6 +32,8 @@
                                                            org.clojure/tools.reader]]
                  [fullcontact/full.async "0.8.2" :exclusions [org.clojure/clojure
                                                               org.clojure/core.async]]
+                 ;; This has been deprecated.
+                 ;; TODO: Switch to hara
                  [im.chit/ribol "0.4.1" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.1.6" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
