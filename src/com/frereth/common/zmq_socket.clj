@@ -61,11 +61,12 @@
    (if-not socket
      (do
        (assert ctx "Can't do anything without a Messaging Context")
-       (comment (log/debug "Getting ready to try to start a"
-                  sock-type
-                  "socket based on context\n"
-                  (util/pretty ctx)
-                  "a" (class ctx)))
+       (assert url "Nowhere to connect")
+       (comment) (log/debug "Getting ready to try to start a"
+                            sock-type
+                            "socket based on context\n"
+                            (util/pretty ctx)
+                            "a" (class ctx))
        (let [sock (mq/socket! (:ctx ctx) sock-type)]
          (try
            (let [uri (mq/connection-string url)]
