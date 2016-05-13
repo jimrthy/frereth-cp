@@ -1,1 +1,0 @@
-(ns frereth-common.config)

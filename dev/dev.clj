@@ -1,5 +1,10 @@
 (ns dev
-  (:require [clojure.java.io :as io]
+  "TODO: Really should figure out a way to share all the common pieces
+  (hint, hint)"
+  (:require [cljeromq.core :as mq]
+            [clojure.core.async :as async]
+            [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.inspector :as i]
             [clojure.string :as str]
             [clojure.pprint :refer (pprint)]
@@ -7,10 +12,17 @@
             [clojure.test :as test]
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [com.stuartsierra.component :as component]
-            [frereth-common.config :as cfg]
-            [frereth-common.system :as system]
-            [frereth-common.util :as util]
+            [com.frereth.common.communication :as com-comm]
+            [com.frereth.common.config :as cfg]
+            [com.frereth.common.system :as sys]
+            [com.frereth.common.util :as util]
+            [joda-time :as dt]
             [ribol.core :refer (raise)]))
+
+;; Because this seems to be the only namespace I ever actually
+;; use in here, and I'm tired of typing it out because it's
+;; ridiculously long
+(require '[com.frereth.common.async-zmq-test :as azt])
 
 (def system nil)
 
@@ -19,9 +31,24 @@
   []
   (set! *print-length* 50)
 
-  (let [config {}]
+  (let [ctx (mq/context 4)
+        socket-pair (mq/build-internal-pair! ctx)
+        reader (fn [sock]
+                 (println "Fake system reading")
+                 (mq/raw-recv! sock))
+        writer (fn [sock msg]
+                 (println "Fake system sending")
+                 (mq/send! sock msg))
+        parameters-tree {:event-loop {:mq-ctx ctx
+                                      :ex-sock (:lhs socket-pair)
+                                      :in-chan (async/chan)
+                                      :external-reader reader
+                                      :external-writer writer}}
+        config {:structure '{:event-loop com.frereth.common.async-zmq/ctor}
+                :dependencies []}]
     (alter-var-root #'system
-                    (constantly (system/build config)))))
+                    (constantly (assoc (sys/build config parameters-tree)
+                                       :fake-external (:rhs socket-pair))))))
 
 (defn start
   "Starts the current development system."
