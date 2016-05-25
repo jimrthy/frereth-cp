@@ -11,6 +11,10 @@ lein install
 
 Although you probably don't want to actually use it.
 
+## Notes
+
+The previous checkin wasn't as bad as I expected
+
 ## License
 
 Copyright © 2014 James Gatannah
