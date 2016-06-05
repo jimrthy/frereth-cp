@@ -15,6 +15,13 @@
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
                  ;; is the primary goal.
+                 ;; It doesn't seem to belong everywhere, but I'm not
+                 ;; sure which pieces won't need to update CLASSPATH on
+                 ;; the fly.
+                 ;; Maybe not the renderer, but that may where it actually
+                 ;; makes the most sense.
+                 ;; Including this is strictly speculative at this point,
+                 ;; but it really is a major part of The Point.
                  [com.cemerick/pomegranate "0.3.1" :exclusions [org.codehaus.plexus/plexus-utils]]
                  ;; For now, this next library needs to be distributed to
                  ;; a local maven repo.
@@ -40,7 +47,8 @@
                  [com.jimrthy/component-dsl "0.1.1-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [com.taoensso/timbre "4.3.1" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
-                 [com.taoensso/timbre "4.3.1" :exclusions [org.clojure/clojure
+                 [com.taoensso/timbre "4.3.1" :exclusions [io.aviso/pretty
+                                                           org.clojure/clojure
                                                            org.clojure/tools.reader]]
                  [fullcontact/full.async "0.9.0" :exclusions [org.clojure/clojure
                                                               org.clojure/core.async]]
@@ -56,14 +64,14 @@
                  #_[mvxcvi/puget "1.0.0" :exclusions [org.clojure/clojure]]
                  [org.clojure/clojure "1.8.0"]
                  [org.clojure/core.async "0.2.374" :exclusions [org.clojure/clojure]]
-                 [org.clojure/tools.reader "0.10.0" :exclusions [org.clojure/clojure]]
+                 [org.clojure/tools.reader "1.0.0-beta1" :exclusions [org.clojure/clojure]]
                  [prismatic/plumbing "0.5.3"]
                  [prismatic/schema "1.1.1"]]
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
   :plugins []
   :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.3"
                                    :exclusions [org.clojure/clojure]]
-                                  [org.clojure/tools.namespace "0.2.10"]]
+                                  [org.clojure/tools.namespace "0.2.11"]]
                    :plugins [[org.clojure/tools.namespace "0.2.11" :exclusions [org.clojure/clojure]]]
                    :source-paths ["dev"]}
              :uberjar {:aot :all}}
