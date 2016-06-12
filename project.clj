@@ -45,9 +45,7 @@
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
                  [com.jimrthy/component-dsl "0.1.1-SNAPSHOT" :exclusions [org.clojure/clojure]]
-                 [com.taoensso/timbre "4.3.1" :exclusions [org.clojure/clojure
-                                                           org.clojure/tools.reader]]
-                 [com.taoensso/timbre "4.3.1" :exclusions [io.aviso/pretty
+                 [com.taoensso/timbre "4.4.0" :exclusions [io.aviso/pretty
                                                            org.clojure/clojure
                                                            org.clojure/tools.reader]]
                  [fullcontact/full.async "0.9.0" :exclusions [org.clojure/clojure
@@ -62,16 +60,22 @@
                  ;; TODO: Make it ignore those
                  ;; Q: Has the situation improved in the months I've been ignoring it?
                  #_[mvxcvi/puget "1.0.0" :exclusions [org.clojure/clojure]]
-                 [org.clojure/clojure "1.8.0"]
-                 [org.clojure/core.async "0.2.374" :exclusions [org.clojure/clojure]]
+                 ;; 1.9.0-alpha5 breaks async-zmq
+                 #_[org.clojure/clojure "1.8.0"]
+                 [org.clojure/clojure "1.9.0-alpha5"]
+                 [org.clojure/core.async "0.2.374" :exclusions [org.clojure/clojure
+                                                                org.clojure/tools.analyzer]]
+                 [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta1" :exclusions [org.clojure/clojure]]
                  [prismatic/plumbing "0.5.3"]
+                 ;; Q: What's the status on this, now that specs are being added for 1.9.0?
                  [prismatic/schema "1.1.1"]]
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
   :plugins []
   :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.3"
                                    :exclusions [org.clojure/clojure]]
                                   [org.clojure/tools.namespace "0.2.11"]]
+                   ;; Q: Why do I have tools.namespace under both dependencies and plugins?
                    :plugins [[org.clojure/tools.namespace "0.2.11" :exclusions [org.clojure/clojure]]]
                    :source-paths ["dev"]}
              :uberjar {:aot :all}}
