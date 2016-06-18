@@ -61,15 +61,16 @@
                  ;; Q: Has the situation improved in the months I've been ignoring it?
                  #_[mvxcvi/puget "1.0.0" :exclusions [org.clojure/clojure]]
                  ;; 1.9.0-alpha5 breaks async-zmq
+                 ;; TODO: Fix that
                  #_[org.clojure/clojure "1.8.0"]
                  [org.clojure/clojure "1.9.0-alpha5"]
-                 [org.clojure/core.async "0.2.374" :exclusions [org.clojure/clojure
+                 [org.clojure/core.async "0.2.385" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta1" :exclusions [org.clojure/clojure]]
                  [prismatic/plumbing "0.5.3"]
                  ;; Q: What's the status on this, now that specs are being added for 1.9.0?
-                 [prismatic/schema "1.1.1"]]
+                 [prismatic/schema "1.1.2"]]
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
   :plugins []
   :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.3"
