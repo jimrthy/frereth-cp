@@ -67,7 +67,7 @@
                  [org.clojure/core.async "0.2.385" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
                  [org.clojure/tools.analyzer "0.6.9"]
-                 [org.clojure/tools.reader "1.0.0-beta1" :exclusions [org.clojure/clojure]]
+                 [org.clojure/tools.reader "1.0.0-beta2" :exclusions [org.clojure/clojure]]
                  [prismatic/plumbing "0.5.3"]
                  ;; Q: What's the status on this, now that specs are being added for 1.9.0?
                  [prismatic/schema "1.1.2"]]
