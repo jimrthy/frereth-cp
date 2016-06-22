@@ -20,9 +20,11 @@ Strongly inspired by lynaghk's zmq-async"
 ;;; Schema
 
 (s/defrecord EventPairInterface
-    [;; send messages to this to get them to 0mq. Supplied by caller
+    [;; send messages to this to get them to 0mq.
+     ;; Should be supplied by caller
      ;; (that's where the messages come from, so that's what's responsible
      ;; for opening/closing)
+     ;; But we'll override to create it if the caller doesn't provide
      in-chan  :- fr-sch/async-channel
      ;; faces outside world.
      ;; Caller provides, because binding/connecting is really not in scope here
@@ -56,30 +58,30 @@ Strongly inspired by lynaghk's zmq-async"
       ;; I wasn't paying enough attention when
       ;; I started refacting.
       ;; This version is broken
-      external-reader (assoc
-                       :external-reader
-                       (fn [sock]
-                         ;; It's tempting to default
-                         ;; to :dont-wait
-                         ;; But we shouldn't ever
-                         ;; try reading this unless
-                         ;; a Poller just verified
-                         ;; that messages are waiting.
-                         ;; Note that we probably never want this
-                         ;; default behavior.
-                         ;; This really needs to demarshall
-                         ;; the message and analyze it before
-                         ;; tagging it with whatever info
-                         ;; really needs to be done.
-                         ;; Still, there might be some
-                         ;; apps where this is enough.
-                         (mq/raw-recv! sock :wait)))
-      external-writer (assoc
-                       :external-writer
-                       (fn [sock array-of-bytes]
-                         ;; Same comments re: over-simplicity
-                         ;; in the default reader apply here
-                         (mq/send! sock array-of-bytes)))))
+      (not external-reader) (assoc
+                             :external-reader
+                             (fn [sock]
+                               ;; It's tempting to default
+                               ;; to :dont-wait
+                               ;; But we shouldn't ever
+                               ;; try reading this unless
+                               ;; a Poller just verified
+                               ;; that messages are waiting.
+                               ;; Note that we probably never want this
+                               ;; default behavior.
+                               ;; This really needs to demarshall
+                               ;; the message and analyze it before
+                               ;; tagging it with whatever info
+                               ;; really needs to be done.
+                               ;; Still, there might be some
+                               ;; apps where this is enough.
+                               (mq/raw-recv! sock :wait)))
+      (not external-writer) (assoc
+                             :external-writer
+                             (fn [sock array-of-bytes]
+                               ;; Same comments re: over-simplicity
+                               ;; in the default reader apply here
+                               (mq/send! sock array-of-bytes)))))
   (stop
    [this]
     (when in-chan
