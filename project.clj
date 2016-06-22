@@ -53,6 +53,7 @@
                  ;; This has been deprecated.
                  ;; TODO: Switch to hara-events
                  [im.chit/ribol "0.4.1" :exclusions [org.clojure/clojure]]
+                 ;; Note that this pulls in weavejester's medley, making it available
                  [io.aviso/config "0.1.13" :exclusions [org.clojure/clojure
                                                         prismatic/schema]]
                  ;; This is screwing up EDN serialization
