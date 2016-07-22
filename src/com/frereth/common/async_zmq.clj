@@ -2,7 +2,8 @@
   "Communicate among 0mq sockets and async channels.
 
 Strongly inspired by lynaghk's zmq-async"
-  (:require [cljeromq.core :as mq]
+  (:require [cljeromq.common :as mq-cmn]
+            [cljeromq.core :as mq]
             [clojure.core.async :as async :refer (>! >!!)]
             [clojure.edn :as edn]
             [com.frereth.common.schema :as fr-sch]
@@ -35,10 +36,10 @@ Strongly inspired by lynaghk's zmq-async"
      ;; reconnecting dropped sessions, etc.
      ;; Luckily (?) these are the server writer's problems.
      ;; TODO: Refactor-rename these to just reader/writer
-     external-reader :- (s/=> fr-sch/java-byte-array mq/Socket)
+     external-reader :- (s/=> fr-sch/java-byte-array mq-cmn/Socket)
      ;; I *think* this returns bool, but, honestly,
      ;; it should return nil
-     external-writer :- (s/=> s/Any mq/Socket fr-sch/java-byte-array)
+     external-writer :- (s/=> s/Any mq-cmn/Socket fr-sch/java-byte-array)
      ;; For requesting status messages
      status-chan :- fr-sch/async-channel
      ;; For updating w/ status messages
@@ -137,8 +138,8 @@ Strongly inspired by lynaghk's zmq-async"
    ;; Splitting them like this (instead of whatever cljeromq names them
    ;; in in<->ex-sock) is really just a convenience to help me remember
    ;; which is which
-   async->sock :- mq/Socket  ; async half of in<->ex-sock
-   ->zmq-sock :- mq/Socket ; 0mq half of in<->ex-sock
+   async->sock :- mq-cmn/Socket  ; async half of in<->ex-sock
+   ->zmq-sock :- mq-cmn/Socket ; 0mq half of in<->ex-sock
 
    ;; After async->sock notifies ->zmq-sock that messages are ready to
    ;; go, pull them from here.
@@ -252,8 +253,8 @@ Their entire purpose in life, really, is to shuffle messages between
   "This is the almost-constructed EventPair that gets passed in to the messaging loops"
   (dissoc (map->EventPair {:interface EventPairInterface
                            :stopper s/Symbol
-                           :async-sock mq/Socket
-                           :->zmq-sock mq/Socket
+                           :async-sock mq-cmn/Socket
+                           :->zmq-sock mq-cmn/Socket
                            :_name s/Str
                            :ex-chan fr-sch/async-channel
                            :in<->ex-sock mq/InternalPair}) :async-loop :zmq-loop))
@@ -386,7 +387,7 @@ Send a duplicate stopper ("
   "Really just refactored to make data flow less opaque"
   [{:keys [_name ->zmq-sock interface stopper in<->ex-chan]
     :as component} :- EventPair
-   poller :- mq/Poller]
+   poller :- mq-cmn/Poller]
   (let [{:keys [ex-sock external-writer]} interface]
     ;; Message over internal notifier socket?
     (if (mq/in-available? poller 1)
@@ -445,7 +446,7 @@ Send a duplicate stopper ("
 (s/defn possibly-forward-msg-from-outside!
   [{:keys [interface ex-chan _name]
     :as component} :- EventPair
-   poller :- mq/Poller]
+   poller :- mq-cmn/Poller]
   ;; Message coming in from outside?
   (when (mq/in-available? poller 0)
     (let [{:keys [external-reader ex-sock]} interface]

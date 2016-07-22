@@ -1,6 +1,7 @@
 (ns com.frereth.common.communication
   "This is really about higher-level messaging abstractions"
-  (:require [cljeromq.core :as mq]
+  (:require [cljeromq.common :as mq-cmn]
+            [cljeromq.core :as mq]
             [com.frereth.common.schema :as fr-sch]
             [com.frereth.common.util :as util]
             [ribol.core :refer (raise)]
@@ -110,18 +111,18 @@ This is almost definitely a bug"
 ;;;; instead
 ;;;; TODO: Make that so.
 (s/defn router-recv! :- (s/maybe router-message)
-  ([s :- mq/Socket]
+  ([s :- mq-cmn/Socket]
    (router-recv! s :wait))
-  ([s :- mq/Socket
+  ([s :- mq-cmn/Socket
     flags :- fr-sch/korks]
    (when-let [all-frames (read-all! s flags)]
      (extract-router-message all-frames))))
 
 (s/defn dealer-recv! :- s/Any
   "Really only for the simplest possible case"
-  ([s :- mq/Socket]
+  ([s :- mq-cmn/Socket]
    (dealer-recv! s :dont-wait))
-  ([s :- mq/Socket
+  ([s :- mq-cmn/Socket
    flags :- fr-sch/korks]
    (when-let [frames (read-all! s flags)]
      ;; Assume we aren't proxying. Drop the NULL separator
@@ -132,7 +133,7 @@ This is almost definitely a bug"
 (s/defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
   ;; TODO: Add an arity that defaults to nil flags
-  ([s :- mq/Socket
+  ([s :- mq-cmn/Socket
     frames :- fr-sch/byte-arrays
     flags :- fr-sch/korks]
    (let [more-flags (conj flags :send-more)]
@@ -147,15 +148,15 @@ This is almost definitely a bug"
      (log/debug "Wrapping up dealer send w/ final frame:\n" (last frames)
                 "\na " (class (last frames)))
      (mq/send! s (util/serialize (last frames)) flags)))
-  ([s :- mq/Socket
+  ([s :- mq-cmn/Socket
     frames :- fr-sch/byte-arrays]
    (dealer-send! s frames [])))
 
 (s/defn router-send!
-  ([sock :- mq/Socket
+  ([sock :- mq-cmn/Socket
     msg :- router-message]
    (router-send! sock msg []))
-  ([sock :- mq/Socket
+  ([sock :- mq-cmn/Socket
     msg :- router-message
     flags :- fr-sch/korks]
    (when-let [contents (:contents msg)]

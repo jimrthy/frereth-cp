@@ -1,6 +1,7 @@
 (ns com.frereth.common.zmq-socket
   "This should be a wrapper interface that hides as many low-level queue implementation details as possible"
-  (:require [cljeromq.core :as mq]
+  (:require [cljeromq.common :as mq-cmn]
+            [cljeromq.core :as mq]
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
             [schema.core :as s]
@@ -18,7 +19,7 @@
                           :router :dealer))
 
 (s/defrecord ContextWrapper
-    [ctx :- mq/Context
+    [ctx :- mq-cmn/Context
      thread-count :- s/Int]
   component/Lifecycle
   (start
@@ -52,7 +53,7 @@
      url :- mq/zmq-url
      sock-type :- socket-types
      direction :- (s/enum :bind :connect)
-     socket :- mq/Socket]
+     socket :- mq-cmn/Socket]
   ;; Q: Why can't I include a docstring?
   ;; "Describe a 0mq socket"
   component/Lifecycle
