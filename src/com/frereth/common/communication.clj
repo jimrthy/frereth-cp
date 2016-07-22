@@ -47,7 +47,7 @@ wouldn't want this to handle the marshalling?"
 (s/defn read-all! :- (s/maybe fr-sch/byte-arrays)
   "N.B. Pretty much by definition, this is non-blocking, as-written.
 This is almost definitely a bug"
-  [s :- mq/Socket
+  [s ;  :- mq/Socket ;;
    flags :- fr-sch/korks]
   (log/debug "read-all: Top")
   ;; It's very tempting to just do recv! here,
