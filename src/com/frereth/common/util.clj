@@ -179,7 +179,16 @@ Yes, it does seem pretty stupid"
   (PushbackReader. reader))
 
 (s/defn random-uuid :- UUID
-  "Because remembering the java namespace is annoying"
+  "Because remembering the java namespace is annoying
+
+medley.core has a cross-platform implementation. As long as it's being
+included anyway, might as well use it instead.
+
+TODO: Make that so.
+
+Or maybe revisit the idea of including io.aviso/config in the first place.
+Why did I include it in the first place? (And would it make more sense in
+component-dsl?)"
   []
   (UUID/randomUUID))
 

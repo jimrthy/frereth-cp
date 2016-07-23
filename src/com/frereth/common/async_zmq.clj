@@ -14,15 +14,18 @@ Strongly inspired by lynaghk's zmq-async"
             [ribol.core :refer (raise)]
             [schema.core :as s]
             [taoensso.timbre :as log])
-  (:import [com.frereth.common.zmq_socket SocketDescription]))
+  (:import [com.frereth.common.zmq_socket SocketDescription]
+           [com.stuartsierra.component SystemMap]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
 
 (s/defrecord EventPairInterface
-    [;; send messages to this to get them to 0mq. Supplied by caller
+    [;; send messages to this to get them to 0mq.
+     ;; Should be supplied by caller
      ;; (that's where the messages come from, so that's what's responsible
      ;; for opening/closing)
+     ;; But we'll override to create it if the caller doesn't provide
      in-chan  :- fr-sch/async-channel
      ;; faces outside world.
      ;; Caller provides, because binding/connecting is really not in scope here
@@ -47,67 +50,51 @@ Strongly inspired by lynaghk's zmq-async"
   component/Lifecycle
   (start
    [this]
-   (let [this (as->
-                  (if in-chan
-                    this
-                    (assoc this :in-chan (async/chan)))
-                  this
-                (if status-chan
-                  this
-                  (assoc this :status-chan (async/chan)))
-                (if status-out
-                  this
-                  (assoc this :status-out (async/chan)))
-                ;; Set up default readers/writers
-                (if external-reader
-                  this
-                  (assoc this
-                         :external-reader
-                         (fn [sock]
-                           ;; It's tempting to default
-                           ;; to :dont-wait
-                           ;; But we shouldn't ever
-                           ;; try reading this unless
-                           ;; a Poller just verified
-                           ;; that messages are waiting.
-                           ;; Note that we probably never want this
-                           ;; default behavior.
-                           ;; This really needs to demarshall
-                           ;; the message and analyze it before
-                           ;; tagging it with whatever info
-                           ;; really needs to be done.
-                           ;; Still, there might be some
-                           ;; apps where this is enough.
-                           (mq/raw-recv! sock :wait))))
-                (if external-writer
-                  this
-                  (assoc this
-                         :external-writer
-                         (fn [sock array-of-bytes]
-                           ;; Same comments re: over-simplicity
-                           ;; in the default reader apply here
-                           (mq/send! sock array-of-bytes)))))]
-     this))
+    (cond-> this
+      in-chan (assoc :in-chan (async/chan))
+      status-chan (assoc :status-chan (async/chan))
+      status-out (assoc :status-out (async/chan))
+      ;; Set up default readers/writers
+      ;; If they weren't already supplied.
+      ;; I wasn't paying enough attention when
+      ;; I started refacting.
+      ;; This version is broken
+      (not external-reader) (assoc
+                             :external-reader
+                             (fn [sock]
+                               ;; It's tempting to default
+                               ;; to :dont-wait
+                               ;; But we shouldn't ever
+                               ;; try reading this unless
+                               ;; a Poller just verified
+                               ;; that messages are waiting.
+                               ;; Note that we probably never want this
+                               ;; default behavior.
+                               ;; This really needs to demarshall
+                               ;; the message and analyze it before
+                               ;; tagging it with whatever info
+                               ;; really needs to be done.
+                               ;; Still, there might be some
+                               ;; apps where this is enough.
+                               (mq/raw-recv! sock :wait)))
+      (not external-writer) (assoc
+                             :external-writer
+                             (fn [sock array-of-bytes]
+                               ;; Same comments re: over-simplicity
+                               ;; in the default reader apply here
+                               (mq/send! sock array-of-bytes)))))
   (stop
    [this]
-   (as->
-       (if in-chan
-         (do
-           (async/close! in-chan)
-           (assoc this
-                  :in-chan nil))
-         this)
-       this
-     (if status-chan
-       (do
-         (async/close! status-chan)
-         (assoc this :status-chan nil))
-       this)
-     (if status-out
-       (do
-         (async/close! status-chan)
-         (assoc this :status-out nil))
-       this))))
+    (when in-chan
+      (async/close! in-chan))
+    (when status-chan
+      (async/close! status-chan))
+    (when status-out
+      (async/close! status-out))
+    (assoc this
+           :in-chan nil
+           :status-chan nil
+           :status-out nil)))
 
 (declare run-async-loop! run-zmq-loop!
          do-signal-async-loop-exit
@@ -258,6 +245,9 @@ Their entire purpose in life, really, is to shuffle messages between
                            :_name s/Str
                            :ex-chan fr-sch/async-channel
                            :in<->ex-sock mq/InternalPair}) :async-loop :zmq-loop))
+
+(def EventInterface {:interface EventPairInterface
+                     :loop EventPair})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -579,3 +569,17 @@ Send a duplicate stopper ("
   [{:keys [_name]
     :as  cfg}]
   (map->EventPair cfg))
+
+(s/defn event-system :- EventInterface
+  ;; TODO: How much does this differ from the System?
+  [{:keys [ex-sock in-chan external-reader external-writer _name]
+    :as cfg}]
+  ;; The EventPairInterface and actual EventPair are so tightly coupled that I don't think
+  ;; it will ever make any sense to try to have one without the other.
+  ;; At the same time, there's so much going on that my internal OOP refuses
+  ;; to just cram them back together
+  ;; So use this as a middle step for pieces that are really dynamic and not
+  ;; tied to the System's lifetime
+  (let [system (component/system-map :interface (ctor-interface (select-keys cfg [ex-sock in-chan external-reader external-writer]))
+                                     :loop (component/using (ctor (select-keys cfg [:_name])) [:interface]))]
+    (component/start system)))
