@@ -56,9 +56,6 @@ Strongly inspired by lynaghk's zmq-async"
       status-out (assoc :status-out (async/chan))
       ;; Set up default readers/writers
       ;; If they weren't already supplied.
-      ;; I wasn't paying enough attention when
-      ;; I started refacting.
-      ;; This version is broken
       (not external-reader) (assoc
                              :external-reader
                              (fn [sock]
@@ -579,7 +576,9 @@ Send a duplicate stopper ("
   ;; to just cram them back together
   ;; So use this as a middle step for pieces that are really dynamic and not
   ;; tied to the System's lifetime
-  ;; Note that callers are responsible for calling component/stop
+  ;; Note that callers are responsible for calling component/stop.
+  ;; Which is totally backwards.
+  ;; This approach seems like a really bad idea.
   (let [system (component/system-map :interface (ctor-interface (select-keys cfg [ex-sock in-chan external-reader external-writer]))
                                      :loop (component/using (ctor (select-keys cfg [:_name])) [:interface]))]
     (component/start system)))
