@@ -2,6 +2,8 @@
   "This should be a wrapper interface that hides as many low-level queue implementation details as possible"
   (:require [cljeromq.common :as mq-cmn]
             [cljeromq.core :as mq]
+            [cljeromq.curve :as curve]
+            [com.frereth.common.schema :as schema]
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
             [schema.core :as s]
@@ -50,10 +52,16 @@
 
 (s/defrecord SocketDescription
     [ctx :- ContextWrapper
-     url :- mq/zmq-url
-     sock-type :- socket-types
      direction :- (s/enum :bind :connect)
-     socket :- mq-cmn/Socket]
+     port :- s/Int
+     ;; Q: How does optional-key work here?
+     ;; A: It doesn't. That's the way Records work.
+     ;; Another reason to move on to Spec
+     client-keys :- (s/maybe curve/key-pair)
+     server-key :- (s/maybe schema/java-byte-array)
+     sock-type :- socket-types
+     socket :- mq-cmn/Socket
+     url :- mq/zmq-url]
   ;; Q: Why can't I include a docstring?
   ;; "Describe a 0mq socket"
   component/Lifecycle
@@ -69,6 +77,18 @@
                             (util/pretty ctx)
                             "a" (class ctx))
        (let [sock (mq/socket! (:ctx ctx) sock-type)]
+         ;; Though this would make debugging/monitoring possible on an
+         ;; internal network that needs to monitor traffic for security reasons.
+         ;; And, for that matter, open internal comms make things like virus
+         ;; and intrusion detection a little less impossible.
+         ;; In those situations, should really be using proxies that MITM
+         ;; to check all the traffic anyway.
+         ;; TODO: Worry about that angle later.
+         (assert server-key "Not allowing decrypted communications")
+         (when server-key
+           (if client-keys
+             (curve/prepare-client-socket-for-server! sock client-keys server-key)
+             (curve/make-socket-a-server! sock server-key)))
          (try
            (let [uri (mq/connection-string url)]
              (if (= direction :bind)
@@ -110,7 +130,7 @@
   (map->ContextWrapper options))
 
 (s/defn ctor :- SocketDescription
-  [{:keys [direction sock-type url]
+  [{:keys [client-keys direction server-key sock-type url]
     :or {direction :connect}
     :as options}]
   (map->SocketDescription options))

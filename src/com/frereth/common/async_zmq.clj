@@ -571,7 +571,6 @@ Send a duplicate stopper ("
   (map->EventPair cfg))
 
 (s/defn event-system :- EventInterface
-  ;; TODO: How much does this differ from the System?
   [{:keys [ex-sock in-chan external-reader external-writer _name]
     :as cfg}]
   ;; The EventPairInterface and actual EventPair are so tightly coupled that I don't think
@@ -580,6 +579,7 @@ Send a duplicate stopper ("
   ;; to just cram them back together
   ;; So use this as a middle step for pieces that are really dynamic and not
   ;; tied to the System's lifetime
+  ;; Note that callers are responsible for calling component/stop
   (let [system (component/system-map :interface (ctor-interface (select-keys cfg [ex-sock in-chan external-reader external-writer]))
                                      :loop (component/using (ctor (select-keys cfg [:_name])) [:interface]))]
     (component/start system)))
