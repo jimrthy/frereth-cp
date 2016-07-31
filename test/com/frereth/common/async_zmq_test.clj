@@ -12,16 +12,6 @@
   (:import [com.stuartsierra.component SystemMap]
            [org.zeromq ZMQException]))
 
-(defn mock-structure
-  []
-  '{:one com.frereth.common.async-zmq/ctor
-    :two com.frereth.common.async-zmq/ctor
-    :iface-one com.frereth.common.async-zmq/ctor-interface
-    :iface-two com.frereth.common.async-zmq/ctor-interface
-    :ex-one com.frereth.common.zmq-socket/ctor
-    :ex-two com.frereth.common.zmq-socket/ctor
-    :ctx com.frereth.common.zmq-socket/ctx-ctor})
-
 (defn mock-cfg
   []
   (let [;; TODO: It's tempting to set these built-ins
@@ -57,12 +47,26 @@
      :iface-two {:external-reader reader
                  :external-writer writer2}}))
 
+(defn mock-structure
+  []
+  '{:one com.frereth.common.async-zmq/ctor
+    :two com.frereth.common.async-zmq/ctor
+    :iface-one com.frereth.common.async-zmq/ctor-interface
+    :iface-two com.frereth.common.async-zmq/ctor-interface
+    :ex-one com.frereth.common.zmq-socket/ctor
+    :ex-two com.frereth.common.zmq-socket/ctor
+    :in-one com.frereth.common.async-component/chan-ctor
+    :in-two com.frereth.common.async-component/chan-ctor
+    :status-one com.frereth.common.async-component/chan-ctor
+    :status-two com.frereth.common.async-component/chan-ctor
+    :ctx com.frereth.common.zmq-socket/ctx-ctor})
+
 (defn mock-depends
   []
   {:one {:interface :iface-one}
    :two {:interface :iface-two}
-   :iface-one {:ex-sock :ex-one}
-   :iface-two {:ex-sock :ex-two}
+   :iface-one {:ex-sock :ex-one :in-chan :in-one :status-chan :status-one}
+   :iface-two {:ex-sock :ex-two :in-chan :in-two :status-chan :status-two}
    :ex-one [:ctx]
    :ex-two [:ctx]})
 
@@ -211,7 +215,7 @@ I write, but I know better."
         system (assoc system :two stopped)]
     (println "mock loops started")
     (try
-      (let [src (-> system :one :interface :in-chan)
+      (let [src (-> system :one :interface :in-chan :ch)
             msg {:action :login
                  :user "#1"
                  :auth-token (gensym)
@@ -255,9 +259,9 @@ I write, but I know better."
   (println "\n\n\techo test")
   (testing "Can send a request and get an echo back"
     (let [test (fn [system]
-                 (let [left-chan (-> system :one :interface :in-chan)
+                 (let [left-chan (-> system :one :interface :in-chan :ch)
                        ex-left (-> system :one :ex-chan)
-                       right-chan (-> system :two :interface :in-chan)
+                       right-chan (-> system :two :interface :in-chan :ch)
                        ex-right (-> system :two :ex-chan)
                        msg {:op :echo
                             :payload "The quick red fox"}]
@@ -284,9 +288,9 @@ I write, but I know better."
   (println "\n\n\tEvaluate")
   (testing "Can send an op and get its evaluation back"
     (let [test (fn [system]
-                 (let [left-chan (-> system :one :interface :in-chan)
+                 (let [left-chan (-> system :one :interface :in-chan :ch)
                        ex-left (-> system :one :ex-chan)
-                       right-chan (-> system :two :interface :in-chan)
+                       right-chan (-> system :two :interface :in-chan :ch)
                        ex-right (-> system :two :ex-chan)
                        x (rand-int 1000)
                        y (rand-int 1000)
