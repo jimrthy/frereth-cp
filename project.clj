@@ -50,7 +50,7 @@
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
                  [com.jimrthy/component-dsl "0.1.1-SNAPSHOT" :exclusions [org.clojure/clojure]]
-                 [com.taoensso/timbre "4.7.0" :exclusions [org.clojure/clojure
+                 [com.taoensso/timbre "4.7.3" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
                  [fullcontact/full.async "0.9.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
@@ -81,7 +81,7 @@
                  [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]
                  [prismatic/plumbing "0.5.3"]
                  ;; Q: What's the status on this, now that specs are being added for 1.9.0?
-                 [prismatic/schema "1.1.2"]]
+                 [prismatic/schema "1.1.3"]]
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
   :plugins []
 
