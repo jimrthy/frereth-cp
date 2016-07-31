@@ -8,5 +8,8 @@
   (testing "Can start and stop an Event Loop successfully"
     (let [initial (sys/build-event-loop {})
           started (component/start initial)]
-      (is true "Reality makes sense")
-      (component/stop initial))))
+      (is started "Managed to start an Event Loop")
+      (try
+        (component/stop started)
+        (catch Exception ex
+          (is false "Stopping the event loop failed"))))))

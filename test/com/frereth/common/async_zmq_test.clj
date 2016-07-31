@@ -30,10 +30,8 @@
         writer1 (partial generic-writer "one")
         writer2 (partial generic-writer "two")
         internal-url (name (gensym))]
-    {:one {:_name "Event Loop One"
-           :in-chan (async/chan)}
-     :two {:_name "Event Loop Two"
-           :in-chan (async/chan)}
+    {:one {:_name "Event Loop One"}
+     :two {:_name "Event Loop Two"}
      :ex-one {:url {:protocol :inproc
                     :address internal-url}
               :sock-type :pair
@@ -99,6 +97,9 @@ I write, but I know better."
   [f :- (s/=> s/Any SystemMap)]
   (let [system (started-mock-up)]
     (try
+      (println "===============================================================")
+      (println "= System started. Running test")
+      (println "===============================================================")
       (f system)
       (finally
         (component/stop system)))))
@@ -270,7 +271,7 @@ I write, but I know better."
                        (is (= c left-chan))
                        (is v)))
                    (let [[v c] (async/alts!! [ex-right (async/timeout 750)])]
-                     (testing "\n\tInitial request received"
+                     (testing "\n\tInitial response received (or not)"
                        (is (= c ex-right))
                        (is (= msg v))))
                    (let [[v c] (async/alts!! [[right-chan msg] (async/timeout 150)])]
@@ -282,6 +283,53 @@ I write, but I know better."
                        (is (= c ex-left))
                        (is (= msg v))))))]
       (with-mock test))))
+
+(comment
+  (let [system (started-mock-up)]
+    (println "===============================================================")
+    (println "= System started. Running test")
+    (println "===============================================================")
+    (try
+      (let [left-chan (-> system :one :interface :in-chan :ch)
+            ex-left (-> system :one :ex-chan)
+            right-chan (-> system :two :interface :in-chan :ch)
+            ex-right (-> system :two :ex-chan)
+            msg {:op :echo
+                 :payload "The quick red fox"}
+            env {:left-chan left-chan
+                 :ex-left ex-left
+                 :right-chan right-chan
+                 :ex-right ex-right
+                 :msg msg}]
+        (println "Running check on" env)
+        (comment
+          (let [[v c] (async/alts!! [[right-chan msg] (async/timeout 150)])]
+            (testing "\n\tResponse sent"
+              (is (= c right-chan))
+              (is v)))
+          (let [[v c] (async/alts!! [ex-left (async/timeout 750)])]
+            (testing "\n\tEcho received"
+              (is (= c ex-left))
+              (is (= msg v)))))
+        (comment [left-chan ex-left right-chan ex-right msg])
+        (Thread/sleep 500)
+        (println "Sending request to echo over" left-chan)
+        (let [[v c] (async/alts!! [[left-chan msg] (async/timeout 150)])]
+          (assert (= c left-chan) "Timed out trying to send message")
+          (assert v "Doing a put! returns truthy, doesn't it?"))
+        (println "Message sent. Waiting for a response from" ex-right)
+        (let [t-o-ch (async/timeout 750)
+              [v c] (async/alts!! [ex-right t-o-ch])]
+          (assert (= c ex-right) "Timed out waiting for message to arrive")
+          (assert (= msg v)))
+        env)
+      (finally
+        (println "===============================================================")
+        (println "= Test finished. Ignore the cleanup below")
+        (println "===============================================================")
+        (component/stop system))))
+
+  )
 
 (deftest evaluate
   []

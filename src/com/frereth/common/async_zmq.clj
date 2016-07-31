@@ -200,8 +200,11 @@ Their entire purpose in life, really, is to shuffle messages between
               (log/debug _name ": 0mq Event Loop exited with status:\n"
                                  (util/pretty zmq-result))
               (do
-                (log/warn _name "zmq-loop didn't exit; trying to force it")
-                (async/close! zmq-loop)))))
+                (log/warn _name "Timed out waiting for zmq-loop to exit; trying to force it")
+                (try
+                  (async/close! zmq-loop)
+                  (catch Exception ex
+                    (log/error ex (str "\n" _name ": Failure trying to close the go loop. Did you really expect this to work?"))))))))
         (when in<->ex-sock
           (comment) (log/debug _name ": Final cleanup")
           (mq/close-internal-pair! in<->ex-sock))
@@ -237,7 +240,7 @@ Their entire purpose in life, really, is to shuffle messages between
   [async-loop interface stopper _name]
   (if-let [in-chan (->  interface :in-chan :ch)]
     (let [[v c] (async/alts!! [[in-chan stopper] (async/timeout 750)])]
-      (if v
+      (if (= c in-chan)
         (log/debug _name ": Close signal submitted on" in-chan)
         (do
           (log/error _name ": Failed to deliver stop message to async channel. Attempting brute force")
@@ -281,51 +284,58 @@ Send a duplicate stopper ("
    in-chan status-chan status-out
    _name internal-> stopper in<->ex-chan]
   (let [in-chan (:ch in-chan)
-        status-chan (:ch status-chan)]
-    (try
-      (if-not (nil? val)
-        (if (= in-chan c)
-          (do
-            (log/debug _name " Incoming async message:\n"
-                       (util/pretty val) "a" (class val)
-                       "\nFrom internal. Forwarding to 0mq")
-            (mq/send! internal-> "outgoing")
-            (log/debug "0mq loop notified")
-            ;; Q: Send via offer! instead?
-            ;; TODO: Make this more granular to allow batch sends when
-            ;; they make sense
-            ;; TODO: 100 ms is far too long to wait here
-            (let [[v c] (async/alts!! [[in<->ex-chan val] (async/timeout 100)])]
-              (log/debug _name": Message" (if v
-                                            "sent"
-                                            "didn't get sent"))
-              (when-not v
-                (log/error _name ": Forwarding message timed out\nExpected channel:"
-                           in<->ex-chan "\nTimeout channel:" c)
-                ;; FIXME: Debug only
-                ;; TODO: Catch this!
-                (raise [:be-smarter])))
+        status-chan (:ch status-chan)])
+  (try
+    (if-not (nil? val)
+      (if (= in-chan c)
+        (do
+          (log/debug _name "-- Incoming async message:\n"
+                     (util/pretty val) "a" (class val)
+                     "\nFrom internal. Forwarding to 0mq")
+          ;; The try/catch is really just for debugging
+          ;; TODO: Check performance timing to see whether this is acceptable to leave around.
+          ;; This seems like a very likely candidate for being a performance hotspot
+          (try
+            (mq/send! internal-> "outgoing" 0)
+            (catch Exception ex
+              (log/error ex "Failed to send availability notification to internal->" internal->)
+              (assert false)))
+          (log/debug "0mq loop notified")
+          ;; Q: Send via offer! instead?
+          ;; TODO: Make this more granular to allow batch sends when
+          ;; they make sense
+          ;; TODO: 100 ms is far too long to wait here
+          (let [[v c] (async/alts!! [[in<->ex-chan val] (async/timeout 100)])]
+            (log/debug _name": Message" (if v
+                                          "sent"
+                                          "didn't get sent"))
+            (when-not v
+              (log/error _name ": Forwarding message timed out\nExpected channel:"
+                         in<->ex-chan "\nTimeout channel:" c)
+              ;; FIXME: Debug only
+              ;; TODO: Catch this!
+              (raise [:be-smarter])))
 
-            (log/debug _name ": Message forwarded from Async side"))
-          (if (= status-chan c)
-            (do
-              (let [msg (str _name " Async Status Request received on " c
-                             "\n(which should be " status-chan
-                             ")\nTODO: Something more useful"
-                             "\nThe 0mq side is really much more interesting")]
-                (log/debug msg))
-              ;; Don't want to risk this blocking for very long
-              ;; Note that we aren't technically inside a go block here, because
-              ;; of macro scope
-              (async/alts!! [(async/timeout 1) [status-out :everythings-fine]]))))
-        (log/debug _name " Async Event Loop: Heartbeat\n"))
-      ;; Exit when input channel closes or someone sends the 'stopper' gensym
-      (catch RuntimeException ex
-        (log/error ex "Unexpected error in async loop"))
-      (catch Exception ex
-        (log/error ex "Unexpected bad error in async loop"))
-      (catch Throwable ex
-        (log/error ex "Things have gotten really bad in the async loop"))))
+          (log/debug _name ": Message forwarded from Async side"))
+        (if (= status-chan c)
+          (do
+            (let [msg (str _name " Async Status Request received on " c
+                           "\n(which should be " status-chan
+                           ")\nTODO: Something more useful"
+                           "\nThe 0mq side is really much more interesting")]
+              (log/debug msg))
+            ;; Don't want to risk this blocking for very long
+            ;; Note that we aren't technically inside a go block here, because
+            ;; of macro scope
+            (async/alts!! [(async/timeout 1) [status-out :everythings-fine]]))))
+      (log/debug _name " Async Event Loop: Heartbeat\n"))
+    ;; Exit when input channel closes or someone sends the 'stopper' gensym
+    (catch RuntimeException ex
+      (log/error ex "Unexpected error in async loop"))
+    (catch Exception ex
+      (log/error ex "Unexpected bad error in async loop"))
+    (catch Throwable ex
+      (log/error ex "Things have gotten really bad in the async loop")))
   ;; Tell the caller whether to continue
   ;; This doesn't belong in the same function as the side-effect
   ;; of handling the message. It's convenient, but
@@ -346,14 +356,25 @@ Send a duplicate stopper ("
       (log/debug "Top of"
                  _name
                  "Async event thread, based on:"
-                 in-chan)
-      (loop [[val c] (async/alts! [in-chan status-chan (minutes-5)])]
-        ;; TODO: How many of these parameters should I just forward along as
-        ;; part of interface or component, because they're no longer used in here?
-        (when (do-process-async-message val c in-chan status-chan status-out
-                                        _name internal-> stopper
-                                        in<->ex-chan)
-          (recur (async/alts! [in-chan status-chan (minutes-5)]))))
+                 in-chan
+                 "and"
+                 status-chan
+                 "\n")
+      (try
+        (loop [[val c] (async/alts! [in-chan status-chan (minutes-5)])]
+          (log/debug (str _name " Async event thread received a message from "
+                          (condp = c
+                              in-chan "incoming channel"
+                              status-chan "status channel"
+                              "5 minute timeout")))
+          ;; TODO: How many of these parameters should I just forward along as
+          ;; part of interface or component, because they're no longer used in here?
+          (when (do-process-async-message val c in-chan status-chan status-out
+                                          _name internal-> stopper
+                                          in<->ex-chan)
+            (recur (async/alts! [in-chan status-chan (minutes-5)]))))
+        (catch Exception ex
+          (log/error ex (str _name ": Async event thread exiting unexpectedly"))))
       (log/debug _name "Async Loop exited because we either received the stop signal or the internal channel closed")
       :exited-successfully)))
 
@@ -459,7 +480,15 @@ Send a duplicate stopper ("
         five-minutes (* 1000 60 5)  ; in milliseconds
         _name (:_name component)]
     (try
+      ;; When we shut down the socket/context, this poll call gets the rug
+      ;; yanked out from under it and fails.
+      ;; This shows up as an erroneous error at the end of shut down.
+      ;; It's ugly, and it distracts from real errors.
+      ;; TODO: Detect this perfectly reasonable state and handle it gracefully.
+      ;; Better TODO: Add another "Stop this" socket and send a message to it so we
+      ;; know that it's time to do something.
       (loop [available-sockets (mq/poll poller five-minutes)]
+        (log/debug _name ": 0mq loop activated with" available-sockets "available")
         (if (< 0 available-sockets)
           (let [received-internal? (possibly-recv-internal! component poller)]
             ;; TODO: Query the poller first, to find out
