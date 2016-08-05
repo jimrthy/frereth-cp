@@ -580,19 +580,10 @@ Send a duplicate stopper ("
   [cfg]
   (map->EventPair (select-keys cfg [:_name])))
 
-(s/defn obsolete-event-system :- EventInterface
-  [{:keys [ex-sock in-chan external-reader external-writer _name]
-    :as cfg}]
-  ;; The EventPairInterface and actual EventPair are so tightly coupled that I don't think
-  ;; it will ever make any sense to try to have one without the other.
-  ;; At the same time, there's so much going on that my internal OOP refuses
-  ;; to just cram them back together
-  ;; So use this as a middle step for pieces that are really dynamic and not
-  ;; tied to the System's lifetime
-  ;; Note that callers are responsible for calling component/stop.
-  ;; Which is totally backwards.
-  ;; This approach seems like a really bad idea.
-  (throw (ex-info "Obsolete" {:replacement 'com.frereth.common.system/build-event-loop}))
-  (let [system (component/system-map :interface (ctor-interface (select-keys cfg [ex-sock in-chan external-reader external-writer]))
-                                     :loop (component/using (ctor (select-keys cfg [:_name])) [:interface]))]
-    (component/start system)))
+;;; I keep being surprised that I don't have a unified Component that wraps those
+;;; two into a neat little bow. They're so tightly coupled that I can't imagine
+;;; ever wanting one without the other.
+
+;;; That's in the system namespace.
+;;; Can't really move the definition into here because I wind up with this namespace
+;;; trying to (require) itself when I try to start the System.
