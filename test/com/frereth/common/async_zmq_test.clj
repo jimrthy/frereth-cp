@@ -51,6 +51,8 @@
     :two com.frereth.common.async-zmq/ctor
     :iface-one com.frereth.common.async-zmq/ctor-interface
     :iface-two com.frereth.common.async-zmq/ctor-interface
+    :ex-chan-1 com.frereth.common.async-component/chan-ctor
+    :ex-chan-2 com.frereth.common.async-component/chan-ctor
     :ex-one com.frereth.common.zmq-socket/ctor
     :ex-two com.frereth.common.zmq-socket/ctor
     :in-one com.frereth.common.async-component/chan-ctor
@@ -61,8 +63,8 @@
 
 (defn mock-depends
   []
-  {:one {:interface :iface-one}
-   :two {:interface :iface-two}
+  {:one {:interface :iface-one, :ex-chan :ex-chan-1}
+   :two {:interface :iface-two, :ex-chan :ex-chan-2}
    :iface-one {:ex-sock :ex-one :in-chan :in-one :status-chan :status-one}
    :iface-two {:ex-sock :ex-two :in-chan :in-two :status-chan :status-two}
    :ex-one [:ctx]
@@ -135,7 +137,7 @@ I write, but I know better."
           system (assoc system :two stopped)]
       (println "Everything's set up, ready to start the test")
       (try
-        (let [dst (-> system :one :ex-chan)
+        (let [dst (-> system :one :ex-chan :ch)
               ;; Because of the way this is wired up,
               ;; we need to read the message that stopped the
               ;; event loop
@@ -261,9 +263,9 @@ I write, but I know better."
   (testing "Can send a request and get an echo back"
     (let [test (fn [system]
                  (let [left-chan (-> system :one :interface :in-chan :ch)
-                       ex-left (-> system :one :ex-chan)
+                       ex-left (-> system :one :ex-chan :ch)
                        right-chan (-> system :two :interface :in-chan :ch)
-                       ex-right (-> system :two :ex-chan)
+                       ex-right (-> system :two :ex-chan :ch)
                        msg {:op :echo
                             :payload "The quick red fox"}]
                    (testing "\n\tRequest sent"
@@ -337,9 +339,9 @@ I write, but I know better."
   (testing "Can send an op and get its evaluation back"
     (let [test (fn [system]
                  (let [left-chan (-> system :one :interface :in-chan :ch)
-                       ex-left (-> system :one :ex-chan)
+                       ex-left (-> system :one :ex-chan :ch)
                        right-chan (-> system :two :interface :in-chan :ch)
-                       ex-right (-> system :two :ex-chan)
+                       ex-right (-> system :two :ex-chan :ch)
                        x (rand-int 1000)
                        y (rand-int 1000)
                        msg {:op :eval

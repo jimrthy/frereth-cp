@@ -23,12 +23,8 @@ Strongly inspired by lynaghk's zmq-async"
 ;;; Schema
 
 (s/defrecord EventPairInterface
-    [;; send messages to this to get them to 0mq.
-     ;; Should be supplied by caller
-     ;; (that's where the messages come from, so that's what's responsible
-     ;; for opening/closing)
-     ;; But we'll override to create it if the caller doesn't provide
-     in-chan  :- fr-sch/async-channel
+    [;; send messages to this' async-chan to get them to 0mq.
+     in-chan  :- AsyncChannelComponent
      ;; faces outside world.
      ;; Caller provides, because binding/connecting is really not in scope here
      ex-sock :- SocketDescription
@@ -100,10 +96,8 @@ Strongly inspired by lynaghk's zmq-async"
    interface :- EventPairInterface
 
    ;; 0mq puts messages onto here when they come in from outside
-   ;; Owned by this.
-   ;; This is the part that you read
-   ;; Q: Any value to converting this to an AsyncChannel Component?
-   ex-chan :- fr-sch/async-channel
+   ;; Read its internal async-channel
+   ex-chan :- AsyncChannelComponent
 
    ;; Really, these are implementation details
 
@@ -139,6 +133,7 @@ Their entire purpose in life, really, is to shuffle messages between
 0mq and core.async"
     (assert interface "Missing the entire external interface")
     (let [{:keys [ex-sock in-chan status-chan]} interface]
+      (assert ex-chan "Missing outgoing channel")
       (assert ex-sock "Missing exterior socket")
 
       ;; TODO: Need channel(s) to write to for handling incoming
@@ -150,14 +145,12 @@ Their entire purpose in life, really, is to shuffle messages between
             in<->ex-sock (or in<->ex-sock (mq/build-internal-pair!
                                            (-> ex-sock :ctx :ctx)))
             in<->ex-chan (or in<->ex-chan (async/chan))
-            ex-chan (or ex-chan (async/chan))
             almost-started (assoc this
                                   :stopper stopper
                                   :in<->ex-chan in<->ex-chan
                                   :in<->ex-sock in<->ex-sock
                                   :->zmq-sock (:rhs in<->ex-sock)
-                                  :async->sock (:lhs in<->ex-sock)
-                                  :ex-chan ex-chan)
+                                  :async->sock (:lhs in<->ex-sock))
             ;; The choice between lhs and rhs for who gets
             ;; which of the internal pairs is completely
             ;; and deliberately arbitrary.
@@ -178,15 +171,6 @@ Their entire purpose in life, really, is to shuffle messages between
           (do-wait-for-async-loop-to-exit _name async-loop stopper async->sock)
           (log/debug _name ": async loop exited"))
 
-        (if ex-chan
-          (async/close! ex-chan)
-          (do
-            (log/info _name ": No ex-chan. Assume this means we weren't actually started")
-            ;; Closing ex-chan should signal the async half of the event loop to
-            ;; send this signal.
-            ;; I don't think this will do any good at all
-            (when async->sock
-              (mq/send! async->sock "exiting"))))
         (if in<->ex-chan
           (async/close! in<->ex-chan)
           (log/info _name ": No in<->ex-chan. Assume this means we weren't actually started"))
@@ -226,7 +210,7 @@ Their entire purpose in life, really, is to shuffle messages between
                            :async-sock mq-cmn/Socket
                            :->zmq-sock mq-cmn/Socket
                            :_name s/Str
-                           :ex-chan fr-sch/async-channel
+                           :ex-chan AsyncChannelComponent
                            :in<->ex-sock mq/InternalPair}) :async-loop :zmq-loop))
 
 (def EventInterface {:interface EventPairInterface
@@ -444,7 +428,8 @@ Send a duplicate stopper ("
    poller :- mq-cmn/Poller]
   ;; Message coming in from outside?
   (when (mq/in-available? poller 0)
-    (let [{:keys [external-reader ex-sock]} interface]
+    (let [{:keys [external-reader ex-sock]} interface
+          real-ex-chan (:ch ex-chan)]
       ;; TODO: Would arguably be more
       ;; efficient to loop over all available
       ;; messages in case several arrive at once.
@@ -466,7 +451,7 @@ Send a duplicate stopper ("
         ;; TODO: Switch to using alts!! and some sort
         ;; of timeout for scenarios where the other
         ;; end can't keep up
-        (let [[sent? c] (async/alts!! [[ex-chan msg] (async/timeout 250)])]
+        (let [[sent? c] (async/alts!! [[real-ex-chan msg] (async/timeout 250)])]
           (when-not sent?
             (raise {:q "How can I debug this?"
                     :problem "0mq loop: forwarding message from outside to async loop timed out"

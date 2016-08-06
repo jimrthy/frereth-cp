@@ -38,6 +38,10 @@ So this abstraction absolutely belongs in common.
 It seems to make less sense under the system namespace, but
 I'm not sure which alternatives make more sense."
   [{:keys [client-keys
+           ;; FIXME: Need to be able to supply the Context Component
+           ;; (because the Client needs to be able to create/destroy these on the fly,
+           ;; and creating multiple contexts generally seems wasteful)
+           context
            ctx-thread-count
            direction
            event-loop-name
@@ -58,11 +62,13 @@ I'm not sure which alternatives make more sense."
                     :zmq-context {:thread-count ctx-thread-count}}
           description {:structure '{:event-loop com.frereth.common.async-zmq/ctor
                                     :evt-iface com.frereth.common.async-zmq/ctor-interface
+                                    :ex-chan com.frereth.common.async-component/chan-ctor
                                     :ex-sock com.frereth.common.zmq-socket/ctor
                                     :in-chan com.frereth.common.async-component/chan-ctor
                                     :status-chan com.frereth.common.async-component/chan-ctor
                                     :zmq-context com.frereth.common.zmq-socket/ctx-ctor}
                        :dependencies {:evt-iface [:ex-sock :in-chan :status-chan]
-                                      :event-loop {:interface :evt-iface}
+                                      :event-loop {:interface :evt-iface
+                                                   :ex-chan :ex-chan}
                                       :ex-sock {:ctx :zmq-context}}}]
       (cpt-dsl/build description defaults))))
