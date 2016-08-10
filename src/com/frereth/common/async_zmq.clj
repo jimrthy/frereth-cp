@@ -42,16 +42,14 @@ Strongly inspired by lynaghk's zmq-async"
      ;; it should return nil
      external-writer :- (s/=> s/Any mq-cmn/Socket fr-sch/java-byte-array)
      ;; For requesting status messages
-     status-chan :- AsyncChannelComponent
-     ;; For updating w/ status messages
-     status-out :- fr-sch/async-channel]
+     ;; Put the channel where you want the response
+     status-chan :- AsyncChannelComponent]
   component/Lifecycle
   (start
       [this]
     (assert in-chan "Caller must supply the input channel")
     (assert status-chan "Caller must supply the status request channel")
     (cond-> this
-      (not status-out) (assoc :status-out (async/chan))
       ;; Set up default readers/writers
       ;; If they weren't already supplied.
       (not external-reader) (assoc
@@ -80,12 +78,9 @@ Strongly inspired by lynaghk's zmq-async"
                                (mq/send! sock array-of-bytes)))))
   (stop
       [this]
-    (when status-out
-      (async/close! status-out))
     (assoc this
            :in-chan nil
-           :status-chan nil
-           :status-out nil)))
+           :status-chan nil)))
 
 (declare run-async-loop! run-zmq-loop!
          do-signal-async-loop-exit
@@ -265,7 +260,7 @@ Send a duplicate stopper ("
   "Refactored out of the loop to make it a little easier to read
   TODO: Change the parameters into a map (actually, just supply the Component)"
   [val c
-   in-chan status-chan status-out
+   in-chan status-chan
    _name internal-> stopper in<->ex-chan]
   (let [in-chan (:ch in-chan)
         status-chan (:ch status-chan)])
@@ -311,7 +306,7 @@ Send a duplicate stopper ("
             ;; Don't want to risk this blocking for very long
             ;; Note that we aren't technically inside a go block here, because
             ;; of macro scope
-            (async/alts!! [(async/timeout 1) [status-out :everythings-fine]]))))
+            (async/alts!! [(async/timeout 1) [val :everythings-fine]]))))
       (log/debug _name " Async Event Loop: Heartbeat\n"))
     ;; Exit when input channel closes or someone sends the 'stopper' gensym
     (catch RuntimeException ex
@@ -331,7 +326,7 @@ Send a duplicate stopper ("
 (s/defn ^:always-validate run-async-loop! :- fr-sch/async-channel
   "TODO: Convert this to a pipeline"
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
-  (let [{:keys [in-chan status-chan status-out]} interface
+  (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
         status-chan (:ch status-chan)
         internal-> async->sock
@@ -353,7 +348,7 @@ Send a duplicate stopper ("
                               "5 minute timeout")))
           ;; TODO: How many of these parameters should I just forward along as
           ;; part of interface or component, because they're no longer used in here?
-          (when (do-process-async-message val c in-chan status-chan status-out
+          (when (do-process-async-message val c in-chan status-chan
                                           _name internal-> stopper
                                           in<->ex-chan)
             (recur (async/alts! [in-chan status-chan (minutes-5)]))))
@@ -556,6 +551,15 @@ Send a duplicate stopper ("
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(s/defn status-check
+  "Really just a synchronous wrapper over the basic idea"
+  [event-pair :- EventPair]
+  (let [interface (:interface event-pair)
+        status-chan (:status-chan interface)
+        status-out (async/chan)]
+    (async/>!! status-chan status-out)
+    (async/<!! status-out)))
 
 (s/defn ctor-interface :- EventPairInterface
   [cfg]

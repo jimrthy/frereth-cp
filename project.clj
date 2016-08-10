@@ -8,12 +8,7 @@
   ;; A: Probably. But it would be a foolish choice. The web and client components
   ;; really shouldn't have access to that sort of thing.
   ;; TODO: Pick a date library and use it.
-  :dependencies [;; Q: Do I really want to choose this over clj-time?
-                 ;; A: Absolutely not.
-                 ;; And there's an excellent chance that I really want hara.time instead.
-                 ;; TODO: Make that switch
-                 ;; Better Q: Why is this mentioned here at all?
-                 [clojure.joda-time "0.7.0"]
+  :dependencies [[clj-time "0.12.0"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
                  ;; is the primary goal.
