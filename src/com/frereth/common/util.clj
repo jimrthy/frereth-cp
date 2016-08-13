@@ -4,8 +4,8 @@
             [clojure.pprint :as pprint]
             [clojure.string :as string]
             [com.frereth.common.schema :as fr-sch]
+            [hara.event :refer (raise)]
             #_[puget.printer :as puget]
-            [ribol.core :refer (raise)]
             [schema.core :as s]
             [taoensso.timbre :as log])
   (:import [java.io PushbackReader]

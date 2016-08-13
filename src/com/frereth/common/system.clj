@@ -4,7 +4,7 @@
             [clojure.core.async :as async]
             [com.frereth.common.async-component]
             [component-dsl.system :as cpt-dsl]
-            [ribol.core :refer (raise)]
+            [hara.event :refer (raise)]
             [schema.core :as s])
   (:import [com.stuartsierra.component SystemMap]))
 
