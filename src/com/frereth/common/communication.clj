@@ -38,16 +38,21 @@
 (s/def ::major int?)
 (s/def ::minor int?)
 (s/def ::detail string?)
-(s/def ::version (s/keys :req [::major ::minor::detail]))
+(s/def ::version (s/keys :req [::major ::minor ::detail]))
 (s/def ::protocol #{::lolcatz})
-(s/def ::header-key (s/or :name string?
-                          :keyed keyword?
-                          :symbol symbol?))
+(s/def ::named (s/or :name string?
+                     :keyed keyword?
+                     :symbol symbol?))
+(s/def ::header-key ::named)
 (s/def ::headers (s/map-of ::header-key (complement nil?)))
+(s/def ::locator (s/or :named ::named
+                       :uuid uuid?))
+(s/def ::parameters (s/map-of ::named (complement nil?)))
+(s/def ::body string?)
 ;;; Note that it really *is* pretty inefficient to include the boilerplate with every request.
 ;;; Should really just negotiate the protocol version during the initial handshake.
-(s/def ::request (s/keys :req [::version ::protocol]
-                         :opt [::headers]))
+(s/def ::request (s/keys :req [::version ::protocol ::locator]
+                         :opt [::headers ::parameters ::body]))
 
 (def router-message
   "The contents are byte-arrays? Really??
@@ -57,9 +62,20 @@ wouldn't want this to handle the marshalling?"
    :addresses fr-sch/byte-arrays
    :contents s2/Any})
 
+(s/def ::id :com.frereth.common.schema/byte-array-type)
+(s/def ::addresses :com.frereth.common.schema/byte-array-seq)
+;; This seems dubious. Will it ever be anything except byte-array(s)?
+(s/def ::contents identity)
+(s/def ::router-message (s/keys :req [::id ::addresses ::contents]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
+(s/fdef read-all!
+        :args (s/cat :s #(instance? mq-cmn/Socket %)
+                     :flags :com.frereth.common.schema/korks)
+        :ret (s/or :frames :com.frereth.common.schema/byte-array-seq
+                   :nada nil?))
 (s2/defn read-all! :- (s2/maybe fr-sch/byte-arrays)
   "N.B. Pretty much by definition, this is non-blocking, as-written.
 This is almost definitely a bug"
@@ -86,6 +102,9 @@ This is almost definitely a bug"
             (log/debug "read-all: Done. Incoming:\n" (map #(String. %) result))
             result))))))
 
+(s/fdef extract-router-message
+        :args (s/cat :frames :com.frereth.common.schema/byte-array-seq)
+        :ret ::router-message)
 (s2/defn extract-router-message :- router-message
   "Note that this limits the actual message to 1 frame of EDN"
   [frames :- fr-sch/byte-arrays]
@@ -122,9 +141,18 @@ This is almost definitely a bug"
 ;;; Public
 
 ;;;; Pretty much everything that follows that takes an mq/Socket
-;;;; parameter should be refactored to accept a zmq-socket/SocketDescription
+;;;; parameter must be refactored to accept a zmq-socket/SocketDescription
 ;;;; instead
 ;;;; TODO: Make that so.
+
+;;; :args is a regex that works like apply
+;;; Supposed to handle multi-arity seamlessly.
+;;; Q: How does this actually work?
+(s/fdef router-recv!
+        :args (s/alt :s :cljeromq.common/Socket
+                     :flags :com.frereth.common.schema/korks)
+        :ret (s/or :msg ::router-message
+                   :nada nil?))
 (s2/defn router-recv! :- (s2/maybe router-message)
   ([s :- mq-cmn/Socket]
    (router-recv! s :wait))
@@ -133,6 +161,10 @@ This is almost definitely a bug"
    (when-let [all-frames (read-all! s flags)]
      (extract-router-message all-frames))))
 
+(s/fdef dealer-recv!
+        :args (s/cat :s :cljeromq.common/Socket
+                     :flags :com.frereth.common.schema/korks)
+        :ret identity)
 (s2/defn dealer-recv! :- s2/Any
   "Really only for the simplest possible case"
   ([s :- mq-cmn/Socket]
@@ -145,6 +177,11 @@ This is almost definitely a bug"
        (assert (= 1 (count content)))
        (-> content first util/deserialize)))))
 
+(s/fdef dealer-send!
+        :args (s/cat :s :cljeromq.common/Socket
+                     :frames :com.frereth.common.schema/byte-array-seq
+                     :flags :com.frereth.common.schema/korks)
+        :ret identity)
 (s2/defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
   ;; TODO: Add an arity that defaults to nil flags
@@ -167,6 +204,11 @@ This is almost definitely a bug"
     frames :- fr-sch/byte-arrays]
    (dealer-send! s frames [])))
 
+(s/fdef router-send!
+        :args (s/cat :sock :cljeromq.common/Socket
+                     :msg ::router-message
+                     :flags :com.frereth.common.schema/korks)
+        :ret identity)
 (s2/defn router-send!
   ([sock :- mq-cmn/Socket
     msg :- router-message]
