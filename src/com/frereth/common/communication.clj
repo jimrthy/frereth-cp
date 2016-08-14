@@ -2,6 +2,7 @@
   "This is really about higher-level messaging abstractions"
   (:require [cljeromq.common :as mq-cmn]
             [cljeromq.core :as mq]
+            [clojure.spec :as s]
             [com.frereth.common.schema :as fr-sch]
             [com.frereth.common.util :as util]
             [hara.event :refer (raise)]
@@ -33,6 +34,20 @@
               ;; for including them both.
               ;; And sticking GET params in the URL has always seemed pretty suspect
               (s2/optional-key :body) s2/Str})
+
+(s/def ::major int?)
+(s/def ::minor int?)
+(s/def ::detail string?)
+(s/def ::version (s/keys :req [::major ::minor::detail]))
+(s/def ::protocol #{::lolcatz})
+(s/def ::header-key (s/or :name string?
+                          :keyed keyword?
+                          :symbol symbol?))
+(s/def ::headers (s/map-of ::header-key (complement nil?)))
+;;; Note that it really *is* pretty inefficient to include the boilerplate with every request.
+;;; Should really just negotiate the protocol version during the initial handshake.
+(s/def ::request (s/keys :req [::version ::protocol]
+                         :opt [::headers]))
 
 (def router-message
   "The contents are byte-arrays? Really??
