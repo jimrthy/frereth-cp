@@ -40,8 +40,10 @@ It seems to make less sense under the system namespace, but
 I'm not sure which alternatives make more sense."
   [{:keys [client-keys
            context
+           direction
            event-loop-name
            server-key
+           socket-type
            url]
     :or {socket-type :dealer
          direction :connect}}]
