@@ -1,6 +1,7 @@
 (ns com.frereth.common.util
   "Utilities to try to make my life easier"
-  (:require [clojure.edn :as edn]
+  (:require [clojure.core.async :as async]
+            [clojure.edn :as edn]
             [clojure.pprint :as pprint]
             [clojure.string :as string]
             [com.frereth.common.schema :as fr-sch]
@@ -33,10 +34,12 @@
 ;;; Internal
 
 (defn describe-annotations
+  "Convert reflected annotions to a seq of strings"
   [as]
   (map #(.toString %) as))
 
 (s/defn interpret-modifiers :- [s/Keyword]
+  "Convert reflected java modifiers (which is really a bit flag) to a seq of keywords"
   [ms :- s/Int]
   ;; TODO: this implementation sucks
   (let [dict {Modifier/ABSTRACT :abstract
@@ -59,12 +62,14 @@
             [] dict)))
 
 (defn describe-field
+  "Make java's reflected field description more user-friendly"
   [f]
   {:name (.getName f)
    :annotations (map describe-annotations (.getDeclaredAnnotations f))
    :modifiers (interpret-modifiers (.getModifiers f))})
 
 (defn describe-method
+  "Make java's reflected method description more user-friendly"
   [m]
   {:annotations (map describe-annotations (.getDeclaredAnnotations m))
    :exceptions (.getExceptionTypes m)
@@ -73,6 +78,7 @@
    :name (.toGenericString m)})
 
 (defn fn-var?
+  "Does a var represent something we can call?"
   [v]
   (let [f @v]
     (or (contains? (meta v) :arglists)
@@ -131,6 +137,13 @@
      ;; Definitely deserves more detail...except that this is mostly useless
      ;; in the clojure world
      :type-params (.getTypeParameters k)}))
+
+(defn five-minute-timeout-chan
+  "Returns an async channel that will time out in 5 minutes
+
+Because I keep using them for heartbeat monitors"
+  []
+  (async/timeout (* 1000 60 5)))
 
 (s/defn ^:always-validate load-resource
   [url :- s/Str]

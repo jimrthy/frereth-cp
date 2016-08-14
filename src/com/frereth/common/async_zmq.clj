@@ -96,7 +96,7 @@ Strongly inspired by lynaghk's zmq-async"
 
    ;; Really, these are implementation details
 
-   ;; feed this into loops to stop them. Very important  when everything hangs
+   ;; feed this into loops to stop them. Very important when everything hangs
    ;; Unless you just enjoy sitting around waiting for the JVM to
    ;; restart, of course
    stopper :- s/Symbol
