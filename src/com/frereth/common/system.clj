@@ -17,13 +17,14 @@
 ;;; Public
 
 (s/defn build :- SystemMap
+  "TODO: Just make this go away as pointless"
   ([description :- cpt-dsl/system-description
     options :- cpt-dsl/option-map]
    (cpt-dsl/build description options))
   ([description :- cpt-dsl/system-description]
    (build description {})))
 
-(defn build-event-loop
+(s/defn build-event-loop :- SystemMap
   "For running as an integrated library inside the Renderer
 
 At one point I thought I was really jumping the gun on this one.
@@ -38,18 +39,11 @@ So this abstraction absolutely belongs in common.
 It seems to make less sense under the system namespace, but
 I'm not sure which alternatives make more sense."
   [{:keys [client-keys
-           ;; FIXME: Need to be able to supply the Context Component
-           ;; (because the Client needs to be able to create/destroy these on the fly,
-           ;; and creating multiple contexts generally seems wasteful)
            context
-           ctx-thread-count
-           direction
            event-loop-name
            server-key
-           socket-type
            url]
-    :or {ctx-thread-count 1
-         socket-type :dealer
+    :or {socket-type :dealer
          direction :connect}}]
   (let [url (cond-> url
               (not (:protocol url)) (assoc :protocol :tcp)
@@ -58,17 +52,15 @@ I'm not sure which alternatives make more sense."
     (let [defaults {:event-loop {:_name event-loop-name}
                     :ex-sock {:url url
                               :direction direction
-                              :sock-type socket-type}
-                    :zmq-context {:thread-count ctx-thread-count}}
+                              :sock-type socket-type
+                              :ctx context}}
           description {:structure '{:event-loop com.frereth.common.async-zmq/ctor
                                     :evt-iface com.frereth.common.async-zmq/ctor-interface
                                     :ex-chan com.frereth.common.async-component/chan-ctor
                                     :ex-sock com.frereth.common.zmq-socket/ctor
                                     :in-chan com.frereth.common.async-component/chan-ctor
-                                    :status-chan com.frereth.common.async-component/chan-ctor
-                                    :zmq-context com.frereth.common.zmq-socket/ctx-ctor}
+                                    :status-chan com.frereth.common.async-component/chan-ctor}
                        :dependencies {:evt-iface [:ex-sock :in-chan :status-chan]
                                       :event-loop {:interface :evt-iface
-                                                   :ex-chan :ex-chan}
-                                      :ex-sock {:ctx :zmq-context}}}]
-      (cpt-dsl/build description defaults))))
+                                                   :ex-chan :ex-chan}}}
+          default-result (cpt-dsl/build description defaults)])))
