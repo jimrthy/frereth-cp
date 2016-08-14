@@ -5,7 +5,7 @@
             [com.frereth.common.schema :as fr-sch]
             [com.frereth.common.util :as util]
             [hara.event :refer (raise)]
-            [schema.core :as s]
+            [schema.core :as s2]
             [taoensso.timbre :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -18,21 +18,21 @@
 
 ;; Note that, in all honesty, this is pretty
 ;; inefficient.
-(def request {:version {:major s/Int
-                        :minor s/Int
-                        :detail s/Int}
-              :protocol s/Str
+(def request {:version {:major s2/Int
+                        :minor s2/Int
+                        :detail s2/Int}
+              :protocol s2/Str
               ;; For dispatching messages that arrive on the same socket
               ;; but are really directed toward different end-points
-              (s/optional-key :channel) s/Str
-              :headers {(s/either s/Str s/Keyword) s/Any}
-              :locator s/Str  ; think URL
-              (s/optional-key :parameters) {:s/Keyword s/Any}  ; think GET
+              (s2/optional-key :channel) s2/Str
+              :headers {(s2/either s2/Str s2/Keyword) s2/Any}
+              :locator s2/Str  ; think URL
+              (s2/optional-key :parameters) {:s2/Keyword s2/Any}  ; think GET
               ;; It's very tempting for the body to be just another dict like
               ;; :parameters. But it seems like we need to have some justification
               ;; for including them both.
               ;; And sticking GET params in the URL has always seemed pretty suspect
-              (s/optional-key :body) s/Str})
+              (s2/optional-key :body) s2/Str})
 
 (def router-message
   "The contents are byte-arrays? Really??
@@ -40,12 +40,12 @@ Q: Is there ever any imaginable scenario where I
 wouldn't want this to handle the marshalling?"
   {:id fr-sch/java-byte-array
    :addresses fr-sch/byte-arrays
-   :contents s/Any})
+   :contents s2/Any})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
-(s/defn read-all! :- (s/maybe fr-sch/byte-arrays)
+(s2/defn read-all! :- (s2/maybe fr-sch/byte-arrays)
   "N.B. Pretty much by definition, this is non-blocking, as-written.
 This is almost definitely a bug"
   [s ;  :- mq/Socket ;;
@@ -71,7 +71,7 @@ This is almost definitely a bug"
             (log/debug "read-all: Done. Incoming:\n" (map #(String. %) result))
             result))))))
 
-(s/defn extract-router-message :- router-message
+(s2/defn extract-router-message :- router-message
   "Note that this limits the actual message to 1 frame of EDN"
   [frames :- fr-sch/byte-arrays]
   (log/debug "Extracting Router Message from "
@@ -110,7 +110,7 @@ This is almost definitely a bug"
 ;;;; parameter should be refactored to accept a zmq-socket/SocketDescription
 ;;;; instead
 ;;;; TODO: Make that so.
-(s/defn router-recv! :- (s/maybe router-message)
+(s2/defn router-recv! :- (s2/maybe router-message)
   ([s :- mq-cmn/Socket]
    (router-recv! s :wait))
   ([s :- mq-cmn/Socket
@@ -118,7 +118,7 @@ This is almost definitely a bug"
    (when-let [all-frames (read-all! s flags)]
      (extract-router-message all-frames))))
 
-(s/defn dealer-recv! :- s/Any
+(s2/defn dealer-recv! :- s2/Any
   "Really only for the simplest possible case"
   ([s :- mq-cmn/Socket]
    (dealer-recv! s :dont-wait))
@@ -130,7 +130,7 @@ This is almost definitely a bug"
        (assert (= 1 (count content)))
        (-> content first util/deserialize)))))
 
-(s/defn dealer-send!
+(s2/defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
   ;; TODO: Add an arity that defaults to nil flags
   ([s :- mq-cmn/Socket
@@ -152,7 +152,7 @@ This is almost definitely a bug"
     frames :- fr-sch/byte-arrays]
    (dealer-send! s frames [])))
 
-(s/defn router-send!
+(s2/defn router-send!
   ([sock :- mq-cmn/Socket
     msg :- router-message]
    (router-send! sock msg []))
