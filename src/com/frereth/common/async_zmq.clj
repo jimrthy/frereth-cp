@@ -12,7 +12,7 @@ Strongly inspired by lynaghk's zmq-async"
             [com.frereth.common.zmq-socket :as zmq-socket]
             [com.stuartsierra.component :as component]
             [full.async :refer (<? <?? alts? go-try)]
-            [ribol.core :refer (raise)]
+            [hara.event :refer (raise)]
             [schema.core :as s]
             [taoensso.timbre :as log])
   (:import [com.frereth.common.async_component AsyncChannelComponent]

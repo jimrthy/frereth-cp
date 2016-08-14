@@ -17,7 +17,7 @@
             [com.frereth.common.system :as sys]
             [com.frereth.common.util :as util]
             [clj-time.core :as dt]
-            [ribol.core :refer (raise)]))
+            [hara.event :refer (raise)]))
 
 ;; Because this seems to be the only namespace I ever actually
 ;; use in here, and I'm tired of typing it out because it's

@@ -49,9 +49,7 @@
                                                            org.clojure/tools.reader]]
                  [fullcontact/full.async "0.9.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
-                 ;; This has been deprecated.
-                 ;; TODO: Switch to hara-events
-                 [im.chit/ribol "0.4.1" :exclusions [org.clojure/clojure]]
+                 [im.chit/hara.event "2.3.7" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.2.0" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
                  ;; Because pomegranate and lein conflict.

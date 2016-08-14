@@ -4,7 +4,7 @@
             [cljeromq.core :as mq]
             [com.frereth.common.schema :as fr-sch]
             [com.frereth.common.util :as util]
-            [ribol.core :refer (raise)]
+            [hara.event :refer (raise)]
             [schema.core :as s]
             [taoensso.timbre :as log]))
 
