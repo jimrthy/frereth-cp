@@ -65,4 +65,5 @@ I'm not sure which alternatives make more sense."
                        :dependencies {:evt-iface [:ex-sock :in-chan :status-chan]
                                       :event-loop {:interface :evt-iface
                                                    :ex-chan :ex-chan}}}
-          default-result (cpt-dsl/build description defaults)])))
+          default-result (cpt-dsl/build description defaults)]
+      default-result)))

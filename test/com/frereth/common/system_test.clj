@@ -5,6 +5,8 @@
 
 (deftest start-stop
   (testing "Can start/stop basic event loop"
+    (throw (ex-info "Duplicate"
+                    {:better-version 'com.frereth.common.event-loop-test}))
     (let [initial (sys/build-event-loop nil)
           started (component/start initial)]
       (is started "start should either return truthy or throw")
