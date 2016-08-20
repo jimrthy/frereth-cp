@@ -17,13 +17,17 @@ But that does make it more difficult to switch the underlying
 message queue implementation"
   mq-common/byte-array-type)
 (s/def ::byte-array-type :cljeromq.common/byte-array-type)
-(def byte-arrays [java-byte-array])
+(def byte-arrays
+  "Deprecated: switch to the spec version instead"
+  [java-byte-array])
 (s/def ::byte-array-seq :cljeromq.common/byte-array-seq)
 (s/def ::korks :cljeromq.common/korks)
 (def korks
   "Deprecated: switch to the spec version instead"
   (s2/either s2/Keyword [s2/Keyword]))
 (def promise-type (class (promise)))
+(s/def ::promise? #(instance? promise-type %))
+
 ;; FIXME: This should come from something like
 ;; simple-time instead
 (def time-stamp Date)

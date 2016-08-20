@@ -40,6 +40,8 @@
 (s/def ::detail string?)
 (s/def ::version (s/keys :req [::major ::minor ::detail]))
 (s/def ::protocol #{::lolcatz})
+(s/def ::protocol-version (s/keys :req [::protocol ::major ::minor ::detail]))
+
 (s/def ::named (s/or :name string?
                      :keyed keyword?
                      :symbol symbol?))
@@ -49,9 +51,15 @@
                        :uuid uuid?))
 (s/def ::parameters (s/map-of ::named (complement nil?)))
 (s/def ::body string?)
-;;; Note that it really *is* pretty inefficient to include the boilerplate with every request.
-;;; Should really just negotiate the protocol version during the initial handshake.
-(s/def ::request (s/keys :req [::version ::protocol ::locator]
+
+;; Q: What about details like a lamport clock?
+;; Bigger Q: What about treating these as a data structure to
+;; let me avoid the duplication?
+;; Since, really, ::request is just a slightly modified version
+;; of ::message
+(s/def ::message (s/keys :req [::locator]
+                         :opt [::headers ::parameters ::body]))
+(s/def ::request (s/keys :req [::locator ::protocol ::version]
                          :opt [::headers ::parameters ::body]))
 
 (def router-message
