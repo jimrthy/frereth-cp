@@ -13,7 +13,7 @@
           wrapper (component/start wrapper-frame)
           context-wrapper (:ctx wrapper)]
       (try
-        (let [initial (sys/build-event-loop {:context context-wrapper})
+        (let [initial (sys/build-event-loop-description {:context context-wrapper})
               started (component/start initial)]
           (is started "Managed to start an Event Loop")
           (try

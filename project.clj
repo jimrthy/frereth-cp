@@ -44,7 +44,7 @@
                  [com.jimrthy/cljeromq "0.1.0-SNAPSHOT" :exclusions [com.stuartsierra/component
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
-                 [com.jimrthy/component-dsl "0.1.1-SNAPSHOT" :exclusions [org.clojure/clojure]]
+                 [com.jimrthy/component-dsl "0.1.2-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [com.taoensso/timbre "4.7.3" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
                  [fullcontact/full.async "0.9.0" :exclusions [org.clojure/clojure

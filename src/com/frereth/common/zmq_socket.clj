@@ -3,10 +3,11 @@
   (:require [cljeromq.common :as mq-cmn]
             [cljeromq.core :as mq]
             [cljeromq.curve :as curve]
+            [clojure.spec :as s]
             [com.frereth.common.schema :as schema]
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
-            [schema.core :as s]
+            [schema.core :as s2]
             [taoensso.timbre :as log])
   (:import [clojure.lang ExceptionInfo]
            [org.zeromq ZMQException]))
@@ -14,15 +15,18 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
 
-(def socket-types (s/enum :push :pull
-                          :req :rep
-                          :pair
-                          :pub :sub
-                          :router :dealer))
+(def socket-types
+  "DEPRECATED: Note that this is duplicated from clejromq.core
+  More importantly, there's now a spec for it in cljeromq.common"
+  (s2/enum :push :pull
+           :req :rep
+           :pair
+           :pub :sub
+           :router :dealer))
 
-(s/defrecord ContextWrapper
+(s2/defrecord ContextWrapper
     [ctx :- mq-cmn/Context
-     thread-count :- s/Int]
+     thread-count :- s2/Int]
   component/Lifecycle
   (start
    [this]
@@ -49,21 +53,23 @@
      (do
        (log/debug "No 0mq messaging context to terminate")
        this))))
+(s/def ::ctx  :cljeromq.common/context)
+(s/def ::thread-count int?)
+(s/def ::context-wrapper (s/keys :req-un [::ctx
+                                          ::thread-count]))
 
-(s/defrecord SocketDescription
+(s2/defrecord SocketDescription
     [ctx :- ContextWrapper
-     direction :- (s/enum :bind :connect)
-     port :- s/Int
+     direction :- (s2/enum :bind :connect)
+     port :- s2/Int
      ;; Q: How does optional-key work here?
      ;; A: It doesn't. That's the way Records work.
      ;; Another reason to move on to Spec
-     client-keys :- (s/maybe curve/key-pair)
-     server-key :- (s/maybe schema/java-byte-array)
+     client-keys :- (s2/maybe curve/key-pair)
+     server-key :- (s2/maybe schema/java-byte-array)
      sock-type :- socket-types
      socket :- mq-cmn/Socket
      url :- mq/zmq-url]
-  ;; Q: Why can't I include a docstring?
-  ;; "Describe a 0mq socket"
   component/Lifecycle
   (start
    [this]
@@ -118,20 +124,41 @@
                       " be using the result of the first call to stop)")
            (assoc this :socket nil))))
      this)))
+(s/def ::client-keys :cljeromq.curve/key-pair)
+(s/def ::port int?)
+(s/def ::server-key :cljeromq.common/byte-array-type)
+(s/def ::sock-type :cljeromq.common/socket-type)
+(s/def ::socket-description (s/keys :opt-un [::client-keys
+                                             ::server-key]
+                                    :req-un [::ctx
+                                             :cljeromq.common/direction
+                                             ::port
+                                             ::sock-type
+                                             :cljeromq.common/socket
+                                             :cljeromq.core/url]))
+(s/def socket-description-ctor-opts
+  (s/keys (opt-un [:cljeromq.common/direction])
+          (:req-un ::sock-type :cljeromq.core/url)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 ;;; TODO: Really need to add wrappers for everything interesting,
 ;;; esp. send/recv
 
-(s/defn ctx-ctor :- ContextWrapper
+(s/fdef ctx-ctor
+        :args (s/cat :options #(-> % (fnil :thread-count 1) int?))
+        :ret ::context-wrapper)
+(s2/defn ctx-ctor :- ContextWrapper
   "TODO: This doesn't belong in a socket namespace"
   [{:keys [thread-count]
     :or [thread-count 1]
     :as options}]
   (map->ContextWrapper options))
 
-(s/defn ctor :- SocketDescription
+(s/fdef ctor
+        :args (s/cat :options ::socket-description-ctor-opts)
+        :ret ::socket-description)
+(s2/defn ctor :- SocketDescription
   [{:keys [client-keys direction server-key sock-type url]
     :or {direction :connect}
     :as options}]

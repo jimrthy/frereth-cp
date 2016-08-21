@@ -6,18 +6,19 @@ about the bigger picture.
 
   No, this probably isn't a very good idea"
   (:require [clojure.core.async :as async]
+            [clojure.spec :as s]
             [com.frereth.common.schema :as frereth-schema]
             [com.stuartsierra.component :as component]
-            [schema.core :as s]))
+            [schema.core :as s2]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
 
-(s/defrecord AsyncChannelComponent [buffer :- clojure.core.async.impl.protocols.Buffer
-                                    buffer-size :- (s/maybe s/Int)
-                                    ch :- frereth-schema/async-channel
-                                    transducer
-                                    ex-handler :- (s/=> s/Any java.lang.Throwable)]
+(s2/defrecord AsyncChannelComponent [buffer :- clojure.core.async.impl.protocols.Buffer
+                                     buffer-size :- (s2/maybe s2/Int)
+                                     ch :- frereth-schema/async-channel
+                                     transducer
+                                     ex-handler :- (s2/=> s2/Any java.lang.Throwable)]
   component/Lifecycle
   (start [this]
     (let [buffer (or buffer (async/buffer buffer-size))]
@@ -30,6 +31,22 @@ about the bigger picture.
     (when ch
       (async/close! ch))
     (assoc this :ch nil)))
+;; Q: Is there a better spec for this?
+(s/def ::buffer #(instance? clojure.core.async.impl.protocols.Buffer %))
+(s/def ::buffer-size int?)
+(s/def ::ch :com.frereth.common.schema/async-channel)
+;;; Q: What is the spec for this, really?
+;;; A: Well...it's really a function w/ 3 arities that
+;;; transforms one reducing function into another
+;;; i.e.
+;;; (whatever, input -> whatever) -> (whatever, input -> whatever)
+;;; For now, just punt on that one
+(s/def ::transducer identity)
+(s/def ::async-channel (s/keys :unq-req [::ch]
+                               :unq-opt [::buffer
+                                         ::buffer-size
+                                         ::ex-handler
+                                         ::transducer]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -37,7 +54,13 @@ about the bigger picture.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(s/defn chan-ctor
+(s/fdef chan-ctor
+        :args (s/cat :options (s/keys :unq-opt [:buffer-size
+                                                :buffer
+                                                :ex-handler
+                                                :transducer]))
+        :ret ::async-channel)
+(s2/defn chan-ctor
   [{:keys [buffer-size]
     :or {buffer-size 0}
     :as options}]

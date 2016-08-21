@@ -2,30 +2,20 @@
   "This is another one that doesn't make a lot of sense"
   (:require [cljeromq.core :as mq]
             [clojure.core.async :as async]
+            [clojure.spec :as s]
             [com.frereth.common.async-component]
             [component-dsl.system :as cpt-dsl]
-            [hara.event :refer (raise)]
-            [schema.core :as s])
+            [hara.event :refer (raise)])
   (:import [com.stuartsierra.component SystemMap]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Schema
-
+;;; Specs
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(s/defn build :- SystemMap
-  "TODO: Just make this go away as pointless"
-  ([description :- cpt-dsl/system-description
-    options :- cpt-dsl/option-map]
-   (throw (ex-info "obsolete" {:problem "pointless"}))
-   (cpt-dsl/build description options))
-  ([description :- cpt-dsl/system-description]
-   (build description {})))
-
-(s/defn build-event-loop :- SystemMap
+(defn build-event-loop-broken
   "For running as an integrated library inside the Renderer
 
 At one point I thought I was really jumping the gun on this one.
@@ -69,3 +59,44 @@ I'm not sure which alternatives make more sense."
                                                    :ex-chan :ex-chan}}}
           default-result (cpt-dsl/build description defaults)]
       default-result)))
+
+(s/fdef build-event-loop-description
+        :args (s/cat :options (s/keys :unq-opt {::client-keys :cljeromq.curve/key-pair
+                                                ::direction :cljeromq.common/direction
+                                                ::server-key :cljeromq.common/byte-array-type
+                                                ::socket-type :cljeromq.common/socket-type}
+                                      :unq-req {::context :com.frereth.common.zmq-socket/context-wrapper
+                                                ::event-loop-name string?
+                                                ::url :cljeromq.core/zmq-url}))
+        :ret (s/keys :req [::description ::options]))
+(defn build-event-loop-description
+  "Return a component description that's suitable for merging into yours to pass along to cpt-dsl/build"
+  [{:keys [client-keys
+           context
+           direction
+           event-loop-name
+           server-key
+           socket-type
+           url]
+    :or {socket-type :dealer
+         direction :connect}}]
+  (let [url (cond-> url
+              (not (:protocol url)) (assoc :protocol :tcp)
+              (not (:address url)) (assoc :address [127 0 0 1])
+              (not (:port url)) (assoc :port 9182))]
+    (let [options {:event-loop {:_name event-loop-name}
+                   :ex-sock {:url url
+                             :direction direction
+                             :sock-type socket-type
+                             :ctx context}}
+          description {:structure '{:event-loop com.frereth.common.async-zmq/ctor
+                                    :evt-iface com.frereth.common.async-zmq/ctor-interface
+                                    :ex-chan com.frereth.common.async-component/chan-ctor
+                                    :ex-sock com.frereth.common.zmq-socket/ctor
+                                    :in-chan com.frereth.common.async-component/chan-ctor
+                                    :status-chan com.frereth.common.async-component/chan-ctor}
+                       :dependencies {:evt-iface [:ex-sock :in-chan :status-chan]
+                                      :event-loop {:interface :evt-iface
+                                                   :ex-chan :ex-chan}}}]
+      {:description description
+       :options options})))

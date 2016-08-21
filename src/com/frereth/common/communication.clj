@@ -10,7 +10,7 @@
             [taoensso.timbre :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Schema
+;;; Specs
 
 ;; Something at least vaguely similar to a REST
 ;; endpoint. Or maybe just something that would
@@ -53,15 +53,10 @@
 (s/def ::body string?)
 
 ;; Q: What about details like a lamport clock?
-;; Bigger Q: What about treating these as a data structure to
-;; let me avoid the duplication?
-;; Since, really, ::request is just a slightly modified version
-;; of ::message
-;; TODO: I'm probably looking for s/merge
 (s/def ::message (s/keys :req [::locator]
                          :opt [::headers ::parameters ::body]))
-(s/def ::request (s/keys :req [::locator ::protocol ::version]
-                         :opt [::headers ::parameters ::body]))
+(s/def ::request (s/merge ::message
+                          (s/keys :req [::protocol ::version])))
 
 (def router-message
   "The contents are byte-arrays? Really??

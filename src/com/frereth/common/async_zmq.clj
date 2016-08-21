@@ -6,6 +6,7 @@ Strongly inspired by lynaghk's zmq-async"
             [cljeromq.core :as mq]
             [clojure.core.async :as async :refer (>! >!!)]
             [clojure.edn :as edn]
+            [clojure.spec :as s]
             [com.frereth.common.async-component]
             [com.frereth.common.schema :as fr-sch]
             [com.frereth.common.util :as util]
@@ -21,7 +22,21 @@ Strongly inspired by lynaghk's zmq-async"
            [com.stuartsierra.component SystemMap]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Schema
+;;; Specs
+
+(s/def ::ex-chan :com.frereth.common.async-component/async-channel)
+(s/def ::ex-sock :com.frereth.common.zmq-socket/socket-description)
+(s/def ::external-reader (s/fspec :args (s/cat :sock :cljeromq.common/socket)
+                                  :ret :cljeromq.common/byte-array-seq))
+(s/def ::external-writer (s/fspec :args (s/cat :sock :cljeromq.common/socket
+                                               :frames :cljeromq.common/byte-array-seq)))
+(s/def ::in-chan :com.frereth.common.async-component/async-channel)
+
+(s/def ::event-pair-interface (s/keys :unq-req [::ex-chan
+                                                ::ex-sock
+                                                ::external-reader
+                                                ::external-writer
+                                                ::in-chan]))
 
 (s2/defrecord EventPairInterface
     [;; send messages to this' async-chan to get them to 0mq.
@@ -82,6 +97,11 @@ Strongly inspired by lynaghk's zmq-async"
     (assoc this
            :in-chan nil
            :status-chan nil)))
+(s/def ::interface (s/keys :req-un [::ex-sock
+                                    ::external-reader
+                                    ::external-writer
+                                    ::in-chan
+                                    ::status-chan]))
 
 (declare run-async-loop! run-zmq-loop!
          do-signal-async-loop-exit
@@ -198,6 +218,17 @@ Their entire purpose in life, really, is to shuffle messages between
                :ex-chan nil
                :async-loop nil
                :zmq-loop nil)))
+;; This is the almost-constructed EventPair that gets passed in to the messaging loops
+(s/def ::event-loopless-pair[:req-un [::->zmq-sock
+                                      ::async-sock
+                                      ::ex-chan
+                                      ::in<->ex-sock
+                                      ::interface
+                                      ::_name
+                                      ::stopper]])
+(s/def ::event-pair (s/merge ::event-loopless-pair
+                             (s/keys ::async-loop
+                                     ::zmq-loop)))
 
 (def event-loopless-pair
   "This is the almost-constructed EventPair that gets passed in to the messaging loops"
@@ -209,8 +240,14 @@ Their entire purpose in life, really, is to shuffle messages between
                            :ex-chan AsyncChannelComponent
                            :in<->ex-sock mq/InternalPair}) :async-loop :zmq-loop))
 
-(def EventInterface {:interface EventPairInterface
-                     :loop EventPair})
+;; Q: Is there any point to this?
+(defrecord EventInterface [event-interface
+                           event-pair]
+  component/Lifecycle
+  (start [this]
+    (assoc this :event-loop (component/start event-pair))))
+(s/def ::event-interface (s/keys :req-un [::event-interface
+                                          ::event-pair]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
