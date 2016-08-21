@@ -20,6 +20,7 @@
   "TODO: Just make this go away as pointless"
   ([description :- cpt-dsl/system-description
     options :- cpt-dsl/option-map]
+   (throw (ex-info "obsolete" {:problem "pointless"}))
    (cpt-dsl/build description options))
   ([description :- cpt-dsl/system-description]
    (build description {})))
@@ -47,6 +48,7 @@ I'm not sure which alternatives make more sense."
            url]
     :or {socket-type :dealer
          direction :connect}}]
+  (throw (ex-info "Just flat-out doesn't work" {:problem "Nested SystemMap doesn't correctly receive dependencies"}))
   (let [url (cond-> url
               (not (:protocol url)) (assoc :protocol :tcp)
               (not (:address url)) (assoc :address [127 0 0 1])

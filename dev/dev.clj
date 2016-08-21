@@ -16,6 +16,7 @@
             [com.frereth.common.config :as cfg]
             [com.frereth.common.system :as sys]
             [com.frereth.common.util :as util]
+            [component-dsl.system :as cpt-dsl]
             [clj-time.core :as dt]
             [hara.event :refer (raise)]))
 
@@ -39,7 +40,7 @@
         writer (fn [sock msg]
                  (println "Fake system sending")
                  (mq/send! sock msg))
-        parameters-tree {:event-loop {:mq-ctx ctx
+        parameters-tree {:event-loop {:context ctx
                                       :ex-sock (:lhs socket-pair)
                                       :in-chan (async/chan)
                                       :external-reader reader
@@ -47,7 +48,7 @@
         config {:structure '{:event-loop com.frereth.common.async-zmq/ctor}
                 :dependencies []}]
     (alter-var-root #'system
-                    (constantly (assoc (sys/build config parameters-tree)
+                    (constantly (assoc (cpt-dsl/build config parameters-tree)
                                        :fake-external (:rhs socket-pair))))))
 
 (defn start

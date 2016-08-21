@@ -57,6 +57,7 @@
 ;; let me avoid the duplication?
 ;; Since, really, ::request is just a slightly modified version
 ;; of ::message
+;; TODO: I'm probably looking for s/merge
 (s/def ::message (s/keys :req [::locator]
                          :opt [::headers ::parameters ::body]))
 (s/def ::request (s/keys :req [::locator ::protocol ::version]
