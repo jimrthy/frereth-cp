@@ -11,9 +11,10 @@ Strongly inspired by lynaghk's zmq-async"
             [com.frereth.common.util :as util]
             [com.frereth.common.zmq-socket :as zmq-socket]
             [com.stuartsierra.component :as component]
+            [component-dsl.system :as cpt-dsl]
             [full.async :refer (<? <?? alts? go-try)]
             [hara.event :refer (raise)]
-            [schema.core :as s]
+            [schema.core :as s2]
             [taoensso.timbre :as log])
   (:import [com.frereth.common.async_component AsyncChannelComponent]
            [com.frereth.common.zmq_socket SocketDescription]
@@ -22,7 +23,7 @@ Strongly inspired by lynaghk's zmq-async"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
 
-(s/defrecord EventPairInterface
+(s2/defrecord EventPairInterface
     [;; send messages to this' async-chan to get them to 0mq.
      in-chan  :- AsyncChannelComponent
      ;; faces outside world.
@@ -37,10 +38,10 @@ Strongly inspired by lynaghk's zmq-async"
      ;; reconnecting dropped sessions, etc.
      ;; Luckily (?) these are the server writer's problems.
      ;; TODO: Refactor-rename these to just reader/writer
-     external-reader :- (s/=> fr-sch/java-byte-array mq-cmn/Socket)
+     external-reader :- (s2/=> fr-sch/java-byte-array mq-cmn/Socket)
      ;; I *think* this returns bool, but, honestly,
      ;; it should return nil
-     external-writer :- (s/=> s/Any mq-cmn/Socket fr-sch/java-byte-array)
+     external-writer :- (s2/=> s2/Any mq-cmn/Socket fr-sch/java-byte-array)
      ;; For requesting status messages
      ;; Put the channel where you want the response
      status-chan :- AsyncChannelComponent]
@@ -85,8 +86,8 @@ Strongly inspired by lynaghk's zmq-async"
 (declare run-async-loop! run-zmq-loop!
          do-signal-async-loop-exit
          do-wait-for-async-loop-to-exit)
-(s/defrecord EventPair
-  [_name :- s/Str  ; Because trying to figure out which is what is driving me crazy
+(s2/defrecord EventPair
+  [_name :- s2/Str  ; Because trying to figure out which is what is driving me crazy
 
    interface :- EventPairInterface
 
@@ -99,7 +100,7 @@ Strongly inspired by lynaghk's zmq-async"
    ;; feed this into loops to stop them. Very important when everything hangs
    ;; Unless you just enjoy sitting around waiting for the JVM to
    ;; restart, of course
-   stopper :- s/Symbol
+   stopper :- s2/Symbol
    ;; Signals the 0mq portion of the loop that messages are ready to send
    ;; to the outside world
    in<->ex-sock :- mq/InternalPair
@@ -201,10 +202,10 @@ Their entire purpose in life, really, is to shuffle messages between
 (def event-loopless-pair
   "This is the almost-constructed EventPair that gets passed in to the messaging loops"
   (dissoc (map->EventPair {:interface EventPairInterface
-                           :stopper s/Symbol
+                           :stopper s2/Symbol
                            :async-sock mq-cmn/Socket
                            :->zmq-sock mq-cmn/Socket
-                           :_name s/Str
+                           :_name s2/Str
                            :ex-chan AsyncChannelComponent
                            :in<->ex-sock mq/InternalPair}) :async-loop :zmq-loop))
 
@@ -323,7 +324,7 @@ Send a duplicate stopper ("
    (and val (not= val stopper))  ; got a message that wasn't stopper
    (and (not= c in-chan) (not= c status-chan))))
 
-(s/defn ^:always-validate run-async-loop! :- fr-sch/async-channel
+(s2/defn ^:always-validate run-async-loop! :- fr-sch/async-channel
   "TODO: Convert this to a pipeline"
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
   (let [{:keys [in-chan status-chan]} interface
@@ -357,7 +358,7 @@ Send a duplicate stopper ("
       (log/debug _name "Async Loop exited because we either received the stop signal or the internal channel closed")
       :exited-successfully)))
 
-(s/defn possibly-recv-internal!
+(s2/defn possibly-recv-internal!
   "Really just refactored to make data flow less opaque"
   [{:keys [_name ->zmq-sock interface stopper in<->ex-chan]
     :as component} :- EventPair
@@ -417,7 +418,7 @@ Send a duplicate stopper ("
                 (recur (async/alts!! [(async/timeout 100) in<->ex-chan]))))))
         @exited))))
 
-(s/defn possibly-forward-msg-from-outside!
+(s2/defn possibly-forward-msg-from-outside!
   [{:keys [interface ex-chan _name]
     :as component} :- EventPair
    poller :- mq-cmn/Poller]
@@ -496,7 +497,7 @@ Send a duplicate stopper ("
         (log/error ex "Unhandled 0mq Exception. 0mq loop exiting")
         :unhandled-0mq-exception))))
 
-(s/defn
+(s2/defn
   ^:always-validate
   run-zmq-loop!
   :- fr-sch/async-channel
@@ -552,7 +553,7 @@ Send a duplicate stopper ("
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(s/defn status-check
+(s2/defn status-check
   "Really just a synchronous wrapper over the basic idea"
   [event-pair :- EventPair]
   (let [interface (:interface event-pair)
@@ -561,11 +562,11 @@ Send a duplicate stopper ("
     (async/>!! status-chan status-out)
     (async/<!! status-out)))
 
-(s/defn ctor-interface :- EventPairInterface
+(s2/defn ctor-interface :- EventPairInterface
   [cfg]
   (map->EventPairInterface (select-keys cfg [:ex-sock :in-chan :external-reader :external-writer])))
 
-(s/defn ctor :- EventPair
+(s2/defn ctor :- EventPair
   [cfg]
   (map->EventPair (select-keys cfg [:_name])))
 
