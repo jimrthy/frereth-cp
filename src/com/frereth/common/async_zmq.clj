@@ -15,7 +15,6 @@ Strongly inspired by lynaghk's zmq-async"
             [component-dsl.system :as cpt-dsl]
             [full.async :refer (<? <?? alts? go-try)]
             [hara.event :refer (raise)]
-            [schema.core :as s2]
             [taoensso.timbre :as log])
   (:import [com.frereth.common.async_component AsyncChannelComponent]
            [com.frereth.common.zmq_socket SocketDescription]
@@ -38,186 +37,12 @@ Strongly inspired by lynaghk's zmq-async"
                                                 ::external-writer
                                                 ::in-chan]))
 
-(s2/defrecord EventPairInterface
-    [;; send messages to this' async-chan to get them to 0mq.
-     in-chan  :- AsyncChannelComponent
-     ;; faces outside world.
-     ;; Caller provides, because binding/connecting is really not in scope here
-     ex-sock :- SocketDescription
-     ;; external-reader and -writer should be simple for
-     ;; everything except router/dealer (which is what
-     ;; I'll be using, of course).
-     ;; dealer really just needs to cope with an empty address
-     ;; separator frame
-     ;; reader has to handle things like socket registration,
-     ;; reconnecting dropped sessions, etc.
-     ;; Luckily (?) these are the server writer's problems.
-     ;; TODO: Refactor-rename these to just reader/writer
-     external-reader :- (s2/=> fr-sch/java-byte-array mq-cmn/Socket)
-     ;; I *think* this returns bool, but, honestly,
-     ;; it should return nil
-     external-writer :- (s2/=> s2/Any mq-cmn/Socket fr-sch/java-byte-array)
-     ;; For requesting status messages
-     ;; Put the channel where you want the response
-     status-chan :- AsyncChannelComponent]
-  component/Lifecycle
-  (start
-      [this]
-    (assert in-chan "Caller must supply the input channel")
-    (assert status-chan "Caller must supply the status request channel")
-    (cond-> this
-      ;; Set up default readers/writers
-      ;; If they weren't already supplied.
-      (not external-reader) (assoc
-                             :external-reader
-                             (fn [sock]
-                               ;; It's tempting to default
-                               ;; to :dont-wait
-                               ;; But we shouldn't ever
-                               ;; try reading this unless
-                               ;; a Poller just verified
-                               ;; that messages are waiting.
-                               ;; Note that we probably never want this
-                               ;; default behavior.
-                               ;; This really needs to demarshall
-                               ;; the message and analyze it before
-                               ;; tagging it with whatever info
-                               ;; really needs to be done.
-                               ;; Still, there might be some
-                               ;; apps where this is enough.
-                               (mq/raw-recv! sock :wait)))
-      (not external-writer) (assoc
-                             :external-writer
-                             (fn [sock array-of-bytes]
-                               ;; Same comments re: over-simplicity
-                               ;; in the default reader apply here
-                               (mq/send! sock array-of-bytes)))))
-  (stop
-      [this]
-    (assoc this
-           :in-chan nil
-           :status-chan nil)))
 (s/def ::interface (s/keys :req-un [::ex-sock
                                     ::external-reader
                                     ::external-writer
                                     ::in-chan
                                     ::status-chan]))
 
-(declare run-async-loop! run-zmq-loop!
-         do-signal-async-loop-exit
-         do-wait-for-async-loop-to-exit)
-(s2/defrecord EventPair
-  [_name :- s2/Str  ; Because trying to figure out which is what is driving me crazy
-
-   interface :- EventPairInterface
-
-   ;; 0mq puts messages onto here when they come in from outside
-   ;; Read its internal async-channel
-   ex-chan :- AsyncChannelComponent
-
-   ;; Really, these are implementation details
-
-   ;; feed this into loops to stop them. Very important when everything hangs
-   ;; Unless you just enjoy sitting around waiting for the JVM to
-   ;; restart, of course
-   stopper :- s2/Symbol
-   ;; Signals the 0mq portion of the loop that messages are ready to send
-   ;; to the outside world
-   in<->ex-sock :- mq/InternalPair
-   ;; It's tempting to make these zmq-socket/Socket instances
-   ;; instead.
-   ;; But mq/InternalPair was pretty much custom-written for this
-   ;; scenario.
-   ;; Splitting them like this (instead of whatever cljeromq names them
-   ;; in in<->ex-sock) is really just a convenience to help me remember
-   ;; which is which
-   async->sock :- mq-cmn/Socket  ; async half of in<->ex-sock
-   ->zmq-sock :- mq-cmn/Socket ; 0mq half of in<->ex-sock
-
-   ;; After async->sock notifies ->zmq-sock that messages are ready to
-   ;; go, pull them from here.
-   in<->ex-chan :- fr-sch/async-channel
-
-   async-loop :- fr-sch/async-channel  ; thread where the async event loop is running
-   zmq-loop :- fr-sch/async-channel  ; thread where the 0mq event loop is running
-   ]
-  component/Lifecycle
-  (start [this]
-    "Set up two entertwined event loops running in background threads.
-
-Their entire purpose in life, really, is to shuffle messages between
-0mq and core.async"
-    (assert interface "Missing the entire external interface")
-    (let [{:keys [ex-sock in-chan status-chan]} interface]
-      (assert ex-chan "Missing outgoing channel")
-      (assert ex-sock "Missing exterior socket")
-
-      ;; TODO: Need channel(s) to write to for handling incoming
-      ;; messages.
-      ;; These can't be in-chan: the entire point to this
-      ;; architecture is to do the heavy lifting of both reading
-      ;; and writing.
-      (let [stopper (gensym)
-            in<->ex-sock (or in<->ex-sock (mq/build-internal-pair!
-                                           (-> ex-sock :ctx :ctx)))
-            in<->ex-chan (or in<->ex-chan (async/chan))
-            almost-started (assoc this
-                                  :stopper stopper
-                                  :in<->ex-chan in<->ex-chan
-                                  :in<->ex-sock in<->ex-sock
-                                  :->zmq-sock (:rhs in<->ex-sock)
-                                  :async->sock (:lhs in<->ex-sock))
-            ;; The choice between lhs and rhs for who gets
-            ;; which of the internal pairs is completely
-            ;; and deliberately arbitrary.
-            ;; Well, I'm thinking in terms of writing left
-            ;; to right and messages originating from the
-            ;; interior more often, but that isn't even
-            ;; vaguely realistic.
-            zmq-loop (run-zmq-loop! almost-started)
-            async-loop (run-async-loop! almost-started)]
-        (assoc almost-started
-               :async-loop async-loop
-               :zmq-loop zmq-loop))))
-  (stop [this]
-        (when async-loop
-          (do-signal-async-loop-exit async-loop
-                                     interface stopper _name)
-          (log/debug _name ": Waiting for Async Loop " async-loop " to exit")
-          (do-wait-for-async-loop-to-exit _name async-loop stopper async->sock)
-          (log/debug _name ": async loop exited"))
-
-        (if in<->ex-chan
-          (async/close! in<->ex-chan)
-          (log/info _name ": No in<->ex-chan. Assume this means we weren't actually started"))
-
-        (when zmq-loop
-          ;; If the async part of the loop is gone, we didn't get the notification
-          ;; to the 0mq half that it should exit
-          (log/debug _name ": Waiting for 0mq Event Loop to exit")
-          (let [[zmq-result c] (async/alts!! [zmq-loop (async/timeout 150)])]
-            (if (= c zmq-loop)
-              (log/debug _name ": 0mq Event Loop exited with status:\n"
-                                 (util/pretty zmq-result))
-              (do
-                (log/warn _name "Timed out waiting for zmq-loop to exit; trying to force it")
-                (try
-                  (async/close! zmq-loop)
-                  (catch Exception ex
-                    (log/error ex (str "\n" _name ": Failure trying to close the go loop. Did you really expect this to work?"))))))))
-        (when in<->ex-sock
-          (comment) (log/debug _name ": Final cleanup")
-          (mq/close-internal-pair! in<->ex-sock))
-        (log/debug _name ": finished cleaning up")
-        (assoc this
-               :stopper nil
-               :in<->ex-sock nil
-               :async->sock nil
-               :->zmq-sock nil
-               :in<->ex-chan nil
-               :ex-chan nil
-               :async-loop nil
-               :zmq-loop nil)))
 ;; This is the almost-constructed EventPair that gets passed in to the messaging loops
 (s/def ::event-loopless-pair[:req-un [::->zmq-sock
                                       ::async-sock
@@ -229,25 +54,6 @@ Their entire purpose in life, really, is to shuffle messages between
 (s/def ::event-pair (s/merge ::event-loopless-pair
                              (s/keys ::async-loop
                                      ::zmq-loop)))
-
-(def event-loopless-pair
-  "This is the almost-constructed EventPair that gets passed in to the messaging loops"
-  (dissoc (map->EventPair {:interface EventPairInterface
-                           :stopper s2/Symbol
-                           :async-sock mq-cmn/Socket
-                           :->zmq-sock mq-cmn/Socket
-                           :_name s2/Str
-                           :ex-chan AsyncChannelComponent
-                           :in<->ex-sock mq/InternalPair}) :async-loop :zmq-loop))
-
-;; Q: Is there any point to this?
-(defrecord EventInterface [event-interface
-                           event-pair]
-  component/Lifecycle
-  (start [this]
-    (assoc this :event-loop (component/start event-pair))))
-(s/def ::event-interface (s/keys :req-un [::event-interface
-                                          ::event-pair]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -361,8 +167,11 @@ Send a duplicate stopper ("
    (and val (not= val stopper))  ; got a message that wasn't stopper
    (and (not= c in-chan) (not= c status-chan))))
 
-(s2/defn ^:always-validate run-async-loop! :- fr-sch/async-channel
-  "TODO: Convert this to a pipeline"
+;; TODO: ^:always-validate
+(s/fdef run-async-loop!
+        :ret :com.frereth.common.schema/async-channel)
+(defn run-async-loop!
+  "TODO: Convert this to an async/pipeline"
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
@@ -395,11 +204,14 @@ Send a duplicate stopper ("
       (log/debug _name "Async Loop exited because we either received the stop signal or the internal channel closed")
       :exited-successfully)))
 
-(s2/defn possibly-recv-internal!
+(s/fdef possibly-recv-internal!
+        :args (s/cat :component ::event-pair
+                     :poller :cljeromq.common/poller))
+(defn possibly-recv-internal!
   "Really just refactored to make data flow less opaque"
   [{:keys [_name ->zmq-sock interface stopper in<->ex-chan]
-    :as component} :- EventPair
-   poller :- mq-cmn/Poller]
+    :as component}
+   poller]
   (let [{:keys [ex-sock external-writer]} interface]
     ;; Message over internal notifier socket?
     (if (mq/in-available? poller 1)
@@ -455,10 +267,13 @@ Send a duplicate stopper ("
                 (recur (async/alts!! [(async/timeout 100) in<->ex-chan]))))))
         @exited))))
 
-(s2/defn possibly-forward-msg-from-outside!
+(s/fdef possibly-forward-msg-from-outside!
+        :args (s/cat :component ::event-pair
+                     :poller :cljeromq.common/poller))
+(defn possibly-forward-msg-from-outside!
   [{:keys [interface ex-chan _name]
-    :as component} :- EventPair
-   poller :- mq-cmn/Poller]
+    :as component}
+   poller]
   ;; Message coming in from outside?
   (when (mq/in-available? poller 0)
     (let [{:keys [external-reader ex-sock]} interface
@@ -534,10 +349,11 @@ Send a duplicate stopper ("
         (log/error ex "Unhandled 0mq Exception. 0mq loop exiting")
         :unhandled-0mq-exception))))
 
-(s2/defn
-  ^:always-validate
-  run-zmq-loop!
-  :- fr-sch/async-channel
+;; TODO: ^:always-validate
+(s/fdef run-zmq-loop!
+        :ret :com.frereth.common.schema/async-channel
+        :args (s/cat :component ::event-pair))
+(defn run-zmq-loop!
   [{:keys [interface ->zmq-sock ex-chan _name]
     :as component}]
   (let [{:keys [ex-sock external-reader externalwriter]} interface
@@ -588,22 +404,208 @@ Send a duplicate stopper ("
              (log/debug "Exiting 0mq Event Loop"))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Components
+
+(defrecord EventPairInterface
+    [;; send messages to this' async-chan to get them to 0mq.
+     in-chan
+     ;; faces outside world.
+     ;; Caller provides, because binding/connecting is really not in scope here
+     ex-sock
+     ;; external-reader and -writer should be simple for
+     ;; everything except router/dealer (which is what
+     ;; I'll be using, of course).
+     ;; dealer really just needs to cope with an empty address
+     ;; separator frame
+     ;; reader has to handle things like socket registration,
+     ;; reconnecting dropped sessions, etc.
+     ;; Luckily (?) these are the server writer's problems.
+     ;; TODO: Refactor-rename these to just reader/writer
+     external-reader
+     ;; I *think* this returns bool, but, honestly,
+     ;; it should return nil
+     external-writer
+     ;; For requesting status messages
+     ;; Put the channel where you want the response
+     status-chan]
+  component/Lifecycle
+  (start
+      [this]
+    (assert in-chan "Caller must supply the input channel")
+    (assert status-chan "Caller must supply the status request channel")
+    (cond-> this
+      ;; Set up default readers/writers
+      ;; If they weren't already supplied.
+      (not external-reader) (assoc
+                             :external-reader
+                             (fn [sock]
+                               ;; It's tempting to default
+                               ;; to :dont-wait
+                               ;; But we shouldn't ever
+                               ;; try reading this unless
+                               ;; a Poller just verified
+                               ;; that messages are waiting.
+                               ;; Note that we probably never want this
+                               ;; default behavior.
+                               ;; This really needs to demarshall
+                               ;; the message and analyze it before
+                               ;; tagging it with whatever info
+                               ;; really needs to be done.
+                               ;; Still, there might be some
+                               ;; apps where this is enough.
+                               (mq/raw-recv! sock :wait)))
+      (not external-writer) (assoc
+                             :external-writer
+                             (fn [sock array-of-bytes]
+                               ;; Same comments re: over-simplicity
+                               ;; in the default reader apply here
+                               (mq/send! sock array-of-bytes)))))
+  (stop
+      [this]
+    (assoc this
+           :in-chan nil
+           :status-chan nil)))
+
+(defrecord EventPair
+  [_name  ; Because trying to figure out which is what is driving me crazy
+
+   interface
+
+   ;; 0mq puts messages onto here when they come in from outside
+   ;; Read its internal async-channel
+   ex-chan
+
+   ;; Really, these are implementation details
+
+   ;; feed this into loops to stop them. Very important when everything hangs
+   ;; Unless you just enjoy sitting around waiting for the JVM to
+   ;; restart, of course
+   stopper
+   ;; Signals the 0mq portion of the loop that messages are ready to send
+   ;; to the outside world
+   in<->ex-sock
+   ;; It's tempting to make these zmq-socket/Socket instances
+   ;; instead.
+   ;; But mq/InternalPair was pretty much custom-written for this
+   ;; scenario.
+   ;; Splitting them like this (instead of whatever cljeromq names them
+   ;; in in<->ex-sock) is really just a convenience to help me remember
+   ;; which is which
+   async->sock  ; async half of in<->ex-sock
+   ->zmq-sock  ; 0mq half of in<->ex-sock
+
+   ;; After async->sock notifies ->zmq-sock that messages are ready to
+   ;; go, pull them from here.
+   in<->ex-chan
+
+   async-loop  ; thread where the async event loop is running
+   zmq-loop    ; thread where the 0mq event loop is running
+   ]
+  component/Lifecycle
+  (start [this]
+    "Set up two entertwined event loops running in background threads.
+
+Their entire purpose in life, really, is to shuffle messages between
+0mq and core.async"
+    (assert interface "Missing the entire external interface")
+    (let [{:keys [ex-sock in-chan status-chan]} interface]
+      (assert ex-chan "Missing outgoing channel")
+      (assert ex-sock "Missing exterior socket")
+
+      ;; TODO: Need channel(s) to write to for handling incoming
+      ;; messages.
+      ;; These can't be in-chan: the entire point to this
+      ;; architecture is to do the heavy lifting of both reading
+      ;; and writing.
+      (let [stopper (gensym)
+            in<->ex-sock (or in<->ex-sock (mq/build-internal-pair!
+                                           (-> ex-sock :ctx :ctx)))
+            in<->ex-chan (or in<->ex-chan (async/chan))
+            almost-started (assoc this
+                                  :stopper stopper
+                                  :in<->ex-chan in<->ex-chan
+                                  :in<->ex-sock in<->ex-sock
+                                  :->zmq-sock (:rhs in<->ex-sock)
+                                  :async->sock (:lhs in<->ex-sock))
+            ;; The choice between lhs and rhs for who gets
+            ;; which of the internal pairs is completely
+            ;; and deliberately arbitrary.
+            ;; Well, I'm thinking in terms of writing left
+            ;; to right and messages originating from the
+            ;; interior more often, but that isn't even
+            ;; vaguely realistic.
+            zmq-loop (run-zmq-loop! almost-started)
+            async-loop (run-async-loop! almost-started)]
+        (assoc almost-started
+               :async-loop async-loop
+               :zmq-loop zmq-loop))))
+  (stop [this]
+        (when async-loop
+          (do-signal-async-loop-exit async-loop
+                                     interface stopper _name)
+          (log/debug _name ": Waiting for Async Loop " async-loop " to exit")
+          (do-wait-for-async-loop-to-exit _name async-loop stopper async->sock)
+          (log/debug _name ": async loop exited"))
+
+        (if in<->ex-chan
+          (async/close! in<->ex-chan)
+          (log/info _name ": No in<->ex-chan. Assume this means we weren't actually started"))
+
+        (when zmq-loop
+          ;; If the async part of the loop is gone, we didn't get the notification
+          ;; to the 0mq half that it should exit
+          (log/debug _name ": Waiting for 0mq Event Loop to exit")
+          (let [[zmq-result c] (async/alts!! [zmq-loop (async/timeout 150)])]
+            (if (= c zmq-loop)
+              (log/debug _name ": 0mq Event Loop exited with status:\n"
+                                 (util/pretty zmq-result))
+              (do
+                (log/warn _name "Timed out waiting for zmq-loop to exit; trying to force it")
+                (try
+                  (async/close! zmq-loop)
+                  (catch Exception ex
+                    (log/error ex (str "\n" _name ": Failure trying to close the go loop. Did you really expect this to work?"))))))))
+        (when in<->ex-sock
+          (comment) (log/debug _name ": Final cleanup")
+          (mq/close-internal-pair! in<->ex-sock))
+        (log/debug _name ": finished cleaning up")
+        (assoc this
+               :stopper nil
+               :in<->ex-sock nil
+               :async->sock nil
+               :->zmq-sock nil
+               :in<->ex-chan nil
+               :ex-chan nil
+               :async-loop nil
+               :zmq-loop nil)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(s2/defn status-check
+(s/fdef status-check
+        :args (s/cat :event-pair ::event-pair)
+        ;; TODO: Be more explicit about what can be returned
+        :ret any?)
+(defn status-check
   "Really just a synchronous wrapper over the basic idea"
-  [event-pair :- EventPair]
+  [event-pair]
   (let [interface (:interface event-pair)
         status-chan (:status-chan interface)
         status-out (async/chan)]
     (async/>!! status-chan status-out)
     (async/<!! status-out)))
 
-(s2/defn ctor-interface :- EventPairInterface
+(s/fdef  ctor-interface
+         :args (s/cat :cfg (s/keys :unq-opt [::ex-sock ::in-chan ::external-reader ::external-writer]))
+         :ret ::event-pair-interface)
+(defn ctor-interface
   [cfg]
   (map->EventPairInterface (select-keys cfg [:ex-sock :in-chan :external-reader :external-writer])))
 
-(s2/defn ctor :- EventPair
+(s/fdef ctor
+        :args (s/cat :cfg (s/keys :unq-opt [:_name]))
+        :ret ::event-pair)
+(defn ctor
   [cfg]
   (map->EventPair (select-keys cfg [:_name])))
 
