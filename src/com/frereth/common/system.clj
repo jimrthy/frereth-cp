@@ -48,15 +48,19 @@ I'm not sure which alternatives make more sense."
                               :direction direction
                               :sock-type socket-type
                               :ctx context}}
-          description {:structure '{:event-loop com.frereth.common.async-zmq/ctor
-                                    :evt-iface com.frereth.common.async-zmq/ctor-interface
-                                    :ex-chan com.frereth.common.async-component/chan-ctor
-                                    :ex-sock com.frereth.common.zmq-socket/ctor
-                                    :in-chan com.frereth.common.async-component/chan-ctor
-                                    :status-chan com.frereth.common.async-component/chan-ctor}
-                       :dependencies {:evt-iface [:ex-sock :in-chan :status-chan]
-                                      :event-loop {:interface :evt-iface
-                                                   :ex-chan :ex-chan}}}
+          struc '#:frereth.com.common{:event-loop com.frereth.common.async-zmq/ctor
+                                      :evt-iface com.frereth.common.async-zmq/ctor-interface
+                                      :ex-chan com.frereth.common.async-component/chan-ctor
+                                      :ex-sock com.frereth.common.zmq-socket/ctor
+                                      :in-chan com.frereth.common.async-component/chan-ctor
+                                      :status-chan com.frereth.common.async-component/chan-ctor}
+          deps '#:frereth.com.common{:evt-iface {:ex-sock :frereth.com.common/ex-sock
+                                                 :in-chan :frereth.com.common/in-chan
+                                                 :status-chan :frereth.com.common/status-chan}
+                                     :event-loop {:interface :frereth.com.common/evt-iface
+                                                  :ex-chan :frereth.com.common/ex-chan}}
+          description #:component-dsl.system{:structure struc
+                                             :dependencies deps}
           default-result (cpt-dsl/build description defaults)]
       default-result)))
 
@@ -84,19 +88,24 @@ I'm not sure which alternatives make more sense."
               (not (:protocol url)) (assoc :protocol :tcp)
               (not (:address url)) (assoc :address [127 0 0 1])
               (not (:port url)) (assoc :port 9182))]
-    (let [options {:event-loop {:_name event-loop-name}
-                   :ex-sock {:url url
-                             :direction direction
-                             :sock-type socket-type
-                             :ctx context}}
-          description {:structure '{:event-loop com.frereth.common.async-zmq/ctor
-                                    :evt-iface com.frereth.common.async-zmq/ctor-interface
-                                    :ex-chan com.frereth.common.async-component/chan-ctor
-                                    :ex-sock com.frereth.common.zmq-socket/ctor
-                                    :in-chan com.frereth.common.async-component/chan-ctor
-                                    :status-chan com.frereth.common.async-component/chan-ctor}
-                       :dependencies {:evt-iface [:ex-sock :in-chan :status-chan]
-                                      :event-loop {:interface :evt-iface
-                                                   :ex-chan :ex-chan}}}]
-      {:description description
-       :options options})))
+    (let [options {::event-loop {:_name event-loop-name}
+                   ::ex-sock {:url url
+                              :direction direction
+                              :sock-type socket-type
+                              :ctx context}}
+          struc '{::event-loop com.frereth.common.async-zmq/ctor
+                  ::evt-iface com.frereth.common.async-zmq/ctor-interface
+                  ::ex-chan com.frereth.common.async-component/chan-ctor
+                  ::ex-sock com.frereth.common.zmq-socket/ctor
+                  ::in-chan com.frereth.common.async-component/chan-ctor
+                  ::status-chan com.frereth.common.async-component/chan-ctor}
+          deps {:evt-iface {:ex-sock ::ex-sock
+                            :in-chan ::in-chan
+                            :status-chan ::status-chan}
+                :event-loop {:interface ::evt-iface
+                             :ex-chan ::ex-chan}}
+          description {:component-dsl.system/structure struc
+                       :component-dsl.system/dependencies deps}]
+      #:component-dsl.system{:system-configuration description
+                             :configuration-tree options
+                             :primary-component ::event-loop})))

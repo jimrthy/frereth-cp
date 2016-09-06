@@ -76,8 +76,8 @@
   (let [descr (mock-structure)
         dependencies (mock-depends)
         configuration-tree (mock-cfg)]
-    (cpt-dsl/build {:structure descr
-                    :dependencies dependencies}
+    (cpt-dsl/build #:component-dsl.system{:structure descr
+                                          :dependencies dependencies}
                    configuration-tree)))
 
 (defn started-mock-up
@@ -86,6 +86,12 @@ Probably won't be very useful: odds are, we'll want to
 customize the reader/writer to create useful tests"
   []
   (component/start (mock-up)))
+
+(comment
+  (let [started-mock-up (started-mockup)
+        (component/stop started-mock-up)]
+    started-mock-up)
+  )
 
 (s/defn with-mock
   "This really isn't a good way to handle this, but it seems like an obvious lazy starter approach
@@ -201,7 +207,7 @@ I write, but I know better."
   ;; Because I've managed to really screw up my REPL key bindings
   ;; I'm tired of scrolling around trying to find these
   (count (Thread/getAllStackTraces))
-  (def started (azt/started-mock-up))
+  (def started (started-mock-up))
   (def started (component/stop started)))
 
 (deftest message-to-outside []
