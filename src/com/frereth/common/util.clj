@@ -18,7 +18,6 @@
 
 (s/def ::reader (fr-sch/class-predicate Reader))
 (s/def ::pushback-reader (fr-sch/class-predicate PushbackReader))
-(s/def ::uuid (fr-sch/class-predicate UUID))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Configuration
@@ -217,7 +216,7 @@ Yes, it does seem pretty stupid"
   (PushbackReader. reader))
 
 (s/fdef random-uuid
-        :ret ::uuid)
+        :ret ::com.frereth.common.schema/uuid)
 (defn random-uuid
   "Because remembering the java namespace is annoying
 

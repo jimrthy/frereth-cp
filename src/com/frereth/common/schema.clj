@@ -3,8 +3,11 @@
   (:require [cljeromq.common :as mq-common]
             [cljeromq.core :as mq]
             [clojure.core.async :as async]
-            [clojure.spec :as s])
-  (:import [java.util Date]))
+            [clojure.spec :as s]
+            [com.stuartsierra.component])
+  (:import [com.stuartsierra.component SystemMap]
+           [java.util Date]
+           [java.util UUID]))
 
 (defn class-predicate
   "Returns a predicate to check whether an object is an instance of the supplied class.
@@ -33,3 +36,16 @@ TODO: At the very least, it needs its own spec."
 ;; FIXME: This should come from something like
 ;; simple-time instead
 (s/def ::time-stamp (class-predicate Date))
+
+(s/def ::uuid (class-predicate UUID))
+
+;; Note that the original schema version is copy/pasted into web's frereth.globals.cljs
+;; And it doesn't work
+;; Q: What's the issue? (aside from the fact that it's experimental)
+;; TODO: Ask on the mailing list
+(s/def ::generic-id (s/or :keyword keyword?
+                          :string string?
+                          :uuid ::uuid))
+
+;; Q: Is this worth really defining?
+(s/def ::system-map (class-predicate SystemMap))

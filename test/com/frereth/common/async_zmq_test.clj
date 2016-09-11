@@ -95,7 +95,7 @@ customize the reader/writer to create useful tests"
   )
 
 (s/fdef with-mock
-        :args (s/cat :f (s/fspec :args (s/cat :system-map (fr-schema/class-predicate SystemMap))
+        :args (s/cat :f (s/fspec :args (s/cat :system-map :com.frereth.common.schema/system-map)
                                  :ret any?)))
 (defn with-mock
   "This really isn't a good way to handle this, but it seems like an obvious lazy starter approach
