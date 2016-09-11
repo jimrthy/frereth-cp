@@ -6,7 +6,6 @@
             [com.frereth.common.schema :as fr-sch]
             [com.frereth.common.util :as util]
             [hara.event :refer (raise)]
-            [schema.core :as s2]
             [taoensso.timbre :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -19,21 +18,6 @@
 
 ;; Note that, in all honesty, this is pretty
 ;; inefficient.
-(def request {:version {:major s2/Int
-                        :minor s2/Int
-                        :detail s2/Int}
-              :protocol s2/Str
-              ;; For dispatching messages that arrive on the same socket
-              ;; but are really directed toward different end-points
-              (s2/optional-key :channel) s2/Str
-              :headers {(s2/either s2/Str s2/Keyword) s2/Any}
-              :locator s2/Str  ; think URL
-              (s2/optional-key :parameters) {:s2/Keyword s2/Any}  ; think GET
-              ;; It's very tempting for the body to be just another dict like
-              ;; :parameters. But it seems like we need to have some justification
-              ;; for including them both.
-              ;; And sticking GET params in the URL has always seemed pretty suspect
-              (s2/optional-key :body) s2/Str})
 
 (s/def ::major int?)
 (s/def ::minor int?)
@@ -58,17 +42,10 @@
 (s/def ::request (s/merge ::message
                           (s/keys :req [::protocol ::version])))
 
-(def router-message
-  "The contents are byte-arrays? Really??
-Q: Is there ever any imaginable scenario where I
-wouldn't want this to handle the marshalling?"
-  {:id fr-sch/java-byte-array
-   :addresses fr-sch/byte-arrays
-   :contents s2/Any})
-
 (s/def ::id :com.frereth.common.schema/byte-array-type)
 (s/def ::addresses :com.frereth.common.schema/byte-array-seq)
 ;; This seems dubious. Will it ever be anything except byte-array(s)?
+;; And any situations where I wouldn't want this marshalled?
 (s/def ::contents identity)
 (s/def ::router-message (s/keys :req [::id ::addresses ::contents]))
 
@@ -80,11 +57,10 @@ wouldn't want this to handle the marshalling?"
                      :flags :com.frereth.common.schema/korks)
         :ret (s/or :frames :com.frereth.common.schema/byte-array-seq
                    :nada nil?))
-(s2/defn read-all! :- (s2/maybe fr-sch/byte-arrays)
+(defn read-all!
   "N.B. Pretty much by definition, this is non-blocking, as-written.
 This is almost definitely a bug"
-  [s ;  :- mq/Socket ;;
-   flags :- fr-sch/korks]
+  [s flags]
   (log/debug "read-all: Top")
   ;; It's very tempting to just do recv! here,
   ;; but callers may not need/want to take the time
@@ -109,9 +85,9 @@ This is almost definitely a bug"
 (s/fdef extract-router-message
         :args (s/cat :frames :com.frereth.common.schema/byte-array-seq)
         :ret ::router-message)
-(s2/defn extract-router-message :- router-message
+(defn extract-router-message
   "Note that this limits the actual message to 1 frame of EDN"
-  [frames :- fr-sch/byte-arrays]
+  [frames]
   (log/debug "Extracting Router Message from "
              (count frames) " frames")
   (when-let [identity-frame (first frames)]
@@ -157,11 +133,10 @@ This is almost definitely a bug"
                      :flags :com.frereth.common.schema/korks)
         :ret (s/or :msg ::router-message
                    :nada nil?))
-(s2/defn router-recv! :- (s2/maybe router-message)
-  ([s :- mq-cmn/Socket]
+(defn router-recv!
+  ([s]
    (router-recv! s :wait))
-  ([s :- mq-cmn/Socket
-    flags :- fr-sch/korks]
+  ([s flags]
    (when-let [all-frames (read-all! s flags)]
      (extract-router-message all-frames))))
 
@@ -169,12 +144,11 @@ This is almost definitely a bug"
         :args (s/cat :s :cljeromq.common/Socket
                      :flags :com.frereth.common.schema/korks)
         :ret identity)
-(s2/defn dealer-recv! :- s2/Any
+(defn dealer-recv!
   "Really only for the simplest possible case"
-  ([s :- mq-cmn/Socket]
+  ([s]
    (dealer-recv! s :dont-wait))
-  ([s :- mq-cmn/Socket
-   flags :- fr-sch/korks]
+  ([s flags]
    (when-let [frames (read-all! s flags)]
      ;; Assume we aren't proxying. Drop the NULL separator
      (let [content (drop 1 frames)]
@@ -186,12 +160,12 @@ This is almost definitely a bug"
                      :frames :com.frereth.common.schema/byte-array-seq
                      :flags :com.frereth.common.schema/korks)
         :ret identity)
-(s2/defn dealer-send!
+(defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
   ;; TODO: Add an arity that defaults to nil flags
-  ([s :- mq-cmn/Socket
-    frames :- fr-sch/byte-arrays
-    flags :- fr-sch/korks]
+  ([s
+    frames
+    flags]
    (let [more-flags (conj flags :send-more)]
      ;; Separator frame
      ;; In theory, this could just be acting as a
@@ -204,8 +178,7 @@ This is almost definitely a bug"
      (log/debug "Wrapping up dealer send w/ final frame:\n" (last frames)
                 "\na " (class (last frames)))
      (mq/send! s (util/serialize (last frames)) flags)))
-  ([s :- mq-cmn/Socket
-    frames :- fr-sch/byte-arrays]
+  ([s frames]
    (dealer-send! s frames [])))
 
 (s/fdef router-send!
@@ -213,13 +186,13 @@ This is almost definitely a bug"
                      :msg ::router-message
                      :flags :com.frereth.common.schema/korks)
         :ret identity)
-(s2/defn router-send!
-  ([sock :- mq-cmn/Socket
-    msg :- router-message]
+(defn router-send!
+  ([sock
+    msg]
    (router-send! sock msg []))
-  ([sock :- mq-cmn/Socket
-    msg :- router-message
-    flags :- fr-sch/korks]
+  ([sock
+    msg
+    flags]
    (when-let [contents (:contents msg)]
      (let [more-flags (conj flags :send-more)
            addresses (:addresses msg)]

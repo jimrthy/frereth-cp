@@ -1,5 +1,8 @@
 (defproject com.frereth/common "0.0.1-SNAPSHOT"
-  :description "Pieces that the different Frereth parts share"
+  :description "Pieces that the different Frereth parts share
+TODO: This needs to be converted to either
+a. boot
+b. lein managed dependencies"
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
@@ -66,15 +69,11 @@
                  ;; 1.9.0-alpha5 breaks async-zmq
                  ;; TODO: Make sure the problem is fixed, whatever it was
                  #_[org.clojure/clojure "1.8.0"]
-                 [org.clojure/clojure "1.9.0-alpha10"]
+                 [org.clojure/clojure "1.9.0-alpha11"]
                  [org.clojure/core.async "0.2.385" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
                  [org.clojure/tools.analyzer "0.6.9"]
-                 [org.clojure/core.async "0.2.385" :exclusions [org.clojure/clojure]]
-                 [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]
-                 [prismatic/plumbing "0.5.3"]
-                 ;; Q: What's the status on this, now that specs are being added for 1.9.0?
-                 [prismatic/schema "1.1.3"]]
+                 [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]]
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
   :plugins []
 

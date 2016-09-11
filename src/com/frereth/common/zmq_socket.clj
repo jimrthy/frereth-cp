@@ -7,7 +7,6 @@
             [com.frereth.common.schema :as schema]
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as component]
-            [schema.core :as s2]
             [taoensso.timbre :as log])
   (:import [clojure.lang ExceptionInfo]
            [org.zeromq ZMQException]))
@@ -15,18 +14,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
 
-(def socket-types
-  "DEPRECATED: Note that this is duplicated from clejromq.core
-  More importantly, there's now a spec for it in cljeromq.common"
-  (s2/enum :push :pull
-           :req :rep
-           :pair
-           :pub :sub
-           :router :dealer))
-
-(s2/defrecord ContextWrapper
-    [ctx :- mq-cmn/Context
-     thread-count :- s2/Int]
+(defrecord ContextWrapper
+    [ctx thread-count]
   component/Lifecycle
   (start
    [this]
@@ -58,18 +47,15 @@
 (s/def ::context-wrapper (s/keys :req-un [::ctx
                                           ::thread-count]))
 
-(s2/defrecord SocketDescription
-    [ctx :- ContextWrapper
-     direction :- (s2/enum :bind :connect)
-     port :- s2/Int
-     ;; Q: How does optional-key work here?
-     ;; A: It doesn't. That's the way Records work.
-     ;; Another reason to move on to Spec
-     client-keys :- (s2/maybe curve/key-pair)
-     server-key :- (s2/maybe schema/java-byte-array)
-     sock-type :- socket-types
-     socket :- mq-cmn/Socket
-     url :- mq/zmq-url]
+(defrecord SocketDescription
+    [ctx
+     direction
+     port
+     client-keys
+     server-key
+     sock-type
+     socket
+     url]
   component/Lifecycle
   (start
    [this]
@@ -148,17 +134,17 @@
 (s/fdef ctx-ctor
         :args (s/cat :options #(-> % (fnil :thread-count 1) int?))
         :ret ::context-wrapper)
-(s2/defn ctx-ctor :- ContextWrapper
+(defn ctx-ctor
   "TODO: This doesn't belong in a socket namespace"
   [{:keys [thread-count]
-    :or [thread-count 1]
+    :or {thread-count 1}
     :as options}]
   (map->ContextWrapper options))
 
 (s/fdef ctor
         :args (s/cat :options ::socket-description-ctor-opts)
         :ret ::socket-description)
-(s2/defn ctor :- SocketDescription
+(defn ctor
   [{:keys [client-keys direction server-key sock-type url]
     :or {direction :connect}
     :as options}]

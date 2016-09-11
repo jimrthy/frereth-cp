@@ -8,17 +8,16 @@ about the bigger picture.
   (:require [clojure.core.async :as async]
             [clojure.spec :as s]
             [com.frereth.common.schema :as frereth-schema]
-            [com.stuartsierra.component :as component]
-            [schema.core :as s2]))
+            [com.stuartsierra.component :as component]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
 
-(s2/defrecord AsyncChannelComponent [buffer :- clojure.core.async.impl.protocols.Buffer
-                                     buffer-size :- (s2/maybe s2/Int)
-                                     ch :- frereth-schema/async-channel
-                                     transducer
-                                     ex-handler :- (s2/=> s2/Any java.lang.Throwable)]
+(defrecord AsyncChannelComponent [buffer
+                                  buffer-size
+                                  ch
+                                  transducer
+                                  ex-handler]
   component/Lifecycle
   (start [this]
     (let [buffer (or buffer (async/buffer buffer-size))]
@@ -32,7 +31,7 @@ about the bigger picture.
       (async/close! ch))
     (assoc this :ch nil)))
 ;; Q: Is there a better spec for this?
-(s/def ::buffer #(instance? clojure.core.async.impl.protocols.Buffer %))
+(s/def ::buffer :com.frereth.common.schema/async-channel)
 (s/def ::buffer-size int?)
 (s/def ::ch :com.frereth.common.schema/async-channel)
 ;;; Q: What is the spec for this, really?
@@ -60,7 +59,7 @@ about the bigger picture.
                                                 :ex-handler
                                                 :transducer]))
         :ret ::async-channel)
-(s2/defn chan-ctor
+(defn chan-ctor
   [{:keys [buffer-size]
     :or {buffer-size 0}
     :as options}]

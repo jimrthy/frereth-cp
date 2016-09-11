@@ -3,22 +3,25 @@
   (:require [clojure.core.async :as async]
             [clojure.edn :as edn]
             [clojure.pprint :as pprint]
+            [clojure.spec :as s]
             [clojure.string :as string]
             [com.frereth.common.schema :as fr-sch]
             [hara.event :refer (raise)]
-            #_[puget.printer :as puget]
-            [schema.core :as s]
             [taoensso.timbre :as log])
-  (:import [java.io PushbackReader]
+  (:import [java.io PushbackReader Reader]
            [java.lang.reflect Modifier]
            [java.net InetAddress]
            [java.util UUID]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Schema
+;;; Specs
+
+(s/def ::reader (fr-sch/class-predicate Reader))
+(s/def ::pushback-reader (fr-sch/class-predicate PushbackReader))
+(s/def ::uuid (fr-sch/class-predicate UUID))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; TODO
+;;; Configuration
 
 ;; Global function calls like this are bad.
 ;; Especially since I'm looking at a
@@ -38,9 +41,12 @@
   [as]
   (map #(.toString %) as))
 
-(s/defn interpret-modifiers :- [s/Keyword]
+(s/fdef interpret-modifiers
+        :args (s/cat :modifiers integer?)
+        :ret (s/coll-of keyword?))
+(defn interpret-modifiers
   "Convert reflected java modifiers (which is really a bit flag) to a seq of keywords"
-  [ms :- s/Int]
+  [ms]
   ;; TODO: this implementation sucks
   (let [dict {Modifier/ABSTRACT :abstract
               Modifier/FINAL :final
@@ -61,6 +67,7 @@
                 acc))
             [] dict)))
 
+;; TODO: Spec this
 (defn describe-field
   "Make java's reflected field description more user-friendly"
   [f]
@@ -68,6 +75,7 @@
    :annotations (map describe-annotations (.getDeclaredAnnotations f))
    :modifiers (interpret-modifiers (.getModifiers f))})
 
+;; TODO: Spec this
 (defn describe-method
   "Make java's reflected method description more user-friendly"
   [m]
@@ -77,6 +85,7 @@
    :return-type (.getReturnType m)
    :name (.toGenericString m)})
 
+;; TODO: Spec this
 (defn fn-var?
   "Does a var represent something we can call?"
   [v]
@@ -88,6 +97,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+;; TODO: Spec this
 (defn cheat-sheet
   "Shamelessly borrowed from https://groups.google.com/forum/#!topic/clojure/j5PmMuhG3d8"
   [ns]
@@ -106,10 +116,13 @@
     (str ";;; " nsname " {{{1\n\n"
          (string/join \newline lines))))
 
-(s/defn core-count :- s/Int
+(s/fdef core-count
+        :ret integer?)
+(defn core-count
   []
   (.availableProcessors (Runtime/getRuntime)))
 
+;; TODO: Spec this
 (defn dir
   [something]
   (let [k (class something)
@@ -138,6 +151,7 @@
      ;; in the clojure world
      :type-params (.getTypeParameters k)}))
 
+;; TODO: Spec this
 (defn five-minute-timeout-chan
   "Returns an async channel that will time out in 5 minutes
 
@@ -145,13 +159,18 @@ Because I keep using them for heartbeat monitors"
   []
   (async/timeout (* 1000 60 5)))
 
-(s/defn ^:always-validate load-resource
-  [url :- s/Str]
+(s/fdef load-resource
+        :args (s/cat :url string?)
+        :ret any?)
+;; TODO: ^:always-validate
+(defn load-resource
+  [url]
   (-> url
       clojure.java.io/resource
       slurp
       edn/read-string))
 
+;; TODO: Spec this
 (defmacro make-runner
   "Ran across this on the clojure mailing list
 
@@ -160,6 +179,7 @@ Idiom for converting expression(s) to a callable"
   (eval `(fn []
            ~expr)))
 
+;; TODO: Spec this
 (defn my-ip
   "What is my IP address?
 
@@ -167,11 +187,13 @@ Totally fails on multi-home systems. But it's worthwhile as a starting point"
   []
   (.getHostAddress (InetAddress/getLocalHost)))
 
+;; TODO: Spec this
 (defn pick-home
   "Returns the current user's home directory"
   []
   (System/getProperty "user.home"))
 
+;; TODO: Spec this
 (defn pretty
   [& os]
   (try
@@ -185,13 +207,18 @@ Falling back to standard")
       (log/error ex "Something seriously wrong w/ pretty printing? Falling back to standard:\n")
       (str os))))
 
-(s/defn pushback-reader :- PushbackReader
+(s/fdef pushback-reader
+        :args (s/cat :reader ::reader)
+        :ret ::pushback-reader)
+(defn pushback-reader
   "Probably belongs under something like utils.
 Yes, it does seem pretty stupid"
   [reader]
   (PushbackReader. reader))
 
-(s/defn random-uuid :- UUID
+(s/fdef random-uuid
+        :ret ::uuid)
+(defn random-uuid
   "Because remembering the java namespace is annoying
 
 medley.core has a cross-platform implementation. As long as it's being
@@ -205,9 +232,12 @@ component-dsl?)"
   []
   (UUID/randomUUID))
 
-(s/defn deserialize :- s/Any
+(s/fdef deserialize
+        :args (s/cat :bs :com.frereth.common/byte-array-seq)
+        :ret any?)
+(defn deserialize
   "Out of alphaetical order because it uses pretty"
-  [bs :- fr-sch/java-byte-array]
+  [bs]
   (let [s (String. bs)]
     (try
       (edn/read-string s)
@@ -215,13 +245,18 @@ component-dsl?)"
         (log/error ex "Failed reading incoming string:\n"
                    (pretty s))))))
 
-(s/defn serialize :- fr-sch/java-byte-array
-  [o :- s/Any]
+(s/fdef serialize
+        :args any?
+        :ret :com.frereth.common.schema/byte-array-seq)
+(defn serialize
+  [o]
   (if (= (class o) fr-sch/java-byte-array)
     o
     (-> o pr-str .getBytes)))
 
-(s/defn thread-count :- s/Int
+(s/fdef thread-count
+        :ret integer?)
+(defn thread-count
   "Rough estimate of how many threads are currently being used
 Probably doesn't mean much, considering thread pools. But it can't hurt
 to know and have available

@@ -1,13 +1,14 @@
 (ns com.frereth.common.async-zmq-test
   (:require [cljeromq.core :as mq]
             [clojure.core.async :as async]
+            [clojure.spec :as s]
             [clojure.test :refer (deftest is testing)]
             [com.frereth.common.async-zmq :refer :all]
+            [com.frereth.common.schema :as fr-schema]
             [com.frereth.common.util :as util]
             [com.frereth.common.zmq-socket :as common-mq]
             [com.stuartsierra.component :as component]
             [component-dsl.system :as cpt-dsl]
-            [schema.core :as s]
             [taoensso.timbre :as log])
   (:import [com.stuartsierra.component SystemMap]
            [org.zeromq ZMQException]))
@@ -93,7 +94,10 @@ customize the reader/writer to create useful tests"
     started-mock-up)
   )
 
-(s/defn with-mock
+(s/fdef with-mock
+        :args (s/cat :f (s/fspec :args (s/cat :system-map (fr-schema/class-predicate SystemMap))
+                                 :ret any?)))
+(defn with-mock
   "This really isn't a good way to handle this, but it seems like an obvious lazy starter approach
 
 To be fair, the 'proper' approach here is starting to look like a macro.
@@ -102,7 +106,7 @@ I've already been down that path with midje.
 
 I'd like to pretend that the results would be happier with macros that
 I write, but I know better."
-  [f :- (s/=> s/Any SystemMap)]
+  [f]
   (let [system (started-mock-up)]
     (try
       (println "===============================================================")
