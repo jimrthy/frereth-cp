@@ -48,12 +48,12 @@ b. lein managed dependencies"
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
                  [com.jimrthy/component-dsl "0.1.2-SNAPSHOT" :exclusions [org.clojure/clojure]]
-                 [com.taoensso/timbre "4.7.3" :exclusions [org.clojure/clojure
+                 [com.taoensso/timbre "4.7.4" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
                  [fullcontact/full.async "0.9.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
-                 [im.chit/hara.event "2.3.7" :exclusions [org.clojure/clojure]]
-                 [io.aviso/config "0.2.0" :exclusions [org.clojure/clojure
+                 [im.chit/hara.event "2.4.4" :exclusions [org.clojure/clojure]]
+                 [io.aviso/config "0.2.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
                  ;; Because pomegranate and lein conflict.
                  ;; Try the latest versions to see how it works
@@ -70,7 +70,7 @@ b. lein managed dependencies"
                  ;; TODO: Make sure the problem is fixed, whatever it was
                  #_[org.clojure/clojure "1.8.0"]
                  [org.clojure/clojure "1.9.0-alpha11"]
-                 [org.clojure/core.async "0.2.385" :exclusions [org.clojure/clojure
+                 [org.clojure/core.async "0.2.391" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]]
