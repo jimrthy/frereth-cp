@@ -6,8 +6,7 @@
             [clojure.spec :as s]
             [com.stuartsierra.component])
   (:import [com.stuartsierra.component SystemMap]
-           [java.util Date]
-           [java.util UUID]))
+           [java.util Date]))
 
 (defn class-predicate
   "Returns a predicate to check whether an object is an instance of the supplied class.
@@ -36,8 +35,6 @@ TODO: At the very least, it needs its own spec."
 ;; FIXME: This should come from something like
 ;; simple-time instead
 (s/def ::time-stamp (class-predicate Date))
-
-(s/def ::uuid (class-predicate UUID))
 
 ;; Note that the original schema version is copy/pasted into web's frereth.globals.cljs
 ;; And it doesn't work

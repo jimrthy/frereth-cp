@@ -129,7 +129,7 @@ This is almost definitely a bug"
 ;;; Supposed to handle multi-arity seamlessly.
 ;;; Q: How does this actually work?
 (s/fdef router-recv!
-        :args (s/alt :s :cljeromq.common/Socket
+        :args (s/cat :s :cljeromq.common/Socket
                      :flags :com.frereth.common.schema/korks)
         :ret (s/or :msg ::router-message
                    :nada nil?))

@@ -216,7 +216,7 @@ Yes, it does seem pretty stupid"
   (PushbackReader. reader))
 
 (s/fdef random-uuid
-        :ret ::com.frereth.common.schema/uuid)
+        :ret uuid?)
 (defn random-uuid
   "Because remembering the java namespace is annoying
 
