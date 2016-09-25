@@ -14,6 +14,30 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Schema
 
+(s/def ::ctx  :cljeromq.common/context)
+(s/def ::thread-count int?)
+(s/def ::context-wrapper (s/keys :req-un [::ctx
+                                          ::thread-count]))
+
+(s/def ::client-keys :cljeromq.curve/key-pair)
+(s/def ::port int?)
+(s/def ::server-key :cljeromq.common/byte-array-type)
+(s/def ::sock-type :cljeromq.common/socket-type)
+(s/def ::socket-description (s/keys :opt-un [::client-keys
+                                             ::server-key]
+                                    :req-un [::ctx
+                                             :cljeromq.common/direction
+                                             ::port
+                                             ::sock-type
+                                             :cljeromq.common/socket
+                                             :cljeromq.core/url]))
+(s/def socket-description-ctor-opts
+  (s/keys (opt-un [:cljeromq.common/direction])
+          (:req-un ::sock-type :cljeromq.core/url)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Components
+
 (defrecord ContextWrapper
     [ctx thread-count]
   component/Lifecycle
@@ -42,10 +66,6 @@
      (do
        (log/debug "No 0mq messaging context to terminate")
        this))))
-(s/def ::ctx  :cljeromq.common/context)
-(s/def ::thread-count int?)
-(s/def ::context-wrapper (s/keys :req-un [::ctx
-                                          ::thread-count]))
 
 (defrecord SocketDescription
     [ctx
@@ -80,6 +100,12 @@
          ;; TODO: Make them add encryption
          (comment (assert server-key "Not allowing decrypted communications"))
          (when server-key
+           ;;; Honestly, it's more complicated than this.
+           ;;; If we want it to be a server, we might want to start out
+           ;;; with the set of allowed client keys.
+           ;;; That's something that really needs to be checked through zauth,
+           ;;; which really isn't fully baked just yet.
+           ;;; So go with this approach for now.
            (if client-keys
              (curve/prepare-client-socket-for-server! sock client-keys server-key)
              (curve/make-socket-a-server! sock server-key)))
@@ -110,21 +136,6 @@
                       " be using the result of the first call to stop)")
            (assoc this :socket nil))))
      this)))
-(s/def ::client-keys :cljeromq.curve/key-pair)
-(s/def ::port int?)
-(s/def ::server-key :cljeromq.common/byte-array-type)
-(s/def ::sock-type :cljeromq.common/socket-type)
-(s/def ::socket-description (s/keys :opt-un [::client-keys
-                                             ::server-key]
-                                    :req-un [::ctx
-                                             :cljeromq.common/direction
-                                             ::port
-                                             ::sock-type
-                                             :cljeromq.common/socket
-                                             :cljeromq.core/url]))
-(s/def socket-description-ctor-opts
-  (s/keys (opt-un [:cljeromq.common/direction])
-          (:req-un ::sock-type :cljeromq.core/url)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

@@ -16,8 +16,14 @@ TODO: At the very least, it needs its own spec."
   [klass]
   #(instance? klass %))
 
+;;; These next 2 are duplicated in substratum.util.
+;;; Very tempting to create a common library to eliminate
+;;; the Copy/Paste.
+;;; Not quite tempting enough to convince me that it would be
+;;; worthwhile.
 (def async-channel-type (class (async/chan)))
 (s/def ::async-channel (class-predicate async-channel-type))
+
 (def atom-type (class (atom {})))
 (s/def ::atom-type (class-predicate atom-type))
 

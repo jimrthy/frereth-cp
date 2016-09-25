@@ -171,7 +171,11 @@ Send a duplicate stopper ("
 (s/fdef run-async-loop!
         :ret :com.frereth.common.schema/async-channel)
 (defn run-async-loop!
-  "TODO: Convert this to an async/pipeline"
+  "Q: Would it make sense to convert this to some variant of an async/pipeline?
+
+  It seems like a really obvious thing to do.
+  But then we could have one thread trying to read while another tries to write,
+  and that's a recipe for disaster."
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
