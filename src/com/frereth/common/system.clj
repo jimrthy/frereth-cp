@@ -25,7 +25,7 @@ inside frereth.client.
 And frereth.server. And, if there's ever a 'real' stand-alone
 frereth.renderer, there.
 
-So this abstraction absolutely belongs in common.
+So this abstraction absolutely does belong in common.
 
 It seems to make less sense under the system namespace, but
 I'm not sure which alternatives make more sense."
@@ -38,6 +38,7 @@ I'm not sure which alternatives make more sense."
            url]
     :or {socket-type :dealer
          direction :connect}}]
+  ;;; Q: Is this still true?
   (throw (ex-info "Just flat-out doesn't work" {:problem "Nested SystemMap doesn't correctly receive dependencies"}))
   (let [url (cond-> url
               (not (:protocol url)) (assoc :protocol :tcp)
@@ -76,6 +77,7 @@ I'm not sure which alternatives make more sense."
 (defn build-event-loop-description
   "Return a component description that's suitable for merging into yours to pass along to cpt-dsl/build"
   [{:keys [client-keys
+           context
            direction
            event-loop-name
            server-key
@@ -94,7 +96,15 @@ I'm not sure which alternatives make more sense."
                    ::ex-sock {:url url
                               :direction direction
                               :sock-type socket-type}}
-          struc '{::context com.frereth.common.zmq-socket/ctx-ctor
+          ;; TODO: Improve component-dsl so I can pass in an
+          ;; already-created instance the way I need to for frereth-client.
+          ;; Actually, I'm just trying to supply my own ctor.
+          ;; Which really should work fine.
+          ;; Note that I need to unquote this.
+          struc `{::context #_(if context
+                               context
+                               com.frereth.common.zmq-socket/ctx-ctor)
+                  com.frereth.common.zmq-socket/ctx-ctor
                   ::event-loop com.frereth.common.async-zmq/ctor
                   ::evt-iface com.frereth.common.async-zmq/ctor-interface
                   ::ex-chan com.frereth.common.async-component/chan-ctor

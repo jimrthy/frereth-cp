@@ -87,7 +87,8 @@
                             sock-type
                             "socket based on context\n"
                             (util/pretty ctx)
-                            "a" (class ctx))
+                            "a" (class ctx)
+                            "\nat" url)
        (let [sock (mq/socket! (:ctx ctx) sock-type)]
          ;; Though this would make debugging/monitoring possible on an
          ;; internal network that needs to monitor traffic for security reasons.
@@ -117,7 +118,10 @@
            (catch ExceptionInfo ex
              (log/error ex "Problem w/ connection to\n"
                         (util/pretty url)
-                        "\nAre you having internet issues?")))
+                        "\nAre you having internet issues?")
+             ;; TODO: Don't just swallow this error
+             ;; But it's really convenient at dev time
+             ))
          (assoc this :socket sock)))
      this))
   (stop
