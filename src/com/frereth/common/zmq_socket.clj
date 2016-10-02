@@ -1,11 +1,13 @@
 (ns com.frereth.common.zmq-socket
   "This should be a wrapper interface that hides as many low-level queue implementation details as possible"
-  (:require [cljeromq.common :as mq-cmn]
-            [cljeromq.core :as mq]
-            [cljeromq.curve :as curve]
+  (:require [cljeromq
+             [common :as mq-cmn]
+             [core :as mq]
+             [curve :as curve]]
             [clojure.spec :as s]
-            [com.frereth.common.schema :as schema]
-            [com.frereth.common.util :as util]
+            [com.frereth.common
+             [schema :as schema]
+             [util :as util]]
             [com.stuartsierra.component :as component]
             [taoensso.timbre :as log])
   (:import [clojure.lang ExceptionInfo]
@@ -110,18 +112,22 @@
            (if client-keys
              (curve/prepare-client-socket-for-server! sock client-keys server-key)
              (curve/make-socket-a-server! sock server-key)))
-         (try
-           (let [uri (mq/connection-string url)]
-             (if (= direction :bind)
+         (let [uri (mq/connection-string url)]
+           (if (= direction :bind)
+             (try
                (mq/bind! sock uri)
-               (mq/connect! sock uri)))
-           (catch ExceptionInfo ex
-             (log/error ex "Problem w/ connection to\n"
-                        (util/pretty url)
-                        "\nAre you having internet issues?")
-             ;; TODO: Don't just swallow this error
-             ;; But it's really convenient at dev time
-             ))
+               (catch ExceptionInfo ex
+                 (log/error ex (str "Problem binding\n"
+                                    (util/pretty url)
+                                    "\nAre you having internet issues?"))
+                 (throw ex)))
+             (try
+               (mq/connect! sock uri)
+               (catch ExceptionInfo ex
+                 (log/error ex (str "Problem connecting to\n"
+                                    (util/pretty url)
+                                    "\nAre you having internet issues?"))
+                 (throw ex)))))
          (assoc this :socket sock)))
      this))
   (stop

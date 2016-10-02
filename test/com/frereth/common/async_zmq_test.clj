@@ -1,6 +1,8 @@
 (ns com.frereth.common.async-zmq-test
   (:require [cljeromq.core :as mq]
             [clojure.core.async :as async]
+            [clojure.pprint :refer (pprint)]
+            [clojure.repl :refer (pst)]
             [clojure.spec :as s]
             [clojure.test :refer (deftest is testing)]
             [com.frereth.common.async-zmq :refer :all]
@@ -10,7 +12,8 @@
             [com.stuartsierra.component :as component]
             [component-dsl.system :as cpt-dsl]
             [taoensso.timbre :as log])
-  (:import [com.stuartsierra.component SystemMap]
+  (:import [clojure.lang ExceptionInfo]
+           [com.stuartsierra.component SystemMap]
            [org.zeromq ZMQException]))
 
 (defn mock-cfg
@@ -33,12 +36,12 @@
         internal-url (name (gensym))]
     {:one {:_name "Event Loop One"}
      :two {:_name "Event Loop Two"}
-     :ex-one {:url {:protocol :inproc
-                    :address internal-url}
+     :ex-one {:url #:cljeromq.common{:zmq-protocol :inproc
+                                     :zmq-address internal-url}
               :sock-type :pair
               :direction :bind}
-     :ex-two {:url {:protocol :inproc
-                    :address internal-url}
+     :ex-two {:url #:cljeromq.common{:zmq-protocol :inproc
+                                     :zmq-address internal-url}
               :sock-type :pair
               :direction :connect}
      :iface-one {:external-reader reader
@@ -216,56 +219,62 @@ I write, but I know better."
 
 (deftest message-to-outside []
   (println "\n\n\tStarting mock for testing message-to-outside")
-  (let [system (started-mock-up)
-        ;; Again, we don't want the "other half" EventPair
-        ;; stealing the messages that we're trying to verify
-        ;; reach it.
-        ;; Yes, this test is pretty silly. It seems like it
-        ;; should involve a lot of wishful thinking on my part,
-        ;; but it did work at one point.
-        dst (-> system :two :interface :ex-sock)
-        stopped (component/stop (:two system))
-        system (assoc system :two stopped)]
-    (println "mock loops started")
-    (try
-      (let [src (-> system :one :interface :in-chan :ch)
-            msg {:action :login
-                 :user "#1"
-                 :auth-token (gensym)
-                 :character-set "utf-8"}]
-        (println "Submitting" msg "to internal channel")
-        (let [[v c] (async/alts!! [(async/timeout 1000)
-                                   [src msg]])]
-          (testing "Message submitted to async loop"
-            (is (= src c) "Timed out trying to send")
-            (is v))
+  (try
+    (let [system (started-mock-up)
+          ;; Again, we don't want the "other half" EventPair
+          ;; stealing the messages that we're trying to verify
+          ;; reach it.
+          ;; Yes, this test is pretty silly. It seems like it
+          ;; should involve a lot of wishful thinking on my part,
+          ;; but it did work at one point.
+          dst (-> system :two :interface :ex-sock)
+          stopped (component/stop (:two system))
+          system (assoc system :two stopped)]
+      (println "mock loops started")
+      (try
+        (let [src (-> system :one :interface :in-chan :ch)
+              msg {:action :login
+                   :user "#1"
+                   :auth-token (gensym)
+                   :character-set "utf-8"}]
+          (println "Submitting" msg "to internal channel")
+          (let [[v c] (async/alts!! [(async/timeout 1000)
+                                     [src msg]])]
+            (testing "Message submitted to async loop"
+              (is (= src c) "Timed out trying to send")
+              (is v))
 
-          (testing "Did message make it to other side?"
-            (let [result
-                  (loop [retries 5
-                         serialized (mq/recv! (:socket dst) :dont-wait)]
-                    (if serialized
-                      (let [result (util/deserialize serialized)]
-                        (println "Received"
-                                 serialized
-                                 "a"
-                                 (class serialized)
-                                 "\naka"
-                                 result "a"
-                                 (class result))
-                        (is (= msg result))
-                        (println "message-to-outside delivered" result)
-                        result)
-                      (when (< 0 retries)
-                        (let [n (- 6 retries)]
-                          (println "Retry # " n)
-                          (Thread/sleep (* 100 n))
-                          (recur (dec retries)
-                                 (mq/recv! (:socket dst) :dont-wait))))))]
-              (is result "Message swallowed")))))
-      (finally
-        (component/stop system)))
-    (println "message-to-outside exiting")))
+            (testing "Did message make it to other side?"
+              (let [result
+                    (loop [retries 5
+                           serialized (mq/recv! (:socket dst) :dont-wait)]
+                      (if serialized
+                        (let [result (util/deserialize serialized)]
+                          (println "Received"
+                                   serialized
+                                   "a"
+                                   (class serialized)
+                                   "\naka"
+                                   result "a"
+                                   (class result))
+                          (is (= msg result))
+                          (println "message-to-outside delivered" result)
+                          result)
+                        (when (< 0 retries)
+                          (let [n (- 6 retries)]
+                            (println "Retry # " n)
+                            (Thread/sleep (* 100 n))
+                            (recur (dec retries)
+                                   (mq/recv! (:socket dst) :dont-wait))))))]
+                (is result "Message swallowed")))))
+        (finally
+          (component/stop system)))
+      (println "message-to-outside exiting"))
+    (catch ExceptionInfo ex
+      (println "Unhandled exception escaped\n"
+               (.getMessage ex))
+      (pprint (.getData ex))
+      (throw ex))))
 
 (deftest echo
   []
