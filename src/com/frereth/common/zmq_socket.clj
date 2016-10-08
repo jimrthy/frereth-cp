@@ -22,7 +22,7 @@
                                           ::thread-count]))
 
 (s/def ::client-keys :cljeromq.curve/key-pair)
-(s/def ::port int?)
+(s/def ::port (s/and nat-int? #(< % 65536)))
 (s/def ::server-key :cljeromq.common/byte-array-type)
 (s/def ::sock-type :cljeromq.common/socket-type)
 (s/def ::socket-description (s/keys :opt-un [::client-keys
