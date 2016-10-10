@@ -218,63 +218,63 @@ I write, but I know better."
   (def started (component/stop started)))
 
 (deftest message-to-outside []
-  (println "\n\n\tStarting mock for testing message-to-outside")
-  (try
-    (let [system (started-mock-up)
-          ;; Again, we don't want the "other half" EventPair
-          ;; stealing the messages that we're trying to verify
-          ;; reach it.
-          ;; Yes, this test is pretty silly. It seems like it
-          ;; should involve a lot of wishful thinking on my part,
-          ;; but it did work at one point.
-          dst (-> system :two :interface :ex-sock)
-          stopped (component/stop (:two system))
-          system (assoc system :two stopped)]
-      (println "mock loops started")
-      (try
-        (let [src (-> system :one :interface :in-chan :ch)
-              msg {:action :login
-                   :user "#1"
-                   :auth-token (gensym)
-                   :character-set "utf-8"}]
-          (println "Submitting" msg "to internal channel")
-          (let [[v c] (async/alts!! [(async/timeout 1000)
-                                     [src msg]])]
-            (testing "Message submitted to async loop"
-              (is (= src c) "Timed out trying to send")
-              (is v))
+  (testing "\n\n\tStarting mock for testing message-to-outside"
+    (try
+      (let [system (started-mock-up)
+            ;; Again, we don't want the "other half" EventPair
+            ;; stealing the messages that we're trying to verify
+            ;; reach it.
+            ;; Yes, this test is pretty silly. It seems like it
+            ;; should involve a lot of wishful thinking on my part,
+            ;; but it did work at one point.
+            dst (-> system :two :interface :ex-sock)
+            stopped (component/stop (:two system))
+            system (assoc system :two stopped)]
+        (println "mock loops started")
+        (try
+          (let [src (-> system :one :interface :in-chan :ch)
+                msg {:action :login
+                     :user "#1"
+                     :auth-token (gensym)
+                     :character-set "utf-8"}]
+            (println "Submitting" msg "to internal channel")
+            (let [[v c] (async/alts!! [(async/timeout 1000)
+                                       [src msg]])]
+              (testing "Message submitted to async loop"
+                (is (= src c) "Timed out trying to send")
+                (is v))
 
-            (testing "Did message make it to other side?"
-              (let [result
-                    (loop [retries 5
-                           serialized (mq/recv! (:socket dst) :dont-wait)]
-                      (if serialized
-                        (let [result (util/deserialize serialized)]
-                          (println "Received"
-                                   serialized
-                                   "a"
-                                   (class serialized)
-                                   "\naka"
-                                   result "a"
-                                   (class result))
-                          (is (= msg result))
-                          (println "message-to-outside delivered" result)
-                          result)
-                        (when (< 0 retries)
-                          (let [n (- 6 retries)]
-                            (println "Retry # " n)
-                            (Thread/sleep (* 100 n))
-                            (recur (dec retries)
-                                   (mq/recv! (:socket dst) :dont-wait))))))]
-                (is result "Message swallowed")))))
-        (finally
-          (component/stop system)))
-      (println "message-to-outside exiting"))
-    (catch ExceptionInfo ex
-      (println "Unhandled exception escaped\n"
-               (.getMessage ex))
-      (pprint (.getData ex))
-      (throw ex))))
+              (testing "Did message make it to other side?"
+                (let [result
+                      (loop [retries 5
+                             serialized (mq/recv! (:socket dst) :dont-wait)]
+                        (if serialized
+                          (let [result (util/deserialize serialized)]
+                            (println "Received"
+                                     serialized
+                                     "a"
+                                     (class serialized)
+                                     "\naka"
+                                     result "a"
+                                     (class result))
+                            (is (= msg result))
+                            (println "message-to-outside delivered" result)
+                            result)
+                          (when (< 0 retries)
+                            (let [n (- 6 retries)]
+                              (println "Retry # " n)
+                              (Thread/sleep (* 100 n))
+                              (recur (dec retries)
+                                     (mq/recv! (:socket dst) :dont-wait))))))]
+                  (is result "Message swallowed")))))
+          (finally
+            (component/stop system)))
+        (println "message-to-outside exiting"))
+      (catch ExceptionInfo ex
+        (println "Unhandled exception escaped\n"
+                 (.getMessage ex))
+        (pprint (.getData ex))
+        (throw ex)))))
 
 (deftest echo
   []
@@ -397,3 +397,30 @@ I write, but I know better."
                        (is (= c ex-left))
                        (is (= (* x y) (:return-value v)))))))]
       (with-mock test))))
+
+(deftest loopless-event-validation
+  (let [ctx (mq/context 2)
+        ex-sock {:ctx ctx
+                 :direction :connect
+                 :port 75
+                 :sock-type :pair
+                 :socket (mq/socket! ctx :pair)
+                 :url "this shouldn't be legal"}
+        interface {:ex-sock ex-sock
+                   :external-reader mq/recv!
+                   :external-writer mq/send!
+                   :in-chan (async/chan)}
+        stopper (gensym)
+        in<->ex-sock (mq/build-internal-pair!
+                      (mq/context 2))
+        in<->ex-chan (async/chan)
+        almost-started {:ex-chan {:ch (async/chan)}
+                        :interface interface
+                        :stopper stopper
+                        :in<->ex-chan in<->ex-chan
+                        :in<->ex-sock in<->ex-sock
+                        :->zmq-sock (:rhs in<->ex-sock)
+                        :async->sock (:lhs in<->ex-sock)}]
+    ;; FIXME: Pretty sure s/explain doesn't return false-y for valid schema.
+    ;; This version is really just trying to nail down why this schema doesn't validate.
+    (is (not (s/explain :com.frereth.common.async-zmq/event-loopless-pair almost-started)))))

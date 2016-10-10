@@ -40,34 +40,35 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Components
 
+;; TODO: Refactor this to the zmq-context namespace
 (defrecord ContextWrapper
     [ctx thread-count]
   component/Lifecycle
   (start
-   [this]
-   (if-not ctx
-     (let [thread-count (or thread-count 1)
-           ctx (mq/context thread-count)]
-       (assoc this
-              :ctx ctx
-              :thread-count thread-count))
-     this))
+    [this]
+    (if-not ctx
+      (let [thread-count (or thread-count 1)
+            ctx (mq/context thread-count)]
+        (assoc this
+               :ctx ctx
+               :thread-count thread-count))
+      this))
   (stop
-   [this]
-   (if ctx
-     (do
-       (log/debug "Terminating context")
-       ;; Note that this is going to hang until
-       ;; all sockets are closed
-       (try
-         (mq/terminate! ctx)
-         (assoc this :ctx nil)
-         (finally
-           (log/debug "Context terminated, one way or another")
-           (assoc this :ctx nil))))
-     (do
-       (log/debug "No 0mq messaging context to terminate")
-       this))))
+    [this]
+    (if ctx
+      (do
+        (log/debug "Terminating context")
+        ;; Note that this is going to hang until
+        ;; all sockets are closed
+        (try
+          (mq/terminate! ctx)
+          (assoc this :ctx nil)
+          (finally
+            (log/debug "Context terminated, one way or another")
+            (assoc this :ctx nil))))
+      (do
+        (log/debug "No 0mq messaging context to terminate")
+        this))))
 
 (defrecord SocketDescription
     [ctx

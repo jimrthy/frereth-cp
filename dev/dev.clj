@@ -9,6 +9,7 @@
             [clojure.pprint :refer (pprint)]
             [clojure.repl :refer :all]  ; dir is very useful
             [clojure.spec :as s]
+            [clojure.spec.gen :as gen]
             [clojure.string :as string]
             [clojure.test :as test]
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]

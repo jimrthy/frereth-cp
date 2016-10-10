@@ -43,14 +43,14 @@ Strongly inspired by lynaghk's zmq-async"
                                     ::in-chan
                                     ::status-chan]))
 
-;; This is the almost-constructed EventPair that gets passed in to the messaging loops
-(s/def ::event-loopless-pair[:req-un [::->zmq-sock
-                                      ::async-sock
-                                      ::ex-chan
-                                      ::in<->ex-sock
-                                      ::interface
-                                      ::_name
-                                      ::stopper]])
+;; This is the almost-started EventPair that gets passed in to the messaging loops
+(s/def ::event-loopless-pair (s/keys :req-un [::->zmq-sock
+                                              ::async->sock
+                                              ::ex-chan
+                                              ::in<->ex-sock
+                                              ::interface
+                                              ::_name
+                                              ::stopper]))
 (s/def ::event-pair (s/merge ::event-loopless-pair
                              (s/keys ::async-loop
                                      ::zmq-loop)))
@@ -167,8 +167,8 @@ Send a duplicate stopper ("
    (and val (not= val stopper))  ; got a message that wasn't stopper
    (and (not= c in-chan) (not= c status-chan))))
 
-;; TODO: ^:always-validate
 (s/fdef run-async-loop!
+        :args (s/cat :component ::event-loopless-pair)
         :ret :com.frereth.common.schema/async-channel)
 (defn run-async-loop!
   "Q: Would it make sense to convert this to some variant of an async/pipeline?
@@ -177,6 +177,12 @@ Send a duplicate stopper ("
   But then we could have one thread trying to read while another tries to write,
   and that's a recipe for disaster."
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
+  {:pre [#_(s/valid? ::event-loopless-pair component)]
+   :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
+  (when-not (s/valid? ::event-loopless-pair component)
+    (throw (ex-info "Component doesn't match spec"
+                    {:problem #_(s/explain ::event-loopless-pair component) "unprintable"
+                     :incoming component})))
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
         status-chan (:ch status-chan)

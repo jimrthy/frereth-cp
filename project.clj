@@ -79,6 +79,7 @@ b. lein managed dependencies"
 
   :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.3"
                                    :exclusions [org.clojure/clojure]]
+                                  [org.clojure/test.check "0.9.0"]
                                   [org.clojure/tools.namespace "0.2.11"]]
                    ;; Q: Why do I have tools.namespace under both dependencies and plugins?
                    :plugins [[org.clojure/tools.namespace "0.2.11" :exclusions [org.clojure/clojure]]]
