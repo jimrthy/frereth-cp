@@ -181,7 +181,7 @@ Send a duplicate stopper ("
    :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
   (when-not (s/valid? ::event-loopless-pair component)
     (throw (ex-info "Component doesn't match spec"
-                    {:problem #_(s/explain ::event-loopless-pair component) "unprintable"
+                    {:problem (s/explain-data ::event-loopless-pair component)
                      :incoming component})))
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)

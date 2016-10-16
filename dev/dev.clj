@@ -22,6 +22,10 @@
             [clj-time.core :as dt]
             [hara.event :refer (raise)]))
 
+(def +frereth-component+
+  "Just to help me track which REPL is which"
+  'common)
+
 ;; Because this seems to be the only namespace I ever actually
 ;; use in here, and I'm tired of typing it out because it's
 ;; ridiculously long
