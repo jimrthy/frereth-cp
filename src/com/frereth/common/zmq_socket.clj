@@ -4,6 +4,7 @@
              [common :as mq-cmn]
              [core :as mq]
              [curve :as curve]]
+            [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [com.frereth.common
              [schema :as schema]
@@ -118,9 +119,15 @@
              (try
                (mq/bind! sock uri)
                (catch ExceptionInfo ex
-                 (log/error ex (str "Problem binding\n"
-                                    (util/pretty url)
-                                    "\nAre you having internet issues?"))
+                 (let [cause (.getCause ex)
+                       errno (.getErrorCode cause)]
+                   ;; TODO: Find a symbolic constant to eliminate this magic number
+                   ;; (it's EADDRINUSE)
+                   (if (= 98 errno)
+                     (log/error ex "Address already in use")
+                     (log/error ex (str "Problem binding\n"
+                                        (util/pretty url)
+                                        "\nAre you having internet issues?"))))
                  (throw ex)))
              (try
                (mq/connect! sock uri)
