@@ -43,6 +43,11 @@ Strongly inspired by lynaghk's zmq-async"
                                     ::in-chan
                                     ::status-chan]))
 
+(s/def ::->zmq-sock any?)
+(s/def ::async->sock any?)
+(s/def ::in<->ex-sock any?)
+(s/def ::_name string?)
+(s/def ::stopper (s/fspec :args nil :ret any?))
 ;; This is the almost-started EventPair that gets passed in to the messaging loops
 (s/def ::event-loopless-pair (s/keys :req-un [::->zmq-sock
                                               ::async->sock
