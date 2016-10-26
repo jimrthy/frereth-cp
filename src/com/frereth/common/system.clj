@@ -51,10 +51,10 @@ I'm not sure which alternatives make more sense."
     :or {direction :connect
          socket-type :dealer
          thread-count 2}}]
-  (throw (ex-info "Start here"
-                  {:huh? "Compare `git diff`"
-                   :suspicion "Does including non-namespaced keywords royally break (s/explain-data)?"
-                   :otoh "This breaks lots of existing unit tests"}))
+  (comment (throw (ex-info "Start here"
+                           {:huh? "Compare `git diff`"
+                            :suspicion "Does including non-namespaced keywords royally break (s/explain-data)?"
+                            :otoh "This breaks lots of existing unit tests"})))
   (let [url (cond-> url
               (not (:cljeromq.common/zmq-protocol url)) (assoc :cljeromq.common/zmq-protocol :tcp)
               (not (:cljeromq.common/zmq-address url)) (assoc :cljeromq.common/zmq-address [127 0 0 1])
