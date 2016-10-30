@@ -5,7 +5,7 @@
             [clojure.repl :refer (pst)]
             [clojure.spec :as s]
             [clojure.test :refer (deftest is testing)]
-            [com.frereth.common.async-zmq :refer :all]
+            [com.frereth.common.async-zmq :refer :all :as a-z]
             [com.frereth.common.schema :as fr-schema]
             [com.frereth.common.util :as util]
             [com.frereth.common.zmq-socket :as common-mq]

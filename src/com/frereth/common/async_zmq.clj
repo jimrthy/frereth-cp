@@ -6,6 +6,7 @@ Strongly inspired by lynaghk's zmq-async"
             [cljeromq.core :as mq]
             [clojure.core.async :as async :refer (>! >!!)]
             [clojure.edn :as edn]
+            [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [com.frereth.common.async-component]
             [com.frereth.common.schema :as fr-sch]
@@ -31,11 +32,11 @@ Strongly inspired by lynaghk's zmq-async"
                                                :frames :cljeromq.common/byte-array-seq)))
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
 
-(s/def ::event-pair-interface (s/keys :unq-req [::ex-chan
-                                                ::ex-sock
-                                                ::external-reader
-                                                ::external-writer
-                                                ::in-chan]))
+(s/def ::event-pair-interface (s/keys :req-un [::ex-chan
+                                               ::ex-sock
+                                               ::external-reader
+                                               ::external-writer
+                                               ::in-chan]))
 
 (s/def ::interface (s/keys :req-un [::ex-sock
                                     ::external-reader
@@ -43,11 +44,12 @@ Strongly inspired by lynaghk's zmq-async"
                                     ::in-chan
                                     ::status-chan]))
 
+;; FIXME: What are these?
 (s/def ::->zmq-sock any?)
 (s/def ::async->sock any?)
 (s/def ::in<->ex-sock any?)
 (s/def ::_name string?)
-(s/def ::stopper (s/fspec :args nil :ret any?))
+(s/def ::stopper symbol?)
 ;; This is the almost-started EventPair that gets passed in to the messaging loops
 (s/def ::event-loopless-pair (s/keys :req-un [::->zmq-sock
                                               ::async->sock
@@ -83,6 +85,7 @@ Strongly inspired by lynaghk's zmq-async"
       (async/close! async-loop))))
 
 (defn do-wait-for-async-loop-to-exit
+  "We've sent the stop signal to the async loop. Wait for it to exit, possibly trying again"
   [_name async-loop stopper async->sock]
   (log/debug _name "-- async-zmq Component: Waiting for Asynchronous Event Loop" async-loop " to exit")
   (try
@@ -188,6 +191,12 @@ Send a duplicate stopper ("
     (println "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Spec mismatch. Would have caught it in the pre-condition if that were enabled
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    (let [ex-sock (:ex-sock component)]
+      (println "Keys available:" (keys component)
+               "\nSpec:" (s/form ::event-loopless-pair)
+               "\nStopper:" stopper "(valid?)" (s/valid? ::stopper stopper)
+               ;; At least one problem is that ex-sock is nil here
+               "\nex-sock:" ex-sock "valid?" (s/valid? ::ex-sock ex-sock)))
     (throw (ex-info "Component doesn't match spec"
                     ;; This leads to calling cljeromq.common/socket-creator.
                     ;; Which is/should be the sample data generator.
