@@ -182,7 +182,7 @@ Send a duplicate stopper ("
   But then we could have one thread trying to read while another tries to write,
   and that's a recipe for disaster."
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
-  {:pre [(comment (s/valid? ::event-loopless-pair component))]
+  {:pre [#_(s/valid? ::event-loopless-pair component)]
    :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
   (when-not (s/valid? ::event-loopless-pair component)
     (println "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

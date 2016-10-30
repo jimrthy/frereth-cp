@@ -92,8 +92,8 @@ customize the reader/writer to create useful tests"
   (component/start (mock-up)))
 
 (comment
-  (let [started-mock-up (started-mockup)
-        (component/stop started-mock-up)]
+  (let [started-mock-up (started-mock-up)
+        _ (component/stop started-mock-up)]
     started-mock-up)
   )
 

@@ -69,7 +69,7 @@ b. lein managed dependencies"
                  ;; 1.9.0-alpha5 breaks async-zmq
                  ;; TODO: Make sure the problem is fixed, whatever it was
                  #_[org.clojure/clojure "1.8.0"]
-                 [org.clojure/clojure "1.9.0-alpha11"]
+                 [org.clojure/clojure "1.9.0-alpha14"]
                  [org.clojure/core.async "0.2.391" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
                  [org.clojure/tools.analyzer "0.6.9"]
