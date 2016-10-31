@@ -36,12 +36,12 @@
         internal-url (name (gensym))]
     {:one {:_name "Event Loop One"}
      :two {:_name "Event Loop Two"}
-     :ex-one {:url #:cljeromq.common{:zmq-protocol :inproc
-                                     :zmq-address internal-url}
+     :ex-one {:zmq-url #:cljeromq.common{:zmq-protocol :inproc
+                                         :zmq-address internal-url}
               :sock-type :pair
               :direction :bind}
-     :ex-two {:url #:cljeromq.common{:zmq-protocol :inproc
-                                     :zmq-address internal-url}
+     :ex-two {:zmq-url #:cljeromq.common{:zmq-protocol :inproc
+                                         :zmq-address internal-url}
               :sock-type :pair
               :direction :connect}
      :iface-one {:external-reader reader
@@ -71,8 +71,8 @@
    :two {:interface :iface-two, :ex-chan :ex-chan-2}
    :iface-one {:ex-sock :ex-one :in-chan :in-one :status-chan :status-one}
    :iface-two {:ex-sock :ex-two :in-chan :in-two :status-chan :status-two}
-   :ex-one [:ctx]
-   :ex-two [:ctx]})
+   :ex-one {:context-wrapper :ctx}
+   :ex-two {:context-wrapper :ctx}})
 
 (defn mock-up
   "TODO: Need tests that work with both EventEair instances"

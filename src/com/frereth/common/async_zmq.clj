@@ -26,17 +26,22 @@ Strongly inspired by lynaghk's zmq-async"
 
 (s/def ::ex-chan :com.frereth.common.async-component/async-channel)
 (s/def ::ex-sock :com.frereth.common.zmq-socket/socket-description)
-(s/def ::external-reader (s/fspec :args (s/cat :sock :cljeromq.common/socket)
-                                  :ret :cljeromq.common/byte-array-seq))
-(s/def ::external-writer (s/fspec :args (s/cat :sock :cljeromq.common/socket
-                                               :frames :cljeromq.common/byte-array-seq)))
+(s/def ::external-reader #_(s/fspec :args (s/cat :sock :cljeromq.common/socket)
+                                    :ret :cljeromq.common/byte-array-seq)
+  any?)
+(s/def ::external-writer #_(s/fspec :args (s/cat :sock :cljeromq.common/socket
+                                                 :frames :cljeromq.common/byte-array-seq))
+  any?)
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
 
-(s/def ::event-pair-interface (s/keys :req-un [::ex-chan
-                                               ::ex-sock
-                                               ::external-reader
-                                               ::external-writer
-                                               ::in-chan]))
+(comment
+  ;; This looks like a duplicate of ::interface, though the name is more
+  ;; meaningful
+  (s/def ::event-pair-interface (s/keys :req-un [::ex-chan
+                                                 ::ex-sock
+                                                 ::external-reader
+                                                 ::external-writer
+                                                 ::in-chan])))
 
 (s/def ::interface (s/keys :req-un [::ex-sock
                                     ::external-reader
@@ -191,12 +196,44 @@ Send a duplicate stopper ("
     (println "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Spec mismatch. Would have caught it in the pre-condition if that were enabled
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-    (let [ex-sock (:ex-sock component)]
+    (let [ex-chan (:ex-chan component)
+          ex-sock (-> component :interface :ex-sock)]
       (println "Keys available:" (keys component)
                "\nSpec:" (s/form ::event-loopless-pair)
                "\nStopper:" stopper "(valid?)" (s/valid? ::stopper stopper)
-               ;; At least one problem is that ex-sock is nil here
-               "\nex-sock:" ex-sock "valid?" (s/valid? ::ex-sock ex-sock)))
+               "\nex-sock:" ex-sock "valid?" (s/valid? ::ex-sock ex-sock))
+      (when-not (s/valid? ::ex-chan ex-chan)
+        (println "Problem w/ ex-chan: " ex-chan))
+      (when-not (s/valid? ::ex-sock ex-sock)
+        (println "Problem stems from the socket (there's a shock)")
+        (pprint ex-sock)
+        (println "Available keys:" (keys ex-sock))
+        (println "Spec:" (s/form :com.frereth.common.zmq-socket/socket-description))
+        (let [ctx (:context-wrapper ex-sock)]
+          (when-not (s/valid? :com.frereth.common.zmq-socket/context-wrapper ctx)
+            (println "Context invalid:" (s/explain :com.frereth.common.zmq-socket/context-wrapper ctx))))
+        (println "Actual socket valid:" (s/valid? :cljeromq.common/socket (:socket ex-sock)))
+        (let [url (:zmq-url ex-sock)]
+          (when-not (s/valid? :cljeromq.common/zmq-url url)
+            (println "URL invalid:" (s/explain :cljeromq.common/zmq-url url))))
+        (let [socket-type (:sock-type ex-sock)]
+          (when-not (s/valid? :com.frereth.common.zmq-socket/sock-type socket-type)
+            (println "Socket Type invalid:" (s/explain :com.frereth.common.zmq-socket/sock-type socket-type))))
+        (let [direction (:direction ex-sock)]
+          (when-not (s/valid? :cljeromq.common/direction direction)
+            (println "Socket Direction invalid:" (s/explain :cljeromq.common/direction direction))))
+        (when-not (s/valid? :com.frereth.common.zmq-socket/client-keys (:client-keys ex-sock))
+          (println "Invalid client keys:" (s/explain :com.frereth.common.zmq-socket/client-keys
+                                             (:client-keys ex-sock))))
+        (when-not (s/valid? :com.frereth.common.zmq-socket/server-key (:server-key ex-sock))
+          (println "Invalid Server key:" (s/explain :com.frereth.common.zmq-socket/server-key
+                                                   (:server-key ex-sock))))
+        (when-not (s/valid? :com.frereth.common.zmq-socket/port (:port ex-sock))
+          (println "Invalid Port:" (s/explain :com.frereth.common.zmq-socket/port (:port ex-sock))))))
+
+    (when-not (s/valid? ::interface interface)
+      (println "Problem w/ interface: " (keys interface))
+      (pprint interface))
     (throw (ex-info "Component doesn't match spec"
                     ;; This leads to calling cljeromq.common/socket-creator.
                     ;; Which is/should be the sample data generator.
@@ -511,7 +548,8 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
    ;; Unless you just enjoy sitting around waiting for the JVM to
    ;; restart, of course
    stopper
-   ;; Signals the 0mq portion of the loop that messages are ready to send
+   ;; This is an mq/InternalPair that
+   ;; signals the 0mq portion of the loop that messages are ready to send
    ;; to the outside world
    in<->ex-sock
    ;; It's tempting to make these zmq-socket/Socket instances
@@ -549,7 +587,7 @@ Their entire purpose in life, really, is to shuffle messages between
       ;; and writing.
       (let [stopper (gensym)
             in<->ex-sock (or in<->ex-sock (mq/build-internal-pair!
-                                           (-> ex-sock :ctx :ctx)))
+                                           (-> ex-sock :context-wrapper :ctx)))
             in<->ex-chan (or in<->ex-chan (async/chan))
             ;; The choice between lhs and rhs for who gets
             ;; which of the internal pairs is completely
@@ -637,7 +675,7 @@ Their entire purpose in life, really, is to shuffle messages between
 
 (s/fdef  ctor-interface
          :args (s/cat :cfg (s/keys :unq-opt [::ex-sock ::in-chan ::external-reader ::external-writer]))
-         :ret ::event-pair-interface)
+         :ret ::interface)
 (defn ctor-interface
   [cfg]
   (map->EventPairInterface (select-keys cfg [:ex-sock :in-chan :external-reader :external-writer])))

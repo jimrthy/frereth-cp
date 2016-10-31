@@ -66,16 +66,12 @@ b. lein managed dependencies"
                  ;; TODO: Make it ignore those
                  ;; Q: Has the situation improved in the months I've been ignoring it?
                  #_[mvxcvi/puget "1.0.0" :exclusions [org.clojure/clojure]]
-                 ;; 1.9.0-alpha5 breaks async-zmq
-                 ;; TODO: Make sure the problem is fixed, whatever it was
-                 #_[org.clojure/clojure "1.8.0"]
                  [org.clojure/clojure "1.9.0-alpha14"]
                  [org.clojure/core.async "0.2.391" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]]
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
-  :plugins []
 
   :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.3"
                                    :exclusions [org.clojure/clojure]]

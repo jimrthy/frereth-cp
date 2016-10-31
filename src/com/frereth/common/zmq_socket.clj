@@ -22,21 +22,21 @@
 (s/def ::context-wrapper (s/keys :req-un [::ctx
                                           ::thread-count]))
 
-(s/def ::client-keys :cljeromq.curve/key-pair)
-(s/def ::port (s/and nat-int? #(< % 65536)))
-(s/def ::server-key :cljeromq.common/byte-array-type)
+(s/def ::client-keys (s/nilable :cljeromq.curve/key-pair))
+(s/def ::port (s/nilable (s/and nat-int? #(< % 65536))))
+(s/def ::server-key (s/nilable :cljeromq.common/byte-array-type))
 (s/def ::sock-type :cljeromq.common/socket-type)
 (s/def ::socket-description (s/keys :opt-un [::client-keys
-                                             ::server-key]
-                                    :req-un [::ctx
+                                             ::server-key
+                                             ::port]
+                                    :req-un [::context-wrapper
                                              :cljeromq.common/direction
-                                             ::port
                                              ::sock-type
                                              :cljeromq.common/socket
-                                             :cljeromq.core/url]))
+                                             :cljeromq.common/zmq-url]))
 (s/def socket-description-ctor-opts
   (s/keys (opt-un [:cljeromq.common/direction])
-          (:req-un ::sock-type :cljeromq.core/url)))
+          (:req-un [::sock-type :cljeromq.common/zmq-url])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Components
@@ -72,28 +72,28 @@
         this))))
 
 (defrecord SocketDescription
-    [ctx
+    [context-wrapper
      direction
      port
      client-keys
      server-key
      sock-type
      socket
-     url]
+     zmq-url]
   component/Lifecycle
   (start
    [this]
    (if-not socket
      (do
-       (assert ctx "Can't do anything without a Messaging Context")
-       (assert url "Nowhere to connect")
-       (comment) (log/debug "Getting ready to try to start a"
+       (assert context-wrapper "Can't do anything without a Messaging Context")
+       (assert zmq-url "Nowhere to connect")
+       (comment) (log/debug "Getting ready to try to create and start a"
                             sock-type
                             "socket based on context\n"
-                            (util/pretty ctx)
-                            "a" (class ctx)
-                            "\nat" url)
-       (let [sock (mq/socket! (:ctx ctx) sock-type)]
+                            (util/pretty context-wrapper)
+                            "a" (class context-wrapper)
+                            "\nat" zmq-url)
+       (let [sock (mq/socket! (:ctx context-wrapper) sock-type)]
          ;; Though this would make debugging/monitoring possible on an
          ;; internal network that needs to monitor traffic for security reasons.
          ;; And, for that matter, open internal comms make things like virus
@@ -114,7 +114,7 @@
            (if client-keys
              (curve/prepare-client-socket-for-server! sock client-keys server-key)
              (curve/make-socket-a-server! sock server-key)))
-         (let [uri (mq/connection-string url)]
+         (let [uri (mq/connection-string zmq-url)]
            (if (= direction :bind)
              (try
                (mq/bind! sock uri)
@@ -126,16 +126,17 @@
                    (if (= 98 errno)
                      (log/error ex "Address already in use")
                      (log/error ex (str "Problem binding\n"
-                                        (util/pretty url)
+                                        (util/pretty zmq-url)
                                         "\nAre you having internet issues?"))))
                  (throw ex)))
              (try
                (mq/connect! sock uri)
                (catch ExceptionInfo ex
                  (log/error ex (str "Problem connecting to\n"
-                                    (util/pretty url)
+                                    (util/pretty zmq-url)
                                     "\nAre you having internet issues?"))
                  (throw ex)))))
+         (log/info "Socket created/started successfully")
          (assoc this :socket sock)))
      this))
   (stop
@@ -174,7 +175,7 @@
         :args (s/cat :options ::socket-description-ctor-opts)
         :ret ::socket-description)
 (defn ctor
-  [{:keys [client-keys direction server-key sock-type url]
+  [{:keys [client-keys direction server-key sock-type zmq-url]
     :or {direction :connect}
     :as options}]
   (map->SocketDescription options))
