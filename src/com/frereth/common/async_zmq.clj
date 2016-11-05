@@ -26,22 +26,17 @@ Strongly inspired by lynaghk's zmq-async"
 
 (s/def ::ex-chan :com.frereth.common.async-component/async-channel)
 (s/def ::ex-sock :com.frereth.common.zmq-socket/socket-description)
-(s/def ::external-reader #_(s/fspec :args (s/cat :sock :cljeromq.common/socket)
-                                    :ret :cljeromq.common/byte-array-seq)
-  any?)
-(s/def ::external-writer #_(s/fspec :args (s/cat :sock :cljeromq.common/socket
-                                                 :frames :cljeromq.common/byte-array-seq))
-  any?)
+;; run-async-loop! can't resolve testable-read-socket.
+;; What gives?
+;; Note that the problem isn't from the alias.
+;; It started with the fully-qualified name.
+;; Theory: I haven't restarted this REPL in quite a while.
+;; Lots have changed in cljeromq since then.
+(s/def ::external-reader (s/fspec :args (s/cat :sock :mq-cmn/testable-read-socket)
+                                  :ret bytes?))
+(s/def ::external-writer (s/fspec :args (s/cat :sock :mq-cmn/testable-write-socket
+                                               :frames :mq-cmn/byte-array-seq)))
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
-
-(comment
-  ;; This looks like a duplicate of ::interface, though the name is more
-  ;; meaningful
-  (s/def ::event-pair-interface (s/keys :req-un [::ex-chan
-                                                 ::ex-sock
-                                                 ::external-reader
-                                                 ::external-writer
-                                                 ::in-chan])))
 
 (s/def ::interface (s/keys :req-un [::ex-sock
                                     ::external-reader
