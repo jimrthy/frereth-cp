@@ -26,16 +26,15 @@ Strongly inspired by lynaghk's zmq-async"
 
 (s/def ::ex-chan :com.frereth.common.async-component/async-channel)
 (s/def ::ex-sock :com.frereth.common.zmq-socket/socket-description)
-;; run-async-loop! can't resolve testable-read-socket.
-;; What gives?
-;; Note that the problem isn't from the alias.
-;; It started with the fully-qualified name.
-;; Theory: I haven't restarted this REPL in quite a while.
-;; Lots have changed in cljeromq since then.
-(s/def ::external-reader (s/fspec :args (s/cat :sock :mq-cmn/testable-read-socket)
+;; Note that I cannot alias the namespace for testable-read-socket,
+;; testable-write-socket, or byte-array-seq.
+;; If I try to us mq-cmn for the ns component, I get an Exception
+;; "Unable to resolve spec".
+;; TODO: publish a minimal reproduction to mailing list.
+(s/def ::external-reader (s/fspec :args (s/cat :sock :cljeromq.common/testable-read-socket)
                                   :ret bytes?))
-(s/def ::external-writer (s/fspec :args (s/cat :sock :mq-cmn/testable-write-socket
-                                               :frames :mq-cmn/byte-array-seq)))
+(s/def ::external-writer (s/fspec :args (s/cat :sock :cljeromq.common/testable-write-socket
+                                               :frames :cljeromq.common/byte-array-seq)))
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
 
 (s/def ::interface (s/keys :req-un [::ex-sock
@@ -228,13 +227,10 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
 
     (when-not (s/valid? ::interface interface)
       (println "Problem w/ interface: " (keys interface))
-      (pprint interface))
-    (throw (ex-info "Component doesn't match spec"
-                    ;; This leads to calling cljeromq.common/socket-creator.
-                    ;; Which is/should be the sample data generator.
-                    ;; Q: Huh?!
-                    {:problem (#_s/explain-data s/explain ::event-loopless-pair component)
-                     :incoming component})))
+      (pprint interface)
+      (throw (ex-info "Component doesn't match spec"
+                      {:problem (s/explain-data ::event-loopless-pair component)
+                       :incoming component}))))
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
         status-chan (:ch status-chan)
