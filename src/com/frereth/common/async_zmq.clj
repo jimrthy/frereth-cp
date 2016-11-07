@@ -31,8 +31,9 @@ Strongly inspired by lynaghk's zmq-async"
 ;; If I try to us mq-cmn for the ns component, I get an Exception
 ;; "Unable to resolve spec".
 ;; TODO: publish a minimal reproduction to mailing list.
-(s/def ::external-reader (s/fspec :args (s/cat :sock :cljeromq.common/testable-read-socket)
-                                  :ret bytes?))
+(s/fdef ::external-reader
+        :args (s/cat :sock :cljeromq.common/testable-read-socket)
+        :ret bytes?)
 (s/def ::external-writer (s/fspec :args (s/cat :sock :cljeromq.common/testable-write-socket
                                                :frames :cljeromq.common/byte-array-seq)))
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
