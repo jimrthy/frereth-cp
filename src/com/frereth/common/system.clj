@@ -18,7 +18,7 @@
 (s/fdef build-event-loop-description
         :args (s/cat :options (s/keys :unq-opt {::client-keys :cljeromq.curve/key-pair
                                                 ::direction :cljeromq.common/direction
-                                                ::server-key :cljeromq.common/byte-array-type
+                                                ::server-key :cljeromq.curve/public
                                                 ::socket-type :cljeromq.common/socket-type}
                                       :unq-req {::context :com.frereth.common.zmq-socket/context-wrapper
                                                 ::event-loop-name string?

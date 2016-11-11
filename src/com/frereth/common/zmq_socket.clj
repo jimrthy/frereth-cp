@@ -24,16 +24,24 @@
 
 (s/def ::client-keys (s/nilable :cljeromq.curve/key-pair))
 (s/def ::port (s/nilable (s/and nat-int? #(< % 65536))))
-(s/def ::server-key (s/nilable :cljeromq.common/byte-array-type))
+(comment
+  (s/def ::server-key (s/nilable :cljeromq.curve/key)))
+(s/def ::public-server-key :cljeromq.curve/public)
+(s/def ::private-server-key :cljeromq.curve/private)
 (s/def ::sock-type :cljeromq.common/socket-type)
-(s/def ::socket-description (s/keys :opt-un [::client-keys
-                                             ::server-key
-                                             ::port]
-                                    :req-un [::context-wrapper
-                                             :cljeromq.common/direction
-                                             ::sock-type
-                                             :cljeromq.common/socket
-                                             :cljeromq.common/zmq-url]))
+(s/def ::base-socket-description (s/keys :opt-un [::port]
+                                         :req-un [::context-wrapper
+                                                  :cljeromq.common/direction
+                                                  ::sock-type
+                                                  :cljeromq.common/socket
+                                                  :cljeromq.common/zmq-url]))
+(s/def ::client-socket-description (s/merge ::base-socket-description
+                                            (s/keys :opt-un [::client-keys])
+                                            (s/map-of #(= % :server-key) ::public-server-key)))
+(s/def ::server-socket-description (s/merge ::base-socket-description
+                                            (s/map-of #(= % :server-key) ::private-server-key)))
+(s/def ::socket-description (s/or :client ::client-socket-description
+                                  :server ::server-socket-description))
 (s/def socket-description-ctor-opts
   (s/keys (opt-un [:cljeromq.common/direction])
           (:req-un [::sock-type :cljeromq.common/zmq-url])))
