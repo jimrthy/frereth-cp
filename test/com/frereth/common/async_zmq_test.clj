@@ -1,5 +1,6 @@
 (ns com.frereth.common.async-zmq-test
   (:require [cljeromq.core :as mq]
+            [cljeromq.curve :as curve]
             [clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
             [clojure.repl :refer (pst)]
@@ -33,17 +34,21 @@
                          (mq/send! sock (util/serialize msg) :dont-wait))
         writer1 (partial generic-writer "one")
         writer2 (partial generic-writer "two")
-        internal-url (name (gensym))]
+        internal-url (name (gensym))
+        server-keys (curve/new-key-pair)]
     {:one {:_name "Event Loop One"}
      :two {:_name "Event Loop Two"}
      :ex-one {:zmq-url #:cljeromq.common{:zmq-protocol :inproc
                                          :zmq-address internal-url}
               :sock-type :pair
-              :direction :bind}
+              :direction :bind
+              :server-key (:private server-keys)}
      :ex-two {:zmq-url #:cljeromq.common{:zmq-protocol :inproc
                                          :zmq-address internal-url}
               :sock-type :pair
-              :direction :connect}
+              :direction :connect
+              :client-keys (curve/new-key-pair)
+              :server-key (:public server-keys)}
      :iface-one {:external-reader reader
                  :external-writer writer1}
      :iface-two {:external-reader reader

@@ -24,8 +24,6 @@
 
 (s/def ::client-keys (s/nilable :cljeromq.curve/key-pair))
 (s/def ::port (s/nilable (s/and nat-int? #(< % 65536))))
-(comment
-  (s/def ::server-key (s/nilable :cljeromq.curve/key)))
 (s/def ::public-server-key :cljeromq.curve/public)
 (s/def ::private-server-key :cljeromq.curve/private)
 (s/def ::sock-type :cljeromq.common/socket-type)
@@ -35,6 +33,12 @@
                                                   ::sock-type
                                                   :cljeromq.common/socket
                                                   :cljeromq.common/zmq-url]))
+;; It's very tempting to make the client/server keys optional. There are
+;; organizations that very deliberately do not allow encrypted communications
+;; across their internal network so they can monitor everything for malicious
+;; anomalies.
+;; And encryption is meaningless/pointless over inproc sockets.
+;; TODO: Figure out a way to make these optional again
 (s/def ::client-socket-description (s/merge ::base-socket-description
                                             (s/keys :opt-un [::client-keys])
                                             (s/map-of #(= % :server-key) ::public-server-key)))

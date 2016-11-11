@@ -4,6 +4,7 @@
 Strongly inspired by lynaghk's zmq-async"
   (:require [cljeromq.common :as mq-cmn]
             [cljeromq.core :as mq]
+            [cljeromq.curve]
             [clojure.core.async :as async :refer (>! >!!)]
             [clojure.edn :as edn]
             [clojure.pprint :refer (pprint)]
@@ -185,6 +186,13 @@ Send a duplicate stopper ("
   But then we could have one thread trying to read while another tries to write,
   and that's a recipe for disaster."
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
+  ;; TODO: Restore the pre-check instead of cluttering this up with my huge
+  ;; custom deugging validator.
+  ;; It seems wrong to be validating this at all at runtime, but it's critical
+  ;; functionally, and it's definitely not performance-sensitive code.
+  ;; So plan on leaving it around until/unless it causes real problems.
+  ;; Then again...the fact that I *am* having so many problems with it is
+  ;; a strong indicator that this approach is too complex.
   {:pre [#_(s/valid? ::event-loopless-pair component)]
    :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
   (when-not (s/valid? ::event-loopless-pair component)
@@ -195,14 +203,14 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
           ex-sock (-> component :interface :ex-sock)]
       (println "Keys available:" (keys component)
                "\nSpec:" (s/form ::event-loopless-pair)
-               "\nStopper:" stopper "(valid?)" (s/valid? ::stopper stopper)
-               "\nex-sock:" ex-sock "valid?" (s/valid? ::ex-sock ex-sock))
+               "\nStopper:" stopper "(valid?)" (s/valid? ::stopper stopper))
       (when-not (s/valid? ::ex-chan ex-chan)
         (println "Problem w/ ex-chan: " ex-chan))
       (when-not (s/valid? ::ex-sock ex-sock)
         (println "Problem stems from the socket (there's a shock)")
         (pprint ex-sock)
         (println "Available keys:" (keys ex-sock))
+        ;; ::ex-sock is just an alias for :zmq-socket/socket-description
         (println "Spec:" (s/form :com.frereth.common.zmq-socket/socket-description))
         (let [ctx (:context-wrapper ex-sock)]
           (when-not (s/valid? :com.frereth.common.zmq-socket/context-wrapper ctx)
@@ -219,10 +227,16 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
             (println "Socket Direction invalid:" (s/explain :cljeromq.common/direction direction))))
         (when-not (s/valid? :com.frereth.common.zmq-socket/client-keys (:client-keys ex-sock))
           (println "Invalid client keys:" (s/explain :com.frereth.common.zmq-socket/client-keys
-                                             (:client-keys ex-sock))))
-        (when-not (s/valid? :com.frereth.common.zmq-socket/server-key (:server-key ex-sock))
-          (println "Invalid Server key:" (s/explain :com.frereth.common.zmq-socket/server-key
-                                                   (:server-key ex-sock))))
+                                                     (:client-keys ex-sock))))
+        (let [server-key (:server-key ex-sock)]
+          (when-not (or (s/valid? :com.frereth.common.zmq-socket/public-server-key server-key)
+                        (s/valid? :com.frereth.common.zmq-socket/private-server-key server-key))
+            (println "Invalid Server key:")
+            (println "Value:" server-key)
+            (println "Contained in:")
+            (pprint ex-sock)
+            (println "With keys:" (keys ex-sock) "\nDetails:")
+            (println (s/explain :cljeromq.curve/key server-key))))
         (when-not (s/valid? :com.frereth.common.zmq-socket/port (:port ex-sock))
           (println "Invalid Port:" (s/explain :com.frereth.common.zmq-socket/port (:port ex-sock))))))
 
