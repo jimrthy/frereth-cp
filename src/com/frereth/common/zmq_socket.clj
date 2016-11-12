@@ -39,11 +39,17 @@
 ;; anomalies.
 ;; And encryption is meaningless/pointless over inproc sockets.
 ;; TODO: Figure out a way to make these optional again
-(s/def ::client-socket-description (s/merge ::base-socket-description
-                                            (s/keys :opt-un [::client-keys])
-                                            (s/map-of #(= % :server-key) ::public-server-key)))
-(s/def ::server-socket-description (s/merge ::base-socket-description
-                                            (s/map-of #(= % :server-key) ::private-server-key)))
+(s/def ::client-socket-description (s/and
+                                    (s/merge ::base-socket-description
+                                             (s/keys :opt-un [::client-keys]))
+                                    #(if-let [server-key (:server-key %)]
+                                       (s/valid? ::public-server-key server-key)
+                                       %)))
+(s/def ::server-socket-description
+  (s/and ::base-socket-description
+         #(if-let [server-key (:server-key %)]
+            (s/valid? ::private-server-key server-key)
+            %)))
 (s/def ::socket-description (s/or :client ::client-socket-description
                                   :server ::server-socket-description))
 (s/def socket-description-ctor-opts

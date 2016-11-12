@@ -38,7 +38,16 @@
                 (is (not (s/explain :com.frereth.common.zmq-socket/server-socket-description server))))
               (when-not (s/valid? :com.frereth.common.zmq-socket/socket-description server)
                 (println "Failed generic socket description spec")
-                (is (not (s/explain :com.frereth.common.zmq-socket/socket-description server)))))
+                (is (not (s/explain :com.frereth.common.zmq-socket/socket-description server))))
+              (let [conformed (s/conform :com.frereth.common.zmq-socket/socket-description server)]
+                (testing "\nconforming to socket-description does not return the source"
+                  (is (= (count conformed) 2))
+                  ;; It would be nice if the two were the same, but things like s/or and s/and foil that hope
+                  (is (= (second conformed)
+                         server)))
+                (testing "Conforming to generic socket-description is not the same as conforming to base-socket-description"
+                  (is (not= (second conformed)
+                            (s/conform :com.frereth.common.zmq-socket/base-socket-description server))))))
             (finally
               (mq/close! sock))))
         (catch clojure.lang.ExceptionInfo ex
@@ -47,7 +56,33 @@
           (throw ex))
         (finally
           (mq/terminate! ctx))))))
-(comment (check-server-socket))
+(comment (check-server-socket)
+         (let [ctx (mq/context 1)]
+           (try
+             (let [sock (mq/socket! ctx :pair)]
+               (try
+                 (let [internal-url (name (gensym))
+                       server-keys (curve/new-key-pair)
+                       server (com.frereth.common.zmq-socket/ctor {:context-wrapper {:ctx ctx
+                                                                                     :thread-count 1}
+                                                                   :zmq-url #:cljeromq.common{:zmq-protocol :inproc
+                                                                                              :zmq-address internal-url}
+                                                                   :sock-type :pair
+                                                                   :socket sock
+                                                                   :direction :bind
+                                                                   :server-key (:private server-keys)})]
+                   ;; Mostly to document behavior that seems unexpected/suspicious.
+                   ;; conform is returning a seq of keys/values rather than the map with which I started
+                   (s/conform :com.frereth.common.zmq-socket/socket-description server))
+                 (finally
+                   (mq/close! sock))))
+             (catch clojure.lang.ExceptionInfo ex
+               (is (not (.getMessage ex)))
+               (is (not (.getData ex)))
+               (throw ex))
+             (finally
+               (mq/terminate! ctx))))
+         )
 
 (deftest check-client-socket
   (testing "Client half of socket spec that fails when I start the async-zmq-loop"
