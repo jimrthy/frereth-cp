@@ -12,10 +12,33 @@
   (let [reader (fn [sock]
                  (let [read (mq/raw-recv! sock)]
                    (comment) (println "Mock Reader Received:\n" (util/pretty read))
-                   (util/deserialize read)))]
+                   (try
+                     (util/deserialize read))))]
     (when-not (s/valid? :com.frereth.common.async-zmq/external-reader reader)
       (is (not (s/explain :com.frereth.common.async-zmq/external-reader reader))))))
-(comment (check-reader-spec))
+(comment (check-reader-spec)
+         (let [reader (fn [sock]
+                        (let [read (mq/raw-recv! sock)]
+                          (comment) (println "Mock Reader Received:\n" (util/pretty read))
+                          (util/deserialize read)))]
+           (:val (s/explain-data :com.frereth.common.async-zmq/external-reader reader))
+           (-> (s/explain-data :com.frereth.common.async-zmq/external-reader reader)
+               :clojure.spec/problems
+               first
+               :val
+               first
+               .recv))
+         )
+
+(deftest check-writer-spec
+  (let [writer (fn [sock msg]
+                 ;; Q: if we're going to do this,
+                 ;; does the event loop need access to the socket at all?
+                 ;; A: Yes. Because it spends most of its time polling on that socket
+                 (println "Mock writer pretending to send" msg)
+                 (mq/send! sock (util/serialize msg) :dont-wait))]
+    (is (not (s/explain :com.frereth.common.async-zmq/external-writer writer)))))
+(comment (check-writer-spec))
 
 (deftest check-server-socket
   (testing "Server version of socket spec that fails when I start the async-zmq-loop"

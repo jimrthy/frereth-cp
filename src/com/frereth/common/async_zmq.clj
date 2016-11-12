@@ -34,9 +34,25 @@ Strongly inspired by lynaghk's zmq-async"
 ;; TODO: publish a minimal reproduction to mailing list.
 (s/fdef ::external-reader
         :args (s/cat :sock :cljeromq.common/testable-read-socket)
+        ;; The mock external reader that I'm using for unit tests
+        ;; is calling deserialize on the raw bytes being generated
+        ;; by the mock socket.
+        ;; So it's generally returning strings,
+        ;; and really could return pretty much any clojure object
+        ;; This seems mostly reasonable, though I'd rather start
+        ;; by supplying it with useful values to deserialize.
+        ;; It would be nice to narrow this down a bit more,
+        ;; but I'm not sure there are good alternatives.
+        ;; Since a big chunk of that point is to move the decision
+        ;; about the actual wire protocol out to clients.
+        :ret any?)
+;; Declaring the spec like this fails with the error "Don't know how to create
+;; ISeq from: cljeromq.common$create_test_reader$reify__38077"
+#_(s/fdef ::external-reader
+        :args :cljeromq.common/testable-read-socket
         :ret bytes?)
-(s/def ::external-writer (s/fspec :args (s/cat :sock :cljeromq.common/testable-write-socket
-                                               :frames :cljeromq.common/byte-array-seq)))
+(s/fdef ::external-writer :args (s/cat :sock :cljeromq.common/testable-write-socket
+                                       :frames :cljeromq.common/byte-array-seq))
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
 
 (s/def ::interface (s/keys :req-un [::ex-sock
@@ -176,25 +192,8 @@ Send a duplicate stopper ("
    (and val (not= val stopper))  ; got a message that wasn't stopper
    (and (not= c in-chan) (not= c status-chan))))
 
-(s/fdef run-async-loop!
-        :args (s/cat :component ::event-loopless-pair)
-        :ret :com.frereth.common.schema/async-channel)
-(defn run-async-loop!
-  "Q: Would it make sense to convert this to some variant of an async/pipeline?
-
-  It seems like a really obvious thing to do.
-  But then we could have one thread trying to read while another tries to write,
-  and that's a recipe for disaster."
-  [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
-  ;; TODO: Restore the pre-check instead of cluttering this up with my huge
-  ;; custom deugging validator.
-  ;; It seems wrong to be validating this at all at runtime, but it's critical
-  ;; functionally, and it's definitely not performance-sensitive code.
-  ;; So plan on leaving it around until/unless it causes real problems.
-  ;; Then again...the fact that I *am* having so many problems with it is
-  ;; a strong indicator that this approach is too complex.
-  {:pre [#_(s/valid? ::event-loopless-pair component)]
-   :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
+(defn validate-component
+  [{:keys [interface stopper] :as component}]
   (when-not (s/valid? ::event-loopless-pair component)
     (println "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Spec mismatch. Would have caught it in the pre-condition if that were enabled
@@ -243,9 +242,33 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
     (when-not (s/valid? ::interface interface)
       (println "Problem w/ interface: " (keys interface))
       (pprint interface)
-      (throw (ex-info "Component doesn't match spec"
-                      {:problem (s/explain-data ::event-loopless-pair component)
-                       :incoming component}))))
+      (throw (ex-info "Component's interface doesn't match spec"
+                      {:problem (s/explain-data ::interface interface)
+                       :incoming component})))
+    (throw (ex-info "Component doesn't match spec"
+                    {:problem (s/explain-data ::event-loopless-pair component)
+                     :incoming component}))))
+
+(s/fdef run-async-loop!
+        :args (s/cat :component ::event-loopless-pair)
+        :ret :com.frereth.common.schema/async-channel)
+(defn run-async-loop!
+  "Q: Would it make sense to convert this to some variant of an async/pipeline?
+
+  It seems like a really obvious thing to do.
+  But then we could have one thread trying to read while another tries to write,
+  and that's a recipe for disaster."
+  [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
+  ;; TODO: Restore the pre-check instead of cluttering this up with my huge
+  ;; custom deugging validator.
+  ;; It seems wrong to be validating this at all at runtime, but it's critical
+  ;; functionally, and it's definitely not performance-sensitive code.
+  ;; So plan on leaving it around until/unless it causes real problems.
+  ;; Then again...the fact that I *am* having so many problems with it is
+  ;; a strong indicator that this approach is too complex.
+  {:pre [#_(s/valid? ::event-loopless-pair component)]
+   :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
+  (validate-component component)
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
         status-chan (:ch status-chan)
