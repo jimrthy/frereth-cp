@@ -46,13 +46,10 @@ Strongly inspired by lynaghk's zmq-async"
         ;; Since a big chunk of that point is to move the decision
         ;; about the actual wire protocol out to clients.
         :ret any?)
-;; Declaring the spec like this fails with the error "Don't know how to create
-;; ISeq from: cljeromq.common$create_test_reader$reify__38077"
-#_(s/fdef ::external-reader
-        :args :cljeromq.common/testable-read-socket
-        :ret bytes?)
-(s/fdef ::external-writer :args (s/cat :sock :cljeromq.common/testable-write-socket
-                                       :frames :cljeromq.common/byte-array-seq))
+(s/fdef ::external-writer
+        :args (s/cat :sock :cljeromq.common/testable-write-socket
+                     :frames :cljeromq.common/byte-array-seq)
+        :ret any?)
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
 
 (s/def ::interface (s/keys :req-un [::ex-sock
@@ -239,12 +236,36 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
         (when-not (s/valid? :com.frereth.common.zmq-socket/port (:port ex-sock))
           (println "Invalid Port:" (s/explain :com.frereth.common.zmq-socket/port (:port ex-sock))))))
 
-    (when-not (s/valid? ::interface interface)
+    (when-not #_(s/valid? ::interface interface)
+              ;; valid? is actually a wrapper around this
+              (not= :clojure.spec/invalid (s/conform ::interface interface))
       (println "Problem w/ interface: " (keys interface))
       (pprint interface)
-      (throw (ex-info "Component's interface doesn't match spec"
-                      {:problem (s/explain-data ::interface interface)
-                       :incoming component})))
+      ;; I'm getting into issues here where it looks like s/explain is
+      ;; throwing a second exception.
+      ;; It isn't, but protect against that possibility anyway.
+      ;; Start by setting up a promise I can deliver on the success of explanation
+      (let [explained (promise)]
+        (try
+          (let [problem (s/explain-data ::interface interface)]
+            ;; We got here. The exception being caught is this one,
+            ;; which we just want to forward along directly
+            (deliver explained true)
+            (throw (ex-info "Component's interface doesn't match spec"
+                            {:conformed (s/conform ::interface interface)
+                             :description (s/explain ::interface interface)
+                             :incoming component
+                             :problem problem
+                             :valid? (s/valid? ::interface interface)})))
+          (catch RuntimeException ex
+            (if (realized? explained)
+              ;; Forward along that inner exception
+              (throw ex)
+              ;; Calling s/explain-data failed. This is more serious/confusing
+              (throw (ex-info "Failed trying to explain failure"
+                              {:problem "unknown"
+                               :cause ex
+                               :incoming component})))))))
     (throw (ex-info "Component doesn't match spec"
                     {:problem (s/explain-data ::event-loopless-pair component)
                      :incoming component}))))
