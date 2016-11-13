@@ -103,7 +103,11 @@
    [this]
    (if-not socket
      (do
-       (assert context-wrapper "Can't do anything without a Messaging Context")
+       (when-not context-wrapper
+         (assert context-wrapper
+                 (str "Can't do anything without a Messaging Context\n"
+                      "Available keys:\n"
+                      (keys this))))
        (assert zmq-url "Nowhere to connect")
        (comment) (log/debug "Getting ready to try to create and start a"
                             sock-type
