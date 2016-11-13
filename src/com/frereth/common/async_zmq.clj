@@ -62,7 +62,7 @@ Strongly inspired by lynaghk's zmq-async"
 (s/def ::->zmq-sock any?)
 (s/def ::async->sock any?)
 (s/def ::in<->ex-sock any?)
-(s/def ::_name string?)
+(s/def ::_name :com.frereth.common.schema/generic-id)
 (s/def ::stopper symbol?)
 ;; This is the almost-started EventPair that gets passed in to the messaging loops
 (s/def ::event-loopless-pair (s/keys :req-un [::->zmq-sock
@@ -280,16 +280,10 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
   But then we could have one thread trying to read while another tries to write,
   and that's a recipe for disaster."
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
-  ;; TODO: Restore the pre-check instead of cluttering this up with my huge
-  ;; custom deugging validator.
-  ;; It seems wrong to be validating this at all at runtime, but it's critical
-  ;; functionally, and it's definitely not performance-sensitive code.
-  ;; So plan on leaving it around until/unless it causes real problems.
-  ;; Then again...the fact that I *am* having so many problems with it is
-  ;; a strong indicator that this approach is too complex.
-  {:pre [#_(s/valid? ::event-loopless-pair component)]
+  {:pre [(s/valid? ::event-loopless-pair component)]
    :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
-  (validate-component component)
+  ;; I'm leaving this around because it is extremely useful for debugging problems.
+  (comment (validate-component component))
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
         status-chan (:ch status-chan)
@@ -325,7 +319,7 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
         :args (s/cat :component ::event-pair
                      :poller :cljeromq.common/poller))
 (defn possibly-recv-internal!
-  "Really just refactored to make data flow less opaque"
+  "Just got notified that there's a message available from the inside"
   [{:keys [_name ->zmq-sock interface stopper in<->ex-chan]
     :as component}
    poller]

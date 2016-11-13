@@ -47,7 +47,7 @@ TODO: At the very least, it needs its own spec."
 ;; TODO: Ask on the mailing list
 (s/def ::generic-id (s/or :keyword keyword?
                           :string string?
-                          :uuid ::uuid))
+                          :uuid uuid?))
 
 ;; Q: Is this worth really defining?
 (s/def ::system-map (class-predicate SystemMap))
