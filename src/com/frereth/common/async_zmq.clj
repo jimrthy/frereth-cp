@@ -32,24 +32,24 @@ Strongly inspired by lynaghk's zmq-async"
 ;; If I try to us mq-cmn for the ns component, I get an Exception
 ;; "Unable to resolve spec".
 ;; TODO: publish a minimal reproduction to mailing list.
-(s/fdef ::external-reader
-        :args (s/cat :sock :cljeromq.common/testable-read-socket)
-        ;; The mock external reader that I'm using for unit tests
-        ;; is calling deserialize on the raw bytes being generated
-        ;; by the mock socket.
-        ;; So it's generally returning strings,
-        ;; and really could return pretty much any clojure object
-        ;; This seems mostly reasonable, though I'd rather start
-        ;; by supplying it with useful values to deserialize.
-        ;; It would be nice to narrow this down a bit more,
-        ;; but I'm not sure there are good alternatives.
-        ;; Since a big chunk of that point is to move the decision
-        ;; about the actual wire protocol out to clients.
-        :ret any?)
-(s/fdef ::external-writer
-        :args (s/cat :sock :cljeromq.common/testable-write-socket
-                     :frames :cljeromq.common/byte-array-seq)
-        :ret any?)
+(def external-reader (s/fspec :args (s/cat :sock :cljeromq.common/testable-read-socket)
+                              ;; The mock external reader that I'm using for unit tests
+                              ;; is calling deserialize on the raw bytes being generated
+                              ;; by the mock socket.
+                              ;; So it's generally returning strings,
+                              ;; and really could return pretty much any clojure object
+                              ;; This seems mostly reasonable, though I'd rather start
+                              ;; by supplying it with useful values to deserialize.
+                              ;; It would be nice to narrow this down a bit more,
+                              ;; but I'm not sure there are good alternatives.
+                              ;; Since a big chunk of that point is to move the decision
+                              ;; about the actual wire protocol out to clients.
+                              :ret any?))
+(s/def ::external-reader external-reader)
+(def external-writer (s/fspec :args (s/cat :sock :cljeromq.common/testable-write-socket
+                                           :frames :cljeromq.common/byte-array-seq)
+                              :ret any?))
+(s/def ::external-writer external-writer)
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
 
 (s/def ::interface (s/keys :req-un [::ex-sock
