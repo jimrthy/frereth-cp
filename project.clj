@@ -11,7 +11,7 @@ b. lein managed dependencies"
   ;; A: Probably. But it would be a foolish choice. The web and client components
   ;; really shouldn't have access to that sort of thing.
   ;; TODO: Pick a date library and use it.
-  :dependencies [[clj-time "0.12.0"]
+  :dependencies [[clj-time "0.12.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
                  ;; is the primary goal.
@@ -50,9 +50,9 @@ b. lein managed dependencies"
                  [com.jimrthy/component-dsl "0.1.2-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [com.taoensso/timbre "4.7.4" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
-                 [fullcontact/full.async "0.9.0" :exclusions [org.clojure/clojure
+                 [fullcontact/full.async "1.0.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
-                 [im.chit/hara.event "2.4.4" :exclusions [org.clojure/clojure]]
+                 [im.chit/hara.event "2.4.8" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.2.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
                  ;; Because pomegranate and lein conflict.
@@ -67,7 +67,7 @@ b. lein managed dependencies"
                  ;; Q: Has the situation improved in the months I've been ignoring it?
                  #_[mvxcvi/puget "1.0.0" :exclusions [org.clojure/clojure]]
                  [org.clojure/clojure "1.9.0-alpha14"]
-                 [org.clojure/core.async "0.2.391" :exclusions [org.clojure/clojure
+                 [org.clojure/core.async "0.2.395" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]]
