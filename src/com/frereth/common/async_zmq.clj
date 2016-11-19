@@ -191,6 +191,7 @@ Send a duplicate stopper ("
 
 (defn validate-component
   [{:keys [interface stopper] :as component}]
+  (println "Verifying that" component "is a valid ::event-loopless-pair")
   (when-not (s/valid? ::event-loopless-pair component)
     (println "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Spec mismatch. Would have caught it in the pre-condition if that were enabled
@@ -236,9 +237,22 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
         (when-not (s/valid? :com.frereth.common.zmq-socket/port (:port ex-sock))
           (println "Invalid Port:" (s/explain :com.frereth.common.zmq-socket/port (:port ex-sock))))))
 
-    (when-not #_(s/valid? ::interface interface)
-              ;; valid? is actually a wrapper around this
-              (not= :clojure.spec/invalid (s/conform ::interface interface))
+    (when-not (s/valid? ::interface interface)
+      (let [external-reader (:external-reader interface)]
+        (when-not (s/valid? ::external-reader external-reader)
+          (throw (ex-info "Invalid external-reader"
+                          {:conformed (s/conform ::external-reader external-reader)
+                           :description (s/explain ::external-reader external-reader)
+                           :incoming component
+                           :problem (s/explain-data ::external-reader external-reader)
+                           :valid? (s/valid? ::external-reader external-reader)})))
+        (when-not (s/valid? ::external-writer external-writer)
+          (throw (ex-info "Invalid external-writer"
+                          {:conformed (s/conform ::external-writer external-writer)
+                           :description (s/explain ::external-writer external-writer)
+                           :incoming component
+                           :problem (s/explain-data ::external-writer external-writer)
+                           :valid? (s/valid? ::external-writer external-writer)}))))
       (println "Problem w/ interface: " (keys interface))
       (pprint interface)
       ;; I'm getting into issues here where it looks like s/explain is
@@ -423,6 +437,7 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
   (let [stopper (:stopper component)
         five-minutes (* 1000 60 5)  ; in milliseconds
         _name (:_name component)]
+    (println "Starting the 0mq loop for" _name "polling on" poller)
     (try
       ;; When we shut down the socket/context, this poll call gets the rug
       ;; yanked out from under it and fails.
@@ -467,7 +482,7 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
 (defn run-zmq-loop!
   [{:keys [interface ->zmq-sock ex-chan _name]
     :as component}]
-  (let [{:keys [ex-sock external-reader externalwriter]} interface
+  (let [{:keys [ex-sock external-reader external-writer]} interface
         poller (mq/poller 2)]
     (mq/register-socket-in-poller! (:socket ex-sock) poller)
     (mq/register-socket-in-poller! ->zmq-sock poller)
@@ -565,12 +580,11 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
                                ;; Still, there might be some
                                ;; apps where this is enough.
                                (mq/raw-recv! sock :wait)))
-      (not external-writer) (assoc
-                             :external-writer
-                             (fn [sock array-of-bytes]
-                               ;; Same comments re: over-simplicity
-                               ;; in the default reader apply here
-                               (mq/send! sock array-of-bytes)))))
+      (not external-writer) (assoc :external-writer
+                                   (fn [sock array-of-bytes]
+                                     ;; Same comments re: over-simplicity
+                                     ;; in the default reader apply here
+                                     (mq/send! sock array-of-bytes)))))
   (stop
       [this]
     (assoc this
