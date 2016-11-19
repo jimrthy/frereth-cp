@@ -280,10 +280,10 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
   But then we could have one thread trying to read while another tries to write,
   and that's a recipe for disaster."
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
-  {:pre [(s/valid? ::event-loopless-pair component)]
+  {:pre [#_(s/valid? ::event-loopless-pair component)]
    :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
   ;; I'm leaving this around because it is extremely useful for debugging problems.
-  (comment (validate-component component))
+  (comment) (validate-component component)
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
         status-chan (:ch status-chan)
@@ -646,7 +646,7 @@ Their entire purpose in life, really, is to shuffle messages between
                                   :in<->ex-sock in<->ex-sock
                                   :->zmq-sock (:rhs in<->ex-sock)
                                   :async->sock (:lhs in<->ex-sock))
-            ;; I'd prefer to start the async-loop first.
+            ;; I'd prefer to start the zmq-loop first.
             ;; It seems cleaner, and I'm not positive which
             ;; bullets I might have been dodging.
             ;; However:
@@ -654,13 +654,15 @@ Their entire purpose in life, really, is to shuffle messages between
             ;; async-loop throws an exception, I have to restart
             ;; the JVM to free up the socket that zmq-loop has bound
             ;; (assuming that we're binding).
-            async-loop (run-async-loop! almost-started)
-            ;; TODO: Still want to clean things up if an exception
-            ;; gets thrown
-            zmq-loop (run-zmq-loop! almost-started)]
-        (assoc almost-started
-               :async-loop async-loop
-               :zmq-loop zmq-loop))))
+            async-loop (run-async-loop! almost-started)]
+        (try
+          (let [zmq-loop (run-zmq-loop! almost-started)]
+            (assoc almost-started
+                   :async-loop async-loop
+                   :zmq-loop zmq-loop))
+          (catch Exception ex
+            (log/error ex "TODO: Cleanup the async loop")
+            (throw ex))))))
   (stop [this]
         (when async-loop
           (do-signal-async-loop-exit async-loop
