@@ -42,7 +42,16 @@
 (s/def ::request (s/merge ::message
                           (s/keys :req [::protocol ::version])))
 
-(s/def ::id :com.frereth.common.schema/byte-array-type)
+;; This is where having a higher-level typedef kind-of spec to distinguish between variants of bytes? seems tempting.
+
+;; Need to ponder that temptation...do I really need to distinguish id's from, say, public-keys?
+
+;; It seems like an obvious step to take, but that doesn't mean it will make the code better in the long run.
+
+;; I guess the real question is:
+;; Is it better to have an abstract named type predicate for specific pieces like this, or just stick with the
+;; generic bytes? everywhere I'm using variations on that theme?
+(s/def ::id bytes?)
 (s/def ::addresses :com.frereth.common.schema/byte-array-seq)
 ;; This seems dubious. Will it ever be anything except byte-array(s)?
 ;; And any situations where I wouldn't want this marshalled?

@@ -31,7 +31,6 @@ TODO: At the very least, it needs its own spec."
 ;; But that does make it more difficult to switch the underlying
 ;; message queue implementation
 (def java-byte-array cljeromq.common/byte-array-type)
-(s/def ::byte-array-type :cljeromq.common/byte-array-type)
 (s/def ::byte-array-seq :cljeromq.common/byte-array-seq)
 (s/def ::korks :cljeromq.common/korks)
 

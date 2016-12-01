@@ -1,11 +1,12 @@
 (ns com.frereth.common.async-zmq-test
   (:require [cljeromq.core :as mq]
+            [cljeromq.curve :as curve]
             [clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
             [clojure.repl :refer (pst)]
             [clojure.spec :as s]
             [clojure.test :refer (deftest is testing)]
-            [com.frereth.common.async-zmq :refer :all]
+            [com.frereth.common.async-zmq :refer :all :as a-z]
             [com.frereth.common.schema :as fr-schema]
             [com.frereth.common.util :as util]
             [com.frereth.common.zmq-socket :as common-mq]
@@ -33,17 +34,21 @@
                          (mq/send! sock (util/serialize msg) :dont-wait))
         writer1 (partial generic-writer "one")
         writer2 (partial generic-writer "two")
-        internal-url (name (gensym))]
+        internal-url (name (gensym))
+        server-keys (curve/new-key-pair)]
     {:one {:_name "Event Loop One"}
      :two {:_name "Event Loop Two"}
-     :ex-one {:url #:cljeromq.common{:zmq-protocol :inproc
-                                     :zmq-address internal-url}
+     :ex-one {:zmq-url #:cljeromq.common{:zmq-protocol :inproc
+                                         :zmq-address internal-url}
               :sock-type :pair
-              :direction :bind}
-     :ex-two {:url #:cljeromq.common{:zmq-protocol :inproc
-                                     :zmq-address internal-url}
+              :direction :bind
+              :server-key (:private server-keys)}
+     :ex-two {:zmq-url #:cljeromq.common{:zmq-protocol :inproc
+                                         :zmq-address internal-url}
               :sock-type :pair
-              :direction :connect}
+              :direction :connect
+              :client-keys (curve/new-key-pair)
+              :server-key (:public server-keys)}
      :iface-one {:external-reader reader
                  :external-writer writer1}
      :iface-two {:external-reader reader
@@ -71,8 +76,8 @@
    :two {:interface :iface-two, :ex-chan :ex-chan-2}
    :iface-one {:ex-sock :ex-one :in-chan :in-one :status-chan :status-one}
    :iface-two {:ex-sock :ex-two :in-chan :in-two :status-chan :status-two}
-   :ex-one [:ctx]
-   :ex-two [:ctx]})
+   :ex-one {:context-wrapper :ctx}
+   :ex-two {:context-wrapper :ctx}})
 
 (defn mock-up
   "TODO: Need tests that work with both EventEair instances"
@@ -92,8 +97,8 @@ customize the reader/writer to create useful tests"
   (component/start (mock-up)))
 
 (comment
-  (let [started-mock-up (started-mockup)
-        (component/stop started-mock-up)]
+  (let [started-mock-up (started-mock-up)
+        _ (component/stop started-mock-up)]
     started-mock-up))
 
 (s/fdef with-mock

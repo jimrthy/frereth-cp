@@ -241,6 +241,7 @@ component-dsl?)"
     (try
       (edn/read-string s)
       (catch RuntimeException ex
+        ;; Q: Do I really want to effectively swallow this exception?
         (log/error ex "Failed reading incoming string:\n"
                    (pretty s))))))
 

@@ -4,8 +4,10 @@
 Strongly inspired by lynaghk's zmq-async"
   (:require [cljeromq.common :as mq-cmn]
             [cljeromq.core :as mq]
+            [cljeromq.curve]
             [clojure.core.async :as async :refer (>! >!!)]
             [clojure.edn :as edn]
+            [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [com.frereth.common.async-component]
             [com.frereth.common.schema :as fr-sch]
@@ -25,17 +27,30 @@ Strongly inspired by lynaghk's zmq-async"
 
 (s/def ::ex-chan :com.frereth.common.async-component/async-channel)
 (s/def ::ex-sock :com.frereth.common.zmq-socket/socket-description)
-(s/def ::external-reader (s/fspec :args (s/cat :sock :cljeromq.common/socket)
-                                  :ret :cljeromq.common/byte-array-seq))
-(s/def ::external-writer (s/fspec :args (s/cat :sock :cljeromq.common/socket
-                                               :frames :cljeromq.common/byte-array-seq)))
+;; Note that I cannot alias the namespace for testable-read-socket,
+;; testable-write-socket, or byte-array-seq.
+;; If I try to us mq-cmn for the ns component, I get an Exception
+;; "Unable to resolve spec".
+;; TODO: publish a minimal reproduction to mailing list.
+(s/fdef ::external-reader
+        :args (s/cat :sock :cljeromq.common/testable-read-socket)
+        ;; The mock external reader that I'm using for unit tests
+        ;; is calling deserialize on the raw bytes being generated
+        ;; by the mock socket.
+        ;; So it's generally returning strings,
+        ;; and really could return pretty much any clojure object
+        ;; This seems mostly reasonable, though I'd rather start
+        ;; by supplying it with useful values to deserialize.
+        ;; It would be nice to narrow this down a bit more,
+        ;; but I'm not sure there are good alternatives.
+        ;; Since a big chunk of that point is to move the decision
+        ;; about the actual wire protocol out to clients.
+        :ret any?)
+(s/fdef ::external-writer
+        :args (s/cat :sock :cljeromq.common/testable-write-socket
+                     :frames :cljeromq.common/byte-array-seq)
+        :ret any?)
 (s/def ::in-chan :com.frereth.common.async-component/async-channel)
-
-(s/def ::event-pair-interface (s/keys :unq-req [::ex-chan
-                                                ::ex-sock
-                                                ::external-reader
-                                                ::external-writer
-                                                ::in-chan]))
 
 (s/def ::interface (s/keys :req-un [::ex-sock
                                     ::external-reader
@@ -43,11 +58,12 @@ Strongly inspired by lynaghk's zmq-async"
                                     ::in-chan
                                     ::status-chan]))
 
+;; FIXME: What are these?
 (s/def ::->zmq-sock any?)
 (s/def ::async->sock any?)
 (s/def ::in<->ex-sock any?)
 (s/def ::_name string?)
-(s/def ::stopper (s/fspec :args nil :ret any?))
+(s/def ::stopper symbol?)
 ;; This is the almost-started EventPair that gets passed in to the messaging loops
 (s/def ::event-loopless-pair (s/keys :req-un [::->zmq-sock
                                               ::async->sock
@@ -83,6 +99,7 @@ Strongly inspired by lynaghk's zmq-async"
       (async/close! async-loop))))
 
 (defn do-wait-for-async-loop-to-exit
+  "We've sent the stop signal to the async loop. Wait for it to exit, possibly trying again"
   [_name async-loop stopper async->sock]
   (log/debug _name "-- async-zmq Component: Waiting for Asynchronous Event Loop" async-loop " to exit")
   (try
@@ -172,6 +189,87 @@ Send a duplicate stopper ("
    (and val (not= val stopper))  ; got a message that wasn't stopper
    (and (not= c in-chan) (not= c status-chan))))
 
+(defn validate-component
+  [{:keys [interface stopper] :as component}]
+  (when-not (s/valid? ::event-loopless-pair component)
+    (println "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Spec mismatch. Would have caught it in the pre-condition if that were enabled
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    (let [ex-chan (:ex-chan component)
+          ex-sock (-> component :interface :ex-sock)]
+      (println "Keys available:" (keys component)
+               "\nSpec:" (s/form ::event-loopless-pair)
+               "\nStopper:" stopper "(valid?)" (s/valid? ::stopper stopper))
+      (when-not (s/valid? ::ex-chan ex-chan)
+        (println "Problem w/ ex-chan: " ex-chan))
+      (when-not (s/valid? ::ex-sock ex-sock)
+        (println "Problem stems from the socket (there's a shock)")
+        (pprint ex-sock)
+        (println "Available keys:" (keys ex-sock))
+        ;; ::ex-sock is just an alias for :zmq-socket/socket-description
+        (println "Spec:" (s/form :com.frereth.common.zmq-socket/socket-description))
+        (let [ctx (:context-wrapper ex-sock)]
+          (when-not (s/valid? :com.frereth.common.zmq-socket/context-wrapper ctx)
+            (println "Context invalid:" (s/explain :com.frereth.common.zmq-socket/context-wrapper ctx))))
+        (println "Actual socket valid:" (s/valid? :cljeromq.common/socket (:socket ex-sock)))
+        (let [url (:zmq-url ex-sock)]
+          (when-not (s/valid? :cljeromq.common/zmq-url url)
+            (println "URL invalid:" (s/explain :cljeromq.common/zmq-url url))))
+        (let [socket-type (:sock-type ex-sock)]
+          (when-not (s/valid? :com.frereth.common.zmq-socket/sock-type socket-type)
+            (println "Socket Type invalid:" (s/explain :com.frereth.common.zmq-socket/sock-type socket-type))))
+        (let [direction (:direction ex-sock)]
+          (when-not (s/valid? :cljeromq.common/direction direction)
+            (println "Socket Direction invalid:" (s/explain :cljeromq.common/direction direction))))
+        (when-not (s/valid? :com.frereth.common.zmq-socket/client-keys (:client-keys ex-sock))
+          (println "Invalid client keys:" (s/explain :com.frereth.common.zmq-socket/client-keys
+                                                     (:client-keys ex-sock))))
+        (let [server-key (:server-key ex-sock)]
+          (when-not (or (s/valid? :com.frereth.common.zmq-socket/public-server-key server-key)
+                        (s/valid? :com.frereth.common.zmq-socket/private-server-key server-key))
+            (println "Invalid Server key:")
+            (println "Value:" server-key)
+            (println "Contained in:")
+            (pprint ex-sock)
+            (println "With keys:" (keys ex-sock) "\nDetails:")
+            (println (s/explain :cljeromq.curve/key server-key))))
+        (when-not (s/valid? :com.frereth.common.zmq-socket/port (:port ex-sock))
+          (println "Invalid Port:" (s/explain :com.frereth.common.zmq-socket/port (:port ex-sock))))))
+
+    (when-not #_(s/valid? ::interface interface)
+              ;; valid? is actually a wrapper around this
+              (not= :clojure.spec/invalid (s/conform ::interface interface))
+      (println "Problem w/ interface: " (keys interface))
+      (pprint interface)
+      ;; I'm getting into issues here where it looks like s/explain is
+      ;; throwing a second exception.
+      ;; It isn't, but protect against that possibility anyway.
+      ;; Start by setting up a promise I can deliver on the success of explanation
+      (let [explained (promise)]
+        (try
+          (let [problem (s/explain-data ::interface interface)]
+            ;; We got here. The exception being caught is this one,
+            ;; which we just want to forward along directly
+            (deliver explained true)
+            (throw (ex-info "Component's interface doesn't match spec"
+                            {:conformed (s/conform ::interface interface)
+                             :description (s/explain ::interface interface)
+                             :incoming component
+                             :problem problem
+                             :valid? (s/valid? ::interface interface)})))
+          (catch RuntimeException ex
+            (if (realized? explained)
+              ;; Forward along that inner exception
+              (throw ex)
+              ;; Calling s/explain-data failed. This is more serious/confusing
+              (throw (ex-info "Failed trying to explain failure"
+                              {:problem "unknown"
+                               :cause ex
+                               :incoming component})))))))
+    (throw (ex-info "Component doesn't match spec"
+                    {:problem (s/explain-data ::event-loopless-pair component)
+                     :incoming component}))))
+
 (s/fdef run-async-loop!
         :args (s/cat :component ::event-loopless-pair)
         :ret :com.frereth.common.schema/async-channel)
@@ -182,18 +280,16 @@ Send a duplicate stopper ("
   But then we could have one thread trying to read while another tries to write,
   and that's a recipe for disaster."
   [{:keys [async->sock in<->ex-chan interface _name stopper] :as component}]
-  {:pre [(comment (s/valid? ::event-loopless-pair component))]
+  ;; TODO: Restore the pre-check instead of cluttering this up with my huge
+  ;; custom deugging validator.
+  ;; It seems wrong to be validating this at all at runtime, but it's critical
+  ;; functionally, and it's definitely not performance-sensitive code.
+  ;; So plan on leaving it around until/unless it causes real problems.
+  ;; Then again...the fact that I *am* having so many problems with it is
+  ;; a strong indicator that this approach is too complex.
+  {:pre [#_(s/valid? ::event-loopless-pair component)]
    :post [(s/valid? :com.frereth.common.schema/async-channel %)]}
-  (when-not (s/valid? ::event-loopless-pair component)
-    (println "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-Spec mismatch. Would have caught it in the pre-condition if that were enabled
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-    (throw (ex-info "Component doesn't match spec"
-                    ;; This leads to calling cljeromq.common/socket-creator.
-                    ;; Which is/should be the sample data generator.
-                    ;; Q: Huh?!
-                    {:problem (#_s/explain-data s/explain ::event-loopless-pair component)
-                     :incoming component})))
+  (validate-component component)
   (let [{:keys [in-chan status-chan]} interface
         in-chan (:ch in-chan)
         status-chan (:ch status-chan)
@@ -502,7 +598,8 @@ Spec mismatch. Would have caught it in the pre-condition if that were enabled
    ;; Unless you just enjoy sitting around waiting for the JVM to
    ;; restart, of course
    stopper
-   ;; Signals the 0mq portion of the loop that messages are ready to send
+   ;; This is an mq/InternalPair that
+   ;; signals the 0mq portion of the loop that messages are ready to send
    ;; to the outside world
    in<->ex-sock
    ;; It's tempting to make these zmq-socket/Socket instances
@@ -540,7 +637,7 @@ Their entire purpose in life, really, is to shuffle messages between
       ;; and writing.
       (let [stopper (gensym)
             in<->ex-sock (or in<->ex-sock (mq/build-internal-pair!
-                                           (-> ex-sock :ctx :ctx)))
+                                           (-> ex-sock :context-wrapper :ctx)))
             in<->ex-chan (or in<->ex-chan (async/chan))
             ;; The choice between lhs and rhs for who gets
             ;; which of the internal pairs is completely
@@ -628,7 +725,7 @@ Their entire purpose in life, really, is to shuffle messages between
 
 (s/fdef  ctor-interface
          :args (s/cat :cfg (s/keys :unq-opt [::ex-sock ::in-chan ::external-reader ::external-writer]))
-         :ret ::event-pair-interface)
+         :ret ::interface)
 (defn ctor-interface
   [cfg]
   (map->EventPairInterface (select-keys cfg [:ex-sock :in-chan :external-reader :external-writer])))
