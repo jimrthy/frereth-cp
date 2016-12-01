@@ -94,8 +94,7 @@ customize the reader/writer to create useful tests"
 (comment
   (let [started-mock-up (started-mockup)
         (component/stop started-mock-up)]
-    started-mock-up)
-  )
+    started-mock-up))
 
 (s/fdef with-mock
         :args (s/cat :f (s/fspec :args (s/cat :system-map :com.frereth.common.schema/system-map)
