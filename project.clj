@@ -81,4 +81,5 @@ b. lein managed dependencies"
                    :plugins [[org.clojure/tools.namespace "0.2.11" :exclusions [org.clojure/clojure]]]
                    :source-paths ["dev"]}
              :uberjar {:aot :all}}
-  :repl-options {:init-ns user})
+  :repl-options {:init-ns user
+                 :timeout 120000})
