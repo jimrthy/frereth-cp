@@ -11,7 +11,9 @@ b. lein managed dependencies"
   ;; A: Probably. But it would be a foolish choice. The web and client components
   ;; really shouldn't have access to that sort of thing.
   ;; TODO: Pick a date library and use it.
-  :dependencies [[clj-time "0.12.0"]
+  :dependencies [[aleph "0.4.1"]
+                 [buddy/buddy-core "1.1.1"]
+                 [clj-time "0.12.0"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
                  ;; is the primary goal.
