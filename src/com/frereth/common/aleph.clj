@@ -49,12 +49,17 @@
 (defn put!
   "Really just a convenience wrapper to cut down on the number
 of namespaces clients have to :require to use this one"
-  [stream bs]
-  (stream/put! stream bs))
+  [stream msg]
+  (stream/put! stream msg))
 
 (defn take!
-  [stream]
-  @(stream/take! stream))
+  ([stream]
+   @(stream/take! stream))
+  ([stream default]
+   (println "Taking from a stream, default:" default)
+   (let [deferred (stream/take! stream default)]
+     (println "Took" deferred)
+     @deferred)))
 
 (s/fdef request-response
         :args (s/cat :connections any?
@@ -66,25 +71,38 @@ of namespaces clients have to :require to use this one"
                                    :info any?)))
 (defn router
   [connections f]
-  (fn [s info]
-    ;; Want to do something like this, so the server can send
-    ;; messages to this client asynchronously.
-    ;; Is it really this simple/easy?
-    (swap! connections update (:remote-addr info) (partial put! s))
-    (deferred/loop []
-      (-> (deferred/let-flow [msg (take! s ::none)]
-            (println "client->server")
-            (when-not (identical? ::none msg)
-              (deferred/let-flow [result (f msg)]
-                (when result
-                  (deferred/recur)))))
-          (deferred/catch
-              (fn [ex]
-                (println "Server Oops!")
-                (put! s {:error (.getMessage ex)
-                         :type (-> ex class str)})
-                (stream/close! s)))))
-    (println "What's the best way to clean up connections when that loop exits?")))
+  (fn [s {:keys [remote-addr]}]
+    (println "Incoming client connection from" remote-addr)
+    (let [putter (partial put! s)]
+      (try
+        (swap! connections
+               assoc remote-addr putter)
+        (catch Exception ex
+          (println "Failed to add new connection!\n" ex)
+          (.printStackTrace ex)
+          (throw ex)))
+      (assert (identical? (@connections remote-addr) putter)))
+    (deferred/chain
+      (deferred/loop []
+        ;; Q: How much cleaner would this be to just
+        ;; use stream/consume ?
+        ;; Or would that work at all?
+        (-> (deferred/let-flow [msg (take! s ::none)]
+              (println "client->server")
+              (when-not (identical? ::none msg)
+                (deferred/let-flow [result (f msg)]
+                  (when result
+                    (deferred/recur)))))
+            (deferred/catch
+                (fn [ex]
+                  (println "Server Oops!\n" ex)
+                  (.printStackTrace ex)
+                  (put! s {:error (.getMessage ex)
+                           :type (-> ex class str)})
+                  (stream/close! s)))))
+      (fn [_]
+        (println "Cleaning up connection from ")
+        (swap! connections dissoc remote-addr)))))
 
 (s/fdef request-response
         :args (s/cat :f (s/fspec
@@ -106,7 +124,7 @@ of namespaces clients have to :require to use this one"
   (fn [s info]
     (deferred/chain
       (deferred/loop []
-        (-> (deferred/let-flow [msg (stream/take! s ::none)]
+        (-> (deferred/let-flow [msg (take! s ::none)]
               (println "client->server")
               (when-not (identical? ::none msg)
                 (deferred/let-flow [msg' (deferred/future (f msg))
