@@ -12,6 +12,8 @@ b. lein managed dependencies"
   ;; really shouldn't have access to that sort of thing.
   ;; TODO: Pick a date library and use it.
   :dependencies [[aleph "0.4.1"]
+                 ;; TODO: Replace this with either transit or fressian
+                 [gloss "0.2.5"]
                  [buddy/buddy-core "1.1.1"]
                  [clj-time "0.12.0"]
                  ;; Q: Does this make any sense in production?

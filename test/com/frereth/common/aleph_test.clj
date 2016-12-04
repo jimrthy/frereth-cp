@@ -6,27 +6,22 @@
 (deftest count-messages
   (let [counter (atom 0)
         port 12017
-        handler (fn [bs]
-                  (println "Message received:"
-                         (edn/read-string (String. bs)))
-                  (let [n (swap! counter inc)]
-                    (-> n pr-str .getBytes)))
+        handler (fn [msg]
+                  (println "Message received:" msg)
+                  (swap! counter inc))
         server (aleph/start-server! (aleph/request-response handler)
                                     port)]
     (try
       (let [client (aleph/start-client! "localhost" port)]
         (doseq [n (range 10)]
-          (let [bs (-> n pr-str .getBytes)]
-            (aleph/put! client bs)))
+          (aleph/put! client n))
         (println "\nMessages sent\n")
         (doseq [n (range 10)]
-          (let [m (-> client
-                      aleph/take!
-                      String.
-                      edn/read-string)]
-            (is (= (inc n) m)))))
-      ;; OK, ok, I need to add a marshalling wrapper
-      (comment (aleph/put! client ::none))
+          (let [m (aleph/take! client)]
+            (is (= (inc n) m))))
+        ;; Q: Does closing the client (whatever that means)
+        ;; accomplish the same thing?
+        (aleph/put! client ::none))
       (is (= @counter 10))
       (finally (.close server)))))
 (comment
