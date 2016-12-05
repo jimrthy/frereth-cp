@@ -1,7 +1,8 @@
 (ns com.frereth.common.aleph-test
   (:require [clojure.edn :as edn]
             [clojure.test :refer (deftest is testing)]
-            [com.frereth.common.aleph :as aleph]))
+            [com.frereth.common.aleph :as aleph]
+            [clojure.core.async :as async]))
 
 (deftest count-messages
   (testing "Count minimalist requests/responses"
@@ -34,29 +35,25 @@
     (let [connections (atom {})
           port 12081
           expected-message (atom nil)
+          sync-ch (async/chan)
           handler (fn [msg]
                     (println "Handler received" msg
                              "expected:" @expected-message)
-                    (is (= msg @expected-message)))
+                    (is (= msg @expected-message))
+                    (async/>!! sync-ch ::next))
           server (aleph/start-server!
                   (aleph/router connections handler)
                   port)]
       (try
         (let [client (aleph/start-client! "localhost" port)]
           (testing "Receiving"
-            (comment) (doseq [n (range 10)]
-                        (let [msg {:payload n}]
-                          (reset! expected-message msg)
-                          (aleph/put! client msg))
-                        ;; Really need a good way to synchronize
-                        ;; the message send, the put!, and the take!
-                        ;; from the handler.
-                        ;; Arbitrary delays are one thing, that
-                        ;; seem to be showing that this approach
-                        ;; seems really slow.
-                        ;; But they aren't portable/sustainable.
-                        (Thread/sleep 30)))
-          (Thread/sleep 100)
+            (doseq [n (range 10)]
+              (let [msg {:payload n}]
+                (reset! expected-message msg)
+                (aleph/put! client msg)
+                (let [[_ ch] (async/alts!! [(async/timeout 500)
+                                            sync-ch])]
+                  (is (= ch sync-ch))))))
           ;; This really isn't very interesting with just 1 client
           ;; But it was finicky
           (testing "Sending"
