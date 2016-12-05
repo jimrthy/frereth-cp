@@ -30,15 +30,12 @@
   (count-messages))
 
 (deftest test-routing
-  (println "Starting test-routing")
   (testing "Router"
     (let [connections (atom {})
           port 12081
           expected-message (atom nil)
           sync-ch (async/chan)
           handler (fn [msg]
-                    (println "Handler received" msg
-                             "expected:" @expected-message)
                     (is (= msg @expected-message))
                     (async/>!! sync-ch ::next))
           server (aleph/start-server!
@@ -65,13 +62,6 @@
                           :c #{6 7 8}
                           :d (9 10 11 x)}
                     out-success (out-fn msg)]
-                (println "out-success:" out-success
-                         "a" (class out-success)
-                         "Actual:" @out-success)
-                (println "Did the client receive that message?")
-                ;; Currently, no.
-                ;; Q: Why not?
-                ;; (out-success is a deferred the derefs to true)
                 (try
                   (if-let [deferred-received (aleph/take! client ::not-found 500)]
                     (do
@@ -81,7 +71,6 @@
                     (println "Failed trying to read from client" ex)
                     (.printStackTrace ex)))))))
         (finally
-          (println "Stopping server")
           (.close server))))))
 (comment
   (test-routing))

@@ -42,7 +42,6 @@
   [handler port]
   (tcp/start-server
    (fn [s info]
-     (println "New client connection:" info)
      (handler (wrap-duplex-stream glossy-protocol s) info))
    {:port port}))
 
@@ -58,9 +57,7 @@ of namespaces clients have to :require to use this one"
   ([stream default]
    @(stream/take! stream default))
   ([stream default timeout]
-   (println "Taking from a stream, default:" default)
    (let [deferred (stream/take! stream default)]
-     (println "Took" deferred)
      (deref deferred timeout ::timeout))))
 
 (defn router-event-loop
@@ -71,7 +68,6 @@ of namespaces clients have to :require to use this one"
       ;; use stream/consume ?
       ;; Or would that work at all?
       (-> (deferred/let-flow [msg (stream/take! s ::none)]
-            (println "client->server")
             (when-not (identical? ::none msg)
               (deferred/let-flow [result (f msg)]
                 (when result
@@ -96,26 +92,18 @@ of namespaces clients have to :require to use this one"
 (defn router
   [connections f]
   (fn [s {:keys [remote-addr]}]
-    (println "Incoming client connection from" remote-addr)
     (let [putter (partial put! s)]
       (try
         (swap! connections
                assoc remote-addr putter)
-        (println "Connections swapped:" @connections)
         (catch Exception ex
           (println "Failed to add new connection!\n" ex)
           (.printStackTrace ex)
           (throw ex)))
       (assert (identical? (@connections remote-addr) putter)))
     (let [cleanup (fn [_]
-                    (println "Cleaning up connection from ")
                     (swap! connections dissoc remote-addr))]
-      ;; If I comment this out, the basic unit test passes.
-      ;; The handler check for incoming values isn't being called,
-      ;; so I don't have any idea what's going on there.
-      ;; But leaving this in seems to block the socket in read
-      ;; mode (that's just a guess)
-      (comment) (router-event-loop f s cleanup))))
+      (router-event-loop f s cleanup))))
 
 (s/fdef request-response
         :args (s/cat :f (s/fspec
@@ -148,7 +136,6 @@ of namespaces clients have to :require to use this one"
             (deferred/catch
                 (fn [ex]
                   (println "Server Oops!")
-                  ;; TODO: Need a serialization library
                   (put! s {:error (.getMessage ex)
                            :type (-> ex class str)})
                   (stream/close! s)))))
