@@ -35,6 +35,8 @@
           port 12081
           expected-message (atom nil)
           handler (fn [msg]
+                    (println "Handler received" msg
+                             "expected:" @expected-message)
                     (is (= msg @expected-message)))
           server (aleph/start-server!
                   (aleph/router connections handler)
@@ -46,7 +48,14 @@
                         (let [msg {:payload n}]
                           (reset! expected-message msg)
                           (aleph/put! client msg))
-                        (Thread/sleep 10)))
+                        ;; Really need a good way to synchronize
+                        ;; the message send, the put!, and the take!
+                        ;; from the handler.
+                        ;; Arbitrary delays are one thing, that
+                        ;; seem to be showing that this approach
+                        ;; seems really slow.
+                        ;; But they aren't portable/sustainable.
+                        (Thread/sleep 30)))
           (Thread/sleep 100)
           ;; This really isn't very interesting with just 1 client
           ;; But it was finicky

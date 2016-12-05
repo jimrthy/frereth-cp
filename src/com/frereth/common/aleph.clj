@@ -70,7 +70,7 @@ of namespaces clients have to :require to use this one"
       ;; Q: How much cleaner would this be to just
       ;; use stream/consume ?
       ;; Or would that work at all?
-      (-> (deferred/let-flow [msg (take! s ::none)]
+      (-> (deferred/let-flow [msg (stream/take! s ::none)]
             (println "client->server")
             (when-not (identical? ::none msg)
               (deferred/let-flow [result (f msg)]
@@ -101,6 +101,7 @@ of namespaces clients have to :require to use this one"
       (try
         (swap! connections
                assoc remote-addr putter)
+        (println "Connections swapped:" @connections)
         (catch Exception ex
           (println "Failed to add new connection!\n" ex)
           (.printStackTrace ex)
