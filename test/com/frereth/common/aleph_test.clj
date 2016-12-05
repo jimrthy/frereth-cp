@@ -42,36 +42,38 @@
       (try
         (let [client (aleph/start-client! "localhost" port)]
           (testing "Receiving"
-            (doseq [n (range 10)]
-              (let [msg {:payload n}]
-                (reset! expected-message msg)
-                (aleph/put! client msg))
-              (Thread/sleep 10)))
+            (comment) (doseq [n (range 10)]
+                        (let [msg {:payload n}]
+                          (reset! expected-message msg)
+                          (aleph/put! client msg))
+                        (Thread/sleep 10)))
+          (Thread/sleep 100)
           ;; This really isn't very interesting with just 1 client
           ;; But it was finicky
           (testing "Sending"
             (let [cxns @connections
-                  out-fn (@connections "127.0.0.1")
-                  msg '{:a 1
-                        :b [2 3 4 5]
-                        :c #{6 7 8}
-                        :d (9 10 11 x)}
-                  out-success (out-fn #_msg "The quick red fox")]
-              (println "out-success:" out-success
-                       "a" (class out-success)
-                       "Actual:" @out-success)
-              (println "Did the client receive that message?")
-              (try
-                (if-let [deferred-received (aleph/take! client ::not-found)]
-                  (do
-                    (println "Got" deferred-received "back from calling take")
-                    ;; Take is already calling deref. Shouldn't need to
-                    ;; do this again
-                    (is (= deferred-received msg)))
-                  (is false "Client didn't receive anything"))
-                (catch Exception ex
-                  (println "Failed trying to read from client" ex)
-                  (.printStackTrace ex))))))
+                  out-fn (@connections "127.0.0.1")]
+              (assert out-fn (str "Missing localhost client in " cxns))
+              (let [msg '{:a 1
+                          :b [2 3 4 5]
+                          :c #{6 7 8}
+                          :d (9 10 11 x)}
+                    out-success (out-fn msg)]
+                (println "out-success:" out-success
+                         "a" (class out-success)
+                         "Actual:" @out-success)
+                (println "Did the client receive that message?")
+                ;; Currently, no.
+                ;; Q: Why not?
+                ;; (out-success is a deferred the derefs to true)
+                (try
+                  (if-let [deferred-received (aleph/take! client ::not-found 500)]
+                    (do
+                      (is (= msg deferred-received)))
+                    (is false "Client didn't receive anything"))
+                  (catch Exception ex
+                    (println "Failed trying to read from client" ex)
+                    (.printStackTrace ex)))))))
         (finally
           (println "Stopping server")
           (.close server))))))

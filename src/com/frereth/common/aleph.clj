@@ -56,12 +56,36 @@ of namespaces clients have to :require to use this one"
   ([stream]
    @(stream/take! stream))
   ([stream default]
+   @(stream/take! stream default))
+  ([stream default timeout]
    (println "Taking from a stream, default:" default)
    (let [deferred (stream/take! stream default)]
      (println "Took" deferred)
-     @deferred)))
+     (deref deferred timeout ::timeout))))
 
-(s/fdef request-response
+(defn router-event-loop
+  [f s cleanup]
+  (deferred/chain
+    (deferred/loop []
+      ;; Q: How much cleaner would this be to just
+      ;; use stream/consume ?
+      ;; Or would that work at all?
+      (-> (deferred/let-flow [msg (take! s ::none)]
+            (println "client->server")
+            (when-not (identical? ::none msg)
+              (deferred/let-flow [result (f msg)]
+                (when result
+                  (deferred/recur)))))
+          (deferred/catch
+              (fn [ex]
+                (println "Server Oops!\n" ex)
+                (.printStackTrace ex)
+                (put! s {:error (.getMessage ex)
+                         :type (-> ex class str)})
+                (stream/close! s)))))
+    cleanup))
+
+(s/fdef router
         :args (s/cat :connections any?
                      :f (s/fspec
                          :args (s/cat :message bytes?)
@@ -82,27 +106,15 @@ of namespaces clients have to :require to use this one"
           (.printStackTrace ex)
           (throw ex)))
       (assert (identical? (@connections remote-addr) putter)))
-    (deferred/chain
-      (deferred/loop []
-        ;; Q: How much cleaner would this be to just
-        ;; use stream/consume ?
-        ;; Or would that work at all?
-        (-> (deferred/let-flow [msg (take! s ::none)]
-              (println "client->server")
-              (when-not (identical? ::none msg)
-                (deferred/let-flow [result (f msg)]
-                  (when result
-                    (deferred/recur)))))
-            (deferred/catch
-                (fn [ex]
-                  (println "Server Oops!\n" ex)
-                  (.printStackTrace ex)
-                  (put! s {:error (.getMessage ex)
-                           :type (-> ex class str)})
-                  (stream/close! s)))))
-      (fn [_]
-        (println "Cleaning up connection from ")
-        (swap! connections dissoc remote-addr)))))
+    (let [cleanup (fn [_]
+                    (println "Cleaning up connection from ")
+                    (swap! connections dissoc remote-addr))]
+      ;; If I comment this out, the basic unit test passes.
+      ;; The handler check for incoming values isn't being called,
+      ;; so I don't have any idea what's going on there.
+      ;; But leaving this in seems to block the socket in read
+      ;; mode (that's just a guess)
+      (comment) (router-event-loop f s cleanup))))
 
 (s/fdef request-response
         :args (s/cat :f (s/fspec
@@ -143,7 +155,7 @@ of namespaces clients have to :require to use this one"
         ;; Actually, I should be able to clean up in here
         (println "Client connection really exited")))
     ;; That loop's running in the background.
-    (println "After the req-rsp loop")))
+    (println "req-rsp loop started")))
 
 (defn start-client!
   [host port]
