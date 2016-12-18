@@ -23,6 +23,7 @@
                                           ::thread-count]))
 
 (s/def ::client-keys (s/nilable :cljeromq.curve/key-pair))
+;; TODO: Move this into schema instead
 (s/def ::port (s/nilable (s/and nat-int? #(< % 65536))))
 (s/def ::public-server-key :cljeromq.curve/public)
 (s/def ::private-server-key :cljeromq.curve/private)

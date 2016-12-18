@@ -12,6 +12,7 @@ b. lein managed dependencies"
   ;; really shouldn't have access to that sort of thing.
   ;; TODO: Pick a date library and use it.
   :dependencies [[aleph "0.4.1"]
+                 [buddy/buddy-core "1.1.1"]
                  [clj-time "0.12.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
@@ -54,6 +55,7 @@ b. lein managed dependencies"
                  ;; Q: Do I really want this?
                  [fullcontact/full.async "1.0.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
+                 ;; TODO: Replace this with either transit or fressian
                  [gloss "0.2.5" :exclusions [byte-streams
                                              manifold
                                              potemkin]]
@@ -86,4 +88,5 @@ b. lein managed dependencies"
                    :plugins [[org.clojure/tools.namespace "0.2.11" :exclusions [org.clojure/clojure]]]
                    :source-paths ["dev"]}
              :uberjar {:aot :all}}
-  :repl-options {:init-ns user})
+  :repl-options {:init-ns user
+                 :timeout 120000})

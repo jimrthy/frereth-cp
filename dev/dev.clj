@@ -14,6 +14,7 @@
             [clojure.test :as test]
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [com.stuartsierra.component :as component]
+            [com.frereth.common.aleph :as aleph]
             [com.frereth.common.communication :as com-comm]
             [com.frereth.common.config :as cfg]
             [com.frereth.common.system :as sys]
