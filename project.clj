@@ -11,7 +11,8 @@ b. lein managed dependencies"
   ;; A: Probably. But it would be a foolish choice. The web and client components
   ;; really shouldn't have access to that sort of thing.
   ;; TODO: Pick a date library and use it.
-  :dependencies [[clj-time "0.12.2"]
+  :dependencies [[aleph "0.4.1"]
+                 [clj-time "0.12.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
                  ;; is the primary goal.
@@ -50,8 +51,12 @@ b. lein managed dependencies"
                  [com.jimrthy/component-dsl "0.1.2-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [com.taoensso/timbre "4.7.4" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
+                 ;; Q: Do I really want this?
                  [fullcontact/full.async "1.0.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
+                 [gloss "0.2.5" :exclusions [byte-streams
+                                             manifold
+                                             potemkin]]
                  [im.chit/hara.event "2.4.8" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.2.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]

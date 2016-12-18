@@ -1,5 +1,7 @@
 (ns com.frereth.common.communication
-  "This is really about higher-level messaging abstractions"
+  "This is really about higher-level messaging abstractions
+Originally written over 0mq. There's an open question about
+how useful they might be in the netty world."
   (:require [cljeromq.common :as mq-cmn]
             [cljeromq.core :as mq]
             [clojure.spec :as s]
