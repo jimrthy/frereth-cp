@@ -19,10 +19,11 @@
             (aleph/put! client n))
           (println "\nMessages sent\n")
           (doseq [n (range 10)]
-            (let [m (aleph/take! client)]
+            (let [m (aleph/take! client ::timed-out 500)]
               (is (= (inc n) m))))
           ;; Q: Does closing the client (whatever that means)
           ;; accomplish the same thing?
+          ;; (That doesn't seem to be a thing)
           (aleph/put! client ::none))
         (is (= @counter 10))
         (finally (.close server))))))

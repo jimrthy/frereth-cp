@@ -46,6 +46,11 @@ of namespaces clients have to :require to use this one"
   (stream/put! stream msg))
 
 (defn take!
+  "Note that this approach doesn't really compose well.
+
+Since everything else in manifold expects the deferred.
+
+That makes this much less useful"
   ([stream]
    @(stream/take! stream))
   ([stream default]
@@ -114,20 +119,15 @@ At least conceptually."
   but seems pretty useless for real async exchanges.
 
   i.e. How am I supposed to send arbitrary messages back
-  to the client at arbitrary times?
-
-  (there are probably hints in the full duplex wrapper
-  at the very beginning of the example)"
+  to the client at arbitrary times?"
   [f]
   (fn [s info]
     (deferred/chain
       (deferred/loop []
-        (-> (deferred/let-flow [msg (take! s ::none)]
-              (println "client->server")
+        (-> (deferred/let-flow [msg (stream/take! s ::none)]
               (when-not (identical? ::none msg)
                 (deferred/let-flow [msg' (deferred/future (f msg))
                                     result (put! s msg')]
-                  (println "server->client: " msg')
                   (when result
                     (deferred/recur)))))
             (deferred/catch
@@ -135,6 +135,7 @@ At least conceptually."
                   (println "Server Oops!")
                   (put! s {:error (.getMessage ex)
                            :type (-> ex class str)})
+                  ;; Q: Is this really what should happen?
                   (stream/close! s)))))
       (fn [_]
         ;; Actually, I should be able to clean up in here
@@ -142,14 +143,27 @@ At least conceptually."
     ;; That loop's running in the background.
     (println "req-rsp loop started")))
 
+(defn close!
+  "Closes a server instance"
+  [x]
+  (.close x))
+
 (defn start-deferred-client!
-  [host port]
-  (deferred/chain (tcp/client {:host host, :port port})
+  [host port ssl? insecure?]
+  (deferred/chain (tcp/client {:host host
+                               :port port
+                               :ssl? ssl?
+                               :insecure? insecure?})
+    ;; Honestly, we need a way to specify this.
+    ;; Except that this is the way, right?
     #(simplest %)))
 
 (defn start-client!
-  [host port]
-  @(start-deferred-client!))
+  "Apparently this doesn't need to be closed"
+  ([host port ssl? insecure?]
+   @(start-deferred-client! host port ssl? insecure?))
+  ([host port]
+   (start-client! host port false false)))
 
 (s/fdef start-server!
         :args (s/cat :handler (s/fspec :args (s/cat :stream ::stream
@@ -158,8 +172,12 @@ At least conceptually."
         :ret ::server)
 (defn start-server!
   "Starts a server that listens on port and calls handler"
-  [handler port]
-  (tcp/start-server
-   (fn [s info]
-     (handler (simplest s) info))
-   {:port port}))
+  ([handler port ssl-context]
+   (tcp/start-server
+    (fn [s info]
+      (println (java.util.Date.) "Outer server handler")
+      (handler (simplest s) info))
+    {:port port
+     :ssl-context ssl-context}))
+  ([handler port]
+   (start-server! handler port nil)))
