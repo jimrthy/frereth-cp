@@ -11,10 +11,7 @@ b. lein managed dependencies"
   ;; A: Probably. But it would be a foolish choice. The web and client components
   ;; really shouldn't have access to that sort of thing.
   ;; TODO: Pick a date library and use it.
-  :dependencies [;; In the world of CurveCP, aleph doesn't seem to make an awful lot of sense.
-                 ;; TODO: Just use netty's UDP layer directly.
-                 [aleph "0.4.1"]
-                 [buddy/buddy-core "1.1.1"]
+  :dependencies [[buddy/buddy-core "1.1.1"]  ;; Q: Is there any point to this now?
                  [clj-time "0.12.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
@@ -58,12 +55,13 @@ b. lein managed dependencies"
                  [fullcontact/full.async "1.0.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
                  ;; TODO: Replace this with either transit or fressian
-                 [gloss "0.2.5" :exclusions [byte-streams
+                 #_[gloss "0.2.5" :exclusions [byte-streams
                                              manifold
                                              potemkin]]
                  [im.chit/hara.event "2.4.8" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.2.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
+                 [io.netty/netty-all "4.1.6.Final"]
                  ;; Because pomegranate and lein conflict.
                  ;; Try the latest versions to see how it works
                  [org.apache.maven.wagon/wagon-http "2.10"]
