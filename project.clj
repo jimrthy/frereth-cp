@@ -11,7 +11,9 @@ b. lein managed dependencies"
   ;; A: Probably. But it would be a foolish choice. The web and client components
   ;; really shouldn't have access to that sort of thing.
   ;; TODO: Pick a date library and use it.
-  :dependencies [[aleph "0.4.1"]
+  :dependencies [;; In the world of CurveCP, aleph doesn't seem to make an awful lot of sense.
+                 ;; TODO: Just use netty's UDP layer directly.
+                 [aleph "0.4.1"]
                  [buddy/buddy-core "1.1.1"]
                  [clj-time "0.12.2"]
                  ;; Q: Does this make any sense in production?
@@ -78,6 +80,7 @@ b. lein managed dependencies"
                                                                 org.clojure/tools.analyzer]]
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]]
+  :java-source-paths ["java"]
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
 
   :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.3"
