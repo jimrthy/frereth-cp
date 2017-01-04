@@ -6,12 +6,7 @@ b. lein managed dependencies"
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  ;; Q: Could I totally pull datomic dependencies out of everything else
-  ;; by putting them in here?
-  ;; A: Probably. But it would be a foolish choice. The web and client components
-  ;; really shouldn't have access to that sort of thing.
-  ;; TODO: Pick a date library and use it.
-  :dependencies [[buddy/buddy-core "1.1.1"]  ;; Q: Is there any point to this now?
+  :dependencies [#_[buddy/buddy-core "1.1.1"]  ;; Q: Is there any point to this now?
                  [clj-time "0.12.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
@@ -54,10 +49,6 @@ b. lein managed dependencies"
                  ;; Q: Do I really want this?
                  [fullcontact/full.async "1.0.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
-                 ;; TODO: Replace this with either transit or fressian
-                 #_[gloss "0.2.5" :exclusions [byte-streams
-                                             manifold
-                                             potemkin]]
                  [im.chit/hara.event "2.4.8" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.2.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
@@ -72,10 +63,14 @@ b. lein managed dependencies"
                  ;; In particular dates.
                  ;; TODO: Make it ignore those
                  ;; Q: Has the situation improved in the months I've been ignoring it?
-                 #_[mvxcvi/puget "1.0.0" :exclusions [org.clojure/clojure]]
+                 ;; A: It really should have. The issue behind it is closed,
+                 ;; anyway.
+                 ;; Next Q: Does this really gain anything?
+                 #_[mvxcvi/puget "1.0.1" :exclusions [org.clojure/clojure]]
                  [org.clojure/clojure "1.9.0-alpha14"]
                  [org.clojure/core.async "0.2.395" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
+                 [org.clojure/test.check "0.9.0"]
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]]
   :java-source-paths ["java"]
