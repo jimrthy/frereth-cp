@@ -2,9 +2,12 @@
   "Implement the client half of the CurveCP protocol.
 
   It seems like it would be nice if I could just declare
-  the message exchange, but that approach seems dubious"
+  the message exchange, but that approach gets complicated
+  on the server side. At least half the point there is
+  reducing DoS."
   (:require [clojure.core.async :as async]
-            [com.frereth.common.curve.shared :as shared]))
+            [com.frereth.common.curve.shared :as shared]
+            [io.netty.buffer ByteBuf]))
 
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
@@ -66,7 +69,26 @@ TODO: Switch to that or whatever Bouncy Castle uses"
            :short-term-nonce short-term-nonce)))
 
 (defn main
-  [{:keys [flag-verbose
+  "This really needs to be some sort of stateful component.
+  It almost definitely needs to interact with ByteBuf to
+  build up something that's ready to start communicating
+  with servers.
+
+  It seems worth working through the implications of
+  exactly what makes sense in a clojure context.
+
+  This shouldn't be a cryptographically sensitive
+  area, since it's just calling the crypto box
+  and key management functions.
+
+  But the functionality it's going to be using has
+  been mostly ignored.
+
+  How much difference would it make if I split some
+  of the low-level buffer management into its own
+  pieces and used clojure's native facilities to
+  handle building that?"
+  [{:keys [flag-verbose  ; Q: Why?
            keydir
            server-name
            server-long-term-pk
