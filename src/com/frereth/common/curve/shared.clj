@@ -7,9 +7,20 @@
 (def max-unsigned-long (bigint (Math/pow 2 64)))
 (def nanos-in-seconds (long (Math/pow 10 9)))
 
+(defn byte-copy!
+  "Copies the bytes from src to dst
+
+  Really not interesting without offsets/limits
+
+  Less interesting because I should really be using ByteBuffers"
+  [dst src]
+  (run! (fn [n]
+          (aset dst n (aget src n)))
+        (range (count src))))
+
 (defn crypto-box-prepare
   [public secret]
-  (TweetNaclFast$Box public secret))
+  (TweetNaclFast$Box. public secret))
 
 (defn random-key-pair
   []
@@ -29,8 +40,17 @@
       (let [place-holder (byte-array 32)]
         ;; Q: How does this compare with just calling
         ;; (.nextLong rng) ?
-        ;; (for now, I'm sticking as closely as possibly
-        ;; to straight translation)
+        ;; A (from crypto.stackexchange.com):
+        ;; If you start with a (uniform) random number in
+        ;; {0, 1, ..., N-1} and take the result module n,
+        ;; the result will differ from a uniform distribution
+        ;; by statistical distance of less than
+        ;; (/ (quot N n) N)
+        ;; The actual value needed for that ratio has a lot
+        ;; to do with the importance of the data you're trying
+        ;; to protect.
+        ;; So definitely stick with this until an expert tells
+        ;; me otherwise
         (random-bytes place-holder)
         (reduce (fn [^clojure.lang.BigInt acc ^Byte b]
                   (quot (+ (* 256 acc) b) n))

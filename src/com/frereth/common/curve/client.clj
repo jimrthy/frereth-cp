@@ -3,7 +3,8 @@
 
   It seems like it would be nice if I could just declare
   the message exchange, but that approach seems dubious"
-  (:require [com.frereth.common.curve.shared :as shared]))
+  (:require [clojure.core.async :as async]
+            [com.frereth.common.curve.shared :as shared]))
 
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
@@ -12,6 +13,7 @@ nor subject to timing attacks because it just won't be called very often."
            client-extension-load-time
            recent]
     :as state}]
+  (assert (and client-extension-load-time recent))
   (let [reload (>= recent client-extension-load-time)
         client-extension-load-time (if reload
                                      (+ recent (* 30 shared/nanos-in-seconds)
@@ -49,6 +51,20 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     (throw (RuntimeException. "Not translated"))
     (shared/random-key-pair)))
 
+(defn build-hello
+  [{:keys [client-extension
+           nonce
+           packet
+           short-term-nonce
+           text]
+    :as state}]
+  (let [state (clientextension-init state)
+        short-term-nonce (update-client-short-term-nonce short-term-nonce)]
+    (shared/byte-copy! nonce (.getBytes "CurveCP-client-H"))
+    (throw (RuntimeException. "Finish this"))
+    (assoc state
+           :short-term-nonce short-term-nonce)))
+
 (defn main
   [{:keys [flag-verbose
            keydir
@@ -58,17 +74,31 @@ TODO: Switch to that or whatever Bouncy Castle uses"
            port
            extension]
     :or {flag-verbose 0}}
+   ch
    first-msg]
   (assert (and server-name server-long-term-pk server-address port extension))
 
-  (let [long-pair (load-keypair keydir)
+  (let [long-pair (do-load-keypair keydir)
         short-pair (shared/random-key-pair)
         short-term-nonce (shared/random-mod 281474976710656N)
         client-short<->server-long (shared/crypto-box-prepare server-long-term-pk (.getSecretKey short-pair))
         client-long<->server-long (shared/crypto-box-prepare server-long-term-pk (.getSecretKey long-pair))
-        udpfd (throw (RuntimeException. "start here"))
-        recent (System/nanoTime)]
-    (throw (RuntimeException. "Not Implemented"))))
+        ;; The reference implementation opens a UDP socket here, then loops over
+        ;; and sends messages to each of the server sockets (with possible duplicates)
+        ;; supplied on the command line.
+        ;; Both of those details simply do not seem to fit.
+        recent (System/nanoTime)
+        state {:client-extension nil
+               :client-extension-load-time 0
+               :nonce (byte-array 24)
+               :packet (byte-array 4096)
+               :recent recent
+               :short-term-nonce short-term-nonce
+               :text (byte-array 2048)}
+        state (build-hello state)]
+    ;; Q: Is this worth bringing manifold back?
+    ;; Or maybe interacting with the socket directly?
+    (async/put! ch state)))
 
 (defn basic-test
   []
