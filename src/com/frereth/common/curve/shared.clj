@@ -5,6 +5,10 @@
             TweetNaclFast$Box]
            java.security.SecureRandom))
 
+(def hello-header (.getBytes "QvnQ5XlH"))
+(def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
+(def vouch-nonce-prefix (.getBytes "CurveCPV"))
+
 (def max-unsigned-long (bigint (Math/pow 2 64)))
 (def nanos-in-seconds (long (Math/pow 10 9)))
 
@@ -17,6 +21,12 @@
   ([dst offset n src]
    (run! (fn [m]
            (aset dst (+ m offset) (aget src m)))
+         (range n)))
+  ([dst offset n src src-offset]
+   (run! (fn [m]
+           (let [o (+ m offset)]
+             (aset dst o
+                   (aget src o))))
          (range n))))
 
 (defn bytes=
@@ -40,6 +50,13 @@
 (defn random-key-pair
   []
   (TweetNaclFast$Box/keyPair))
+
+(defn do-load-keypair
+  [keydir]
+  (if keydir
+    ;; TODO: Get this translated
+    (throw (RuntimeException. "Load from file"))
+    (random-key-pair)))
 
 (let [rng (SecureRandom.)]
   (defn random-bytes
@@ -71,6 +88,21 @@
                   (quot (+ (* 256 acc) b) n))
                 default
                 place-holder)))))
+
+(defn safe-nonce
+  [dst keydir offset]
+  (if keydir
+    (throw (RuntimeException. "Get real safe-nonce implementation translated"))
+    ;; This is where working with something like a ByteBuf seems like it
+    ;; would be much nicer
+    (let [n (- (count dst) offset)
+          tmp (byte-array n)]
+      (.randomBytes tmp)
+      (byte-copy! dst offset n tmp))))
+
+(defn uint64-pack
+  [dst n src]
+  (throw (RuntimeException. "Get this translated")))
 
 (defn zero-bytes
   [n]
