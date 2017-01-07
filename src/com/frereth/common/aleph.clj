@@ -1,12 +1,12 @@
 (ns com.frereth.common.aleph
   "Wrappers for my aleph experiments"
-  (:require #_[aleph.tcp :as tcp]
+  (:require [aleph.udp :as udp]
             [clojure.edn :as edn]
             [clojure.spec :as s]
-            #_[gloss.core :as gloss]
-            #_[gloss.io :as gloss-io]
-            #_[manifold.deferred :as deferred]
-            #_[manifold.stream :as stream]))
+            [gloss.core :as gloss]
+            [gloss.io :as gloss-io]
+            [manifold.deferred :as deferred]
+            [manifold.stream :as stream]))
 
 
 ;; TODO: Get these spec'd

@@ -6,7 +6,8 @@ b. lein managed dependencies"
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [#_[buddy/buddy-core "1.1.1"]  ;; Q: Is there any point to this now?
+  :dependencies [[aleph "0.4.1"]
+                 #_[buddy/buddy-core "1.1.1"]  ;; Q: Is there any point to this now?
                  [clj-time "0.12.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
@@ -40,6 +41,9 @@ b. lein managed dependencies"
                  ;; It does make sense for the client/server (until/unless I just swap
                  ;; it out for hornetq), but I'm writing an app that needs functionality
                  ;; implemented in here, and I really don't want to install this for it.
+
+                 ;; If I'm serious about netty and CurveCP, this should just go away
+                 ;; TODO: Make that happen
                  [com.jimrthy/cljeromq "0.1.0-SNAPSHOT" :exclusions [com.stuartsierra/component
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
@@ -48,7 +52,10 @@ b. lein managed dependencies"
                                                            org.clojure/tools.reader]]
                  ;; Q: Do I really want this?
                  [fullcontact/full.async "1.0.0" :exclusions [org.clojure/clojure
-                                                               org.clojure/core.async]]
+                                                              org.clojure/core.async]]
+                 [gloss "0.2.5" :exclusions [byte-streams
+                                             manifold
+                                             potemkin]]
                  [im.chit/hara.event "2.4.8" :exclusions [org.clojure/clojure]]
                  [io.aviso/config "0.2.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]

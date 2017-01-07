@@ -1,5 +1,6 @@
 (ns com.frereth.common.curve.shared
   "For pieces shared among client, server, and messaging"
+  (:require [gloss.core :as gloss])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            java.security.SecureRandom))
@@ -8,15 +9,29 @@
 (def nanos-in-seconds (long (Math/pow 10 9)))
 
 (defn byte-copy!
-  "Copies the bytes from src to dst
+  "Copies the bytes from src to dst"
+  ([dst src]
+   (run! (fn [n]
+           (aset dst n (aget src n)))
+         (range (count src))))
+  ([dst offset n src]
+   (run! (fn [m]
+           (aset dst (+ m offset) (aget src m)))
+         (range n))))
 
-  Really not interesting without offsets/limits
+(defn bytes=
+  [x y]
+  (throw (RuntimeException. "Translate this")))
 
-  Less interesting because I should really be using ByteBuffers"
-  [dst src]
-  (run! (fn [n]
-          (aset dst n (aget src n)))
-        (range (count src))))
+(def cookie-header (.getBytes "RL3aNMXK"))
+(def cookie-nonce-prefix (.getBytes "CurveCPK"))
+
+(def cookie-frame (gloss/compile-frame (gloss/ordered-map :header (gloss/string :utf-8 :length 8)
+                                                          :client-extension (gloss/finite-block 16)
+                                                          :server-extension (gloss/finite-block 16)
+                                                          ;; Implicitly prefixed with "CurveCPK"
+                                                          :nonce (gloss/finite-block 16)
+                                                          :cookie (gloss/finite-block 144))))
 
 (defn crypto-box-prepare
   [public secret]
