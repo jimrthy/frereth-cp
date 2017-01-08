@@ -8,6 +8,8 @@
 (def hello-header (.getBytes "QvnQ5XlH"))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
+(def initiate-header (.getBytes "QvnQ5XlI"))
+(def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 
 (def max-unsigned-long (bigint (Math/pow 2 64)))
 (def nanos-in-seconds (long (Math/pow 10 9)))
@@ -100,9 +102,32 @@
       (.randomBytes tmp)
       (byte-copy! dst offset n tmp))))
 
-(defn uint64-pack
-  [dst n src]
-  (throw (RuntimeException. "Get this translated")))
+(defn uint64-pack!
+  "Sets 8 bytes in dst (starting at offset n) to "
+  [dst n x]
+  (let [x' (bit-and 0xff x)]
+    (aset dst n x')
+    (let [x (unsigned-bit-shift-right x 8)
+          x' (bit-and 0xff x)]
+      (aset dst (inc n) x')
+      (let [x (unsigned-bit-shift-right x 8)
+            x' (bit-and 0xff x)]
+        (aset dst (+ n 2) x')
+        (let [x (unsigned-bit-shift-right x 8)
+              x' (bit-and 0xff x)]
+          (aset dst (+ n 3) x')
+          (let [x (unsigned-bit-shift-right x 8)
+                x' (bit-and 0xff x)]
+            (aset dst (+ n 4) x')
+            (let [x (unsigned-bit-shift-right x 8)
+                  x' (bit-and 0xff x)]
+              (aset dst (+ n 5) x')
+              (let [x (unsigned-bit-shift-right x 8)
+                    x' (bit-and 0xff x)]
+                (aset dst (+ n 6) x')
+                (let [x (unsigned-bit-shift-right x 8)
+                      x' (bit-and 0xff x)]
+                  (aset dst (+ n 7) x'))))))))))
 
 (defn zero-bytes
   [n]

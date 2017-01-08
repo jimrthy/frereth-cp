@@ -22,6 +22,7 @@
                   keydir
                   long-pair
                   nonce
+                  outgoing-message
                   packet
                   port
                   recent
@@ -87,7 +88,7 @@ TODO: Switch to that or whatever Bouncy Castle uses"
   (let [state (clientextension-init state)
         short-term-nonce (update-client-short-term-nonce short-term-nonce)]
     (shared/byte-copy! nonce shared/hello-nonce-prefix)
-    (shared/uint64-pack nonce 16 short-term-nonce)
+    (shared/uint64-pack! nonce 16 short-term-nonce)
 
     ;; This seems to be screaming for gloss.
     ;; Q: What kind of performance difference would that make?
@@ -173,6 +174,93 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     (throw (RuntimeException. "Finish this"))
     (assoc state :vouch vouch)))
 
+(defn extract-child-message
+  "Pretty much blindly translated from the CurveCP reference
+implementation. This is code that I don't understand yet"
+  [state buffer]
+  (let [extracted (reduce (fn [{:keys [buf
+                                       buf-len
+                                       msg
+                                       msg-len
+                                       i
+                                       state]
+                                :as acc}
+                               b]
+                            (when (or (< msg-len 0)
+                                      (> msg-len 2048))
+                              (throw (ex-info "done" {})))
+                            ;; It seems silly to set this and then check the first byte
+                            ;; for the quit signal (assuming that's what it is)
+                            ;; every time through the loop.
+                            (aset msg msg-len (aget buf i))
+                            (let [msg-len (inc msg-len)
+                                  length-code (aget msg 0)]
+                              (when (bit-and length-code 0x80)
+                                (throw (ex-info "done" {})))
+                              (if (= msg-len (inc (* 16 length-code)))
+                                (let [{:keys [client-extension
+                                              client-short<->server-short
+                                              long-pair
+                                              nonce
+                                              server-cookie
+                                              server-extension
+                                              server-name
+                                              short-pair
+                                              packet
+                                              text
+                                              vouch]
+                                       :as state} (clientextension-init state)
+                                      short-term-nonce (update-client-short-term-nonce
+                                                        (:short-term-nonce state))]
+                                  (shared/uint64-pack! nonce 16 short-term-nonce)
+                                  ;; This is where the original splits, depending on whether
+                                  ;; we've received a message back from the server or not.
+                                  ;; According to the spec:
+                                  ;; The server is free to send any number of Message packets
+                                  ;; after it sees the Initiate packet.
+                                  ;; The client is free to send any number of Message packets
+                                  ;; after it sees the server's first Message packet.
+                                  ;; At this point in time, we know we're still building the
+                                  ;; Initiate packet.
+                                  ;; It's tempting to try to avoid duplication the same
+                                  ;; way the reference implementation does, by handling
+                                  ;; both logical branches here.
+                                  ;; And maybe there's a really good reason for doing so.
+                                  ;; But this function feels far too complex as it is.
+                                  (let [r (dec msg-len)]
+                                    (when (or (< r 16)
+                                              (> r 640))
+                                      (throw (ex-info "done" {})))
+                                    (shared/byte-copy! nonce 0 16 shared/initiate-nonce-prefix)
+                                    ;; Reference version starts by zeroing first 32 bytes.
+                                    ;; I thought we just needed 16 for the encryption buffer
+                                    (shared/byte-copy! text 0 16 shared/all-zeros)
+                                    (shared/byte-copy! text 32 32 (.getPublicKey long-pair))
+                                    (shared/byte-copy! text 64 64 vouch)
+                                    (shared/byte-copy! text 128 256 server-name)
+                                    (shared/byte-copy! text 384 r msg 1)
+                                    (let [box (.after client-short<->server-short text 0 (+ r 384)
+                                                      nonce)]
+                                      (shared/byte-copy! packet 0 8 shared/initiate-header)
+                                      (shared/byte-copy! packet 8 16 server-extension)
+                                      (shared/byte-copy! packet 24 16 client-extension)
+                                      (shared/byte-copy! packet 40 32 (.getPublicKey short-pair))
+                                      (shared/byte-copy! packet 72 96 server-cookie)
+                                      (shared/byte-copy! packet 168 8 nonce 16)
+                                      ;; Actually, the original version sends off the packet, updates
+                                      ;; msg-len to 0, and goes back to pulling date from child/server.
+                                      (throw (ex-info "How should this really work?"
+                                                      {:problem "Need to break out of loop here"})))))
+                                (assoc acc :msg-len msg-len))))
+                          {:buf (byte-array 4096)
+                           :buf-len 0
+                           :msg (byte-array 2048)
+                           :msg-len 0
+                           :i 0
+                           :state state}
+                          buffer)]
+    (assoc state :outgoing-message (:child-msg extracted))))
+
 (defn hand-shake
   "This really needs to be some sort of stateful component.
   It almost definitely needs to interact with ByteBuf to
@@ -195,7 +283,9 @@ TODO: Switch to that or whatever Bouncy Castle uses"
   handle building that?"
   [{:keys [flag-verbose  ; Q: Why?
            keydir
-           server-name   ; Q: What's this for?
+           ;; The server's domain name, in DNS format (between 1 and 255 bytes),
+           ;; zero-padded to 256 bytes
+           server-name
            server-long-term-pk
            server-address
            port
@@ -204,8 +294,8 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     :or {flag-verbose 0
          timeout 2500}
     :as state}
-   ch
-   first-msg]
+   server-chan
+   client-chan]
   (assert (and server-name server-long-term-pk server-address port server-extension))
 
   (let [recent (System/nanoTime)
@@ -229,11 +319,11 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     ;; That seems like it might make sense as an optimization,
     ;; but not until I have convincing numbers that it's needed.
     ;; Of course, I might also be opening things up for timing attacks.
-    (let [d (stream/put! ch (:packet state))]
+    (let [d (stream/put! server-chan (:packet state))]
       (deferred/chain d
         (fn [sent?]
           (if sent?
-            (deferred/timeout! (stream/take! ch) timeout ::hello-timed-out)
+            (deferred/timeout! (stream/take! server-chan) timeout ::hello-timed-out)
             ::hello-send-failed))
         (fn [cookie]
           ;; Q: What is really in cookie now?
@@ -253,7 +343,23 @@ TODO: Switch to that or whatever Bouncy Castle uses"
         (fn [state-with-keyed-cookie]
           (build-vouch state-with-keyed-cookie))
         (fn [vouched-state]
-          (throw (RuntimeException. "What's next?")))))))
+          (let [future (stream/take! client-chan)
+                ;; I'd like to just return that future and
+                ;; handle the next pieces separately.
+                ;; But then I'd lose the state that I'm
+                ;; accumulating
+                msg-buffer (deref future timeout ::child-timed-out)]
+            (assert (and msg-buffer
+                         (not= msg-buffer ::child-timed-out)))
+            (let [updated (extract-child-message vouched-state msg-buffer)]
+              (assoc updated :initiate-sent? (stream/put! server-chan (:packet updated))))))
+        (fn [state]
+          (let [success (deref (:initiate-sent? state) timeout ::sending-initiate-failed)]
+            (if success
+              (dissoc state :initiate-sent?)
+              ;; TODO: Really should initiate retries
+              ;; But if we failed to send the packet at all, something is badly wrong
+              (throw (ex-info "Failed to send initiate" state)))))))))
 
 (defn basic-test
   []
