@@ -53,17 +53,39 @@
   []
   (TweetNaclFast$Box/keyPair))
 
+(defn slurp-bytes
+  "Slurp the bytes from a slurpable thing
+
+Copy/pasted from stackoverflow. Credit: Matt W-D.
+
+alt approach: Add dependency to org.apache.commons.io
+
+Or there's probably something similar in guava"
+  [x]
+  (with-open [out (java.io.ByteArrayOutputStream.)]
+    (clojure.java.io/copy (clojure.java.io/input-stream x) out)
+    (.toByteArray out)))
+
 (defn do-load-keypair
   [keydir]
   (if keydir
-    ;; TODO: Get this translated
-    (throw (RuntimeException. "Load from file"))
+    (let [secret (slurp-bytes (str keydir "/.expertsonly/secretkey"))]
+      (.keyPair_fromSecretKey TweetNaclFast secret))
     (random-key-pair)))
 
-(let [rng (SecureRandom.)]
-  (defn random-bytes
-    [dst]
-    (.nextBytes rng dst)))
+(defn random-bytes!
+  [#^bytes dst]
+  (TweetNaclFast/randombytes dst))
+
+(defn random-array
+  [^Long n]
+  (TweetNaclFast/randombytes n))
+
+(defn random-long
+  "This seems like it's really just for generating a nonce.
+  Or maybe it isn't being used at all?"
+  []
+  (throw (RuntimeException. "No matching implementation")))
 
 (defn random-mod
   "Returns a cryptographically secure random number between 0 and n"
@@ -71,7 +93,7 @@
   (let [default 0N]
     (if (<= n 1)
       default
-      (let [place-holder (byte-array 32)]
+      (let [bs (random-array 32)]
         ;; Q: How does this compare with just calling
         ;; (.nextLong rng) ?
         ;; A (from crypto.stackexchange.com):
@@ -83,13 +105,15 @@
         ;; The actual value needed for that ratio has a lot
         ;; to do with the importance of the data you're trying
         ;; to protect.
+        ;; (He recommended 2^-30 for protecting your collection
+        ;; of pirated music and 2^-80 for nuclear launch codes.
+        ;; Note that this was written several years ago
         ;; So definitely stick with this until an expert tells
         ;; me otherwise
-        (random-bytes place-holder)
         (reduce (fn [^clojure.lang.BigInt acc ^Byte b]
                   (quot (+ (* 256 acc) b) n))
                 default
-                place-holder)))))
+                bs)))))
 
 (defn safe-nonce
   [dst keydir offset]
@@ -103,7 +127,13 @@
       (byte-copy! dst offset n tmp))))
 
 (defn uint64-pack!
-  "Sets 8 bytes in dst (starting at offset n) to "
+  "Sets 8 bytes in dst (starting at offset n) to x
+
+Note that this looks/smells very similar to TweetNaclFast's
+Box.generateNonce.
+
+If that's really all this is used for, should definitely use
+that implementation instead"
   [dst n x]
   (let [x' (bit-and 0xff x)]
     (aset dst n x')
