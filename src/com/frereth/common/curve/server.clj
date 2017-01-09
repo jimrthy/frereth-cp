@@ -2,7 +2,7 @@
   "Implement the server half of the CurveCP protocol"
   (:require [clojure.spec :as s]
             [com.frereth.common.curve.shared :as shared]
-            [mount.core :as mount :refer [defstate]]
+            [com.stuartsierra.component :as cpt]
             [gloss.core :as gloss-core]
             [gloss.io :as gloss]
             [manifold.deferred :as deferred]
@@ -93,15 +93,14 @@
                   packet-management
                   server-routing
                   security
-                  working-area])
-
-(defn start!
-  []
-  (println "CurveCP Server: Starting the server state")
-  (let [{:keys [client-chan]
-         :as this} (:server-state (mount/args))
-        security (:security this)
-        extension (:extension this)]
+                  working-area]
+  cpt/Lifecycle
+  (start
+    [{:keys [client-chan
+             extension
+             security]
+      :as this}]
+    (println "CurveCP Server: Starting the server state")
     (assert (and client-chan
                  (:name security)
                  (:keydir security)
@@ -110,13 +109,13 @@
                  ;; 32 hex characters. Which really means
                  ;; a 16-byte array
                  (= (count extension) 16)))
-    (println "Passed assertion checks")
     ;; Reference implementation starts by allocating the active client structs.
     ;; This is one area where updating in place simply cannot be worth it.
     ;; Q: Can it?
     ;; A: Skip it, for now
 
     ;; So we're starting by loading up the long-term keys
+
     (let [max-active-clients (or (:max-active-clients this) 100)
           keydir (:keydir security)
           long-pair (shared/do-load-keypair keydir)
@@ -130,21 +129,17 @@
                      (assoc :active-clients {})
                      (assoc :client-chan client-chan))]
       (println "Kicking off event loop")
-      (assoc almost :event-loop-stopper (begin! this)))))
+      (assoc almost :event-loop-stopper (begin! this))))
 
-(defn stop!
-  [this]
-  (println "Stopping server state")
-  (when-let [event-loop-stopper (:event-loop-stopper this)]
-    (println "Stopping event loop")
-    (event-loop-stopper))
-  (println "Clearing secrets")
-  (assoc (hide-secrets! this)
-         :event-loop-stopper nil))
-
-(defstate cp-state
-  :start (start!)
-  :stop (stop! cp-state))
+  (stop
+    [this]
+    (println "Stopping server state")
+    (when-let [event-loop-stopper (:event-loop-stopper this)]
+      (println "Stopping event loop")
+      (event-loop-stopper))
+    (println "Clearing secrets")
+    (assoc (hide-secrets! this)
+           :event-loop-stopper nil)))
 ;;; TODO: Def the State spec
 
 (defn alloc-client
@@ -259,3 +254,7 @@
   ;; Actually, keeping them in 2 different places seems odd.
   ;; Q: What's the point to current-client at all?
   (assoc-in state [:current-client :shared-secrets] nil))
+
+(defn ctor
+  [cfg]
+  (map->State cfg))
