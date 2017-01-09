@@ -61,7 +61,7 @@ b. lein managed dependencies"
                                                        prismatic/schema]]
                  [io.netty/netty-all "4.1.6.Final"]
                  ;; TODO: Refactor from component-dsl to this
-                 #_[mount "0.1.11"]
+                 [mount "0.1.11"]
                  ;; Because pomegranate and lein conflict.
                  ;; Try the latest versions to see how it works
                  [org.apache.maven.wagon/wagon-http "2.10"]

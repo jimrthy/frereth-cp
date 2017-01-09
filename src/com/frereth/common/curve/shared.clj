@@ -1,6 +1,7 @@
 (ns com.frereth.common.curve.shared
   "For pieces shared among client, server, and messaging"
-  (:require [gloss.core :as gloss])
+  (:require [clojure.java.io :as io]
+            [gloss.core :as gloss])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            java.security.SecureRandom))
@@ -69,9 +70,11 @@ Or there's probably something similar in guava"
 (defn do-load-keypair
   [keydir]
   (if keydir
-    (let [secret (slurp-bytes (str keydir "/.expertsonly/secretkey"))]
-      (.keyPair_fromSecretKey TweetNaclFast secret))
+    (let [secret (slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))]
+      (TweetNaclFast$Box/keyPair_fromSecretKey secret))
     (random-key-pair)))
+(comment (io/resource "curve-test/."))
+
 
 (defn random-bytes!
   [#^bytes dst]

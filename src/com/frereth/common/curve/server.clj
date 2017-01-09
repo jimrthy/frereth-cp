@@ -2,7 +2,7 @@
   "Implement the server half of the CurveCP protocol"
   (:require [clojure.spec :as s]
             [com.frereth.common.curve.shared :as shared]
-            [com.stuartsierra.component :as cpt]
+            [mount.core :as mount :refer [defstate]]
             [gloss.core :as gloss-core]
             [gloss.io :as gloss]
             [manifold.deferred :as deferred]
@@ -93,48 +93,59 @@
                   packet-management
                   server-routing
                   security
-                  working-area]
-  cpt/Lifecycle
-  (start [this]
-    (assert (and (:name security)
+                  working-area])
+
+(defn start!
+  []
+  (println "CurveCP Server: Starting the server state")
+  (let [{:keys [client-chan]
+         :as this} (:server-state (mount/args))
+        security (:security this)
+        extension (:extension this)]
+    (assert (and client-chan
+                 (:name security)
                  (:keydir security)
                  extension
                  ;; Actually, the rule is that it must be
                  ;; 32 hex characters. Which really means
                  ;; a 16-byte array
                  (= (count extension) 16)))
+    (println "Passed assertion checks")
     ;; Reference implementation starts by allocating the active client structs.
     ;; This is one area where updating in place simply cannot be worth it.
     ;; Q: Can it?
     ;; A: Skip it, for now
 
     ;; So we're starting by loading up the long-term keys
-    (let [max-active-clients (or max-active-clients 100)
+    (let [max-active-clients (or (:max-active-clients this) 100)
           keydir (:keydir security)
           long-pair (shared/do-load-keypair keydir)
           almost (-> this
                      ;; Randomize the cookie-cutter keys
-                     (assoc-in [:cookie-cutter :minute-key] (shared/random-array 32))
-                     (assoc-in [:cookie-cutter :last-minute-key] (shared/random-array 32))
-                     (assoc-in [:cookie-cutter :next-minute (+ (System/nanoTime)
-                                                               (one-minute))])
-                     (assoc-in [:security :long-pair] long-pair))]
-      (assoc almost :event-loop-stopper (begin! this))
-      ;; Another break with reference implementation:
-      ;; It enters an infinite loop here.
-      ;; The top of that infinite loop checks for a timeout every minute
-      ;; When that happens, it updates cookie-cutter and randomizes all the
-      ;; sensitive arrays.
-      ;; That obviously needs to happen, but it doesn't seem to make sense here.
-      ;; (Everything except preserving the cookie key rotation happens in hide-secrets)
-      )
-    )
-  (stop
-    [this]
-    (when event-loop-stopper
-      (event-loop-stopper))
-    (assoc (hide-secrets! this)
-           :event-loop-stopper nil)))
+                     (assoc :cookie-cutter {:minute-key (shared/random-array 32)
+                                            :last-minute-key (shared/random-array 32)
+                                            :next-minute(+ (System/nanoTime)
+                                                           (one-minute))})
+                     (assoc-in [:security :long-pair] long-pair)
+                     (assoc :active-clients {})
+                     (assoc :client-chan client-chan))]
+      (println "Kicking off event loop")
+      (assoc almost :event-loop-stopper (begin! this)))))
+
+(defn stop!
+  [this]
+  (println "Stopping server state")
+  (when-let [event-loop-stopper (:event-loop-stopper this)]
+    (println "Stopping event loop")
+    (event-loop-stopper))
+  (println "Clearing secrets")
+  (assoc (hide-secrets! this)
+         :event-loop-stopper nil))
+
+(defstate cp-state
+  :start (start!)
+  :stop (stop! cp-state))
+;;; TODO: Def the State spec
 
 (defn alloc-client
   []
@@ -178,20 +189,39 @@
         stopped (promise)]
     (deferred/loop [state (assoc state
                                  :timeout (one-minute))]
+      (println "Top of event loop. Timeout: " (:timeout state))
       (deferred/chain
-        ;; Q: Why
+        ;; timeout is in nanoseconds.
+        ;; The timeout is in milliseconds, but state's timeout uses
+        ;; the nanosecond clock
         (stream/try-take! client-chan ::drained
                           (inc (/ (:timeout state) 1000000)) ::timeout)
         (fn [msg]
+          (println (str "Top of Server Event loop received " msg))
           (if-not (or (identical? ::drained msg)
                       (identical? ::timeout msg))
-            (handle-incoming! state msg)
+            (try
+              ;; Q: Do I want unhandled exceptions to be fatal errors?
+              (let [modified-state (handle-incoming! state msg)]
+                (println "Updated state based on incoming msg:" state)
+                modified-state)
+              (catch clojure.lang.ExceptionInfo ex
+                (println "handle-incoming! failed" ex (.getStackTrace ex))
+                state)
+              (catch RuntimeException ex
+                (println "Unhandled low-level exception escaped handler" ex (.getStackTrace ex))
+                (comment state))
+              (catch Exception ex
+                (println "Major problem escaped handler" ex (.getStackTrace ex))))
             msg))
         (fn [state]
-          (when-not (identical? state ::drained)
+          (if-not (identical? state ::drained)
             (if-not (realized? stopper)
               (deferred/recur (handle-key-rotation state))
-              (deliver stopped ::exited))))))
+              (do
+                (println "Received stop signal")
+                (deliver stopped ::exited)))
+            (println "Closing because client connection is drained")))))
     (fn []
       (deliver stopper ::exiting)
       @stopped)))
@@ -201,7 +231,9 @@
   ;; This is almost the top of the server's for(;;)
   ;; Missing step: reset timeout
   ;; Missing step: copy :minute-key into :last-minute-key
-  (shared/random-bytes! (-> state :cookie-cutter :minute-key))
+  (let [min-key-array (-> state :cookie-cutter :minute-key)]
+    (assert min-key-array)
+    (shared/random-bytes! min-key-array))
   ;; Missing step: update cookie-cutter's next-minute
   (shared/random-bytes! (-> state :packet-management :packet))
   (shared/random-bytes! (-> state :packet-management :ip))
