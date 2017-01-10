@@ -5,31 +5,56 @@
             [component-dsl.system :as cpt-dsl]
             [manifold.stream :as strm]))
 
+(defrecord StreamOwner [chan]
+  cpt/Lifecycle
+  (start
+    [this]
+    (assoc this :chan (or chan (strm/stream))))
+  (stop
+    [this]
+    (println "Stopping StreamOwner")
+    (when chan
+      (strm/close! chan))
+    (assoc this :chan nil)))
+(defn chan-ctor
+  [_]
+  (->StreamOwner (strm/stream)))
+
+(def options {:cp-server {:security {:keydir "curve-test"
+                                     ;; Note that name really isn't legal.
+                                     ;; It needs to be something we can pass
+                                     ;; along to DNS, padded to 255 bytes.
+                                     ;; This bug really should show up in
+                                     ;; a test.
+                                     :name "local.test"}
+                          :extension (byte-array [0x01 0x02 0x03 0x04
+                                                  0x05 0x06 0x07 0x08
+                                                  0x09 0x0a 0x0b 0x0c
+                                                  0x0d 0x0e 0x0f 0x10])}})
+(def sys-struct {:cp-server 'com.frereth.common.curve.server/ctor
+                 :client-chan 'com.frereth.common.curve.server-test/chan-ctor})
+
 (defn build
-  [client-chan]
-  (let [cfg {:cp-server {:client-chan client-chan
-                         :security {:keydir "curve-test"
-                                    ;; Note that name really isn't legal.
-                                    ;; It needs to be something we can pass
-                                    ;; along to DNS, padded to 255 bytes.
-                                    ;; This bug really should show up in
-                                    ;; a test.
-                                    :name "local.test"}
-                         :extension (byte-array [0x01 0x02 0x03 0x04
-                                                 0x05 0x06 0x07 0x08
-                                                 0x09 0x0a 0x0b 0x0c
-                                                 0x0d 0x0e 0x0f 0x10])}}
-        structure {:cp-server com.frereth.common.curve.server/ctor}]
+  []
+  (let [structure sys-struct]
     (cpt-dsl/build #:component-dsl.system {:structure structure
-                                           :dependencies {}}
-                   cfg)))
+
+                                           :dependencies {:cp-server [:client-chan]}}
+                   options)))
 
 (deftest start-stop
   (testing "That we can start and stop successfully"
-    (let [init (build (promise))
+    (let [ch (strm/stream)
+          init (build ch)
           started (cpt/start init)]
       (is started)
+      (strm/close! ch)
       (is (cpt/stop started)))))
+(comment
+  (def test-sys (build))
+  (alter-var-root #'test-sys cpt/start)
+  (alter-var-root #'test-sys cpt/stop)
+  )
 
 (deftest shake-hands
   (let [client (strm/stream)]

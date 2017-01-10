@@ -2,6 +2,7 @@
   "Implement the server half of the CurveCP protocol"
   (:require [clojure.spec :as s]
             [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.util :as util]
             [com.stuartsierra.component :as cpt]
             [gloss.core :as gloss-core]
             [gloss.io :as gloss]
@@ -72,8 +73,13 @@
                         text])
 
 (defrecord PacketManagement [packet ; TODO: Rename this to body
+                             ;; Looks like the client's IPv4 address
+                             ;; Q: Any point?
                              ip
                              nonce
+                             ;; 2-byte array for the packetport
+                             ;; Seems likely this means the port used by the client
+                             ;; Q: Any point?
                              port])
 
 ;; Q: Do I have any real use for this?
@@ -102,6 +108,7 @@
       :as this}]
     (println "CurveCP Server: Starting the server state")
     (assert (and client-chan
+                 (:chan client-chan)
                  (:name security)
                  (:keydir security)
                  extension
@@ -124,22 +131,36 @@
                      (assoc :cookie-cutter {:minute-key (shared/random-array 32)
                                             :last-minute-key (shared/random-array 32)
                                             :next-minute(+ (System/nanoTime)
-                                                           (one-minute))})
+                                                           (one-minute))}
+                            :current-client (throw (RuntimeException. "Initialize this"))
+                            :packet-management (map->PacketManagement {:packet (byte-array 4096)
+                                                                       :ip (byte-array 4)
+                                                                       :nonce 0N
+                                                                       :port (byte-array 2)}))
                      (assoc-in [:security :long-pair] long-pair)
-                     (assoc :active-clients {})
-                     (assoc :client-chan client-chan))]
-      (println "Kicking off event loop")
-      (assoc almost :event-loop-stopper (begin! this))))
+                     (assoc :active-clients {}))]
+      (println "Kicking off event loop. packet-management:" (:packet-management almost))
+      (assoc almost :event-loop-stopper (begin! almost))))
 
   (stop
     [this]
     (println "Stopping server state")
     (when-let [event-loop-stopper (:event-loop-stopper this)]
       (println "Stopping event loop")
-      (event-loop-stopper))
+      (when (= (event-loop-stopper 250) ::stopping-timed-out)
+        (println "WARNING: Timed out trying to stop the event loop")))
     (println "Clearing secrets")
-    (assoc (hide-secrets! this)
-           :event-loop-stopper nil)))
+    (let [outcome
+          (assoc (try
+                   (hide-secrets! this)
+                   (catch Exception ex
+                     (println "WARNING:" ex)
+                     ;; TODO: This really should be fatal.
+                     ;; Make the error-handling go away once hiding secrets actually works
+                     this))
+                 :event-loop-stopper nil)]
+      (println "Secrets hidden")
+      outcome)))
 ;;; TODO: Def the State spec
 
 (defn alloc-client
@@ -157,7 +178,7 @@
 
 (defn one-minute
   ([]
-   (* 60 shared/nanos-in-seconds))
+   (* #_60 6 shared/nanos-in-seconds))
   ([now]
    (+ (one-minute) now)))
 
@@ -166,15 +187,41 @@
   (throw (RuntimeException. (str "Just received: " msg))))
 
 (defn handle-key-rotation
+  "Doing it this way means that state changes are only seen locally
+
+  They really need to propagate back up to the System that owns the Component.
+
+  It seems obvious that this state should go into an atom, or possibly an agent
+  so other pieces can see it.
+
+  But this is very similar to the kinds of state management issues that Om and
+  Om next are trying to solve. So that approach might not be as obvious as it
+  seems at first."
   [state]
-  (let [now (System/nanoTime)
-        timeout (- (-> state :cookie-cutter :next-minute) now)]
-    (if (<= timeout 0)
-      (let [timeout (one-minute now)]
-        (shared/byte-copy! (-> state :cookie-cutter :last-minute-key))
-        (assoc (hide-secrets! state)
-               :timeout timeout))
-      (assoc state :timeout timeout))))
+  (try
+    (println "Checking whether it's time to rotate keys or not")
+    (let [now (System/nanoTime)
+          next-minute (-> state :cookie-cutter :next-minute)
+          _ (println "next-minute:" next-minute "out of" (-> state keys)
+                     "with cookie-cutter" (:cookie-cutter state))
+          timeout (- next-minute now)]
+      (println "Top of handle-key-rotation. Remaining timeout:" timeout)
+      (if (<= timeout 0)
+        (let [timeout (one-minute now)]
+          (println "Saving key for previous minute")
+          (try
+            (shared/byte-copy! (-> state :cookie-cutter :last-minute-key)
+                               (-> state :cookie-cutter :minute-key))
+            (catch Exception ex
+              (println "Key rotation failed:" ex "a" (class ex))))
+          (println "Saved key for previous minute. Hiding:")
+          (assoc (hide-secrets! state)
+                 :timeout timeout))
+        (assoc state :timeout timeout)))
+    (catch Exception ex
+      (println "Rotation failed:" ex "\nStack trace:")
+      (.printtStackTrace ex)
+      state)))
 
 (defn begin!
   "Start the event loop"
@@ -184,12 +231,13 @@
         stopped (promise)]
     (deferred/loop [state (assoc state
                                  :timeout (one-minute))]
-      (println "Top of event loop. Timeout: " (:timeout state))
+      (println "Top of event loop. Timeout: " (:timeout state) "in"
+               (util/pretty (assoc-in state [:packet-management :packet] "Lots o' bytes")))
       (deferred/chain
         ;; timeout is in nanoseconds.
         ;; The timeout is in milliseconds, but state's timeout uses
         ;; the nanosecond clock
-        (stream/try-take! client-chan ::drained
+        (stream/try-take! (:chan client-chan) ::drained
                           (inc (/ (:timeout state) 1000000)) ::timeout)
         (fn [msg]
           (println (str "Top of Server Event loop received " msg))
@@ -208,32 +256,49 @@
                 (comment state))
               (catch Exception ex
                 (println "Major problem escaped handler" ex (.getStackTrace ex))))
-            msg))
+            (do
+              (println "Took from the client:" msg)
+              (if (identical? msg ::drained)
+                msg
+                state))))
         (fn [state]
           (if-not (identical? state ::drained)
             (if-not (realized? stopper)
-              (deferred/recur (handle-key-rotation state))
+              (do
+                (println "Rotating" (util/pretty state))
+                (deferred/recur (handle-key-rotation state)))
               (do
                 (println "Received stop signal")
                 (deliver stopped ::exited)))
-            (println "Closing because client connection is drained")))))
-    (fn []
-      (deliver stopper ::exiting)
-      @stopped)))
+            (do
+              (println "Closing because client connection is drained")
+              (deliver stopped ::drained))))))
+    (fn [timeout]
+      (when (not (realized? stopped))
+        (deliver stopper ::exiting))
+      (deref stopped timeout ::stopping-timed-out))))
 
 (defn hide-secrets!
   [state]
+  (println "Hiding secrets")
   ;; This is almost the top of the server's for(;;)
   ;; Missing step: reset timeout
   ;; Missing step: copy :minute-key into :last-minute-key
   (let [min-key-array (-> state :cookie-cutter :minute-key)]
     (assert min-key-array)
+    (println "Filling minute-key with" (count min-key-array) "random bytes")
     (shared/random-bytes! min-key-array))
   ;; Missing step: update cookie-cutter's next-minute
-  (shared/random-bytes! (-> state :packet-management :packet))
-  (shared/random-bytes! (-> state :packet-management :ip))
-  (shared/random-bytes! (-> state :packet-management :port))
+  ;; (that happens in handle-key-rotation)
+  (let [p-m (:packet-management state)]
+    (println "Randomizing packet-management" (keys p-m) "out of" (keys state))
+    (shared/random-bytes! (:packet p-m))
+    (println "Randomizing IP bytes")
+    (shared/random-bytes! (:ip p-m))
+    (println "Point B")
+    (shared/random-bytes! (:port p-m)))
   (shared/random-bytes! (-> state :current-client :client-security :short-pk))
+  (println "Point A")
   ;; These are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
   ;; For now, just explicitly set to nil once we get past these side-effects
