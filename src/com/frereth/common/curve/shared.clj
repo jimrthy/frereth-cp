@@ -84,9 +84,14 @@ Or there's probably something similar in guava"
   [^Long n]
   (TweetNaclFast/randombytes n))
 
-(defn random-long
+(defn random-key
+  []
+  (random-array 32))
+
+(defn random-long-obsolete
   "This seems like it's really just for generating a nonce.
-  Or maybe it isn't being used at all?"
+  Or maybe it isn't being used at all?
+  I could always do something like (random-mod MAXINT)"
   []
   (throw (RuntimeException. "No matching implementation")))
 

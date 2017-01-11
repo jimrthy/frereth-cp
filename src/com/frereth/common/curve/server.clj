@@ -69,8 +69,13 @@
                                        ::sent-nonce
                                        ::shared-secrets]))
 
+;; This seems like it probably belongs in shared
 (defrecord WorkingArea [nonce
                         text])
+;; Q: Worth specifying a length?
+(s/def ::nonce bytes?)
+(s/def ::text bytes?)
+(s/def ::client-state (s/keys :req-un [::nonce ::text]))
 
 (defrecord PacketManagement [packet ; TODO: Rename this to body
                              ;; Looks like the client's IPv4 address
@@ -88,7 +93,7 @@
                         msg
                         msg-len])
 
-(declare begin! hide-secrets! one-minute)
+(declare alloc-client begin! hide-secrets! one-minute)
 (defrecord State [active-clients
                   client-chan
                   cookie-cutter
@@ -127,16 +132,20 @@
           keydir (:keydir security)
           long-pair (shared/do-load-keypair keydir)
           almost (-> this
-                     ;; Randomize the cookie-cutter keys
-                     (assoc :cookie-cutter {:minute-key (shared/random-array 32)
-                                            :last-minute-key (shared/random-array 32)
+                     (assoc :active-clients (atom #{})
+                            ;; Randomize the cookie-cutter keys
+                            :cookie-cutter {:minute-key (shared/random-key)
+                                            :last-minute-key (shared/random-key)
                                             :next-minute(+ (System/nanoTime)
                                                            (one-minute))}
-                            :current-client (throw (RuntimeException. "Initialize this"))
+                            :current-client (alloc-client)
+                            :max-active-clients max-active-clients
                             :packet-management (map->PacketManagement {:packet (byte-array 4096)
                                                                        :ip (byte-array 4)
                                                                        :nonce 0N
-                                                                       :port (byte-array 2)}))
+                                                                       :port (byte-array 2)})
+                            :working-area (map->WorkingArea {:nonce (byte-array 24)
+                                                             :text (byte-array 2048)}))
                      (assoc-in [:security :long-pair] long-pair)
                      (assoc :active-clients {}))]
       (println "Kicking off event loop. packet-management:" (:packet-management almost))
@@ -147,8 +156,15 @@
     (println "Stopping server state")
     (when-let [event-loop-stopper (:event-loop-stopper this)]
       (println "Stopping event loop")
+      ;; It should also stop if/when the client-chan stream closes.
+      ;; But that's in a Component on which this one depends. So,
+      ;; in normal operation, this should be the trigger to stop it.
+      ;; Note that it isn't working out this way.
+      ;; This is timing out, client-chan closes, then the event loop is
+      ;; exiting because it's been drained.
       (when (= (event-loop-stopper 250) ::stopping-timed-out)
-        (println "WARNING: Timed out trying to stop the event loop")))
+        (println "WARNING: Timed out trying to stop the event loop")
+        (throw (RuntimeException. "What's going wrong here?"))))
     (println "Clearing secrets")
     (let [outcome
           (assoc (try
@@ -166,19 +182,19 @@
 (defn alloc-client
   []
   (let [interact (map->ChildInteraction {:child-id -1})
-        sec (map->ClientSecurity {:long-pair (shared/random-bytes! (byte-array 32))
-                                  :short-pair (shared/random-bytes! (byte-array 32))})]
+        sec (map->ClientSecurity {:long-pk (shared/random-key)
+                                  :short-pk (shared/random-key)})]
     (map->ClientState {:child-interaction interact
                        :client-security sec
                        :extension (shared/random-bytes! (byte-array 16))
                        :message (shared/random-bytes! (byte-array message-len))
-                       :message-len (shared/random-long)
+                       :message-len 0
                        :received-nonce 0
                        :sent-nonce (shared/random-mod 281474976710656N)})))
 
 (defn one-minute
   ([]
-   (* #_60 6 shared/nanos-in-seconds))
+   (* 60 shared/nanos-in-seconds))
   ([now]
    (+ (one-minute) now)))
 
@@ -223,6 +239,13 @@
       (.printtStackTrace ex)
       state)))
 
+(defn hide-long-arrays
+  "Try to make pretty printing less obnoxious"
+  [state]
+  (-> state
+      (assoc-in [:packet-management :packet] "Lots o' bytes")
+      (assoc :working-area "Lots more bytes")))
+
 (defn begin!
   "Start the event loop"
   [{:keys [client-chan]
@@ -232,7 +255,7 @@
     (deferred/loop [state (assoc state
                                  :timeout (one-minute))]
       (println "Top of event loop. Timeout: " (:timeout state) "in"
-               (util/pretty (assoc-in state [:packet-management :packet] "Lots o' bytes")))
+               (util/pretty (hide-long-arrays state)))
       (deferred/chain
         ;; timeout is in nanoseconds.
         ;; The timeout is in milliseconds, but state's timeout uses
@@ -265,7 +288,7 @@
           (if-not (identical? state ::drained)
             (if-not (realized? stopper)
               (do
-                (println "Rotating" (util/pretty state))
+                (println "Rotating" (util/pretty (hide-long-arrays state)))
                 (deferred/recur (handle-key-rotation state)))
               (do
                 (println "Received stop signal")
@@ -286,19 +309,14 @@
   ;; Missing step: copy :minute-key into :last-minute-key
   (let [min-key-array (-> state :cookie-cutter :minute-key)]
     (assert min-key-array)
-    (println "Filling minute-key with" (count min-key-array) "random bytes")
     (shared/random-bytes! min-key-array))
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
   (let [p-m (:packet-management state)]
-    (println "Randomizing packet-management" (keys p-m) "out of" (keys state))
     (shared/random-bytes! (:packet p-m))
-    (println "Randomizing IP bytes")
     (shared/random-bytes! (:ip p-m))
-    (println "Point B")
     (shared/random-bytes! (:port p-m)))
   (shared/random-bytes! (-> state :current-client :client-security :short-pk))
-  (println "Point A")
   ;; These are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
   ;; For now, just explicitly set to nil once we get past these side-effects
@@ -312,8 +330,9 @@
   ;; and need to be sharded.
   #_(shared/random-bytes! (-> state :child-buffer :buf))
   #_(shared/random-bytes! (-> state :child-buffer :msg))
-  (shared/random-bytes! (-> state :security :short-pair .getPublicKey))
-  (shared/random-bytes! (-> state :security :short-pair .getSecretKey))
+  (when-let [short-term-keys (-> state :security :short-pair)]
+    (shared/random-bytes! (.getPublicKey short-term-keys)))
+  (shared/random-bytes! (-> state :security :long-pair .getSecretKey))
   ;; Clear the shared secrets in the current client
   ;; Maintaning these anywhere I don't need them seems like an odd choice.
   ;; Actually, keeping them in 2 different places seems odd.
