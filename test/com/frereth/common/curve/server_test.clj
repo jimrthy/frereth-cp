@@ -36,11 +36,9 @@
 
 (defn build
   []
-  (let [structure sys-struct]
-    (cpt-dsl/build #:component-dsl.system {:structure structure
-
-                                           :dependencies {:cp-server [:client-chan]}}
-                   options)))
+  (cpt-dsl/build #:component-dsl.system {:structure sys-struct
+                                         :dependencies {:cp-server [:client-chan]}}
+                 options))
 
 (deftest start-stop
   (testing "That we can start and stop successfully"

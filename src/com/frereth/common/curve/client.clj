@@ -299,7 +299,7 @@ implementation. This is code that I don't understand yet"
   (assert (and server-name server-long-term-pk server-address port server-extension))
 
   (let [recent (System/nanoTime)
-        long-pair (do-load-keypair keydir)
+        long-pair (shared/do-load-keypair keydir)
         short-pair (shared/random-key-pair)
         state (assoc state
                      :client-extension nil

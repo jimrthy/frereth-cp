@@ -155,16 +155,13 @@
     [this]
     (println "Stopping server state")
     (when-let [event-loop-stopper (:event-loop-stopper this)]
-      (println "Stopping event loop")
-      ;; It should also stop if/when the client-chan stream closes.
-      ;; But that's in a Component on which this one depends. So,
-      ;; in normal operation, this should be the trigger to stop it.
-      ;; Note that it isn't working out this way.
-      ;; This is timing out, client-chan closes, then the event loop is
-      ;; exiting because it's been drained.
-      (when (= (event-loop-stopper 250) ::stopping-timed-out)
-        (println "WARNING: Timed out trying to stop the event loop")
-        (throw (RuntimeException. "What's going wrong here?"))))
+      (println "Sending stop signal to event loop")
+      ;; This is fairly pointless. The client channel Component on which this
+      ;; depends will close shortly after this returns. That will cause the
+      ;; event loop to exit directly.
+      ;; But, just in case that doesn't work, this will tell the event loop to
+      ;; exit the next time it times out.
+      (event-loop-stopper 1))
     (println "Clearing secrets")
     (let [outcome
           (assoc (try
