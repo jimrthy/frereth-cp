@@ -75,17 +75,7 @@
 ;; Q: Worth specifying a length?
 (s/def ::nonce bytes?)
 (s/def ::text bytes?)
-(s/def ::client-state (s/keys :req-un [::nonce ::text]))
-
-(defrecord PacketManagement [packet ; TODO: Rename this to body
-                             ;; Looks like the client's IPv4 address
-                             ;; Q: Any point?
-                             ip
-                             nonce
-                             ;; 2-byte array for the packetport
-                             ;; Seems likely this means the port used by the client
-                             ;; Q: Any point?
-                             port])
+(s/def ::working-area (s/keys :req-un [::nonce ::text]))
 
 ;; Q: Do I have any real use for this?
 (defrecord ChildBuffer [buf
@@ -140,10 +130,10 @@
                                                            (one-minute))}
                             :current-client (alloc-client)
                             :max-active-clients max-active-clients
-                            :packet-management (map->PacketManagement {:packet (byte-array 4096)
-                                                                       :ip (byte-array 4)
-                                                                       :nonce 0N
-                                                                       :port (byte-array 2)})
+                            :packet-management (shared/map->PacketManagement {:packet (byte-array 4096)
+                                                                              :ip (byte-array 4)
+                                                                              :nonce 0N
+                                                                              :port (byte-array 2)})
                             :working-area (map->WorkingArea {:nonce (byte-array 24)
                                                              :text (byte-array 2048)}))
                      (assoc-in [:security :long-pair] long-pair)

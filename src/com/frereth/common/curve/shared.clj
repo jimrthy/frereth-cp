@@ -6,6 +6,9 @@
             TweetNaclFast$Box]
            java.security.SecureRandom))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Magic constants
+
 (def hello-header (.getBytes "QvnQ5XlH"))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
@@ -14,6 +17,23 @@
 
 (def max-unsigned-long (bigint (Math/pow 2 64)))
 (def nanos-in-seconds (long (Math/pow 10 9)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
+;; TODO: Needs spec
+(defrecord PacketManagement [packet ; TODO: Rename this to body
+                             ;; Looks like the client's IPv4 address
+                             ;; Q: Any point?
+                             ip
+                             nonce
+                             ;; 2-byte array for the packetport
+                             ;; Seems likely this means the port used by the client
+                             ;; Q: Any point?
+                             port])
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public
 
 (defn byte-copy!
   "Copies the bytes from src to dst"
