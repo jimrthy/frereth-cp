@@ -1,5 +1,6 @@
 (ns com.frereth.common.curve.interaction-test
   (:require [clojure.test :refer (deftest is)]
+            [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.curve.server :as srvr]
             [com.frereth.common.curve.client :as clnt]
             [com.stuartsierra.component :as cpt]
@@ -8,13 +9,13 @@
             [manifold.stream :as strm]))
 
 (deftest handshake
-  (let [options {:server {:security {:keydir "curve-test"
+  (let [options {:server {:security {::shared/keydir "curve-test"
                                      ;; Note that name really isn't legal.
                                      ;; It needs to be something we can pass
                                      ;; along to DNS, padded to 255 bytes.
                                      ;; This bug really should show up in
                                      ;; a test.
-                                     :name "local.test"}
+                                     ::shared/server-name "local.test"}
                           :extension (byte-array [0x01 0x02 0x03 0x04
                                                   0x05 0x06 0x07 0x08
                                                   0x09 0x0a 0x0b 0x0c

@@ -2,6 +2,7 @@
   "For pieces shared among client, server, and messaging"
   (:require [clojure.java.io :as io]
             [clojure.spec :as s]
+            [clojure.string]
             [gloss.core :as gloss])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
@@ -38,10 +39,23 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+(s/def ::dns-string (s/and string?
+                           #(> (count %) 0)
+                           #(< (count %) 256)
+                           (fn [s]
+                             (let [ns (clojure.string/split s #"\.")]
+                               (doseq [n ns]
+                                 (when (< 63 (count n))
+                                   (throw (RuntimeException. (str n " too long"))))))
+                             s)))
 ;; Q: Worth adding a check to verify that it's a folder that exists on the classpath?
 (s/def ::keydir string?)
 (s/def ::long-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
-(s/def ::server-name (s/and string? #(= (count %) 256)))
+;; This is a name suitable for submitting a DNS query.
+;; 1. Its encoder starts with an array of zeros
+;; 2. Each name segment is prefixed with the number of bytes
+;; 3. No name segment is longer than 63 bytes
+(s/def ::server-name (s/and bytes #(= (count %) 256)))
 (s/def ::short-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
 (s/def ::client-keys (s/keys :req-un [::long-pair ::short-pair]
                              :opt-un [::keydir]))
@@ -133,6 +147,38 @@
   {::working-nonce (byte-array nonce-length)
    ::text (byte-array 2048)})
 
+(declare slurp-bytes)
+(defn do-load-keypair
+  [keydir]
+  (if keydir
+    (let [secret (slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))]
+      (TweetNaclFast$Box/keyPair_fromSecretKey secret))
+    (random-key-pair)))
+
+(s/fdef encode-server-name
+        :args (s/cat :name ::dns-string)
+        :ret ::server-name)
+(defn encode-server-name
+  [name]
+  (let [result (byte-array 256 (repeat 0))
+        ns (clojure.string/split name #"\.")]
+    (let [pos (atom 0)]
+      (doseq [n ns]
+        (let [length (count n)]
+          (when (< 0 length)
+            (when (< 63 length)
+              (throw (ex-info "Name segment too long" {:encoding name
+                                                       :problem n})))
+            (println "Trying to set" (byte length) "at" @pos "in" result)
+            (aset-byte result @pos (byte length))
+            (doseq [c n]
+              (swap! pos inc)
+              (aset-byte result @pos (byte c)))
+            (swap! pos inc)))))
+    result))
+(comment (let [encoded (encode-server-name "foo..bacon.com")]
+           (vec encoded)))
+
 (s/fdef random-key-pair
         :args (s/cat)
         :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
@@ -152,15 +198,6 @@ Or there's probably something similar in guava"
   (with-open [out (java.io.ByteArrayOutputStream.)]
     (clojure.java.io/copy (clojure.java.io/input-stream x) out)
     (.toByteArray out)))
-
-(defn do-load-keypair
-  [keydir]
-  (if keydir
-    (let [secret (slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))]
-      (TweetNaclFast$Box/keyPair_fromSecretKey secret))
-    (random-key-pair)))
-(comment (io/resource "curve-test/."))
-
 
 (defn random-bytes!
   [#^bytes dst]
