@@ -16,6 +16,8 @@
 (def initiate-header (.getBytes "QvnQ5XlI"))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 
+(def cookie-packet-length 200)
+
 (def box-zero-bytes 16)
 (def extension-length 16)
 (def key-length 32)
@@ -29,9 +31,9 @@
 
 (def max-unsigned-long (bigint (Math/pow 2 64)))
 (def nanos-in-milli (long (Math/pow 10 9)))
-(def nanos-in-seconds (* nanos-in-milli 1000))
+(def nanos-in-second (* nanos-in-milli 1000))
 
-(def random-nonce-domain (bigint (Math/pow 2 48)))
+(def max-random-nonce (bigint (Math/pow 2 48)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -39,27 +41,38 @@
 ;; Q: Worth adding a check to verify that it's a folder that exists on the classpath?
 (s/def ::keydir string?)
 (s/def ::long-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
-(s/def ::name (s/and string? #(= (count %) 256)))
+(s/def ::server-name (s/and string? #(= (count %) 256)))
 (s/def ::short-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
 (s/def ::client-keys (s/keys :req-un [::long-pair ::short-pair]
                              :opt-un [::keydir]))
 (s/def ::server-keys (s/keys :req-un [::long-pair ::name ::short-pair]
                              :opt-un [::keydir]))
-(defrecord MyKeys [keydir
-                   name  ; Not used by Client
-                   long-pair
-                   short-pair])
 
-;; TODO: Needs spec
-(defrecord PacketManagement [packet ; TODO: Rename this to body
-                             ;; Looks like the client's IPv4 address
-                             ;; Q: Any point?
-                             ip
-                             nonce
-                             ;; 2-byte array for the packetport
-                             ;; Seems likely this means the port used by the client
-                             ;; Q: Any point?
-                             port])
+(s/def ::my-keys (s/keys :req [::keydir
+                               ::long-pair
+                               ::server-name
+                               ::short-pair]))
+
+;; Q: What *is* this, really?
+(s/def ::shared-secret any?)
+(s/def ::public-key (s/and bytes? #(= (count %) key-length)))
+(s/def ::symmetric-key (s/and bytes? #(= (count %) key-length)))
+
+(s/def ::working-nonce (s/and bytes? #(= (count %) nonce-length)))
+(s/def ::text bytes?)
+(s/def ::working-area (s/keys :req [::text ::working-nonce]))
+
+(s/def ::packet-nonce integer?)
+;; Q: Can I make this any more explicit?
+;; This is really arriving as a ByteBuffer. It's tempting to work
+;; with that instead, but TweetNacl only handles byte arrays.
+;; It's also tempting to shove it into a vector and only use byte
+;; arrays/buffers with the low-level java code when I really need it.
+;; TODO: Get it working, then see what kind of performance impact
+;; that has
+(s/def ::packet bytes?)
+(s/def ::packet-management (s/keys :req [::packet-nonce
+                                         ::packet]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -99,11 +112,30 @@
   [public secret]
   (TweetNaclFast$Box. public secret))
 
+(s/fdef default-packet-manager
+        :args (s/cat)
+        :ret ::packet-management)
 (defn default-packet-manager
   []
-  map->PacketManagement {:packet (byte-array 4096)
-                         :nonce 0N})
+  {::packet (byte-array 4096)
+   ;; Note that this is distinct from the working-area's nonce
+   ;; And it probably needs to be an atom
+   ;; Or maybe even a ref (although STM would be a disaster here...
+   ;; actually, trying to cope with this in multiple threads
+   ;; seems like a train wreck waiting to happen)
+   ::packet-nonce 0N})
 
+(s/fdef default-work-area
+        :args (s/cat)
+        :ret ::working-area)
+(defn default-work-area
+  []
+  {::working-nonce (byte-array nonce-length)
+   ::text (byte-array 2048)})
+
+(s/fdef random-key-pair
+        :args (s/cat)
+        :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
 (defn random-key-pair
   []
   (TweetNaclFast$Box/keyPair))
@@ -141,6 +173,10 @@ Or there's probably something similar in guava"
 (defn random-key
   []
   (random-array key-length))
+
+(defn random-nonce
+  []
+  (random-mod max-random-nonce))
 
 (defn random-long-obsolete
   "This seems like it's really just for generating a nonce.

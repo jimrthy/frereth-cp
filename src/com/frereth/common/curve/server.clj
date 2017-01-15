@@ -14,22 +14,26 @@
 
 ;; For maintaining a secret symmetric pair of encryption
 ;; keys for the cookies.
-(defrecord CookieCutter [next-minute
-                         minute-key
-                         last-minute-key])
+(s/def ::last-minute-key ::shared/symmetric-key)
+(s/def ::minute-key ::shared/symmetric-key)
+(s/def ::next-minute integer?)
+(s/def cookie-cutter (s/keys :req [::next-minute
+                                   ::minute-key
+                                   ::last-minute-key]))
 
 (s/def ::long-pk (s/and bytes?
                         #(= (count %) shared/key-length)))
 (s/def ::short-pk (s/and bytes?
                          #(= (count %) shared/key-length)))
-(defrecord ClientSecurity [long-pk
-                           short-pk])
-(s/def ::client-security (s/keys :req-un [::long-pk
-                                          ::short-pk]))
+(s/def ::client-security (s/keys :req [::long-pk
+                                       ::short-pk]))
 
-(defrecord SharedSecrets [client-short<->server-long
-                          client-short<->server-short
-                          client-long<->server-long])
+(s/def client-short<->server-long ::shared/shared-secret)
+(s/def client-short<->server-short ::shared/shared-secret)
+(s/def client-long<->server-long ::shared/shared-secret)
+(s/def ::shared-secrets (s/keys :req [::client-short<->server-long
+                                      ::client-short<->server-short
+                                      ::client-long<->server-long]))
 
 ;;; This is probably too restrictive. And it seems a little
 ;;; pointless. But we have to have *some* way to identify
@@ -41,45 +45,22 @@
 (s/def ::to-child (s/and stream/sinkable?
                          stream/sourceable?))
 
-(defrecord ChildInteraction [child-id
-                             from-child
-                             to-child])
-(s/def ::child-interaction (s/keys :req-un [::child-id
-                                            ::to-child
-                                            ::from-child]))
+(s/def ::child-interaction (s/keys :req [::child-id
+                                         ::to-child
+                                         ::from-child]))
 
-(defrecord ClientState [child-interaction
-                        client-security
-                        extension
-                        message
-                        message-len
-                        received-nonce
-                        sent-nonce
-                        shared-secrets])
-(s/def ::client-state (s/keys :req-un [::child-interaction
-                                       ::client-security
-                                       ::extension
-                                       ::message
-                                       ::message-len
-                                       ::received-nonce
-                                       ::sent-nonce
-                                       ::shared-secrets]))
+(s/def ::client-state (s/keys :req [::child-interaction
+                                    ::client-security
+                                    ::extension
+                                    ::message
+                                    ::message-len
+                                    ::received-nonce
+                                    ::sent-nonce
+                                    ::shared-secrets]))
 
-;; This seems like it probably belongs in shared
-(defrecord WorkingArea [nonce  ; This is also defined in PacketManagement. That seems wrong.
-                        text])
-;; Q: Worth specifying a length?
-(s/def ::nonce bytes?)
-(s/def ::text bytes?)
-(s/def ::working-area (s/keys :req-un [::nonce ::text]))
+(s/def ::state (s/keys :req-un [::shared/packet-management]))
 
-;; Q: Do I have any real use for this?
-(defrecord ChildBuffer [buf
-                        buf-len
-                        msg
-                        msg-len])
-
-(declare alloc-client begin! hide-secrets! one-minute)
+(declare alloc-client begin! hide-secrets! randomized-cookie-cutter)
 (defrecord State [active-clients
                   client-chan
                   cookie-cutter
@@ -97,39 +78,33 @@
              extension
              my-keys]
       :as this}]
+    {:pre [(and client-chan
+                (:chan client-chan)
+                (::shared/server-name my-keys)
+                (::shared/keydir my-keys)
+                extension
+                ;; Actually, the rule is that it must be
+                ;; 32 hex characters. Which really means
+                ;; a 16-byte array
+                (= (count extension) shared/extension-length))]}
     (println "CurveCP Server: Starting the server state")
-    (assert (and client-chan
-                 (:chan client-chan)
-                 (:name my-keys)
-                 (:keydir my-keys)
-                 extension
-                 ;; Actually, the rule is that it must be
-                 ;; 32 hex characters. Which really means
-                 ;; a 16-byte array
-                 (= (count extension) shared/extension-length)))
     ;; Reference implementation starts by allocating the active client structs.
     ;; This is one area where updating in place simply cannot be worth it.
     ;; Q: Can it?
     ;; A: Skip it, for now
 
     ;; So we're starting by loading up the long-term keys
-
     (let [max-active-clients (or (:max-active-clients this) default-max-clients)
-          keydir (:keydir my-keys)
+          keydir (::shared/keydir my-keys)
           long-pair (shared/do-load-keypair keydir)
           almost (-> this
                      (assoc :active-clients (atom #{})
-                            ;; Randomize the cookie-cutter keys
-                            :cookie-cutter {:minute-key (shared/random-key)
-                                            :last-minute-key (shared/random-key)
-                                            :next-minute(+ (System/nanoTime)
-                                                           (one-minute))}
+                            :cookie-cutter (randomized-cookie-cutter)
                             :current-client (alloc-client)
                             :max-active-clients max-active-clients
                             :packet-management (shared/default-packet-manager)
-                            :working-area (map->WorkingArea {:nonce (byte-array shared/nonce-length)
-                                                             :text (byte-array 2048)}))
-                     (assoc-in [:my-keys :long-pair] long-pair)
+                            :working-area (shared/default-work-area))
+                     (assoc-in [:my-keys :shared/long-pair] long-pair)
                      (assoc :active-clients {}))]
       (println "Kicking off event loop. packet-management:" (:packet-management almost))
       (assoc almost :event-loop-stopper (begin! almost))))
@@ -159,22 +134,28 @@
       outcome)))
 ;;; TODO: Def the State spec
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Internal
+
+(s/fdef alloc-client
+        :args (s/cat)
+        :ret ::client-state)
 (defn alloc-client
   []
-  (let [interact (map->ChildInteraction {:child-id -1})
-        sec (map->ClientSecurity {:long-pk (shared/random-key)
-                                  :short-pk (shared/random-key)})]
-    (map->ClientState {:child-interaction interact
-                       :client-security sec
-                       :extension (shared/random-bytes! (byte-array 16))
-                       :message (shared/random-bytes! (byte-array message-len))
-                       :message-len 0
-                       :received-nonce 0
-                       :sent-nonce (shared/random-mod (shared/random-nonce-domain))})))
+  (let [interact {::child-id -1}
+        sec {::long-pk (shared/random-key)
+             ::short-pk (shared/random-key)}]
+    {::child-interaction interact
+     ::client-security sec
+     ::extension (shared/random-bytes! (byte-array 16))
+     ::message (shared/random-bytes! (byte-array message-len))
+     ::message-len 0
+     ::received-nonce 0
+     ::sent-nonce (shared/random-nonce)}))
 
 (defn one-minute
   ([]
-   (* 60 shared/nanos-in-seconds))
+   (* 60 shared/nanos-in-second))
   ([now]
    (+ (one-minute) now)))
 
@@ -206,8 +187,8 @@
         (let [timeout (one-minute now)]
           (println "Saving key for previous minute")
           (try
-            (shared/byte-copy! (-> state :cookie-cutter :last-minute-key)
-                               (-> state :cookie-cutter :minute-key))
+            (shared/byte-copy! (-> state :cookie-cutter ::last-minute-key)
+                               (-> state :cookie-cutter ::minute-key))
             (catch Exception ex
               (println "Key rotation failed:" ex "a" (class ex))))
           (println "Saved key for previous minute. Hiding:")
@@ -223,54 +204,56 @@
   "Try to make pretty printing less obnoxious"
   [state]
   (-> state
-      (assoc-in [:packet-management :packet] "Lots o' bytes")
+      (assoc-in [:packet-management ::shared/packet] "Lots o' bytes")
       (assoc :working-area "Lots more bytes")))
 
 (defn begin!
   "Start the event loop"
   [{:keys [client-chan]
-    :as state}]
+    :as this}]
   (let [stopper (deferred/deferred)
         stopped (promise)]
-    (deferred/loop [state (assoc state
+    (deferred/loop [this (assoc this
                                  :timeout (one-minute))]
-      (println "Top of event loop. Timeout: " (:timeout state) "in"
-               (util/pretty (hide-long-arrays state)))
+      (println "Top of event loop. Timeout: " (:timeout this) "in"
+               (util/pretty (hide-long-arrays this)))
       (deferred/chain
         ;; timeout is in nanoseconds.
         ;; The timeout is in milliseconds, but state's timeout uses
         ;; the nanosecond clock
         (stream/try-take! (:chan client-chan) ::drained
                           ;; This is in milliseconds
-                          (inc (/ (:timeout state) shared/nanos-in-milli)) ::timeout)
+                          (inc (/ (:timeout this) shared/nanos-in-milli)) ::timeout)
         (fn [msg]
           (println (str "Top of Server Event loop received " msg))
           (if-not (or (identical? ::drained msg)
                       (identical? ::timeout msg))
             (try
               ;; Q: Do I want unhandled exceptions to be fatal errors?
-              (let [modified-state (handle-incoming! state msg)]
-                (println "Updated state based on incoming msg:" state)
+              (let [modified-state (handle-incoming! this msg)]
+                (println "Updated state based on incoming msg:" (hide-long-arrays modified-state))
                 modified-state)
               (catch clojure.lang.ExceptionInfo ex
                 (println "handle-incoming! failed" ex (.getStackTrace ex))
-                state)
+                this)
               (catch RuntimeException ex
                 (println "Unhandled low-level exception escaped handler" ex (.getStackTrace ex))
-                (comment state))
+                (comment this))
               (catch Exception ex
                 (println "Major problem escaped handler" ex (.getStackTrace ex))))
             (do
               (println "Took from the client:" msg)
               (if (identical? msg ::drained)
                 msg
-                state))))
-        (fn [state]
-          (if-not (identical? state ::drained)
+                this))))
+        ;; Return a function that will (eventually) cause that event
+        ;; loop to exit
+        (fn [this]
+          (if-not (identical? this ::drained)
             (if-not (realized? stopper)
               (do
-                (println "Rotating" (util/pretty (hide-long-arrays state)))
-                (deferred/recur (handle-key-rotation state)))
+                (println "Rotating" (util/pretty (hide-long-arrays this)))
+                (deferred/recur (handle-key-rotation this)))
               (do
                 (println "Received stop signal")
                 (deliver stopped ::exited)))
@@ -283,41 +266,56 @@
       (deref stopped timeout ::stopping-timed-out))))
 
 (defn hide-secrets!
-  [state]
+  [this]
   (println "Hiding secrets")
   ;; This is almost the top of the server's for(;;)
   ;; Missing step: reset timeout
   ;; Missing step: copy :minute-key into :last-minute-key
-  (let [min-key-array (-> state :cookie-cutter :minute-key)]
-    (assert min-key-array)
-    (shared/random-bytes! min-key-array))
+  ;; (that's handled by key rotation. Don't need to bother
+  ;; if we're "just" cleaning up on exit)
+  (let [minute-key-array (get-in this [:cookie-cutter ::minute-key])]
+    (assert minute-key-array)
+    (shared/random-bytes! minute-key-array))
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
-  (let [p-m (:packet-management state)]
-    (shared/random-bytes! (:packet p-m)))
-  (shared/random-bytes! (-> state :current-client :client-security :short-pk))
+  (let [p-m (:packet-management this)]
+    (shared/random-bytes! (::shared/packet p-m)))
+  (shared/random-bytes! (-> this :current-client ::client-security ::short-pk))
   ;; These are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
   ;; For now, just explicitly set to nil once we get past these side-effects
   ;; (i.e. at the bottom)
-  #_(shared/random-bytes (-> state :current-client :shared-secrets :what?))
-  (shared/random-bytes! (-> state :working-area :nonce))
-  (shared/random-bytes! (-> state :working-area :text))
+  #_(shared/random-bytes (-> this :current-client ::shared-secrets :what?))
+  (let [work-area (:working-area this)]
+    (shared/random-bytes! (::shared/working-nonce work-area))
+    (shared/random-bytes! (::shared/text work-area)))
   ;; These next two may make more sense once I have a better idea about
   ;; the actual messaging implementation.
   ;; Until then, plan on just sending objects across core.async.
   ;; Of course, the entire point may be messages that are too big
   ;; and need to be sharded.
-  #_(shared/random-bytes! (-> state :child-buffer :buf))
-  #_(shared/random-bytes! (-> state :child-buffer :msg))
-  (when-let [short-term-keys (-> state :my-keys :short-pair)]
+  #_(shared/random-bytes! (-> this :child-buffer ::buf))
+  #_(shared/random-bytes! (-> this :child-buffer ::msg))
+  (when-let [short-term-keys (get-in this [:my-keys ::short-pair])]
     (shared/random-bytes! (.getPublicKey short-term-keys)))
-  (shared/random-bytes! (-> state :my-keys :long-pair .getSecretKey))
+  (shared/random-bytes! (-> this :my-keys ::long-pair .getSecretKey))
   ;; Clear the shared secrets in the current client
   ;; Maintaning these anywhere I don't need them seems like an odd choice.
   ;; Actually, keeping them in 2 different places seems odd.
   ;; Q: What's the point to current-client at all?
-  (assoc-in state [:current-client :shared-secrets] nil))
+  (assoc-in this [:current-client ::shared-secrets] {::client-short<->server-long nil
+                                                     ::client-short<->server-short nil
+                                                     ::client-long<->server-long nil}))
+
+(defn randomized-cookie-cutter
+  []
+  {::minute-key (shared/random-key)
+   ::last-minute-key (shared/random-key)
+   ::next-minute(+ (System/nanoTime)
+                   (one-minute))})
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public
 
 (defn ctor
   [cfg]
