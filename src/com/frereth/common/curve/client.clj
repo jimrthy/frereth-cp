@@ -15,31 +15,38 @@
 (def cookie (gloss-core/compile-frame (gloss-core/ordered-map :s' (gloss-core/finite-block 32)
                                                               :black-box (gloss-core/finite-block 96))))
 
+(defrecord ServerSecurity [server-long-term-pk
+                           server-cookie
+                           server-name
+                           server-short-term-pk])
+
+(defrecord SharedSecrets [client-long<->server-long
+                          client-short<->server-long
+                          client-short<->server-short])
+
 (declare hand-shake)
 (defrecord State [child-chan
                   client-extension
                   client-extension-load-time
-                  client-long<->server-long
-                  client-short<->server-long
-                  client-short<->server-short
-                  keydir
-                  long-pair
+                                    my-keys
                   outgoing-message
                   packet-management
                   recent
                   server-chan
-                  server-cookie
                   server-extension
-                  server-name
-                  server-short-term-pk
-                  server-long-term-pk
-                  short-pair
+                  shared-secrets
                   short-term-nonce
                   text
                   vouch]
   cpt/Lifecycle
   (start
     [this]
+    ;; I've managed to muddle them.
+    ;; They're definitely not part of State any more.
+    ;; They're part of PacketManagement, defined in shared.
+    ;; On the server side, they're also part of WorkingArea.
+    ;; TODO: Unsully the muddle
+    (throw (RuntimeException. "Start with nonces"))
     (hand-shake this))
   (stop
     [this]
@@ -51,7 +58,7 @@ nor subject to timing attacks because it just won't be called very often."
   [{:keys [client-extension
            client-extension-load-time
            recent]
-    :as state}]
+    :as this}]
   (assert (and client-extension-load-time recent))
   (let [reload (>= recent client-extension-load-time)
         client-extension-load-time (if reload
@@ -64,7 +71,7 @@ nor subject to timing attacks because it just won't be called very often."
                                 (catch java.io.FileNotFoundException _
                                   (shared/zero-bytes 16)))
                            client-extension)]
-    (assoc state
+    (assoc this
            :client-extension-load-time client-extension-load-time
            :client-extension client-extension)))
 
@@ -85,14 +92,14 @@ TODO: Switch to that or whatever Bouncy Castle uses"
 
 (defn do-build-hello
   [{:keys [client-extension
-           client-short<->server-long
+           my-keys
            server-extension
-           short-pair
+           shared-secrets
            short-term-nonce
            text]
-    :as state}]
-  (let [state (clientextension-init state)
-        packet-management (:packet-management state)
+    :as this}]
+  (let [this (clientextension-init this)
+        packet-management (:packet-management this)
         {:keys [nonce packet]} packet-management
         short-term-nonce (update-client-short-term-nonce short-term-nonce)]
     (shared/byte-copy! nonce shared/hello-nonce-prefix)
@@ -101,36 +108,42 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     ;; This seems to be screaming for gloss.
     ;; Q: What kind of performance difference would that make?
     (shared/byte-copy! packet shared/hello-header)
-    (shared/byte-copy! packet 8 16 server-extension)
-    (shared/byte-copy! packet 24 16 client-extension)
-    (shared/byte-copy! packet 40 32 (.getPublicKey short-pair))
+    (shared/byte-copy! packet 8 shared/extension-length server-extension)
+    (shared/byte-copy! packet 24 shared/extension-length client-extension)
+    (shared/byte-copy! packet 40 shared/key-length (.getPublicKey (:short-pair my-keys)))
     (shared/byte-copy! packet 72 64 shared/all-zeros)
-    (shared/byte-copy! packet 136 8 nonce 16)
-    (let [payload (.after client-short<->server-long packet 144 80 nonce)]
+    (shared/byte-copy! packet 136 shared/client-nonce-suffix-length
+                       nonce
+                       shared/client-nonce-prefix-length)
+    (let [payload (.after (:client-short<->server-long shared-secrets) packet 144 80 nonce)]
       (shared/byte-copy! packet 144 80 payload)
-      (map->State (assoc state
-                         :short-term-nonce short-term-nonce)))))
+      (assoc this
+             :short-term-nonce short-term-nonce))))
 
 (defn decrypt-actual-cookie
-  [{:keys [client-short<->server-long
-           nonce
+  [{:keys [nonce
            packet-management
-           server-cookie
+           shared-secrets
+           server-security
            text]
-    :as state}
+    :as this}
    rcvd]
   (shared/byte-copy! nonce shared/cookie-nonce-prefix)
-  (shared/byte-copy! nonce 8 16 (:nonce rcvd))
+  (shared/byte-copy! nonce
+                     shared/server-nonce-prefix-length
+                     shared/server-nonce-suffix-length
+                     (:nonce rcvd))
   (shared/byte-copy! text 0 144 (-> packet-management :packet :cookie))
-  (let [decrypted (.open_after client-short<->server-long text 0 144 nonce)
+  (let [decrypted (.open_after (:client-short<->server-long shared-secrets) text 0 144 nonce)
         extracted (gloss/decode cookie)
-        server-short-term-pk (byte-array 32)]
+        server-short-term-pk (byte-array shared/key-length)
+        server-cookie (byte-array 96)
+        server-security (assoc (:server-security this)
+                               :server-short-term-pk server-short-term-pk
+                               :server-cookie server-cookie)]
     (shared/byte-copy! server-short-term-pk (:s' extracted))
-    (server-cookie (byte-array 96))
     (shared/byte-copy! server-cookie (:cookie extracted))
-    (assoc state
-           :server-short-term-pk server-short-term-pk
-           :server-cookie server-cookie)))
+    (assoc this :server-security server-security)))
 
 (defn decrypt-cookie-packet
   [{:keys [client-extension
@@ -138,7 +151,7 @@ TODO: Switch to that or whatever Bouncy Castle uses"
            packet-management
            server-extension
            text]
-    :as state}]
+    :as this}]
   (let [packet (:packet packet-management)]
     ;; Q: How does packet length actually work?
     (assert (= (count packet) 200))
@@ -160,42 +173,50 @@ TODO: Switch to that or whatever Bouncy Castle uses"
                                 (String. (:header rcvd)))
                  (shared/bytes= client-extension (:client-extension rcvd))
                  (shared/bytes= server-extension (:server-extension rcvd)))
-        (decrypt-actual-cookie state rcvd)))))
+        (decrypt-actual-cookie this rcvd)))))
 
 (defn build-vouch
-  [{:keys [client-long<->server-long
-           keydir
-           packet-management
-           short-pair
+  [{:keys [packet-management
+           my-keys
+           shared-secrets
            text]
-    :as state}]
-  (let [nonce (:nonce packet-management)]
+    :as this}]
+  (let [nonce (:nonce packet-management)
+        keydir (:keydir my-keys)]
     (shared/byte-copy! nonce shared/vouch-nonce-prefix)
-    (shared/safe-nonce nonce keydir 16)
+    (shared/safe-nonce nonce keydir shared/client-nonce-prefix-length)
 
     (shared/byte-copy! text (shared/zero-bytes 32))
-    (shared/byte-copy! text 32 32 (.getPublicKey short-pair))
-    (let [encrypted (.after client-long<->server-long text 0 64 nonce)
+    (shared/byte-copy! text shared/key-length shared/key-length (.getPublicKey (:short-pair my-keys)))
+    (let [encrypted (.after (:client-long<->server-long shared-secrets) text 0 64 nonce)
           vouch (byte-array 64)]
-      (shared/byte-copy! vouch 0 16 nonce 8)
-      (shared/byte-copy! vouch 16 48 encrypted)
+      (shared/byte-copy! vouch
+                         0
+                         shared/server-nonce-suffix-length
+                         nonce
+                         shared/server-nonce-prefix-length)
+      (shared/byte-copy! vouch
+                         shared/server-nonce-suffix-length
+                         48
+                         encrypted
+                         shared/server-nonce-suffix-length)
       ;; At this point the reference implementation pauses to fire up
       ;; its message-handling child process.
       ;; This should probably construct something like a go loop that
       ;; will occupy the same ecological niche
       (throw (RuntimeException. "Q: How should this work?"))
-      (assoc state :vouch vouch))))
+      (assoc this :vouch vouch))))
 
 (defn extract-child-message
   "Pretty much blindly translated from the CurveCP reference
 implementation. This is code that I don't understand yet"
-  [state buffer]
+  [this buffer]
   (let [extracted (reduce (fn [{:keys [buf
                                        buf-len
                                        msg
                                        msg-len
                                        i
-                                       state]
+                                       this]
                                 :as acc}
                                b]
                             (when (or (< msg-len 0)
@@ -211,20 +232,19 @@ implementation. This is code that I don't understand yet"
                                 (throw (ex-info "done" {})))
                               (if (= msg-len (inc (* 16 length-code)))
                                 (let [{:keys [client-extension
-                                              client-short<->server-short
-                                              long-pair
+                                              my-keys
                                               packet-management
-                                              server-cookie
                                               server-extension
-                                              server-name
-                                              short-pair
+                                              shared-secrets
+                                              server-security
                                               text
                                               vouch]
-                                       :as state} (clientextension-init state)
+                                       :as this} (clientextension-init this)
                                       short-term-nonce (update-client-short-term-nonce
-                                                        (:short-term-nonce state))
+                                                        (:short-term-nonce this))
                                       {:keys [nonce packet]} packet-management]
-                                  (shared/uint64-pack! nonce 16 short-term-nonce)
+                                  (shared/uint64-pack! nonce shared/client-nonce-prefix-length
+                                                       short-term-nonce)
                                   ;; This is where the original splits, depending on whether
                                   ;; we've received a message back from the server or not.
                                   ;; According to the spec:
@@ -243,22 +263,47 @@ implementation. This is code that I don't understand yet"
                                     (when (or (< r 16)
                                               (> r 640))
                                       (throw (ex-info "done" {})))
-                                    (shared/byte-copy! nonce 0 16 shared/initiate-nonce-prefix)
+                                    (shared/byte-copy! nonce 0 shared/client-nonce-prefix-length
+                                                       shared/initiate-nonce-prefix)
                                     ;; Reference version starts by zeroing first 32 bytes.
                                     ;; I thought we just needed 16 for the encryption buffer
-                                    (shared/byte-copy! text 0 16 shared/all-zeros)
-                                    (shared/byte-copy! text 32 32 (.getPublicKey long-pair))
+                                    ;; And that doesn't really seem to apply here
+                                    ;; Q: What's up with this?
+                                    ;; (it doesn't seem to match the spec, either)
+                                    (shared/byte-copy! text 0 32 shared/all-zeros)
+                                    (shared/byte-copy! text 32 shared/key-length (.getPublicKey (:long-pair my-keys)))
                                     (shared/byte-copy! text 64 64 vouch)
-                                    (shared/byte-copy! text 128 256 server-name)
+                                    (shared/byte-copy! text
+                                                       128
+                                                       shared/server-name-length
+                                                       (:server-name server-security))
+                                    ;; First byte is a magical length marker
                                     (shared/byte-copy! text 384 r msg 1)
-                                    (let [box (.after client-short<->server-short text 0 (+ r 384)
+                                    (let [box (.after (:client-short<->server-short shared-secrets)
+                                                      text
+                                                      0
+                                                      (+ r 384)
                                                       nonce)]
-                                      (shared/byte-copy! packet 0 8 shared/initiate-header)
-                                      (shared/byte-copy! packet 8 16 server-extension)
-                                      (shared/byte-copy! packet 24 16 client-extension)
-                                      (shared/byte-copy! packet 40 32 (.getPublicKey short-pair))
-                                      (shared/byte-copy! packet 72 96 server-cookie)
-                                      (shared/byte-copy! packet 168 8 nonce 16)
+                                      (shared/byte-copy! packet 0 shared/server-nonce-prefix-length shared/initiate-header)
+                                      (let [offset shared/server-nonce-prefix-length]
+                                        (shared/byte-copy! packet offset
+                                                           shared/extension-length server-extension)
+                                        (let [offset (+ offset shared/extension-length)]
+                                          (shared/byte-copy! packet offset
+                                                             shared/extension-length client-extension)
+                                          (let [offset (+ offset shared/extension-length client-extension)]
+                                            (shared/byte-copy! packet offset shared/key-length
+                                                               (.getPublicKey (:short-pair my-keys)))
+                                            (let [offset (+ offset shared/key-length)]
+                                              (shared/byte-copy! packet
+                                                                 offset
+                                                                 shared/server-cookie-length
+                                                                 (:server-cookie server-security))
+                                              (let [offset (+ offset shared/server-cookie-length)]
+                                                (shared/byte-copy! packet offset
+                                                                   shared/server-nonce-prefix-length
+                                                                   nonce
+                                                                   shared/server-nonce-suffix-length))))))
                                       ;; Actually, the original version sends off the packet, updates
                                       ;; msg-len to 0, and goes back to pulling date from child/server.
                                       (throw (ex-info "How should this really work?"
@@ -269,9 +314,9 @@ implementation. This is code that I don't understand yet"
                            :msg (byte-array 2048)
                            :msg-len 0
                            :i 0
-                           :state state}
+                           :this this}
                           buffer)]
-    (assoc state :outgoing-message (:child-msg extracted))))
+    (assoc this :outgoing-message (:child-msg extracted))))
 
 (defn hand-shake
   "This really needs to be some sort of stateful component.
@@ -294,86 +339,95 @@ implementation. This is code that I don't understand yet"
   pieces and used clojure's native facilities to
   handle building that?"
   [{:keys [child-chan  ; Seems wrong. If it's a real child, should spawn it here
-           keydir
-           server-chan
-           ;; The server's domain name, in DNS format (between 1 and 255 bytes),
-           ;; zero-padded to 256 bytes
-           ;; Q: Why do I need this here?
-           server-name
-           server-long-term-pk
+           my-keys
            packet-management
+           server-chan
            server-extension
+           server-security
            timeout]
     :or {timeout 2500}
     :as this}]
-  (let [port (:port packet-management)]
-    (assert (and server-name server-long-term-pk port server-extension))
-
-    (let [recent (System/nanoTime)
-          long-pair (shared/do-load-keypair keydir)
-          short-pair (shared/random-key-pair)
-          pack-mgmt (assoc packet-management
-                           :nonce (byte-array 24)
-                           :packet (byte-array 4096))
-          this (-> this
-                   (assoc
-                    :client-extension nil
-                    :client-extension-load-time 0
-                    :client-long<->server-long (shared/crypto-box-prepare server-long-term-pk (.getSecretKey short-pair))
-                    :client-short<->server-long (shared/crypto-box-prepare server-long-term-pk (.getSecretKey long-pair))
-                    :long-pair long-pair
-                    :packet-management pack-mgmt
-                    :recent recent
-                    :short-pair short-pair
-                    ;; Q: What's the magic number?
-                    :short-term-nonce (shared/random-mod 281474976710656N)
-                    :text (byte-array 2048))
-                   do-build-hello)]
-      ;; The reference implementation mingles networking with this code.
-      ;; That seems like it might make sense as an optimization,
-      ;; but not until I have convincing numbers that it's needed.
-      ;; Of course, I might also be opening things up for timing attacks.
-      (let [d (stream/put! server-chan (-> this :packet-management :packet))]
-        (deferred/chain d
-          (fn [sent?]
-            (if sent?
-              (deferred/timeout! (stream/take! server-chan) timeout ::hello-timed-out)
-              ::hello-send-failed))
-          (fn [cookie]
-            ;; Q: What is really in cookie now?
-            ;; (I think it's a netty ByteBuf)
-            (let [this (assoc-in this [:packet-management :packet] cookie)]
-              ;; Really just want to break out of the chain
-              ;; if this returns nil.
-              ;; There's no reason to try to go any further
-              ;; Q: What's a good way to handle that?
-              (decrypt-cookie-packet this)))
-          (fn [state-with-decrypted-cookie]
-            (when state-with-decrypted-cookie
-              (assoc state-with-decrypted-cookie
-                     :client-short<->server-short (shared/crypto-box-prepare
-                                                   (:server-short-term-pk state-with-decrypted-cookie)
-                                                   (.getSecretKey short-pair)))))
-          (fn [state-with-keyed-cookie]
-            (build-vouch state-with-keyed-cookie))
-          (fn [vouched-state]
-            (let [future (stream/take! child-chan)
-                  ;; I'd like to just return that future and
-                  ;; handle the next pieces separately.
-                  ;; But then I'd lose the state that I'm
-                  ;; accumulating
-                  msg-buffer (deref future timeout ::child-timed-out)]
-              (assert (and msg-buffer
-                           (not= msg-buffer ::child-timed-out)))
-              (let [updated (extract-child-message vouched-state msg-buffer)]
-                (assoc updated :initiate-sent? (stream/put! server-chan (:packet updated))))))
-          (fn [this]
-            (let [success (deref (:initiate-sent? this) timeout ::sending-initiate-failed)]
-              (if success
-                (dissoc this :initiate-sent?)
-                ;; TODO: Really should initiate retries
-                ;; But if we failed to send the packet at all, something is badly wrong
-                (throw (ex-info "Failed to send initiate" this))))))))))
+  {:pre [(and server-extension
+              (:server-long-term-pk server-security))]}
+  (let [server-long-term-pk (:server-long-term-pk server-security)
+        recent (System/nanoTime)
+        long-pair (shared/do-load-keypair (:keydir my-keys))
+        short-pair (shared/random-key-pair)
+        pack-mgmt (assoc packet-management
+                         ;; Q: Is there any reason not to initialize these
+                         ;; in (start) ?
+                         :nonce (byte-array shared/nonce-length)
+                         :packet (byte-array 4096))
+        my-keys (assoc my-keys
+                       :long-pair long-pair
+                       :short-pair short-pair)
+        shared-secrets (assoc (:shared-secrets this
+                                               :client-long<->server-long (shared/crypto-box-prepare
+                                                                           server-long-term-pk
+                                                                           (.getSecretKey short-pair))
+                                               :client-short<->server-long (shared/crypto-box-prepare
+                                                                            server-long-term-pk
+                                                                            (.getSecretKey long-pair))))
+        this (-> this
+                 (assoc
+                  :client-extension nil
+                  :client-extension-load-time 0
+                  :packet-management pack-mgmt
+                  :recent recent
+                  :my-keys my-keys
+                  :shared-secrets shared-secrets
+                  :short-term-nonce (shared/random-mod shared/random-nonce-domain)
+                  :text (byte-array 2048))
+                 do-build-hello)]
+    ;; The reference implementation mingles networking with this code.
+    ;; That seems like it might make sense as an optimization,
+    ;; but not until I have convincing numbers that it's needed.
+    ;; Of course, I might also be opening things up for timing attacks.
+    (let [d (stream/put! server-chan (-> this :packet-management :packet))]
+      (deferred/chain d
+        (fn [sent?]
+          (if sent?
+            (deferred/timeout! (stream/take! server-chan) timeout ::hello-timed-out)
+            ::hello-send-failed))
+        (fn [cookie]
+          ;; Q: What is really in cookie now?
+          ;; (I think it's a netty ByteBuf)
+          (let [this (assoc-in this [:packet-management :packet] cookie)]
+            ;; Really just want to break out of the chain
+            ;; if this returns nil.
+            ;; There's no reason to try to go any further
+            ;; Q: What's a good way to handle that?
+            (decrypt-cookie-packet this)))
+        (fn [state-with-decrypted-cookie]
+          (when state-with-decrypted-cookie
+            (assoc-in state-with-decrypted-cookie
+                      [:shared-secrets :client-short<->server-short]
+                      (shared/crypto-box-prepare
+                       (->
+                        state-with-decrypted-cookie
+                        :server-security
+                        :server-short-term-pk)
+                       (.getSecretKey (:short-pair my-keys))))))
+        (fn [state-with-keyed-cookie]
+          (build-vouch state-with-keyed-cookie))
+        (fn [vouched-state]
+          (let [future (stream/take! child-chan)
+                ;; I'd like to just return that future and
+                ;; handle the next pieces separately.
+                ;; But then I'd lose the state that I'm
+                ;; accumulating
+                msg-buffer (deref future timeout ::child-timed-out)]
+            (assert (and msg-buffer
+                         (not= msg-buffer ::child-timed-out)))
+            (let [updated (extract-child-message vouched-state msg-buffer)]
+              (assoc updated :initiate-sent? (stream/put! server-chan (:packet updated))))))
+        (fn [this]
+          (let [success (deref (:initiate-sent? this) timeout ::sending-initiate-failed)]
+            (if success
+              (dissoc this :initiate-sent?)
+              ;; TODO: Really should initiate retries
+              ;; But if we failed to send the packet at all, something is badly wrong
+              (throw (ex-info "Failed to send initiate" this)))))))))
 
 (defn basic-test
   "This should probably go away"

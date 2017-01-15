@@ -1,6 +1,7 @@
 (ns com.frereth.common.curve.shared
   "For pieces shared among client, server, and messaging"
   (:require [clojure.java.io :as io]
+            [clojure.spec :as s]
             [gloss.core :as gloss])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
@@ -15,11 +16,39 @@
 (def initiate-header (.getBytes "QvnQ5XlI"))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 
+(def box-zero-bytes 16)
+(def extension-length 16)
+(def key-length 32)
+(def nonce-length 24)
+(def client-nonce-prefix-length 16)
+(def client-nonce-suffix-length 8)
+(def server-nonce-prefix-length 8)
+(def server-nonce-suffix-length 16)
+(def server-cookie-length 96)
+(def server-name-length 256)
+
 (def max-unsigned-long (bigint (Math/pow 2 64)))
-(def nanos-in-seconds (long (Math/pow 10 9)))
+(def nanos-in-milli (long (Math/pow 10 9)))
+(def nanos-in-seconds (* nanos-in-milli 1000))
+
+(def random-nonce-domain (bigint (Math/pow 2 48)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
+
+;; Q: Worth adding a check to verify that it's a folder that exists on the classpath?
+(s/def ::keydir string?)
+(s/def ::long-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
+(s/def ::name (s/and string? #(= (count %) 256)))
+(s/def ::short-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
+(s/def ::client-keys (s/keys :req-un [::long-pair ::short-pair]
+                             :opt-un [::keydir]))
+(s/def ::server-keys (s/keys :req-un [::long-pair ::name ::short-pair]
+                             :opt-un [::keydir]))
+(defrecord MyKeys [keydir
+                   name  ; Not used by Client
+                   long-pair
+                   short-pair])
 
 ;; TODO: Needs spec
 (defrecord PacketManagement [packet ; TODO: Rename this to body
@@ -60,15 +89,20 @@
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
 
 (def cookie-frame (gloss/compile-frame (gloss/ordered-map :header (gloss/string :utf-8 :length 8)
-                                                          :client-extension (gloss/finite-block 16)
-                                                          :server-extension (gloss/finite-block 16)
+                                                          :client-extension (gloss/finite-block extension-length)
+                                                          :server-extension (gloss/finite-block extension-length)
                                                           ;; Implicitly prefixed with "CurveCPK"
-                                                          :nonce (gloss/finite-block 16)
+                                                          :nonce (gloss/finite-block server-nonce-suffix-length)
                                                           :cookie (gloss/finite-block 144))))
 
 (defn crypto-box-prepare
   [public secret]
   (TweetNaclFast$Box. public secret))
+
+(defn default-packet-manager
+  []
+  map->PacketManagement {:packet (byte-array 4096)
+                         :nonce 0N})
 
 (defn random-key-pair
   []
@@ -106,7 +140,7 @@ Or there's probably something similar in guava"
 
 (defn random-key
   []
-  (random-array 32))
+  (random-array key-length))
 
 (defn random-long-obsolete
   "This seems like it's really just for generating a nonce.
@@ -121,6 +155,8 @@ Or there's probably something similar in guava"
   (let [default 0N]
     (if (<= n 1)
       default
+      ;; Q: Is this seemingly arbitrary number related to
+      ;; key length?
       (let [bs (random-array 32)]
         ;; Q: How does this compare with just calling
         ;; (.nextLong rng) ?

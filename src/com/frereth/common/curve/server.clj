@@ -9,6 +9,7 @@
             [manifold.deferred :as deferred]
             [manifold.stream :as stream]))
 
+(def default-max-clients 100)
 (def message-len 1104)
 
 ;; For maintaining a secret symmetric pair of encryption
@@ -17,15 +18,10 @@
                          minute-key
                          last-minute-key])
 
-(defrecord Security [keydir
-                     name
-                     long-pair
-                     short-pair])
-
-(s/def ::long-term-public (s/and bytes?
-                                 #(= (count %) 32)))
-(s/def ::short-term-public (s/and bytes?
-                                  #(= (count %) 32)))
+(s/def ::long-pk (s/and bytes?
+                        #(= (count %) shared/key-length)))
+(s/def ::short-pk (s/and bytes?
+                         #(= (count %) shared/key-length)))
 (defrecord ClientSecurity [long-pk
                            short-pk])
 (s/def ::client-security (s/keys :req-un [::long-pk
@@ -70,7 +66,7 @@
                                        ::shared-secrets]))
 
 ;; This seems like it probably belongs in shared
-(defrecord WorkingArea [nonce
+(defrecord WorkingArea [nonce  ; This is also defined in PacketManagement. That seems wrong.
                         text])
 ;; Q: Worth specifying a length?
 (s/def ::nonce bytes?)
@@ -91,26 +87,26 @@
                   event-loop-stopper
                   extension
                   max-active-clients
+                  my-keys
                   packet-management
                   server-routing
-                  security
                   working-area]
   cpt/Lifecycle
   (start
     [{:keys [client-chan
              extension
-             security]
+             my-keys]
       :as this}]
     (println "CurveCP Server: Starting the server state")
     (assert (and client-chan
                  (:chan client-chan)
-                 (:name security)
-                 (:keydir security)
+                 (:name my-keys)
+                 (:keydir my-keys)
                  extension
                  ;; Actually, the rule is that it must be
                  ;; 32 hex characters. Which really means
                  ;; a 16-byte array
-                 (= (count extension) 16)))
+                 (= (count extension) shared/extension-length)))
     ;; Reference implementation starts by allocating the active client structs.
     ;; This is one area where updating in place simply cannot be worth it.
     ;; Q: Can it?
@@ -118,8 +114,8 @@
 
     ;; So we're starting by loading up the long-term keys
 
-    (let [max-active-clients (or (:max-active-clients this) 100)
-          keydir (:keydir security)
+    (let [max-active-clients (or (:max-active-clients this) default-max-clients)
+          keydir (:keydir my-keys)
           long-pair (shared/do-load-keypair keydir)
           almost (-> this
                      (assoc :active-clients (atom #{})
@@ -130,13 +126,10 @@
                                                            (one-minute))}
                             :current-client (alloc-client)
                             :max-active-clients max-active-clients
-                            :packet-management (shared/map->PacketManagement {:packet (byte-array 4096)
-                                                                              :ip (byte-array 4)
-                                                                              :nonce 0N
-                                                                              :port (byte-array 2)})
-                            :working-area (map->WorkingArea {:nonce (byte-array 24)
+                            :packet-management (shared/default-packet-manager)
+                            :working-area (map->WorkingArea {:nonce (byte-array shared/nonce-length)
                                                              :text (byte-array 2048)}))
-                     (assoc-in [:security :long-pair] long-pair)
+                     (assoc-in [:my-keys :long-pair] long-pair)
                      (assoc :active-clients {}))]
       (println "Kicking off event loop. packet-management:" (:packet-management almost))
       (assoc almost :event-loop-stopper (begin! almost))))
@@ -177,7 +170,7 @@
                        :message (shared/random-bytes! (byte-array message-len))
                        :message-len 0
                        :received-nonce 0
-                       :sent-nonce (shared/random-mod 281474976710656N)})))
+                       :sent-nonce (shared/random-mod (shared/random-nonce-domain))})))
 
 (defn one-minute
   ([]
@@ -248,7 +241,8 @@
         ;; The timeout is in milliseconds, but state's timeout uses
         ;; the nanosecond clock
         (stream/try-take! (:chan client-chan) ::drained
-                          (inc (/ (:timeout state) 1000000)) ::timeout)
+                          ;; This is in milliseconds
+                          (inc (/ (:timeout state) shared/nanos-in-milli)) ::timeout)
         (fn [msg]
           (println (str "Top of Server Event loop received " msg))
           (if-not (or (identical? ::drained msg)
@@ -300,13 +294,12 @@
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
   (let [p-m (:packet-management state)]
-    (shared/random-bytes! (:packet p-m))
-    (shared/random-bytes! (:ip p-m))
-    (shared/random-bytes! (:port p-m)))
+    (shared/random-bytes! (:packet p-m)))
   (shared/random-bytes! (-> state :current-client :client-security :short-pk))
   ;; These are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
   ;; For now, just explicitly set to nil once we get past these side-effects
+  ;; (i.e. at the bottom)
   #_(shared/random-bytes (-> state :current-client :shared-secrets :what?))
   (shared/random-bytes! (-> state :working-area :nonce))
   (shared/random-bytes! (-> state :working-area :text))
@@ -317,9 +310,9 @@
   ;; and need to be sharded.
   #_(shared/random-bytes! (-> state :child-buffer :buf))
   #_(shared/random-bytes! (-> state :child-buffer :msg))
-  (when-let [short-term-keys (-> state :security :short-pair)]
+  (when-let [short-term-keys (-> state :my-keys :short-pair)]
     (shared/random-bytes! (.getPublicKey short-term-keys)))
-  (shared/random-bytes! (-> state :security :long-pair .getSecretKey))
+  (shared/random-bytes! (-> state :my-keys :long-pair .getSecretKey))
   ;; Clear the shared secrets in the current client
   ;; Maintaning these anywhere I don't need them seems like an odd choice.
   ;; Actually, keeping them in 2 different places seems odd.
