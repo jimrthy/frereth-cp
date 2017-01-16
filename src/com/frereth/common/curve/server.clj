@@ -58,7 +58,8 @@
                                     ::sent-nonce
                                     ::shared-secrets]))
 
-(s/def ::state (s/keys :req-un [::shared/packet-management]))
+(s/def ::state (s/keys :req-un [::cookie-cutter
+                                ::shared/packet-management]))
 
 (declare alloc-client begin! hide-secrets! randomized-cookie-cutter)
 (defrecord State [active-clients
@@ -161,7 +162,7 @@
 
 (defn handle-incoming!
   [state msg]
-  (throw (RuntimeException. (str "Just received: " msg))))
+  (throw (ex-info "Not yet written" {:message msg})))
 
 (defn handle-key-rotation
   "Doing it this way means that state changes are only seen locally
@@ -178,7 +179,7 @@
   (try
     (println "Checking whether it's time to rotate keys or not")
     (let [now (System/nanoTime)
-          next-minute (-> state :cookie-cutter :next-minute)
+          next-minute (-> state :cookie-cutter ::next-minute)
           _ (println "next-minute:" next-minute "out of" (-> state keys)
                      "with cookie-cutter" (:cookie-cutter state))
           timeout (- next-minute now)]
@@ -204,8 +205,52 @@
   "Try to make pretty printing less obnoxious"
   [state]
   (-> state
-      (assoc-in [:packet-management ::shared/packet] "Lots o' bytes")
-      (assoc :working-area "Lots more bytes")))
+      (assoc-in [:current-client ::message] "...")
+      (assoc-in [:packet-management ::shared/packet] "...")
+      (assoc :message "..."
+             :working-area "...")))
+
+(defn hide-secrets!
+  [this]
+  (println "Hiding secrets")
+  ;; This is almost the top of the server's for(;;)
+  ;; Missing step: reset timeout
+  ;; Missing step: copy :minute-key into :last-minute-key
+  ;; (that's handled by key rotation. Don't need to bother
+  ;; if we're "just" cleaning up on exit)
+  (let [minute-key-array (get-in this [:cookie-cutter ::minute-key])]
+    (assert minute-key-array)
+    (shared/random-bytes! minute-key-array))
+  ;; Missing step: update cookie-cutter's next-minute
+  ;; (that happens in handle-key-rotation)
+  (let [p-m (:packet-management this)]
+    (shared/random-bytes! (::shared/packet p-m)))
+  (shared/random-bytes! (-> this :current-client ::client-security ::short-pk))
+  ;; These are all private, so I really can't touch them
+  ;; Q: What *is* the best approach to clearing them then?
+  ;; For now, just explicitly set to nil once we get past these side-effects
+  ;; (i.e. at the bottom)
+  #_(shared/random-bytes (-> this :current-client ::shared-secrets :what?))
+  (let [work-area (:working-area this)]
+    (shared/random-bytes! (::shared/working-nonce work-area))
+    (shared/random-bytes! (::shared/text work-area)))
+  ;; These next two may make more sense once I have a better idea about
+  ;; the actual messaging implementation.
+  ;; Until then, plan on just sending objects across core.async.
+  ;; Of course, the entire point may be messages that are too big
+  ;; and need to be sharded.
+  #_(shared/random-bytes! (-> this :child-buffer ::buf))
+  #_(shared/random-bytes! (-> this :child-buffer ::msg))
+  (when-let [short-term-keys (get-in this [:my-keys ::short-pair])]
+    (shared/random-bytes! (.getPublicKey short-term-keys))
+    (shared/random-bytes! (.getSecretKey short-term-keys)))
+  ;; Clear the shared secrets in the current client
+  ;; Maintaning these anywhere I don't need them seems like an odd choice.
+  ;; Actually, keeping them in 2 different places seems odd.
+  ;; Q: What's the point to current-client at all?
+  (assoc-in this [:current-client ::shared-secrets] {::client-short<->server-long nil
+                                                     ::client-short<->server-short nil
+                                                     ::client-long<->server-long nil}))
 
 (defn begin!
   "Start the event loop"
@@ -249,63 +294,25 @@
         ;; Return a function that will (eventually) cause that event
         ;; loop to exit
         (fn [this]
-          (if-not (identical? this ::drained)
-            (if-not (realized? stopper)
+          (if this
+            (if-not (identical? this ::drained)
+              (if-not (realized? stopper)
+                (do
+                  (println "Rotating" (util/pretty (hide-long-arrays this)))
+                  (deferred/recur (handle-key-rotation this)))
+                (do
+                  (println "Received stop signal")
+                  (deliver stopped ::exited)))
               (do
-                (println "Rotating" (util/pretty (hide-long-arrays this)))
-                (deferred/recur (handle-key-rotation this)))
-              (do
-                (println "Received stop signal")
-                (deliver stopped ::exited)))
+                (println "Closing because client connection is drained")
+                (deliver stopped ::drained)))
             (do
-              (println "Closing because client connection is drained")
-              (deliver stopped ::drained))))))
+              (println "Exiting event loop because state turned falsey. Unhandled exception?")
+              (deliver stopped ::failed))))))
     (fn [timeout]
       (when (not (realized? stopped))
         (deliver stopper ::exiting))
       (deref stopped timeout ::stopping-timed-out))))
-
-(defn hide-secrets!
-  [this]
-  (println "Hiding secrets")
-  ;; This is almost the top of the server's for(;;)
-  ;; Missing step: reset timeout
-  ;; Missing step: copy :minute-key into :last-minute-key
-  ;; (that's handled by key rotation. Don't need to bother
-  ;; if we're "just" cleaning up on exit)
-  (let [minute-key-array (get-in this [:cookie-cutter ::minute-key])]
-    (assert minute-key-array)
-    (shared/random-bytes! minute-key-array))
-  ;; Missing step: update cookie-cutter's next-minute
-  ;; (that happens in handle-key-rotation)
-  (let [p-m (:packet-management this)]
-    (shared/random-bytes! (::shared/packet p-m)))
-  (shared/random-bytes! (-> this :current-client ::client-security ::short-pk))
-  ;; These are all private, so I really can't touch them
-  ;; Q: What *is* the best approach to clearing them then?
-  ;; For now, just explicitly set to nil once we get past these side-effects
-  ;; (i.e. at the bottom)
-  #_(shared/random-bytes (-> this :current-client ::shared-secrets :what?))
-  (let [work-area (:working-area this)]
-    (shared/random-bytes! (::shared/working-nonce work-area))
-    (shared/random-bytes! (::shared/text work-area)))
-  ;; These next two may make more sense once I have a better idea about
-  ;; the actual messaging implementation.
-  ;; Until then, plan on just sending objects across core.async.
-  ;; Of course, the entire point may be messages that are too big
-  ;; and need to be sharded.
-  #_(shared/random-bytes! (-> this :child-buffer ::buf))
-  #_(shared/random-bytes! (-> this :child-buffer ::msg))
-  (when-let [short-term-keys (get-in this [:my-keys ::short-pair])]
-    (shared/random-bytes! (.getPublicKey short-term-keys)))
-  (shared/random-bytes! (-> this :my-keys ::long-pair .getSecretKey))
-  ;; Clear the shared secrets in the current client
-  ;; Maintaning these anywhere I don't need them seems like an odd choice.
-  ;; Actually, keeping them in 2 different places seems odd.
-  ;; Q: What's the point to current-client at all?
-  (assoc-in this [:current-client ::shared-secrets] {::client-short<->server-long nil
-                                                     ::client-short<->server-short nil
-                                                     ::client-long<->server-long nil}))
 
 (defn randomized-cookie-cutter
   []

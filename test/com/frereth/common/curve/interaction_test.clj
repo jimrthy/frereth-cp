@@ -9,18 +9,39 @@
             [manifold.stream :as strm]))
 
 (deftest handshake
-  (let [options {:server {:security {::shared/keydir "curve-test"
+  (let [server-extension (byte-array [0x01 0x02 0x03 0x04
+                                      0x05 0x06 0x07 0x08
+                                      0x09 0x0a 0x0b 0x0c
+                                      0x0d 0x0e 0x0f 0x10])
+        server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
+                                    51 -105 -107 -125 -120 -41 83 -46
+                                    -23 -72 109 -58 -100 87 115 95
+                                    89 -74 -21 -33 20 21 110 95])
+        server-name (shared/encode-server-name "test.frereth.com")
+        options {:server {:extension server-extension
+                          :my-keys {::shared/server-name server-name}
+                          :security {::shared/keydir "curve-test"
                                      ;; Note that name really isn't legal.
                                      ;; It needs to be something we can pass
                                      ;; along to DNS, padded to 255 bytes.
                                      ;; This bug really should show up in
                                      ;; a test.
-                                     ::shared/server-name "local.test"}
-                          :extension (byte-array [0x01 0x02 0x03 0x04
-                                                  0x05 0x06 0x07 0x08
-                                                  0x09 0x0a 0x0b 0x0c
-                                                  0x0d 0x0e 0x0f 0x10])}
-                 :cp-client {}}
+                                     ::shared/server-name "local.test"}}
+                 :client {:extension (byte-array [0x10 0x0f 0x0e 0x0d
+                                                  0x0c 0x0b 0x0a 0x09
+                                                  0x08 0x07 0x06 0x05
+                                                  0x04 0x03 0x02 0x01])
+                          :server-extension server-extension
+                          ;; Q: Where do I get the server's public key?
+                          ;; A: Right now, I just have the secret key's 32 bytes encoded as
+                          ;; the alphabet.
+                          ;; TODO: Really need to mirror what the code does to load the
+                          ;; secret key from a file.
+                          ;; Then I can just generate a random key pair for the server.
+                          ;; Use the key-put functionality to store the secret, then
+                          ;; hard-code the public key here.
+                          :server-security {::clnt/server-long-term-pk server-long-pk
+                                            ::shared/server-name server-name}}}
         system (-> #:component-dsl.system {:structure {:client 'com.frereth.common.curve.client/ctor
                                                        :server 'com.frereth.common.curve.server/ctor
                                                        ;; Flip the meaning of these channel names,

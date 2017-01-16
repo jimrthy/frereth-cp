@@ -149,6 +149,9 @@
 
 (declare slurp-bytes)
 (defn do-load-keypair
+  "Honestly, these should be stored with something like base64 encoding.
+
+And encrypted with a passphrase, of course."
   [keydir]
   (if keydir
     (let [secret (slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))]
@@ -179,26 +182,6 @@
 (comment (let [encoded (encode-server-name "foo..bacon.com")]
            (vec encoded)))
 
-(s/fdef random-key-pair
-        :args (s/cat)
-        :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
-(defn random-key-pair
-  []
-  (TweetNaclFast$Box/keyPair))
-
-(defn slurp-bytes
-  "Slurp the bytes from a slurpable thing
-
-Copy/pasted from stackoverflow. Credit: Matt W-D.
-
-alt approach: Add dependency to org.apache.commons.io
-
-Or there's probably something similar in guava"
-  [x]
-  (with-open [out (java.io.ByteArrayOutputStream.)]
-    (clojure.java.io/copy (clojure.java.io/input-stream x) out)
-    (.toByteArray out)))
-
 (defn random-bytes!
   [#^bytes dst]
   (TweetNaclFast/randombytes dst))
@@ -210,6 +193,13 @@ Or there's probably something similar in guava"
 (defn random-key
   []
   (random-array key-length))
+
+(s/fdef random-key-pair
+        :args (s/cat)
+        :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
+(defn random-key-pair
+  []
+  (TweetNaclFast$Box/keyPair))
 
 (defn random-nonce
   []
@@ -262,6 +252,26 @@ Or there's probably something similar in guava"
           tmp (byte-array n)]
       (.randomBytes tmp)
       (byte-copy! dst offset n tmp))))
+
+(defn slurp-bytes
+  "Slurp the bytes from a slurpable thing
+
+Copy/pasted from stackoverflow. Credit: Matt W-D.
+
+alt approach: Add dependency to org.apache.commons.io
+
+Or there's probably something similar in guava"
+  [bs]
+  (with-open [out (java.io.ByteArrayOutputStream.)]
+    (clojure.java.io/copy (clojure.java.io/input-stream bs) out)
+    (.toByteArray out)))
+
+(defn spit-bytes
+  "Spit bytes to a spittable thing"
+  [f bs]
+  (with-open [out (clojure.java.io/output-stream f)]
+    (with-open [in (clojure.java.io/input-stream bs)]
+      (clojure.java.io/copy in out))))
 
 (defn uint64-pack!
   "Sets 8 bytes in dst (starting at offset n) to x

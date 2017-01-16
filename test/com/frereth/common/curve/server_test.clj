@@ -42,28 +42,38 @@
 
 (deftest start-stop
   (testing "That we can start and stop successfully"
-    (let [ch (strm/stream)
-          init (build ch)
+    (let [init (build)
           started (cpt/start init)]
       (is started)
-      (strm/close! ch)
       (is (cpt/stop started)))))
 (comment
   (def test-sys (build))
   (alter-var-root #'test-sys cpt/start)
+  (-> test-sys :client-chan keys)
   (alter-var-root #'test-sys cpt/stop)
   )
 
 (deftest shake-hands
-  (let [client (strm/stream)]
-    (let [init (build client)
-          started (cpt/start init)]
-      (println "Server should be started now")
-      (try
-        (println "Sending HELLO")
-        (let [success (deref (strm/try-put! client "Howdy!" 1000 ::timed-out))]
-          (println "put! success:" success)
-          (is (not= ::timed-out success)))
-        (finally
-          (println "Triggering event loop exit")
-          (cpt/stop started))))))
+  (let [init (build)
+        started (cpt/start init)]
+    (println "Server should be started now")
+    (try
+      (println "Sending bogus HELLO")
+      (let [client (get-in started [:client-chan :chan])
+            ;; Currently, this fails silently (from our perspective).
+            ;; Which, really, is a fine thing.
+            ;; Although the log message should be improved (since this could
+            ;; very well indicate a hacking attempt).
+            ;; Still, the current behavior is good enough for now.
+            ;; I need to build packets to send to do the real work.
+            ;; That will be easier/simpler to do in shared when I'm
+            ;; interacting with a real client.
+            ;; (The alternative is to either capture that exchange so
+            ;; I can send it manually or reinvent the client's packet
+            ;; buildig code)
+            success (deref (strm/try-put! client "Howdy!" 1000 ::timed-out))]
+        (println "put! success:" success)
+        (is (not= ::timed-out success)))
+      (finally
+        (println "Triggering event loop exit")
+        (cpt/stop started)))))

@@ -35,9 +35,9 @@
 
 (declare hand-shake)
 (defrecord State [child-chan
-                  client-extension
                   client-extension-load-time
-                                    my-keys
+                  extension
+                  my-keys
                   outgoing-message
                   packet-management
                   recent
@@ -45,7 +45,6 @@
                   server-extension
                   server-security
                   shared-secrets
-                  text
                   vouch
                   work-area]
   cpt/Lifecycle
@@ -61,7 +60,7 @@
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
 nor subject to timing attacks because it just won't be called very often."
-  [{:keys [client-extension
+  [{:keys [extension
            client-extension-load-time
            recent]
     :as this}]
@@ -70,16 +69,16 @@ nor subject to timing attacks because it just won't be called very often."
         client-extension-load-time (if reload
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
-        client-extension (if-not reload
-                           (try (-> "/etc/curvecpextension"
-                                    (subs 0 16)
-                                    .getBytes)
-                                (catch java.io.FileNotFoundException _
-                                  (shared/zero-bytes 16)))
-                           client-extension)]
+        extension (if-not reload
+                    (try (-> "/etc/curvecpextension"
+                             (subs 0 16)
+                             .getBytes)
+                         (catch java.io.FileNotFoundException _
+                           (shared/zero-bytes 16)))
+                    extension)]
     (assoc this
            :client-extension-load-time client-extension-load-time
-           :client-extension client-extension)))
+           :extension extension)))
 
 (defn update-client-short-term-nonce
   "Using a BigInt for this seems like an obnoxious performance hit.
@@ -97,7 +96,7 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     result))
 
 (defn do-build-hello
-  [{:keys [client-extension
+  [{:keys [extension
            my-keys
            server-extension
            shared-secrets
@@ -115,7 +114,7 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     ;; Q: What kind of performance difference would that make?
     (shared/byte-copy! packet shared/hello-header)
     (shared/byte-copy! packet 8 shared/extension-length server-extension)
-    (shared/byte-copy! packet 24 shared/extension-length client-extension)
+    (shared/byte-copy! packet 24 shared/extension-length extension)
     (shared/byte-copy! packet 40 shared/key-length (.getPublicKey (::short-pair my-keys)))
     (shared/byte-copy! packet 72 64 shared/all-zeros)
     (shared/byte-copy! packet 136 shared/client-nonce-suffix-length
@@ -152,7 +151,7 @@ TODO: Switch to that or whatever Bouncy Castle uses"
       (assoc this :server-security server-security))))
 
 (defn decrypt-cookie-packet
-  [{:keys [client-extension
+  [{:keys [extension
            packet-management
            server-extension
            text]
@@ -176,7 +175,7 @@ TODO: Switch to that or whatever Bouncy Castle uses"
       ;; (i.e. mostly comparing byte arrays
       (when (and (shared/bytes= shared/cookie-header
                                 (String. (:header rcvd)))
-                 (shared/bytes= client-extension (:client-extension rcvd))
+                 (shared/bytes= extension (:client-extension rcvd))
                  (shared/bytes= server-extension (:server-extension rcvd)))
         (decrypt-actual-cookie this rcvd)))))
 
@@ -237,7 +236,7 @@ implementation. This is code that I don't understand yet"
                     (when (bit-and length-code 0x80)
                       (throw (ex-info "done" {})))
                     (if (= msg-len (inc (* 16 length-code)))
-                      (let [{:keys [client-extension
+                      (let [{:keys [extension
                                     my-keys
                                     packet-management
                                     server-extension
@@ -304,8 +303,8 @@ implementation. This is code that I don't understand yet"
                                                            shared/extension-length server-extension)
                                         (let [offset (+ offset shared/extension-length)]
                                           (shared/byte-copy! packet offset
-                                                             shared/extension-length client-extension)
-                                          (let [offset (+ offset shared/extension-length client-extension)]
+                                                             shared/extension-length extension)
+                                          (let [offset (+ offset shared/extension-length)]
                                             (shared/byte-copy! packet offset shared/key-length
                                                                (.getPublicKey (::short-pair my-keys)))
                                             (let [offset (+ offset shared/key-length)]
@@ -371,16 +370,16 @@ implementation. This is code that I don't understand yet"
         my-keys (assoc my-keys
                        ::long-pair long-pair
                        ::short-pair short-pair)
-        shared-secrets (assoc (:shared-secrets this
-                                               ::client-long<->server-long (shared/crypto-box-prepare
-                                                                            server-long-term-pk
-                                                                            (.getSecretKey short-pair))
-                                               ::client-short<->server-long (shared/crypto-box-prepare
+        shared-secrets (assoc (:shared-secrets this)
+                              ::client-long<->server-long (shared/crypto-box-prepare
                                                                              server-long-term-pk
-                                                                             (.getSecretKey long-pair))))
+                                                                             (.getSecretKey short-pair))
+                              ::client-short<->server-long (shared/crypto-box-prepare
+                                                                              server-long-term-pk
+                                                                              (.getSecretKey long-pair)))
         this (-> this
                  (assoc
-                  :client-extension nil
+                  :extension nil
                   :client-extension-load-time 0
                   :recent recent
                   :my-keys my-keys
@@ -445,7 +444,6 @@ implementation. This is code that I don't understand yet"
         server-keys (shared/random-key-pair)
         msg "Hold on, my child needs my attention"
         bs (.getBytes msg)
-        ;; This can't possibly be the proper size
         nonce (byte-array [1 2 3 4 5 6 7 8 9 10
                            11 12 13 14 15 16 17
                            18 19 20 21 22 23 24])
