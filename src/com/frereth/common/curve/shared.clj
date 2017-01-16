@@ -95,16 +95,16 @@
   "Copies the bytes from src to dst"
   ([dst src]
    (run! (fn [n]
-           (aset dst n (aget src n)))
+           (aset-byte dst n (aget src n)))
          (range (count src))))
   ([dst offset n src]
    (run! (fn [m]
-           (aset dst (+ m offset) (aget src m)))
+           (aset-byte dst (+ m offset) (aget src m)))
          (range n)))
   ([dst offset n src src-offset]
    (run! (fn [m]
            (let [o (+ m offset)]
-             (aset dst o
+             (aset-byte dst o
                    (aget src o))))
          (range n))))
 
@@ -282,6 +282,9 @@ Box.generateNonce.
 If that's really all this is used for, should definitely use
 that implementation instead"
   [dst n x]
+  ;; This is failing because bit operations aren't supported
+  ;; on BigInt.
+  (throw (RuntimeException. "How do I want to handle this?"))
   (let [x' (bit-and 0xff x)]
     (aset dst n x')
     (let [x (unsigned-bit-shift-right x 8)

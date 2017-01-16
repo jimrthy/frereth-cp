@@ -57,6 +57,12 @@
     [this]
     this))
 
+(defn hide-long-arrays
+  [this]
+  (-> this
+      ;; TODO: Write a mirror image version of dns-encode to just show this
+      (assoc-in [:my-keys :server-name] "name")))
+
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
 nor subject to timing attacks because it just won't be called very often."
@@ -98,17 +104,19 @@ TODO: Switch to that or whatever Bouncy Castle uses"
 (defn do-build-hello
   [{:keys [extension
            my-keys
+           packet-management
            server-extension
            shared-secrets
-           short-term-nonce
-           text]
+           work-area]
     :as this}]
   (let [this (clientextension-init this)
-        packet-management (:packet-management this)
-        {:keys [::shared/nonce ::shared/packet]} packet-management
-        short-term-nonce (update-client-short-term-nonce short-term-nonce)]
-    (shared/byte-copy! nonce shared/hello-nonce-prefix)
-    (shared/uint64-pack! nonce 16 short-term-nonce)
+        _ (println "Extension initialized")
+        working-nonce (::shared/working-nonce work-area)
+        {:keys [::shared/packet-nonce ::shared/packet]} (:packet-management this)
+        short-term-nonce (update-client-short-term-nonce packet-nonce)]
+    (println "Packing nonces")
+    (shared/byte-copy! working-nonce shared/hello-nonce-prefix)
+    (shared/uint64-pack! working-nonce 16 short-term-nonce)
 
     ;; This seems to be screaming for gloss.
     ;; Q: What kind of performance difference would that make?
@@ -118,12 +126,11 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     (shared/byte-copy! packet 40 shared/key-length (.getPublicKey (::short-pair my-keys)))
     (shared/byte-copy! packet 72 64 shared/all-zeros)
     (shared/byte-copy! packet 136 shared/client-nonce-suffix-length
-                       nonce
+                       working-nonce
                        shared/client-nonce-prefix-length)
-    (let [payload (.after (::client-short<->server-long shared-secrets) packet 144 80 nonce)]
+    (let [payload (.after (::client-short<->server-long shared-secrets) packet 144 80 working-nonce)]
       (shared/byte-copy! packet 144 80 payload)
-      (assoc this
-             :short-term-nonce short-term-nonce))))
+      (assoc-in this [:packet-management ::shared/packet-nonce] short-term-nonce))))
 
 (defn decrypt-actual-cookie
   [{:keys [packet-management
@@ -385,6 +392,7 @@ implementation. This is code that I don't understand yet"
                   :my-keys my-keys
                   :shared-secrets shared-secrets)
                  do-build-hello)]
+    (println "Hello built")
     ;; The reference implementation mingles networking with this code.
     ;; That seems like it might make sense as an optimization,
     ;; but not until I have convincing numbers that it's needed.
