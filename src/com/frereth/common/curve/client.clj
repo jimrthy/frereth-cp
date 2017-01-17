@@ -58,6 +58,7 @@
     this))
 
 (defn hide-long-arrays
+  "Make pretty printing a little less verbose"
   [this]
   (-> this
       ;; TODO: Write a mirror image version of dns-encode to just show this
@@ -91,12 +92,9 @@ nor subject to timing attacks because it just won't be called very often."
 Using a regular long seems like a recipe for getting it wrong.
 Guava specifically has an unsigned long class.
 TODO: Switch to that or whatever Bouncy Castle uses"
-  [^clojure.lang.BigInt nonce]
-  (let [result (inc nonce)]
-    ;; In the original C, the nonce is a crypto_uint64.
-    ;; So they can just check to see whether it wrapped
-    ;; around to 0.
-    (when (> result shared/max-unsigned-long)
+  [^Long nonce]
+  (let [result (unchecked-inc nonce)]
+    (when (= result 0)
       (throw (Exception. "nonce space expired"
                          {:must "End communication immediately"})))
     result))

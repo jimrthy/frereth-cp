@@ -30,11 +30,11 @@
 (def server-cookie-length 96)
 (def server-name-length 256)
 
-(def max-unsigned-long (bigint (Math/pow 2 64)))
+(def max-unsigned-long -1)
 (def nanos-in-milli (long (Math/pow 10 9)))
 (def nanos-in-second (* nanos-in-milli 1000))
 
-(def max-random-nonce (bigint (Math/pow 2 48)))
+(def max-random-nonce (long (Math/pow 2 48)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -137,7 +137,7 @@
    ;; Or maybe even a ref (although STM would be a disaster here...
    ;; actually, trying to cope with this in multiple threads
    ;; seems like a train wreck waiting to happen)
-   ::packet-nonce 0N})
+   ::packet-nonce 0})
 
 (s/fdef default-work-area
         :args (s/cat)
@@ -147,7 +147,7 @@
   {::working-nonce (byte-array nonce-length)
    ::text (byte-array 2048)})
 
-(declare slurp-bytes)
+(declare random-key-pair slurp-bytes)
 (defn do-load-keypair
   "Honestly, these should be stored with something like base64 encoding.
 
@@ -183,14 +183,17 @@ And encrypted with a passphrase, of course."
            (vec encoded)))
 
 (defn random-bytes!
+  "Fills dst with random bytes"
   [#^bytes dst]
   (TweetNaclFast/randombytes dst))
 
 (defn random-array
+  "Returns an array of n random bytes"
   [^Long n]
   (TweetNaclFast/randombytes n))
 
 (defn random-key
+  "Returns a byte array suitable for use as a random key"
   []
   (random-array key-length))
 
@@ -198,22 +201,14 @@ And encrypted with a passphrase, of course."
         :args (s/cat)
         :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
 (defn random-key-pair
+  "Generates a pair of random keys"
   []
   (TweetNaclFast$Box/keyPair))
 
-(defn random-nonce
-  []
-  (random-mod max-random-nonce))
-
-(defn random-long-obsolete
-  "This seems like it's really just for generating a nonce.
-  Or maybe it isn't being used at all?
-  I could always do something like (random-mod MAXINT)"
-  []
-  (throw (RuntimeException. "No matching implementation")))
-
 (defn random-mod
-  "Returns a cryptographically secure random number between 0 and n"
+  "Returns a cryptographically secure random number between 0 and n
+
+Or maybe that's (dec n)"
   [n]
   (let [default 0N]
     (if (<= n 1)
@@ -242,9 +237,15 @@ And encrypted with a passphrase, of course."
                 default
                 bs)))))
 
+(defn random-nonce
+  "Generates a number suitable for use as a cryptographically secure random nonce"
+  []
+  (random-mod max-random-nonce))
+
 (defn safe-nonce
   [dst keydir offset]
   (if keydir
+    ;; Read the last saved version from something in keydir
     (throw (RuntimeException. "Get real safe-nonce implementation translated"))
     ;; This is where working with something like a ByteBuf seems like it
     ;; would be much nicer
@@ -281,10 +282,21 @@ Box.generateNonce.
 
 If that's really all this is used for, should definitely use
 that implementation instead"
-  [dst n x]
+  [^bytes dst n ^Long x]
   ;; This is failing because bit operations aren't supported
   ;; on BigInt.
-  (throw (RuntimeException. "How do I want to handle this?"))
+  ;; Note that I do inherit guava 19.0 from the google closure
+  ;; compiler.
+  ;; Which is almost an accident from component-dsl including
+  ;; clojurescript.
+  ;; Guava's unsigned long is slightly slower than using
+  ;; primitive longs, with the trade-off of strong typing.
+  ;; That seems like a fairly dumb trade-off.
+  ;; Especially since the bit twiddling here almost has
+  ;; to be for performance/timing reasons.
+  ;; Maybe I should just be using primitive longs to start
+  ;; with and cope with the way the signed bit works when
+  ;; I must.
   (let [x' (bit-and 0xff x)]
     (aset dst n x')
     (let [x (unsigned-bit-shift-right x 8)
@@ -311,8 +323,7 @@ that implementation instead"
 
 (defn zero-bytes
   [n]
-  (let [result (byte-array n)]
-    (java.util.Arrays/fill result (byte 0))))
+  (byte-array n (repeat 0)))
 
 (def all-zeros
   "To avoid creating this over and over"
