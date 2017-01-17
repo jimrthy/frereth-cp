@@ -5,7 +5,8 @@
   the message exchange, but that approach gets complicated
   on the server side. At least half the point there is
   reducing DoS."
-  (:require [clojure.spec :as s]
+  (:require [clojure.pprint :refer (pprint)]
+            [clojure.spec :as s]
             [com.frereth.common.curve.shared :as shared]
             [com.stuartsierra.component :as cpt]
             [gloss.core :as gloss-core]
@@ -50,6 +51,12 @@
   cpt/Lifecycle
   (start
     [this]
+    (throw (ex-info "Start here" {:problem "hand-shake returns a deferred"}))
+    ;; Q: Does it make sense to just do the deref here?
+    ;; Nothing else matters while we're waiting for this.
+    ;; Then again, we could really have bunches of these going
+    ;; at once, so blocking a full System is a really bad idea.
+    ;; This needs more hammock time.
     (hand-shake (assoc this
                        :packet-management (shared/default-packet-manager)
                        :work-area (shared/default-work-area))))
@@ -62,7 +69,10 @@
   [this]
   (-> this
       ;; TODO: Write a mirror image version of dns-encode to just show this
-      (assoc-in [:my-keys :server-name] "name")))
+      (assoc-in [:server-security :server-name] "name")
+      (assoc-in [:packet-management ::shared/packet] "...packet bytes...")
+      (assoc-in [:work-area ::shared/working-nonce] "...FIXME: Decode nonce bytes")
+      (assoc-in [:work-area ::shared/text] "...plain/cipher text")))
 
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
@@ -73,16 +83,25 @@ nor subject to timing attacks because it just won't be called very often."
     :as this}]
   (assert (and client-extension-load-time recent))
   (let [reload (>= recent client-extension-load-time)
+        _ (println "Reloading extension:" reload "(currently:" extension ") in"
+                   #_(with-out-str (pprint (hide-long-arrays this)))
+                   (keys (hide-long-arrays this)))
         client-extension-load-time (if reload
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
-        extension (if-not reload
+        extension (if reload
                     (try (-> "/etc/curvecpextension"
+                             ;; This is pretty inefficient...we really only want 16 bytes.
+                             ;; Should be good enough for a starting point, though
+                             slurp
                              (subs 0 16)
                              .getBytes)
                          (catch java.io.FileNotFoundException _
+                           (println "Missing extension file")
                            (shared/zero-bytes 16)))
                     extension)]
+    (assert (= (count extension) shared/extension-length))
+    (println "Loaded extension:" (vec extension))
     (assoc this
            :client-extension-load-time client-extension-load-time
            :extension extension)))
@@ -100,21 +119,20 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     result))
 
 (defn do-build-hello
-  [{:keys [extension
-           my-keys
+  [{:keys [my-keys
            packet-management
            server-extension
            shared-secrets
            work-area]
     :as this}]
   (let [this (clientextension-init this)
-        _ (println "Extension initialized")
+        ;; There's a good chance this just got replaced
+        extension (:extension this)
         working-nonce (::shared/working-nonce work-area)
         {:keys [::shared/packet-nonce ::shared/packet]} (:packet-management this)
         short-term-nonce (update-client-short-term-nonce packet-nonce)]
-    (println "Packing nonces")
     (shared/byte-copy! working-nonce shared/hello-nonce-prefix)
-    (shared/uint64-pack! working-nonce 16 short-term-nonce)
+    (shared/uint64-pack! working-nonce shared/client-nonce-prefix-length short-term-nonce)
 
     ;; This seems to be screaming for gloss.
     ;; Q: What kind of performance difference would that make?
@@ -122,6 +140,7 @@ TODO: Switch to that or whatever Bouncy Castle uses"
     (shared/byte-copy! packet 8 shared/extension-length server-extension)
     (shared/byte-copy! packet 24 shared/extension-length extension)
     (shared/byte-copy! packet 40 shared/key-length (.getPublicKey (::short-pair my-keys)))
+    ;; This is throwing an ArrayIndexOutOfBoundsException
     (shared/byte-copy! packet 72 64 shared/all-zeros)
     (shared/byte-copy! packet 136 shared/client-nonce-suffix-length
                        working-nonce
@@ -384,6 +403,7 @@ implementation. This is code that I don't understand yet"
                                                                               (.getSecretKey long-pair)))
         this (-> this
                  (assoc
+                  ;; Q: Why can't I specify this?
                   :extension nil
                   :client-extension-load-time 0
                   :recent recent
@@ -396,7 +416,9 @@ implementation. This is code that I don't understand yet"
     ;; but not until I have convincing numbers that it's needed.
     ;; Of course, I might also be opening things up for something
     ;; like a timing attack.
-    (let [d (stream/put! server-chan (-> this :packet-management ::shared/packet))]
+    (let [packet (-> this :packet-management ::shared/packet)
+          _ (println "Putting" packet "onto" server-chan)
+          d (stream/put! server-chan packet)]
       (deferred/chain d
         (fn [sent?]
           (if sent?

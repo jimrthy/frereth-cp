@@ -98,14 +98,15 @@
            (aset-byte dst n (aget src n)))
          (range (count src))))
   ([dst offset n src]
+   (println "Copying" n "bytes from a" (count src) "byte array to offset"
+            offset "of a" (count dst) "byte array")
    (run! (fn [m]
            (aset-byte dst (+ m offset) (aget src m)))
          (range n)))
   ([dst offset n src src-offset]
    (run! (fn [m]
-           (let [o (+ m offset)]
-             (aset-byte dst o
-                   (aget src o))))
+           (aset-byte dst (+ m offset)
+                      (aget src (+ m src-offset))))
          (range n))))
 
 (defn bytes=
@@ -172,7 +173,6 @@ And encrypted with a passphrase, of course."
             (when (< 63 length)
               (throw (ex-info "Name segment too long" {:encoding name
                                                        :problem n})))
-            (println "Trying to set" (byte length) "at" @pos "in" result)
             (aset-byte result @pos (byte length))
             (doseq [c n]
               (swap! pos inc)
@@ -298,28 +298,28 @@ that implementation instead"
   ;; with and cope with the way the signed bit works when
   ;; I must.
   (let [x' (bit-and 0xff x)]
-    (aset dst n x')
+    (aset-byte dst n x')
     (let [x (unsigned-bit-shift-right x 8)
           x' (bit-and 0xff x)]
-      (aset dst (inc n) x')
+      (aset-byte dst (inc n) x')
       (let [x (unsigned-bit-shift-right x 8)
             x' (bit-and 0xff x)]
-        (aset dst (+ n 2) x')
+        (aset-byte dst (+ n 2) x')
         (let [x (unsigned-bit-shift-right x 8)
               x' (bit-and 0xff x)]
-          (aset dst (+ n 3) x')
+          (aset-byte dst (+ n 3) x')
           (let [x (unsigned-bit-shift-right x 8)
                 x' (bit-and 0xff x)]
-            (aset dst (+ n 4) x')
+            (aset-byte dst (+ n 4) x')
             (let [x (unsigned-bit-shift-right x 8)
                   x' (bit-and 0xff x)]
-              (aset dst (+ n 5) x')
+              (aset-byte dst (+ n 5) x')
               (let [x (unsigned-bit-shift-right x 8)
                     x' (bit-and 0xff x)]
-                (aset dst (+ n 6) x')
+                (aset-byte dst (+ n 6) x')
                 (let [x (unsigned-bit-shift-right x 8)
                       x' (bit-and 0xff x)]
-                  (aset dst (+ n 7) x'))))))))))
+                  (aset-byte dst (+ n 7) x'))))))))))
 
 (defn zero-bytes
   [n]
