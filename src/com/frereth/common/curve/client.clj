@@ -8,6 +8,7 @@
   (:require [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.schema :as schema]
             [com.stuartsierra.component :as cpt]
             [gloss.core :as gloss-core]
             [gloss.io :as gloss]
@@ -17,10 +18,30 @@
 (def cookie (gloss-core/compile-frame (gloss-core/ordered-map :s' (gloss-core/finite-block 32)
                                                               :black-box (gloss-core/finite-block 96))))
 
+;; Send messages to the child process
+(s/def ::chan->child ::schema/async-channel)
+;; Pull messages from the child process
+(s/def ::chan<-child ::schema/async-channel)
+;; Note that there's a good chance that these are
+;; actual instances of manifold.stream/stream.
+(s/def ::chan<-server ::schema/async-channel)
+(s/def ::chan->server ::schema/async-channel)
+
+;; Periodically pull the client extension from...wherever it comes from.
+;; Q: Why?
+;; A: Has to do with randomizing and security, like sending from a random
+;; UDP port. This will pull in updates when and if some mechanism is
+;; added to implement that sort of thing.
+;; Actually doing anything useful with this seems like it's probably
+;; an exercise that's been left for later
+(s/def ::client-extension-load-time integer?)
+
 (s/def ::server-long-term-pk ::shared/public-key)
 (s/def ::server-cookie any?)  ; TODO: Needs a real spec
 (s/def ::server-short-term-pk ::shared/public-key)
 (s/def ::server-security (s/keys :req [::server-long-term-pk
+                                       ;; Q: Is there a valid reason for this to live here?
+                                       ;; I can discard it after sending the vouch, can't I?
                                        ::server-cookie
                                        ::shared/server-name
                                        ::server-short-term-pk]))
@@ -32,17 +53,53 @@
                                       ::client-short<->server-long
                                       ::client-short<->server-short]))
 
-(s/def ::state (s/keys :req-un [::shared/packet-management]))
+;; Q: What is this, and how is it used?
+;; A: Well, it has something to do with messages from the Child to the Server.
+(s/def ::outgoing-message any?)
+
+;; The parts that change really need to be stored in a mutable
+;; data structure.
+;; An agent really does seem like it was specifically designed
+;; for this.
+;; Parts of this mutate over time. Others advance with the handshake
+;; FSM. And others are really just temporary members.
+;; I could also handle this with refs, but combining STM with
+;; mutable byte arrays (which is where the "real work"
+;; happens) seems like a recipe for disaster.
+(s/def ::mutable-state (s/keys :req-un [::client-extension-load-time
+                                        ::shared/extension
+                                        ::outgoing-message
+                                        ::shared/packet-management
+                                        ::shared/recent
+                                        ::server-extension
+                                        ::server-security
+                                        ::shared-secrets
+                                        ::shared/work-area]
+                               :opt-un [::chan->child
+                                        ::chan<-child
+                                        ;; Q: Why am I tempted to store this at all?
+                                        ;; A: Well...I might need to resend it if it
+                                        ;; gets dropped initially.
+                                        ::vouch]))
+(s/def ::immutable-state (s/keys [::shared/my-keys
+                                  ;; Q: How do these mesh with netty's pipeline model?
+                                  ;; For that matter, how much sense does the idea of
+                                  ;; spawning a child process here?
+                                  ::chan->server
+                                  ::chan<-server]))
+(s/def ::state (s/merge ::mutable-state ::immutable-state))
 
 (declare hand-shake)
-(defrecord State [child-chan
+(defrecord State [chan->child
+                  chan<-child
                   client-extension-load-time
                   extension
                   my-keys
                   outgoing-message
                   packet-management
                   recent
-                  server-chan
+                  chan<-server
+                  chan->server
                   server-extension
                   server-security
                   shared-secrets
@@ -57,6 +114,15 @@
     ;; Then again, we could really have bunches of these going
     ;; at once, so blocking a full System is a really bad idea.
     ;; This needs more hammock time.
+    ;; After very brief consideration, agents seem almost suited
+    ;; for what needs to happen here.
+    ;; Except for nonce manipulation. That puts a major wrench in the gears.
+
+    ;; Important note:
+    ;; The reference implementation actually loops over several servers
+    ;; so we can rapidly pick the first that responds.
+    ;; This is one of the selling points over TCP, where a connection
+    ;; failure might require 3 minutes to fall back to the backup.
     (hand-shake (assoc this
                        :packet-management (shared/default-packet-manager)
                        :work-area (shared/default-work-area))))
@@ -376,10 +442,12 @@ implementation. This is code that I don't understand yet"
   of the low-level buffer management into its own
   pieces and used clojure's native facilities to
   handle building that?"
-  [{:keys [child-chan  ; Seems wrong. If it's a real child, should spawn it here
+  [{:keys [chan<-child  ; Seems wrong for caller to supply these. If it's a real child, should spawn it here
+           chan->child
            my-keys
            packet-management
-           server-chan
+           chan<-server
+           chan->server
            server-extension
            server-security
            timeout]
@@ -417,12 +485,12 @@ implementation. This is code that I don't understand yet"
     ;; Of course, I might also be opening things up for something
     ;; like a timing attack.
     (let [packet (-> this :packet-management ::shared/packet)
-          _ (println "Putting" packet "onto" server-chan)
-          d (stream/put! server-chan packet)]
+          _ (println "Putting" packet "onto" chan->server)
+          d (stream/put! chan->server packet)]
       (deferred/chain d
         (fn [sent?]
           (if sent?
-            (deferred/timeout! (stream/take! server-chan) timeout ::hello-timed-out)
+            (deferred/timeout! (stream/take! chan<-server) timeout ::hello-timed-out)
             ::hello-send-failed))
         (fn [cookie]
           ;; Q: What is really in cookie now?
@@ -444,7 +512,7 @@ implementation. This is code that I don't understand yet"
         (fn [state-with-keyed-cookie]
           (build-vouch state-with-keyed-cookie))
         (fn [vouched-state]
-          (let [future (stream/take! child-chan)
+          (let [future (stream/take! chan<-child)
                 ;; I'd like to just return that future and
                 ;; handle the next pieces separately.
                 ;; But then I'd lose the state that I'm
@@ -455,7 +523,7 @@ implementation. This is code that I don't understand yet"
             (let [updated (extract-child-message
                            vouched-state
                            msg-buffer)]
-              (assoc updated :initiate-sent? (stream/put! server-chan (:packet updated))))))
+              (assoc updated :initiate-sent? (stream/put! chan->server (:packet updated))))))
         (fn [this]
           (let [success (deref (:initiate-sent? this) timeout ::sending-initiate-failed)]
             (if success
@@ -463,24 +531,6 @@ implementation. This is code that I don't understand yet"
               ;; TODO: Really should initiate retries
               ;; But if we failed to send the packet at all, something is badly wrong
               (throw (ex-info "Failed to send initiate" this)))))))))
-
-(defn basic-test
-  "This should probably go away"
-  []
-  (let [client-keys (shared/random-key-pair)
-        ;; Q: Do I want to use this or TweetNaclFast/keyPair?
-        server-keys (shared/random-key-pair)
-        msg "Hold on, my child needs my attention"
-        bs (.getBytes msg)
-        nonce (byte-array [1 2 3 4 5 6 7 8 9 10
-                           11 12 13 14 15 16 17
-                           18 19 20 21 22 23 24])
-        boxer (shared/crypto-box-prepare (.getPublicKey server-keys) (.getSecretKey client-keys))
-        ;; This seems likely to get confused due to arity issues
-        boxed (.box boxer bs nonce)
-        unboxer (shared/crypto-box-prepare (.getPublicKey client-keys) (.getSecretKey server-keys))]
-    (String. (.open unboxer boxed nonce))))
-(comment (basic-test))
 
 (defn ctor
   [opts]

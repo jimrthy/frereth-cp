@@ -51,7 +51,7 @@
 
 (s/def ::client-state (s/keys :req [::child-interaction
                                     ::client-security
-                                    ::extension
+                                    ::shared/extension
                                     ::message
                                     ::message-len
                                     ::received-nonce
@@ -148,7 +148,7 @@
              ::short-pk (shared/random-key)}]
     {::child-interaction interact
      ::client-security sec
-     ::extension (shared/random-bytes! (byte-array 16))
+     ::shared/extension (shared/random-bytes! (byte-array 16))
      ::message (shared/random-bytes! (byte-array message-len))
      ::message-len 0
      ::received-nonce 0

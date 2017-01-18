@@ -48,3 +48,21 @@
   (-> junk keys)
   (alter-var-root #'junk #(.start %))
   (alter-var-root #'junk #(.stop %)))
+
+(defn basic-test
+  "This should probably go away"
+  []
+  (let [client-keys (shared/random-key-pair)
+        ;; Q: Do I want to use this or TweetNaclFast/keyPair?
+        server-keys (shared/random-key-pair)
+        msg "Hold on, my child needs my attention"
+        bs (.getBytes msg)
+        nonce (byte-array [1 2 3 4 5 6 7 8 9 10
+                           11 12 13 14 15 16 17
+                           18 19 20 21 22 23 24])
+        boxer (shared/crypto-box-prepare (.getPublicKey server-keys) (.getSecretKey client-keys))
+        ;; This seems likely to get confused due to arity issues
+        boxed (.box boxer bs nonce)
+        unboxer (shared/crypto-box-prepare (.getPublicKey client-keys) (.getSecretKey server-keys))]
+    (String. (.open unboxer boxed nonce))))
+(comment (basic-test))

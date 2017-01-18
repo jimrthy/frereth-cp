@@ -48,6 +48,7 @@
                                  (when (< 63 (count n))
                                    (throw (RuntimeException. (str n " too long"))))))
                              s)))
+(s/def ::extension (s/and bytes? #(= (count %) 16)))
 ;; Q: Worth adding a check to verify that it's a folder that exists on the classpath?
 (s/def ::keydir string?)
 (s/def ::long-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
@@ -66,8 +67,11 @@
                                ::long-pair
                                ::server-name
                                ::short-pair]))
+;; "Recent" timestamp, in nanoseconds
+(s/def ::recent integer?)
 
-;; Q: What *is* this, really?
+;; I think this is a TweetNaclFast$Box
+;; TODO: Verify
 (s/def ::shared-secret any?)
 (s/def ::public-key (s/and bytes? #(= (count %) key-length)))
 (s/def ::symmetric-key (s/and bytes? #(= (count %) key-length)))
