@@ -116,6 +116,7 @@
   cpt/Lifecycle
   (start
     [this]
+    (throw (RuntimeException. "obsolete"))
     (let [immutable (initialize-immutable-state this)
           mutable (agent (initialize-mutable-state immutable))]
 
@@ -128,11 +129,6 @@
       ;; for what needs to happen here.
       ;; Except for nonce manipulation. That puts a major wrench in the gears.
 
-      ;; Important note:
-      ;; The reference implementation actually loops over several servers
-      ;; so we can rapidly pick the first that responds.
-      ;; This is one of the selling points over TCP, where a connection
-      ;; failure might require 3 minutes to fall back to the backup.
       (throw (ex-info "Start here" {:problem "Who should initiate handshake?"}))
       ;; In a lot of ways, this doesn't make sense as a Component at all.
       ;; Yes, it's definitely mutable boundary state.
@@ -140,9 +136,7 @@
       ;; There should probably be a Component that owns a collection of these
       ;; that handles that sort of detail.
       ;; It's almost like I've been through this thought process before.
-      (hand-shake (assoc this
-                         :packet-management (shared/default-packet-manager)
-                         :work-area (shared/default-work-area)))))
+      ))
   (stop
     [this]
     ;; TODO: At the very least, surely I need to purge shared secrets
@@ -440,7 +434,7 @@ implementation. This is code that I don't understand yet"
                           buffer)]
     (assoc this :outgoing-message (:child-msg extracted))))
 
-(defn initialize-immutable-state
+(defn load-keys
   [{:keys [:my-keys]
     :as this}]
   (let [long-pair (shared/do-load-keypair (::keydir my-keys))
@@ -449,10 +443,17 @@ implementation. This is code that I don't understand yet"
                                 ::long-pair long-pair
                                 ::short-pair short-pair))))
 
+(defn initialize-immutable-values
+  "Sets up the immutable value that will be used in tandem with the mutable agent later"
+  [this]
+  ;; In theory, it seems like it would make sense to -> this through a chain of
+  ;; these sorts of initializers.
+  ;; In practice, as it stands, it seems a little silly.
+  (load-keys this))
+
 (defn initialize-mutable-state
-  [{:keys [:my-keys
-           :server-security
-           :shared-secrets]}]
+  [{:keys [::shared/my-keys
+           ::server-security]}]
   {:pre [(::server-long-term-pk server-security)]}
   (let [server-long-term-pk (::server-long-term-pk server-security)
         long-pair (::long-pair my-keys)
@@ -468,14 +469,18 @@ implementation. This is code that I don't understand yet"
      ;; A: Who am I to argue with an expert?
      ::server-security server-security
      ::shared/extension nil
-     ::shared-secrets (assoc shared-secrets
-                             ::client-long<->server-long (shared/crypto-box-prepare
-                                                          server-long-term-pk
-                                                          (.getSecretKey short-pair))
-                             ::client-short<->server-long (shared/crypto-box-prepare
-                                                           server-long-term-pk
-                                                           (.getSecretKey long-pair)))}))
+     ::shared-secrets {::client-long<->server-long (shared/crypto-box-prepare
+                                                    server-long-term-pk
+                                                    (.getSecretKey short-pair))
+                       ::client-short<->server-long (shared/crypto-box-prepare
+                                                     server-long-term-pk
+                                                     (.getSecretKey long-pair))}}))
 
+;; Important note:
+;; The reference implementation actually loops over several servers
+;; so we can rapidly pick the first that responds.
+;; This is one of the selling points over TCP, where a connection
+;; failure might require 3 minutes to fall back to the backup.
 (defn hand-shake
   "This really needs to be some sort of stateful component.
   It almost definitely needs to interact with ByteBuf to
@@ -566,6 +571,39 @@ implementation. This is code that I don't understand yet"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(s/fdef ctor
+        :args (s/keys :req [::shared/my-keys
+                            ::server-security])
+        ;; Q: What *does* this return?
+        :ret any?)
 (defn ctor
-  [opts]
-  (map->State opts))
+  [{:keys []
+    :as opts}]
+  (let [immutable (initialize-immutable-values opts)
+        mutable (agent (initialize-mutable-state immutable))
+        ;; It seems wrong to define these here, but they pretty
+        ;; definitely belong with the agent.
+        ;; We don't want anyone else or any other threads to gain
+        ;; access.
+        packet-manager (shared/default-packet-manager)
+        work-area (shared/default-work-area)]
+    ;; Options:
+    ;; 1) Just return the 4 parts as one state that happens to include values
+    ;; Caller can pass them along as it follows the handshake protocol
+    ;; (which no longer seems like a good fit for my original definition)
+    ;; 2) Return closures over the handshake methods
+    ;; 3) ...
+    ;; Note that those are probably both short-sighted.
+    ;; The *real* point is the message that follows the handshake.
+    ;; For it, we really need to discard a lot of these pieces and
+    ;; switch to a drastically different view of the state
+    (throw (RuntimeException. "What does this really look like?"))
+    ;; Definitely do *not* want to call this now.
+    ;; For that matter, I don't want it to set up the actual
+    ;; call chain.
+    ;; Well, maybe.
+    ;; Actually, that part does make sense
+    (hand-shake {::immutable immutable
+                 ::mutable mutable
+                 ::shared/packet-management packet-manager
+                 ::shared/work-area work-area})))
