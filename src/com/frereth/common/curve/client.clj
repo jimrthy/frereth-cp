@@ -15,6 +15,9 @@
             [manifold.deferred :as deferred]
             [manifold.stream :as stream]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
 (def cookie (gloss-core/compile-frame (gloss-core/ordered-map :s' (gloss-core/finite-block 32)
                                                               :black-box (gloss-core/finite-block 96))))
 
@@ -71,7 +74,6 @@
                                         ::outgoing-message
                                         ::shared/packet-management
                                         ::shared/recent
-                                        ::server-extension
                                         ::server-security
                                         ::shared-secrets
                                         ::shared/work-area]
@@ -81,53 +83,69 @@
                                         ;; A: Well...I might need to resend it if it
                                         ;; gets dropped initially.
                                         ::vouch]))
-(s/def ::immutable-state (s/keys [::shared/my-keys
-                                  ;; Q: How do these mesh with netty's pipeline model?
-                                  ;; For that matter, how much sense does the idea of
-                                  ;; spawning a child process here?
-                                  ::chan->server
-                                  ::chan<-server]))
+(s/def ::immutable-state (s/keys :req-un [::shared/my-keys
+                                          ;; Q: How do these mesh with netty's pipeline model?
+                                          ;; For that matter, how much sense does the idea of
+                                          ;; spawning a child process here?
+                                          ::chan->server
+                                          ::chan<-server
+                                          ::server-extension]))
 (s/def ::state (s/merge ::mutable-state ::immutable-state))
 
-(declare hand-shake)
-(defrecord State [chan->child
-                  chan<-child
-                  client-extension-load-time
+(declare hand-shake initialize-immutable-state initialize-mutable-state)
+(defrecord State [chan->child       ;; Q: Where do these live?
+                  chan<-child       ;; (they don't really seem to fit here)
+                  client-extension-load-time   ; mutable
+                  ;; Q: Where does this really belong?
                   extension
-                  my-keys
-                  outgoing-message
+                  immutable         ; owns nested pieces
+                  mutable           ; Becomes an agent
+                  my-keys           ; mutable
+                  outgoing-message  ; Q: What is this?
+                  ;; Q: Where does this really belong?
                   packet-management
-                  recent
-                  chan<-server
-                  chan->server
-                  server-extension
-                  server-security
-                  shared-secrets
-                  vouch
+                  recent            ; mutable
+                  chan<-server      ; belongs under immutable
+                  chan->server      ;  ditto
+                  server-extension  ;  ditto
+                  server-security   ; mutable
+                  shared-secrets    ; mutable (build w/ handshake)
+                  vouch             ; mutable
+                  ;; Q: Where does this really belong?
                   work-area]
   cpt/Lifecycle
   (start
     [this]
-    (throw (ex-info "Start here" {:problem "hand-shake returns a deferred"}))
-    ;; Q: Does it make sense to just do the deref here?
-    ;; Nothing else matters while we're waiting for this.
-    ;; Then again, we could really have bunches of these going
-    ;; at once, so blocking a full System is a really bad idea.
-    ;; This needs more hammock time.
-    ;; After very brief consideration, agents seem almost suited
-    ;; for what needs to happen here.
-    ;; Except for nonce manipulation. That puts a major wrench in the gears.
+    (let [immutable (initialize-immutable-state this)
+          mutable (agent (initialize-mutable-state immutable))]
 
-    ;; Important note:
-    ;; The reference implementation actually loops over several servers
-    ;; so we can rapidly pick the first that responds.
-    ;; This is one of the selling points over TCP, where a connection
-    ;; failure might require 3 minutes to fall back to the backup.
-    (hand-shake (assoc this
-                       :packet-management (shared/default-packet-manager)
-                       :work-area (shared/default-work-area))))
+      ;; Q: Does it make sense to just do the deref here?
+      ;; Nothing else matters while we're waiting for this.
+      ;; Then again, we could really have bunches of these going
+      ;; at once, so blocking a full System is a really bad idea.
+      ;; This needs more hammock time.
+      ;; After very brief consideration, agents seem almost suited
+      ;; for what needs to happen here.
+      ;; Except for nonce manipulation. That puts a major wrench in the gears.
+
+      ;; Important note:
+      ;; The reference implementation actually loops over several servers
+      ;; so we can rapidly pick the first that responds.
+      ;; This is one of the selling points over TCP, where a connection
+      ;; failure might require 3 minutes to fall back to the backup.
+      (throw (ex-info "Start here" {:problem "Who should initiate handshake?"}))
+      ;; In a lot of ways, this doesn't make sense as a Component at all.
+      ;; Yes, it's definitely mutable boundary state.
+      ;; But their lifecycle (sorry for the pun) doesn't match System's start/stop.
+      ;; There should probably be a Component that owns a collection of these
+      ;; that handles that sort of detail.
+      ;; It's almost like I've been through this thought process before.
+      (hand-shake (assoc this
+                         :packet-management (shared/default-packet-manager)
+                         :work-area (shared/default-work-area)))))
   (stop
     [this]
+    ;; TODO: At the very least, surely I need to purge shared secrets
     this))
 
 (defn hide-long-arrays
@@ -422,6 +440,42 @@ implementation. This is code that I don't understand yet"
                           buffer)]
     (assoc this :outgoing-message (:child-msg extracted))))
 
+(defn initialize-immutable-state
+  [{:keys [:my-keys]
+    :as this}]
+  (let [long-pair (shared/do-load-keypair (::keydir my-keys))
+        short-pair (shared/random-key-pair)]
+    (assoc this :my-keys (assoc my-keys
+                                ::long-pair long-pair
+                                ::short-pair short-pair))))
+
+(defn initialize-mutable-state
+  [{:keys [:my-keys
+           :server-security
+           :shared-secrets]}]
+  {:pre [(::server-long-term-pk server-security)]}
+  (let [server-long-term-pk (::server-long-term-pk server-security)
+        long-pair (::long-pair my-keys)
+        short-pair (::short-pair my-keys)]
+    {::client-extension-load-time 0
+     ::recent (System/nanoTime)
+     ;; This seems like something that we should be able to set here.
+     ;; djb's docs say that it's a security matter, like connecting from a
+     ;; random port.
+     ;; Hopefully, someday, operating systems will have some mechanism for
+     ;; rotating these automatically
+     ;; Q: Is this really better than just picking something random here?
+     ;; A: Who am I to argue with an expert?
+     ::server-security server-security
+     ::shared/extension nil
+     ::shared-secrets (assoc shared-secrets
+                             ::client-long<->server-long (shared/crypto-box-prepare
+                                                          server-long-term-pk
+                                                          (.getSecretKey short-pair))
+                             ::client-short<->server-long (shared/crypto-box-prepare
+                                                           server-long-term-pk
+                                                           (.getSecretKey long-pair)))}))
+
 (defn hand-shake
   "This really needs to be some sort of stateful component.
   It almost definitely needs to interact with ByteBuf to
@@ -453,31 +507,8 @@ implementation. This is code that I don't understand yet"
            timeout]
     :or {timeout 2500}
     :as this}]
-  {:pre [(and server-extension
-              (::server-long-term-pk server-security))]}
-  (let [server-long-term-pk (::server-long-term-pk server-security)
-        recent (System/nanoTime)
-        long-pair (shared/do-load-keypair (::keydir my-keys))
-        short-pair (shared/random-key-pair)
-        my-keys (assoc my-keys
-                       ::long-pair long-pair
-                       ::short-pair short-pair)
-        shared-secrets (assoc (:shared-secrets this)
-                              ::client-long<->server-long (shared/crypto-box-prepare
-                                                                             server-long-term-pk
-                                                                             (.getSecretKey short-pair))
-                              ::client-short<->server-long (shared/crypto-box-prepare
-                                                                              server-long-term-pk
-                                                                              (.getSecretKey long-pair)))
-        this (-> this
-                 (assoc
-                  ;; Q: Why can't I specify this?
-                  :extension nil
-                  :client-extension-load-time 0
-                  :recent recent
-                  :my-keys my-keys
-                  :shared-secrets shared-secrets)
-                 do-build-hello)]
+  {:pre [server-extension]}
+  (let [this (do-build-hello this)]
     (println "Hello built")
     ;; The reference implementation mingles networking with this code.
     ;; That seems like it might make sense as an optimization,
@@ -531,6 +562,9 @@ implementation. This is code that I don't understand yet"
               ;; TODO: Really should initiate retries
               ;; But if we failed to send the packet at all, something is badly wrong
               (throw (ex-info "Failed to send initiate" this)))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public
 
 (defn ctor
   [opts]
