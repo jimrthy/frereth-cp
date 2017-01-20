@@ -11,13 +11,15 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
+(def cookie-header (.getBytes "RL3aNMXK"))
+(def cookie-nonce-prefix (.getBytes "CurveCPK"))
+(def cookie-packet-length 200)
 (def hello-header (.getBytes "QvnQ5XlH"))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
+(def hello-packet-length 224)
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 (def initiate-header (.getBytes "QvnQ5XlI"))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
-
-(def cookie-packet-length 200)
 
 (def box-zero-bytes 16)
 (def extension-length 16)
@@ -116,9 +118,6 @@
 (defn bytes=
   [x y]
   (throw (RuntimeException. "Translate this")))
-
-(def cookie-header (.getBytes "RL3aNMXK"))
-(def cookie-nonce-prefix (.getBytes "CurveCPK"))
 
 (def cookie-frame (gloss/compile-frame (gloss/ordered-map :header (gloss/string :utf-8 :length 8)
                                                           :client-extension (gloss/finite-block extension-length)

@@ -90,57 +90,11 @@
                                           ::chan->server
                                           ::chan<-server
                                           ::server-extension]))
-(s/def ::state (s/merge ::mutable-state ::immutable-state))
+(s/def ::state (s/merge ::mutable-state
+                       ::immutable-state))
 
-(declare hand-shake initialize-immutable-state initialize-mutable-state)
-(defrecord State [chan->child       ;; Q: Where do these live?
-                  chan<-child       ;; (they don't really seem to fit here)
-                  client-extension-load-time   ; mutable
-                  ;; Q: Where does this really belong?
-                  extension
-                  immutable         ; owns nested pieces
-                  mutable           ; Becomes an agent
-                  my-keys           ; mutable
-                  outgoing-message  ; Q: What is this?
-                  ;; Q: Where does this really belong?
-                  packet-management
-                  recent            ; mutable
-                  chan<-server      ; belongs under immutable
-                  chan->server      ;  ditto
-                  server-extension  ;  ditto
-                  server-security   ; mutable
-                  shared-secrets    ; mutable (build w/ handshake)
-                  vouch             ; mutable
-                  ;; Q: Where does this really belong?
-                  work-area]
-  cpt/Lifecycle
-  (start
-    [this]
-    (throw (RuntimeException. "obsolete"))
-    (let [immutable (initialize-immutable-state this)
-          mutable (agent (initialize-mutable-state immutable))]
-
-      ;; Q: Does it make sense to just do the deref here?
-      ;; Nothing else matters while we're waiting for this.
-      ;; Then again, we could really have bunches of these going
-      ;; at once, so blocking a full System is a really bad idea.
-      ;; This needs more hammock time.
-      ;; After very brief consideration, agents seem almost suited
-      ;; for what needs to happen here.
-      ;; Except for nonce manipulation. That puts a major wrench in the gears.
-
-      (throw (ex-info "Start here" {:problem "Who should initiate handshake?"}))
-      ;; In a lot of ways, this doesn't make sense as a Component at all.
-      ;; Yes, it's definitely mutable boundary state.
-      ;; But their lifecycle (sorry for the pun) doesn't match System's start/stop.
-      ;; There should probably be a Component that owns a collection of these
-      ;; that handles that sort of detail.
-      ;; It's almost like I've been through this thought process before.
-      ))
-  (stop
-    [this]
-    ;; TODO: At the very least, surely I need to purge shared secrets
-    this))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Internal
 
 (defn hide-long-arrays
   "Make pretty printing a little less verbose"
@@ -451,7 +405,7 @@ implementation. This is code that I don't understand yet"
   ;; In practice, as it stands, it seems a little silly.
   (load-keys this))
 
-(defn initialize-mutable-state
+(defn initialize-mutable-state!
   [{:keys [::shared/my-keys
            ::server-security]}]
   {:pre [(::server-long-term-pk server-security)]}
@@ -476,12 +430,34 @@ implementation. This is code that I don't understand yet"
                                                      server-long-term-pk
                                                      (.getSecretKey long-pair))}}))
 
+(defn child-exited!
+  [this]
+  ::child-exited)
+
+(defn server-closed!
+  "This seems pretty meaningless in a UDP context"
+  [this]
+  ::server-closed)
+
+(s/fdef register-closing-handlers!
+        :args (s/cat :this #(instance? clojure.lang.Agent %))
+        :ret nil?)
+(defn register-closing-handlers!
+ [this]
+ (let [{:keys [::chan<-child
+               ::chan<-server]} (deref this)]
+   (stream/on-drained chan<-child #(send this child-exited!))
+   (stream/on-drained chan<-server #(send this server-closed!))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public
+
 ;; Important note:
 ;; The reference implementation actually loops over several servers
 ;; so we can rapidly pick the first that responds.
 ;; This is one of the selling points over TCP, where a connection
 ;; failure might require 3 minutes to fall back to the backup.
-(defn hand-shake
+(defn start-handshake!
   "This really needs to be some sort of stateful component.
   It almost definitely needs to interact with ByteBuf to
   build up something that's ready to start communicating
@@ -568,42 +544,22 @@ implementation. This is code that I don't understand yet"
               ;; But if we failed to send the packet at all, something is badly wrong
               (throw (ex-info "Failed to send initiate" this)))))))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
-
 (s/fdef ctor
         :args (s/keys :req [::shared/my-keys
                             ::server-security])
-        ;; Q: What *does* this return?
-        :ret any?)
+        :ret (s/and #(instance? clojure.lang.Agent %)
+                    #(s/valid? ::state (deref %))))
 (defn ctor
   [{:keys []
     :as opts}]
-  (let [immutable (initialize-immutable-values opts)
-        mutable (agent (initialize-mutable-state immutable))
-        ;; It seems wrong to define these here, but they pretty
-        ;; definitely belong with the agent.
-        ;; We don't want anyone else or any other threads to gain
-        ;; access.
-        packet-manager (shared/default-packet-manager)
-        work-area (shared/default-work-area)]
-    ;; Options:
-    ;; 1) Just return the 4 parts as one state that happens to include values
-    ;; Caller can pass them along as it follows the handshake protocol
-    ;; (which no longer seems like a good fit for my original definition)
-    ;; 2) Return closures over the handshake methods
-    ;; 3) ...
-    ;; Note that those are probably both short-sighted.
-    ;; The *real* point is the message that follows the handshake.
-    ;; For it, we really need to discard a lot of these pieces and
-    ;; switch to a drastically different view of the state
-    (throw (RuntimeException. "What does this really look like?"))
-    ;; Definitely do *not* want to call this now.
-    ;; For that matter, I don't want it to set up the actual
-    ;; call chain.
-    ;; Well, maybe.
-    ;; Actually, that part does make sense
-    (hand-shake {::immutable immutable
-                 ::mutable mutable
-                 ::shared/packet-management packet-manager
-                 ::shared/work-area work-area})))
+  (-> (initialize-immutable-values opts)
+      (initialize-mutable-state!)
+      (assoc
+       ;; This seems very cheese-ball, but they
+       ;; *do* need to be part of the agent.
+       ;; We definitely don't want multiple threads
+       ;; messing with them
+       ::shared/packet-manager (shared/default-packet-manager)
+       ::shared/work-area (shared/default-work-area))
+      agent
+      (register-closing-handlers!)))
