@@ -15,14 +15,11 @@
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         server-name (shared/encode-server-name "hypothet.i.cal")]
-    (clnt/ctor {;; Q: Do I really want these to be manifold streams
-                ;; instead of core.async channels?
-                ;; They really do need to be unidirectional, but
-                ;; I can't just register an arbitrary callback
-                ;; on a core.async on-closed.
-                ;; Q: Can I?
-                ::clnt/chan<-server (strm/stream)
-                ::clnt/chan->server (strm/stream)
+    (clnt/ctor {;; It seems wrong for this to be a bidirectional stream
+                ;; instead of a pair of core.async channel that I treat
+                ;; as unidirectional.
+                ;; But this is what aleph is going to give me.
+                ::clnt/chan<->server (strm/stream)
                 ::clnt/server-extension server-extension
                 ;; Q: Where do I get the server's public key?
                 ;; A: Right now, I just have the secret key's 32 bytes encoded as
@@ -37,37 +34,41 @@
 
 (deftest start-stop
   (let [client (raw-client)
-        server-chan (-> client deref :chan<-server)]
-    (if server-chan
+        chan<->server (-> client deref ::clnt/chan<->server)]
+    (if chan<->server
       (try
-        (let [reader (-> client deref :chan->server)]
-          (send-off client clnt/start-handshake!)
-          ;; TODO: Really should do this, once I know start-handshake! will succeed
-          (comment (await client))
-          ;; But start with this instead, since I'm 90% certain the current
-          ;; implementation will fail
-          (let [hello-future (strm/take! reader ::drained)
-                hello (deref hello-future 500 ::timeout)]
-            (is (not (or (= hello ::timeout)
-                         (= hello ::drained))))
-            ;; Q: Can we do anything else meaningful here?
-            ;; I mean...I have access to the private server key.
-            ;; I could decrypt that packet to see what's in it.
-            ;; But that seems to belong in the actual interactive
-            ;; tests
-            (is (bytes? hello))
-            ;; Actually, this is an interesting point:
-            ;; hello should really be a ByteBuffer.
-            ;; Or a portion of a ByteArray that will be
-            ;; copied into a ByteBuffer.
-            (is (= shared/hello-packet-length (count hello)))
-            (is (shared/bytes= shared/hello-header
-                               (subvec (vec hello) 0 (count shared/hello-header))))))
+        (let [client-thread (future (clnt/start! client))]
+          (try
+            (let [hello-future (strm/try-take! chan<->server ::drained 500 ::timeout)
+                  hello (deref hello-future)]
+              (is (not (or (= hello ::timeout)
+                           (= hello ::drained))))
+              ;; Q: Can we do anything else meaningful here?
+              ;; I mean...I have access to the private server key.
+              ;; I could decrypt that packet to see what's in it.
+              ;; But that seems to belong in the actual interactive
+              ;; tests
+              (is (bytes? hello))
+              ;; Actually, this is an interesting point:
+              ;; hello should really be a ByteBuffer.
+              ;; Or a portion of a ByteArray that will be
+              ;; copied into a ByteBuffer.
+              (is (= shared/hello-packet-length (count hello)))
+              (is (shared/bytes= shared/hello-header
+                                 (subvec (vec hello) 0 (count shared/hello-header)))))
+            (finally
+              (let [hand-shake-result (deref client-thread 500 ::awaiting-handshake)]
+                ;; That timeout is almost definitely too low
+                ;; But it should short-circuit pretty quickly, once it fails.
+                ;; Q: Shouldn't it?
+                (is (not hand-shake-result))))))
         (finally
-          (strm/close! server-chan)
+          (strm/close! chan<->server)
+          ;; Give that a chance to percolate through...
           (Thread/sleep 0.2)
-          (is (= ::server-closed @client))))
-      (is server-chan "No channel to pull data from server"))))
+          (let [ex (agent-error client)]
+            (is (= ::server-closed (-> ex .getData :problem))))))
+      (is chan<->server "No channel to pull data from server"))))
 
 (comment
   (def junk (raw-client))

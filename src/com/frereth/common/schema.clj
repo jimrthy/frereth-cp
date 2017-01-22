@@ -4,7 +4,8 @@
             [cljeromq.core :as mq]
             [clojure.core.async :as async]
             [clojure.spec :as s]
-            [com.stuartsierra.component])
+            [com.stuartsierra.component]
+            [manifold.stream :as strm])
   (:import [com.stuartsierra.component SystemMap]
            [java.util Date]))
 
@@ -21,8 +22,11 @@ TODO: At the very least, it needs its own spec."
 ;;; the Copy/Paste.
 ;;; Not quite tempting enough to convince me that it would be
 ;;; worthwhile.
-(def async-channel-type (class (async/chan)))
-(s/def ::async-channel (class-predicate async-channel-type))
+(let [async-channel-type
+      (class (async/chan))]
+  (s/def ::async-channel (class-predicate async-channel-type)))
+(let [manifold-stream-type (class strm/stream)]
+  (s/def ::manifold-stream (class-predicate manifold-stream-type)))
 
 (def atom-type (class (atom {})))
 (s/def ::atom-type (class-predicate atom-type))
