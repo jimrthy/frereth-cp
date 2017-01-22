@@ -33,8 +33,9 @@
 (def server-name-length 256)
 
 (def max-unsigned-long -1)
+(def millis-in-second 1000)
 (def nanos-in-milli (long (Math/pow 10 9)))
-(def nanos-in-second (* nanos-in-milli 1000))
+(def nanos-in-second (* nanos-in-milli millis-in-second))
 
 (def max-random-nonce (long (Math/pow 2 48)))
 

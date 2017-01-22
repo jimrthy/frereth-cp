@@ -5,7 +5,8 @@
   the message exchange, but that approach gets complicated
   on the server side. At least half the point there is
   reducing DoS."
-  (:require [clojure.pprint :refer (pprint)]
+  (:require [clojure.core.async :as async]
+            [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.schema :as schema]
@@ -13,7 +14,13 @@
             [gloss.core :as gloss-core]
             [gloss.io :as gloss]
             [manifold.deferred :as deferred]
+            ;; Mixing this and core.async seems dubious, at best
             [manifold.stream :as stream]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Magic Constants
+
+(def heartbeat-interval (* 15 shared/millis-in-second))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -26,7 +33,7 @@
 ;; Pull messages from the child process
 (s/def ::chan<-child ::schema/async-channel)
 ;; Note that there's a good chance that these are
-;; actual instances of manifold.stream/stream.
+;; actually instances of manifold.stream/stream.
 (s/def ::chan<-server ::schema/async-channel)
 (s/def ::chan->server ::schema/async-channel)
 
@@ -83,15 +90,16 @@
                                         ;; A: Well...I might need to resend it if it
                                         ;; gets dropped initially.
                                         ::vouch]))
-(s/def ::immutable-state (s/keys :req-un [::shared/my-keys
-                                          ;; Q: How do these mesh with netty's pipeline model?
-                                          ;; For that matter, how much sense does the idea of
-                                          ;; spawning a child process here?
-                                          ::chan->server
-                                          ::chan<-server
-                                          ::server-extension]))
+(s/def ::immutable-value (s/keys :req [::shared/my-keys
+                                       ;; Q: How do these mesh with netty's pipeline model?
+                                       ;; For that matter, how much sense does the idea of
+                                       ;; spawning a child process here?
+                                       ::chan->server
+                                       ::chan<-server
+                                       ::child-spawner
+                                       ::server-extension]))
 (s/def ::state (s/merge ::mutable-state
-                       ::immutable-state))
+                       ::immutable-value))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -146,8 +154,8 @@ TODO: Switch to that or whatever Bouncy Castle uses"
   [^Long nonce]
   (let [result (unchecked-inc nonce)]
     (when (= result 0)
-      (throw (Exception. "nonce space expired"
-                         {:must "End communication immediately"})))
+      (throw (ex-info "nonce space expired"
+                      {:must "End communication immediately"})))
     result))
 
 (defn do-build-hello
@@ -235,6 +243,31 @@ TODO: Switch to that or whatever Bouncy Castle uses"
                  (shared/bytes= server-extension (:server-extension rcvd)))
         (decrypt-actual-cookie this rcvd)))))
 
+(defn add-child
+  [{:keys [::chan<-child
+           ::child-spawner]
+    :as this}]
+  (let [chan->child (async/chan)
+        chan<-child (child-spawner)
+        child-loop (async/go
+                     (loop []
+                       (let [[msg ch] (async/alts! [chan<-child
+                                                    (async/timeout heartbeat-interval)])]
+                         (when msg
+                           ;; 2 problems w/ this implementation
+                           ;; 1. This needs to pull a stream of bytes,
+                           ;; not individual messages
+                           ;; 2. Really needs to trigger a send (-off ?)
+                           ;; Since this is going to trigger i/o and
+                           ;; update the nonce (along with altering
+                           ;; the working area).
+                           (throw (RuntimeException. "Implement")))
+                         (when (or msg
+                                   (not= ch chan<-child))
+                           (recur))))
+                     (print "Child listener exiting"))]
+    (throw (Exception. "This still needs work"))))
+
 (defn build-vouch
   [{:keys [packet-management
            my-keys
@@ -261,12 +294,8 @@ TODO: Switch to that or whatever Bouncy Castle uses"
                          48
                          encrypted
                          shared/server-nonce-suffix-length)
-      ;; At this point the reference implementation pauses to fire up
-      ;; its message-handling child process.
-      ;; This should probably construct something like a go loop that
-      ;; will occupy the same ecological niche
-      (throw (RuntimeException. "Q: How should this work?"))
-      (assoc this :vouch vouch))))
+      (let [pregnant (add-child this)]
+        (assoc pregnant :vouch vouch)))))
 
 (defn extract-child-message
   "Pretty much blindly translated from the CurveCP reference
@@ -389,13 +418,12 @@ implementation. This is code that I don't understand yet"
     (assoc this :outgoing-message (:child-msg extracted))))
 
 (defn load-keys
-  [{:keys [:my-keys]
-    :as this}]
-  (let [long-pair (shared/do-load-keypair (::keydir my-keys))
+  [my-keys]
+  (let [long-pair (shared/do-load-keypair (::shared/keydir my-keys))
         short-pair (shared/random-key-pair)]
-    (assoc this ::shared/my-keys (assoc my-keys
-                                        ::long-pair long-pair
-                                        ::short-pair short-pair))))
+    (assoc my-keys
+           ::shared/long-pair long-pair
+           ::shared/short-pair short-pair)))
 
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
@@ -403,7 +431,8 @@ implementation. This is code that I don't understand yet"
   ;; In theory, it seems like it would make sense to -> this through a chain of
   ;; these sorts of initializers.
   ;; In practice, as it stands, it seems a little silly.
-  (load-keys this))
+  (update this ::shared/my-keys
+          load-keys (::shared/my-keys this)))
 
 (defn initialize-mutable-state!
   [{:keys [::shared/my-keys
@@ -442,12 +471,12 @@ implementation. This is code that I don't understand yet"
 (s/fdef register-closing-handlers!
         :args (s/cat :this #(instance? clojure.lang.Agent %))
         :ret nil?)
-(defn register-closing-handlers!
+(defn register-closing-handlers-obsolete!
  [this]
  (let [{:keys [::chan<-child  ; TODO: Register this after we create it
                ::chan<-server]} (deref this)]
    (stream/on-drained chan<-child #(send this child-exited!))
-   (stream/on-drained chan<-server #(send this server-closed!))))
+   ))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -544,14 +573,31 @@ implementation. This is code that I don't understand yet"
               ;; But if we failed to send the packet at all, something is badly wrong
               (throw (ex-info "Failed to send initiate" this)))))))))
 
+(defn start!
+  "This almost seems like it belongs in ctor.
+
+But not quite, since it's really a side-effect that sets up another.
+
+Q: Is there something equivalent I can set up using core.async?
+
+For that matter, it seems like setting up a watch on an atom that's
+specifically for something like this might make a lot more sense.
+
+That way I wouldn't be trying to multi-purpose communications channels.
+
+OTOH, they *are* the trigger for this sort of thing."
+  [{:keys [::chan<-server]
+    :as this}]
+  (stream/on-drained chan<-server #(send this server-closed!)))
+
 (s/fdef ctor
-        :args (s/keys :req [::shared/my-keys
+        :args (s/keys :req [::chan<-server
+                            ::shared/my-keys
                             ::server-security])
         :ret (s/and #(instance? clojure.lang.Agent %)
                     #(s/valid? ::state (deref %))))
 (defn ctor
-  [{:keys []
-    :as opts}]
+  [opts]
   (-> (initialize-immutable-values opts)
       (initialize-mutable-state!)
       (assoc
@@ -561,5 +607,4 @@ implementation. This is code that I don't understand yet"
        ;; messing with them
        ::shared/packet-manager (shared/default-packet-manager)
        ::shared/work-area (shared/default-work-area))
-      agent
-      (register-closing-handlers!)))
+      agent))
