@@ -1,7 +1,8 @@
 (ns com.frereth.common.curve.client-test
-  (:require [clojure.test :refer (deftest is)]
+  (:require [clojure.test :refer (deftest is testing)]
             [com.frereth.common.curve.client :as clnt]
             [com.frereth.common.curve.shared :as shared]
+            [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))
 
 (defn raw-client
@@ -31,6 +32,41 @@
                 ;; hard-code the public key here.
                 ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
                                         ::shared/server-name server-name}})))
+
+(deftest step-1
+  (testing "The first basic thing that clnt/start does"
+    (let [client (raw-client)
+          chan<->server (-> client deref ::clnt/chan<->server)]
+        (strm/on-drained chan<->server
+                         #(send client clnt/server-closed!))
+        (send client clnt/do-build-hello)
+        (await-for 150 client)
+        (is @client)
+        (let [basic-check "Did this work?"
+              fut (future (let [d (strm/try-put! chan<->server basic-check 150 ::timed-out)]
+                            (dfrd/on-realized d
+                                              #(is (not= % ::timed-out))
+                                              #(is false (str "put! " %)))))]
+          (let [d' (strm/try-take! chan<->server ::nada 200 ::response-timed-out)]
+            (dfrd/on-realized d'
+                              #(is (= % basic-check))
+                              #(is false (str "take! " %))))))))
+
+(deftest build-hello
+  (testing "Can I build a Hello packet?"
+    (let [client-agent (raw-client)
+          client @client-agent
+          updated (clnt/do-build-hello client)]
+      (let [p-m (::shared/packet-management updated)
+            nonce (::shared/packet-nonce p-m)]
+        (is p-m)
+        (is (and (integer? nonce)
+                 (not= 0 nonce)))
+        (let [buffer (::shared/packet p-m)]
+          (is buffer)
+          (let [v (subvec (vec buffer) 0 224)]
+            (is (= (subvec v 0 (count shared/hello-header)) (vec shared/hello-header)))
+            (is (= (subvec v 72 136) (take 64 (repeat 0))))))))))
 
 (deftest start-stop
   (let [client (raw-client)

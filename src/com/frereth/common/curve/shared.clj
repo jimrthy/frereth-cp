@@ -102,13 +102,10 @@
   "Copies the bytes from src to dst"
   ([dst src]
    (let [m (count src)]
-     (println "Copying" m "bytes from" src "to the" (count dst) "array:" dst)
      (run! (fn [n]
              (aset-byte dst n (aget src n)))
            (range m))))
   ([dst offset n src]
-   (println "Copying" n "bytes from a" (count src) "byte array to offset"
-            offset "of a" (count dst) "byte array")
    (run! (fn [m]
            (aset-byte dst (+ m offset) (aget src m)))
          (range n)))
@@ -133,7 +130,7 @@
   [public secret]
   (TweetNaclFast$Box. public secret))
 
-(s/fdef default-packet-manager
+(s/fdef default-packet-management
         :args (s/cat)
         :ret ::packet-management)
 (defn default-packet-manager

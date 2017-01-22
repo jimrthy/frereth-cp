@@ -130,13 +130,13 @@
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
 nor subject to timing attacks because it just won't be called very often."
-  [{:keys [extension
-           client-extension-load-time
-           recent]
+  [{:keys [::client-extension-load-time
+           ::shared/extension
+           ::recent]
     :as this}]
-  (assert (and client-extension-load-time recent))
+  {:pre [(and client-extension-load-time recent)]}
   (let [reload (>= recent client-extension-load-time)
-        _ (println "Reloading extension:" reload "(currently:" extension ") in"
+        _ (println "Reloading extension:" reload "(currently:" extension  ") in"
                    #_(with-out-str (pprint (hide-long-arrays this)))
                    (keys (hide-long-arrays this)))
         client-extension-load-time (if reload
@@ -156,8 +156,8 @@ nor subject to timing attacks because it just won't be called very often."
     (assert (= (count extension) shared/extension-length))
     (println "Loaded extension:" (vec extension))
     (assoc this
-           :client-extension-load-time client-extension-load-time
-           :extension extension)))
+           ::client-extension-load-time client-extension-load-time
+           ::shared/extension extension)))
 
 (defn update-client-short-term-nonce
   "Note that this can loop right back to a negative number."
@@ -169,17 +169,20 @@ nor subject to timing attacks because it just won't be called very often."
     result))
 
 (defn do-build-hello
-  [{:keys [my-keys
-           packet-management
-           server-extension
-           shared-secrets
-           work-area]
+  "Puts plain-text hello packet into packet-management
+
+Note that this is really called for side-effects"
+  [{:keys [::shared/my-keys
+           ::shared/packet-management
+           ::server-extension
+           ::shared-secrets
+           ::shared/work-area]
     :as this}]
   (let [this (clientextension-init this)
         ;; There's a good chance this just got replaced
-        extension (:extension this)
+        extension (::shared/extension this)
         working-nonce (::shared/working-nonce work-area)
-        {:keys [::shared/packet-nonce ::shared/packet]} (:packet-management this)
+        {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (update-client-short-term-nonce packet-nonce)]
     (shared/byte-copy! working-nonce shared/hello-nonce-prefix)
     (shared/uint64-pack! working-nonce shared/client-nonce-prefix-length short-term-nonce)
@@ -189,15 +192,14 @@ nor subject to timing attacks because it just won't be called very often."
     (shared/byte-copy! packet shared/hello-header)
     (shared/byte-copy! packet 8 shared/extension-length server-extension)
     (shared/byte-copy! packet 24 shared/extension-length extension)
-    (shared/byte-copy! packet 40 shared/key-length (.getPublicKey (::short-pair my-keys)))
-    ;; This is throwing an ArrayIndexOutOfBoundsException
+    (shared/byte-copy! packet 40 shared/key-length (.getPublicKey (::shared/short-pair my-keys)))
     (shared/byte-copy! packet 72 64 shared/all-zeros)
     (shared/byte-copy! packet 136 shared/client-nonce-suffix-length
                        working-nonce
                        shared/client-nonce-prefix-length)
     (let [payload (.after (::client-short<->server-long shared-secrets) packet 144 80 working-nonce)]
       (shared/byte-copy! packet 144 80 payload)
-      (assoc-in this [:packet-management ::shared/packet-nonce] short-term-nonce))))
+      (assoc-in this [::shared/packet-management ::shared/packet-nonce] short-term-nonce))))
 
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet-management
@@ -233,10 +235,9 @@ nor subject to timing attacks because it just won't be called very often."
       (assoc this :server-security server-security))))
 
 (defn decrypt-cookie-packet
-  [{:keys [extension
-           packet-management
-           server-extension
-           text]
+  [{:keys [::shared/extension
+           ::shared/packet-management
+           ::server-extension]
     :as this}]
   (let [packet (::shared/packet packet-management)]
     ;; Q: How does packet length actually work?
@@ -624,7 +625,7 @@ OTOH, they *are* the trigger for this sort of thing."
     ;; explicitly place-oriented programming working
     ;; with mutable state.
     (send wrapper do-build-hello)
-    (when (await-for timeout wrapper)
+    (if (await-for timeout wrapper)
       (let [packet (-> wrapper
                        deref
                        ::shared/packet-management
@@ -645,7 +646,8 @@ OTOH, they *are* the trigger for this sort of thing."
               d (stream/try-put! chan<->server packet timeout ::hello-timed-out)]
           (deferred/on-realized d
             (partial wait-for-cookie wrapper)
-            (partial hello-failed! wrapper))))))
+            (partial hello-failed! wrapper)))
+      (throw (ex-info "Building the hello failed" {:problem (agent-error wrapper)})))))
 
 (s/fdef ctor
         :args (s/keys :req [::chan<->server
@@ -661,6 +663,6 @@ OTOH, they *are* the trigger for this sort of thing."
        ;; *do* need to be part of the agent.
        ;; We definitely don't want multiple threads
        ;; messing with them
-       ::shared/packet-manager (shared/default-packet-manager)
+       ::shared/packet-management (shared/default-packet-manager)
        ::shared/work-area (shared/default-work-area))
       agent))
