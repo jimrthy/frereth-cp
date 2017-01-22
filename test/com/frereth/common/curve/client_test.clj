@@ -15,7 +15,13 @@
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         server-name (shared/encode-server-name "hypothet.i.cal")]
-    (clnt/ctor {::clnt/chan<-server (strm/stream)
+    (clnt/ctor {;; Q: Do I really want these to be manifold streams
+                ;; instead of core.async channels?
+                ;; They really do need to be unidirectional, but
+                ;; I can't just register an arbitrary callback
+                ;; on a core.async on-closed.
+                ;; Q: Can I?
+                ::clnt/chan<-server (strm/stream)
                 ::clnt/chan->server (strm/stream)
                 ::clnt/server-extension server-extension
                 ;; Q: Where do I get the server's public key?
@@ -26,8 +32,8 @@
                 ;; Then I can just generate a random key pair for the server.
                 ;; Use the key-put functionality to store the secret, then
                 ;; hard-code the public key here.
-                :server-security {::clnt/server-long-term-pk server-long-pk
-                                  ::shared/server-name server-name}})))
+                ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
+                                        ::shared/server-name server-name}})))
 
 (deftest start-stop
   (let [client (raw-client)

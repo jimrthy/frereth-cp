@@ -393,9 +393,9 @@ implementation. This is code that I don't understand yet"
     :as this}]
   (let [long-pair (shared/do-load-keypair (::keydir my-keys))
         short-pair (shared/random-key-pair)]
-    (assoc this :my-keys (assoc my-keys
-                                ::long-pair long-pair
-                                ::short-pair short-pair))))
+    (assoc this ::shared/my-keys (assoc my-keys
+                                        ::long-pair long-pair
+                                        ::short-pair short-pair))))
 
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
@@ -444,7 +444,7 @@ implementation. This is code that I don't understand yet"
         :ret nil?)
 (defn register-closing-handlers!
  [this]
- (let [{:keys [::chan<-child
+ (let [{:keys [::chan<-child  ; TODO: Register this after we create it
                ::chan<-server]} (deref this)]
    (stream/on-drained chan<-child #(send this child-exited!))
    (stream/on-drained chan<-server #(send this server-closed!))))
