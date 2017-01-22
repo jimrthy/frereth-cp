@@ -101,9 +101,11 @@
 (defn byte-copy!
   "Copies the bytes from src to dst"
   ([dst src]
-   (run! (fn [n]
-           (aset-byte dst n (aget src n)))
-         (range (count src))))
+   (let [m (count src)]
+     (println "Copying" m "bytes from" src "to the" (count dst) "array:" dst)
+     (run! (fn [n]
+             (aset-byte dst n (aget src n)))
+           (range m))))
   ([dst offset n src]
    (println "Copying" n "bytes from a" (count src) "byte array to offset"
             offset "of a" (count dst) "byte array")
@@ -237,14 +239,15 @@ Or maybe that's (dec n)"
         ;; So definitely stick with this until an expert tells
         ;; me otherwise
         (reduce (fn [^clojure.lang.BigInt acc ^Byte b]
-                  (quot (+ (* 256 acc) b) n))
+                  ;; Note that b is signed
+                  (mod (+ (* 256 acc) b 128) n))
                 default
                 bs)))))
 
 (defn random-nonce
   "Generates a number suitable for use as a cryptographically secure random nonce"
   []
-  (random-mod max-random-nonce))
+  (long (random-mod max-random-nonce)))
 
 (defn safe-nonce
   [dst keydir offset]
@@ -301,29 +304,31 @@ that implementation instead"
   ;; Maybe I should just be using primitive longs to start
   ;; with and cope with the way the signed bit works when
   ;; I must.
+  (print "Trying to pack" x "a" (class x) "into offset" n "of"
+         (count dst) "bytes at" dst)
   (let [x' (bit-and 0xff x)]
-    (aset-byte dst n x')
+    (aset-byte dst n (- x' 128))
     (let [x (unsigned-bit-shift-right x 8)
           x' (bit-and 0xff x)]
-      (aset-byte dst (inc n) x')
+      (aset-byte dst (inc n) (- x' 128))
       (let [x (unsigned-bit-shift-right x 8)
             x' (bit-and 0xff x)]
-        (aset-byte dst (+ n 2) x')
+        (aset-byte dst (+ n 2) (- x' 128))
         (let [x (unsigned-bit-shift-right x 8)
               x' (bit-and 0xff x)]
-          (aset-byte dst (+ n 3) x')
+          (aset-byte dst (+ n 3) (- x' 128))
           (let [x (unsigned-bit-shift-right x 8)
                 x' (bit-and 0xff x)]
-            (aset-byte dst (+ n 4) x')
+            (aset-byte dst (+ n 4) (- x' 128))
             (let [x (unsigned-bit-shift-right x 8)
                   x' (bit-and 0xff x)]
-              (aset-byte dst (+ n 5) x')
+              (aset-byte dst (+ n 5) (- x' 128))
               (let [x (unsigned-bit-shift-right x 8)
                     x' (bit-and 0xff x)]
-                (aset-byte dst (+ n 6) x')
+                (aset-byte dst (+ n 6) (- x' 128))
                 (let [x (unsigned-bit-shift-right x 8)
                       x' (bit-and 0xff x)]
-                  (aset-byte dst (+ n 7) x'))))))))))
+                  (aset-byte dst (+ n 7) (- x' 128)))))))))))
 
 (defn zero-bytes
   [n]
