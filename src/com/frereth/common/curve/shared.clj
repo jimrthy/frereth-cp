@@ -117,7 +117,18 @@
 
 (defn bytes=
   [x y]
-  (throw (RuntimeException. "Translate this")))
+  ;; This has to take constant time.
+  ;; No short-cutting!
+  (let [nx (count x)
+        ny (count y)
+        diff
+        (reduce (fn [acc n]
+                  (let [xv (aget x n)
+                        yv (aget y n)]
+                    (bit-or acc (bit-xor xv yv))))
+                0 (range (min nx ny)))]
+    (and (not= 0 (unsigned-bit-shift-right (- 256 diff) 8))
+         (= nx ny))))
 
 (def cookie-frame (gloss/compile-frame (gloss/ordered-map :header (gloss/string :utf-8 :length 8)
                                                           :client-extension (gloss/finite-block extension-length)
