@@ -97,13 +97,24 @@
                 ;; That timeout is almost definitely too low
                 ;; But it should short-circuit pretty quickly, once it fails.
                 ;; Q: Shouldn't it?
+                ;; Problem: This is still a deferred.
+                ;; Huh?
                 (is (not hand-shake-result))))))
         (finally
           (strm/close! chan<->server)
           ;; Give that a chance to percolate through...
           (Thread/sleep 0.2)
           (let [ex (agent-error client)]
-            (is (= ::server-closed (-> ex .getData :problem))))))
+            (if (instance? clojure.lang.ExceptionInfo ex)
+              ;; So far, I haven't had a chance to come up with a better alternative to
+              ;; "just set the agent state to an error when a channel closes"
+              (is (= ::server-closed (-> ex .getData :problem))
+                  "Not elegant, but really should be closed")
+              (do
+                ;; I'm winding up with an NPE here, which doesn't seem to make
+                ;; any sense at all
+                (.printStackTrace ex)
+                (is (not ex)))))))
       (is chan<->server "No channel to pull data from server"))))
 
 (comment

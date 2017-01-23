@@ -630,23 +630,29 @@ OTOH, they *are* the trigger for this sort of thing."
                        deref
                        ::shared/packet-management
                        ::shared/packet)
-              _ (println "Putting" packet "onto" chan<->server)
-              ;; There's still an important break
-              ;; with the reference implementation
-              ;; here: this should be sending the
-              ;; HELLO packet to multiple server
-              ;; end-points to deal with them
-              ;; going down.
-              ;; I think it's supposed to happen
-              ;; in a delayed interval, to give
-              ;; each a short time to answer before
-              ;; the next, but a major selling point
-              ;; is not waiting for TCP buffers
-              ;; to expire.
-              d (stream/try-put! chan<->server packet timeout ::hello-timed-out)]
-          (deferred/on-realized d
-            (partial wait-for-cookie wrapper)
-            (partial hello-failed! wrapper)))
+            ;; Major flaw in this implementation: I only want to
+            ;; put 224 bytes here.
+            ;; Pretty sure that needs to be a ByteBuffer, since
+            ;; that's what netty speaks.
+            ;; Really need to just break down and do that translation
+            ;; while I know how many bytes I'm sending.
+            _ (println "Putting" packet "onto" chan<->server)
+            ;; There's still an important break
+            ;; with the reference implementation
+            ;; here: this should be sending the
+            ;; HELLO packet to multiple server
+            ;; end-points to deal with them
+            ;; going down.
+            ;; I think it's supposed to happen
+            ;; in a delayed interval, to give
+            ;; each a short time to answer before
+            ;; the next, but a major selling point
+            ;; is not waiting for TCP buffers
+            ;; to expire.
+            d (stream/try-put! chan<->server packet timeout ::hello-timed-out)]
+        (deferred/on-realized d
+          (partial wait-for-cookie wrapper)
+          (partial hello-failed! wrapper)))
       (throw (ex-info "Building the hello failed" {:problem (agent-error wrapper)})))))
 
 (s/fdef ctor
