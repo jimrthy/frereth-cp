@@ -83,6 +83,10 @@
 (s/def ::text bytes?)
 (s/def ::working-area (s/keys :req [::text ::working-nonce]))
 
+(s/def ::packet-length (s/and integer?
+                              pos?
+                              ;; evenly divisible by 16
+                              #(= 0 (bit-and % 0xf))))
 (s/def ::packet-nonce integer?)
 ;; Q: Can I make this any more explicit?
 ;; This is really arriving as a ByteBuffer. It's tempting to work
@@ -92,7 +96,8 @@
 ;; TODO: Get it working, then see what kind of performance impact
 ;; that has
 (s/def ::packet bytes?)
-(s/def ::packet-management (s/keys :req [::packet-nonce
+(s/def ::packet-management (s/keys :req [::packet-length
+                                         ::packet-nonce
                                          ::packet]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -147,6 +152,7 @@
 (defn default-packet-manager
   []
   {::packet (byte-array 4096)
+   ::packet-length 0
    ;; Note that this is distinct from the working-area's nonce
    ;; And it probably needs to be an atom
    ;; Or maybe even a ref (although STM would be a disaster here...

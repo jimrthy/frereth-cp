@@ -122,10 +122,10 @@
   [this]
   (-> this
       ;; TODO: Write a mirror image version of dns-encode to just show this
-      (assoc-in [:server-security :server-name] "name")
-      (assoc-in [:packet-management ::shared/packet] "...packet bytes...")
-      (assoc-in [:work-area ::shared/working-nonce] "...FIXME: Decode nonce bytes")
-      (assoc-in [:work-area ::shared/text] "...plain/cipher text")))
+      (assoc-in [::server-security :server-name] "name")
+      (assoc-in [::shared/packet-management ::shared/packet] "...packet bytes...")
+      (assoc-in [::shared/work-area ::shared/working-nonce] "...FIXME: Decode nonce bytes")
+      (assoc-in [::shared/work-area ::shared/text] "...plain/cipher text")))
 
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
@@ -189,6 +189,8 @@ Note that this is really called for side-effects"
 
     ;; This seems to be screaming for gloss.
     ;; Q: What kind of performance difference would that make?
+    ;; A: This is building the packet to open the handshake.
+    ;; It really can't possibly matter.
     (shared/byte-copy! packet shared/hello-header)
     (shared/byte-copy! packet 8 shared/extension-length server-extension)
     (shared/byte-copy! packet 24 shared/extension-length extension)
@@ -199,7 +201,9 @@ Note that this is really called for side-effects"
                        shared/client-nonce-prefix-length)
     (let [payload (.after (::client-short<->server-long shared-secrets) packet 144 80 working-nonce)]
       (shared/byte-copy! packet 144 80 payload)
-      (assoc-in this [::shared/packet-management ::shared/packet-nonce] short-term-nonce))))
+      (-> this
+          (assoc-in [::shared/packet-management ::shared/packet-nonce] short-term-nonce)
+          (assoc-in [::shared/packet-management ::shared/packet-length] shared/hello-packet-length)))))
 
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet-management
@@ -218,7 +222,7 @@ Note that this is really called for side-effects"
                        (:nonce rcvd))
     ;; Wait...what?
     ;; Where's :cookie coming from?!
-    ;; (I csee it coming from the packet after I've used gloss to decode it,
+    ;; (I can see it coming from the packet after I've used gloss to decode it,
     ;; but this doesn't seem to make any sense
     (shared/byte-copy! text 0 144 (-> packet-management ::shared/packet :cookie))
     (let [decrypted (.open_after (::client-short<->server-long shared-secrets) text 0 144 nonce)
@@ -232,7 +236,7 @@ Note that this is really called for side-effects"
                                  ::server-cookie server-cookie)]
       (shared/byte-copy! server-short-term-pk (:s' extracted))
       (shared/byte-copy! server-cookie (:cookie extracted))
-      (assoc this :server-security server-security))))
+      (assoc this ::server-security server-security))))
 
 (defn decrypt-cookie-packet
   [{:keys [::shared/extension
@@ -241,6 +245,9 @@ Note that this is really called for side-effects"
     :as this}]
   (let [packet (::shared/packet packet-management)]
     ;; Q: How does packet length actually work?
+    ;; A: We have the full length of the byte array here,
+    ;; of course.
+    ;; Unless I switch to using ByteBuffers more intelligently.
     (assert (= (count packet) shared/cookie-packet-length))
     (let [rcvd (gloss/decode shared/cookie-frame packet)]
       ;; Reference implementation starts by comparing the
@@ -303,6 +310,8 @@ implementation. This is code that I don't understand yet"
                       :as acc}
                      b]
                   (when (or (< msg-len 0)
+                            ;; This is the flag that the stream has exited.
+                            ;; Q: Is that what it's being used for here?
                             (> msg-len 2048))
                     (throw (ex-info "done" {})))
                   ;; It seems silly to set this and then check the first byte
