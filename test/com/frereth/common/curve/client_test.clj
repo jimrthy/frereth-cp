@@ -6,7 +6,7 @@
             [manifold.stream :as strm]))
 
 (defn raw-client
-  []
+  [child-spawner]
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
                                       0x09 0x0a 0x0b 0x0c
@@ -21,6 +21,7 @@
                 ;; as unidirectional.
                 ;; But this is what aleph is going to give me.
                 ::clnt/chan<->server (strm/stream)
+                ::clnt/child-spawner child-spawner
                 ::clnt/server-extension server-extension
                 ;; Q: Where do I get the server's public key?
                 ;; A: Right now, I just have the secret key's 32 bytes encoded as
@@ -35,7 +36,7 @@
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"
-    (let [client (raw-client)
+    (let [client (raw-client nil)
           chan<->server (-> client deref ::clnt/chan<->server)]
         (strm/on-drained chan<->server
                          #(send client clnt/server-closed!))
@@ -69,7 +70,37 @@
             (is (= (subvec v 72 136) (take 64 (repeat 0))))))))))
 
 (deftest start-stop
-  (let [client (raw-client)
+  (let [spawner (fn [owner-agent]
+                  ;; Note that this is really
+                  ;; the first time I've ever
+                  ;; given any thought at all to
+                  ;; what this side of things might
+                  ;; look like.
+                  ;; And there isn't much thought
+                  ;; involved yet
+                  (let [ch (strm/stream)
+                        fut (strm/take! ch ::drained)
+                        ;; Note that this is absolutely just a toy approach.
+                        ;; The entire point is that we should be doing things
+                        ;; and responding to input from the server.
+                        ;; This is were the protocol starts to get really
+                        ;; interesting and controversial.
+                        owner-updater
+                        (fn
+                          [owner msg]
+                          ;; My OOP background thinks we should just
+                          ;; be notifying the owner agent that we have
+                          ;; state updates it might want to consider
+                          ;; forwarding along to the server
+                          (println "This is definitely wrong:" msg)
+                          owner)]
+                    (dfrd/on-realized fut
+                                      (fn [msg]
+                                        (send owner-agent owner-updater msg))
+                                      (fn [ex]
+                                        (println "Either way, this is obviously broken")))
+                    ch))
+        client (raw-client spawner)
         chan<->server (-> client deref ::clnt/chan<->server)]
     (if chan<->server
       (try
@@ -96,9 +127,9 @@
                     ;; Especially since, realistically, I should build everything
                     ;; except the crypto box in a Direct buffer, then copy that in
                     ;; and send it to the network.
-                    (is (shared/bytes= shared/hello-header
-                                       (subvec (vec backing-array) 0
-                                               (count shared/hello-header))))))
+                    (is (shared/bytes= (.getBytes shared/hello-header)
+                                       (byte-array (subvec (vec backing-array) 0
+                                                           (count shared/hello-header)))))))
                 (throw (ex-info "Failed pulling hello packet"
                                 {:client-errors (agent-error client)
                                  :client-thread client-thread}))))
@@ -110,7 +141,7 @@
                   ;; That timeout is almost definitely too low
                   ;; But it should short-circuit pretty quickly, once it fails.
                   ;; Q: Shouldn't it?
-                  (is (not hand-shake-result)))))))
+                  (is hand-shake-result))))))
         (finally
           (strm/close! chan<->server)
           ;; Give that a chance to percolate through...

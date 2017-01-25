@@ -313,7 +313,8 @@ Note that this is really called for side-effects"
     ;; Q: How does packet length actually work?
     ;; A: We have the full length of the byte array here,
     ;; of course.
-    ;; TODO: switch to using ByteBuffers more intelligently.
+    ;; DONE: switch to using ByteBuffers
+    ;; TODO: more intelligently.
     (assert (= (count packet) shared/cookie-packet-length))
     (let [rcvd (gloss/decode shared/cookie-frame packet)]
       ;; Reference implementation starts by comparing the
@@ -592,10 +593,30 @@ implementation. This is code that I don't understand yet"
         (send wrapper #(throw (ex-info "Server vouch response failed"
                                        (assoc % :problem ex))))))))
 
+(s/fdef fork
+        :args (s/cat :wrapper ::state-agent
+                       :this ::state)
+        :ret ::state)
 (defn fork
-  [wrapper this]
-  (let [{:keys [::child-spawner]} this]
-    (assoc this ::chan->child (child-spawner wrapper))))
+  "This has to 'fork' a child with access to the agent, and update the agent state
+
+So, yes, it *is* weird.
+
+It happens in the agent processing thread pool, during a send operation.
+
+It's the child's responsibility to return a manifold.stream we can use to send it
+bytes from the server.
+
+It notifies us that it has bytes ready to process via the standard agent (send)
+mechanism.
+
+Although send-off might seem more appropriate, it probably isn't.
+
+TODO: Need to ask around about that."
+  [wrapper
+   {:keys [::child-spawner]
+    :as this}]
+  (assoc this ::chan->child (child-spawner wrapper)))
 
 (defn cookie->vouch
   "Got a cookie from the server.
