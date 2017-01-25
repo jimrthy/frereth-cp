@@ -77,29 +77,40 @@
           (try
             (let [hello-future (strm/try-take! chan<->server ::drained 500 ::timeout)
                   hello (deref hello-future)]
-              (is (not (or (= hello ::timeout)
-                           (= hello ::drained))))
-              ;; Q: Can we do anything else meaningful here?
-              ;; I mean...I have access to the private server key.
-              ;; I could decrypt that packet to see what's in it.
-              ;; But that seems to belong in the actual interactive
-              ;; tests
-              (is (bytes? hello))
-              ;; Actually, this is an interesting point:
-              ;; hello should really be a ByteBuffer.
-              ;; Or a portion of a ByteArray that will be
-              ;; copied into a ByteBuffer.
-              (is (= shared/hello-packet-length (count hello)))
-              (is (shared/bytes= shared/hello-header
-                                 (subvec (vec hello) 0 (count shared/hello-header)))))
+              (if (not (or (= hello ::timeout)
+                           (= hello ::drained)))
+                (do
+                  ;; Q: Can we do anything else meaningful here?
+                  ;; I mean...I have access to the private server key.
+                  ;; I could decrypt that packet to see what's in it.
+                  ;; But that seems to belong in the actual interactive
+                  ;; tests
+                  (is (instance? io.netty.buffer.ByteBuf hello))
+                  ;; Actually, this is an interesting point:
+                  ;; hello should really be a ByteBuffer.
+                  ;; Or a portion of a ByteArray that will be
+                  ;; copied into a ByteBuffer.
+                  (is (= shared/hello-packet-length (.readableBytes hello)))
+                  (let [backing-array (.array hello)]
+                    ;; Really don't want to mess with the backing array at all.
+                    ;; Especially since, realistically, I should build everything
+                    ;; except the crypto box in a Direct buffer, then copy that in
+                    ;; and send it to the network.
+                    (is (shared/bytes= shared/hello-header
+                                       (subvec (vec backing-array) 0
+                                               (count shared/hello-header))))))
+                (throw (ex-info "Failed pulling hello packet"
+                                {:client-errors (agent-error client)
+                                 :client-thread client-thread}))))
             (finally
-              (let [hand-shake-result (deref client-thread 500 ::awaiting-handshake)]
-                ;; That timeout is almost definitely too low
-                ;; But it should short-circuit pretty quickly, once it fails.
-                ;; Q: Shouldn't it?
-                ;; Problem: This is still a deferred.
-                ;; Huh?
-                (is (not hand-shake-result))))))
+              (let [client-start-outcome (deref client-thread 500 ::awaiting-handshake-start)]
+                (is (not= client-start-outcome ::awaiting-handshake-start))
+                ;; That's actually a deferred chain
+                (let [hand-shake-result (deref client-start-outcome 500 ::awaiting-handshake)]
+                  ;; That timeout is almost definitely too low
+                  ;; But it should short-circuit pretty quickly, once it fails.
+                  ;; Q: Shouldn't it?
+                  (is (not hand-shake-result)))))))
         (finally
           (strm/close! chan<->server)
           ;; Give that a chance to percolate through...

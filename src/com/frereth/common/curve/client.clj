@@ -5,7 +5,8 @@
   the message exchange, but that approach gets complicated
   on the server side. At least half the point there is
   reducing DoS."
-  (:require [clojure.core.async :as async]
+  (:require [byte-streams :as b-s]
+            [clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [com.frereth.common.curve.shared :as shared]
@@ -26,6 +27,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+;; Q: Does this really belong here?
+;; It seems like shared would make a lot more sense
 (def cookie (gloss-core/compile-frame (gloss-core/ordered-map :s' (gloss-core/finite-block 32)
                                                               :black-box (gloss-core/finite-block 96))))
 
@@ -168,42 +171,105 @@ nor subject to timing attacks because it just won't be called very often."
                       {:must "End communication immediately"})))
     result))
 
+(defn build-raw-hello
+  [{:keys [::server-extension
+           ::shared/extension
+           ::shared/my-keys
+           ::shared-secrets]}
+   short-term-nonce
+   working-nonce]
+  {:prefix shared/hello-header
+   :srvr-xtn server-extension
+   :clnt-xtn extension
+   :clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
+   ;; Q: How well does it handle this?
+   :zeros (byte-array (subvec (vec shared/all-zeros) 0 64))
+   :nonce short-term-nonce
+   ;; This is getting set to nil.
+   ;; Q: What gives?
+   :crypto-box (.after (::client-short<->server-long shared-secrets)
+                       shared/all-zeros 0 64 working-nonce)})
+
+(s/fdef build-actual-hello-packet
+        :args (s/cat :this ::state
+                     ;; TODO: Verify that this is a long
+                     :short-nonce integer?
+                     :working-nonce bytes?)
+        :ret ::state)
+(defn build-actual-hello-packet
+  [this
+   short-term-nonce
+   working-nonce]
+      ;; Q: What kind of performance hit do I take by switching this to gloss?
+    ;; A: This is building the packet to open the handshake.
+    ;; It really can't possibly matter.
+    (let [raw-hello (build-raw-hello this short-term-nonce working-nonce)]
+      ;; gloss encodes to a sequence of nio.ByteBuffers
+      ;; Q: Does it make life easier enough to justify the extra conversion?
+      ;; Since netty speaks in Byte Bufs.
+      (gloss/encode shared/hello-packet-dscr raw-hello)))
+(comment
+  (let [my-short (shared/random-key-pair)
+        server-long (shared/random-key-pair)
+        my<->server (shared/crypto-box-prepare (.getPublicKey server-long)
+                                               (.getSecretKey my-short))
+        this {::server-extension (byte-array [0x01 0x02 0x03 0x04
+                                              0x05 0x06 0x07 0x08
+                                              0x09 0x0a 0x0b 0x0b
+                                              0x0c 0x0d 0x0e 0x0f])
+              ::shared/extension (byte-array [0x10 0x20 0x30 0x40
+                                              0x50 0x60 0x70 0x80
+                                              0x90 0xa0 0xb0 0xb0
+                                              0xc0 0xd0 0xe0 0xf0])
+              ::shared/my-keys {::shared/short-pair my-short}
+              ::shared-secrets {::client-short<->server-long my<->server}}
+        short-nonce 0x03
+        ;; Q: How close is this?
+        working-nonce (byte-array [(byte \C) (byte \u) (byte \r) (byte \v) (byte \e)
+                                   (byte \C) (byte \P) (byte \-) (byte \c) (byte \l)
+                                   (byte \i) (byte \e) (byte \n) (byte \t) (byte \-)
+                                   (byte \H)
+                                   0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x03])]
+    (comment)
+    (def hello-sample
+      (build-actual-hello-packet this
+                                 short-nonce
+                                 working-nonce))
+    (build-raw-hello this short-nonce working-nonce))
+  hello-sample
+  (count hello-sample)
+  (map #(.capacity %) hello-sample)
+  (def decoded (gloss/decode shared/hello-packet-dscr hello-sample))
+  (keys decoded)
+  (:prefix :srvr-xtn :clnt-xtn :clnt-short-pk :zeros :nonce :crypto-box)
+  (:prefix decoded)
+  ;; Q: So...how do I extract this?
+  ;; (this isn't it)
+  (vec (.array (:srvr-xtn decoded)))
+  )
+
 (defn do-build-hello
   "Puts plain-text hello packet into packet-management
 
 Note that this is really called for side-effects"
-  [{:keys [::shared/my-keys
+  [{:keys [
            ::shared/packet-management
-           ::server-extension
-           ::shared-secrets
+
            ::shared/work-area]
     :as this}]
-  (let [this (clientextension-init this)
-        ;; There's a good chance this just got replaced
-        extension (::shared/extension this)
+  (let [this (clientextension-init this) ; There's a good chance this updates my extension
         working-nonce (::shared/working-nonce work-area)
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (update-client-short-term-nonce packet-nonce)]
     (shared/byte-copy! working-nonce shared/hello-nonce-prefix)
     (shared/uint64-pack! working-nonce shared/client-nonce-prefix-length short-term-nonce)
 
-    ;; This seems to be screaming for gloss.
-    ;; Q: What kind of performance difference would that make?
-    ;; A: This is building the packet to open the handshake.
-    ;; It really can't possibly matter.
-    (shared/byte-copy! packet shared/hello-header)
-    (shared/byte-copy! packet 8 shared/extension-length server-extension)
-    (shared/byte-copy! packet 24 shared/extension-length extension)
-    (shared/byte-copy! packet 40 shared/key-length (.getPublicKey (::shared/short-pair my-keys)))
-    (shared/byte-copy! packet 72 64 shared/all-zeros)
-    (shared/byte-copy! packet 136 shared/client-nonce-suffix-length
-                       working-nonce
-                       shared/client-nonce-prefix-length)
-    (let [payload (.after (::client-short<->server-long shared-secrets) packet 144 80 working-nonce)]
-      (shared/byte-copy! packet 144 80 payload)
-      (-> this
-          (assoc-in [::shared/packet-management ::shared/packet-nonce] short-term-nonce)
-          (assoc-in [::shared/packet-management ::shared/packet-length] shared/hello-packet-length)))))
+    (let [packet (build-actual-hello-packet this short-term-nonce working-nonce)]
+      (update this ::shared/packet-management
+              (fn [current]
+                (assoc current
+                       ::shared/packet-nonce short-term-nonce
+                       ::shared/packet (b-s/convert packet io.netty.buffer.ByteBuf)))))))
 
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet-management
@@ -247,7 +313,7 @@ Note that this is really called for side-effects"
     ;; Q: How does packet length actually work?
     ;; A: We have the full length of the byte array here,
     ;; of course.
-    ;; Unless I switch to using ByteBuffers more intelligently.
+    ;; TODO: switch to using ByteBuffers more intelligently.
     (assert (= (count packet) shared/cookie-packet-length))
     (let [rcvd (gloss/decode shared/cookie-frame packet)]
       ;; Reference implementation starts by comparing the
@@ -628,7 +694,7 @@ OTOH, they *are* the trigger for this sort of thing."
         {:keys [::chan<->server]} this
         timeout (current-timeout wrapper)]
     (stream/on-drained chan<->server
-                       #(send this server-closed!))
+                       #(send wrapper server-closed!))
     ;; This feels inside-out and backwards.
     ;; But it probably should, since this is very
     ;; explicitly place-oriented programming working
@@ -641,7 +707,7 @@ OTOH, they *are* the trigger for this sort of thing."
                        ::shared/packet)
             ;; Major flaw in this implementation: I only want to
             ;; put 224 bytes here.
-            ;; Pretty sure that needs to be a ByteBuffer, since
+            ;; Pretty sure that needs to be a ByteBuf, since
             ;; that's what netty speaks.
             ;; Really need to just break down and do that translation
             ;; while I know how many bytes I'm sending.

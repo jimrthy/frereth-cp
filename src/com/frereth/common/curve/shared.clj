@@ -11,16 +11,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
-(def cookie-header (.getBytes "RL3aNMXK"))
-(def cookie-nonce-prefix (.getBytes "CurveCPK"))
-(def cookie-packet-length 200)
-(def hello-header (.getBytes "QvnQ5XlH"))
-(def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
-(def hello-packet-length 224)
-(def vouch-nonce-prefix (.getBytes "CurveCPV"))
-(def initiate-header (.getBytes "QvnQ5XlI"))
-(def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
-
 (def box-zero-bytes 16)
 (def extension-length 16)
 (def key-length 32)
@@ -31,6 +21,27 @@
 (def server-nonce-suffix-length 16)
 (def server-cookie-length 96)
 (def server-name-length 256)
+
+(def hello-header "QvnQ5XlH")
+(def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
+(def hello-packet-length 224)
+(let [dscr (gloss/ordered-map :prefix (gloss/string :utf-8 :length 8)
+                              :srvr-xtn (gloss/finite-block extension-length)
+                              :clnt-xtn (gloss/finite-block extension-length)
+                              :clnt-short-pk (gloss/finite-block key-length)
+                              :zeros (gloss/finite-block 64)
+                              :nonce :int64  ;; This is 8 bytes...right?
+                              :crypto-box (gloss/finite-block 80))]
+  (def hello-packet-dscr (gloss/compile-frame dscr)))
+
+(def cookie-header (.getBytes "RL3aNMXK"))
+(def cookie-nonce-prefix (.getBytes "CurveCPK"))
+(def cookie-packet-length 200)
+
+(def vouch-nonce-prefix (.getBytes "CurveCPV"))
+
+(def initiate-header (.getBytes "QvnQ5XlI"))
+(def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 
 (def max-unsigned-long -1)
 (def millis-in-second 1000)
@@ -83,10 +94,11 @@
 (s/def ::text bytes?)
 (s/def ::working-area (s/keys :req [::text ::working-nonce]))
 
-(s/def ::packet-length (s/and integer?
-                              pos?
-                              ;; evenly divisible by 16
-                              #(= 0 (bit-and % 0xf))))
+(comment
+  (s/def ::packet-length (s/and integer?
+                                pos?
+                                ;; evenly divisible by 16
+                                #(= 0 (bit-and % 0xf)))))
 (s/def ::packet-nonce integer?)
 ;; Q: Can I make this any more explicit?
 ;; This is really arriving as a ByteBuffer. It's tempting to work
@@ -96,13 +108,12 @@
 ;; TODO: Get it working, then see what kind of performance impact
 ;; that has
 (s/def ::packet bytes?)
-(s/def ::packet-management (s/keys :req [::packet-length
-                                         ::packet-nonce
+
+(s/def ::packet-management (s/keys :req [::packet-nonce
                                          ::packet]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
-
 (defn byte-copy!
   "Copies the bytes from src to dst"
   ([dst src]
@@ -151,8 +162,7 @@
         :ret ::packet-management)
 (defn default-packet-manager
   []
-  {::packet (byte-array 4096)
-   ::packet-length 0
+  {::packet nil
    ;; Note that this is distinct from the working-area's nonce
    ;; And it probably needs to be an atom
    ;; Or maybe even a ref (although STM would be a disaster here...
@@ -318,8 +328,8 @@ that implementation instead"
   ;; Maybe I should just be using primitive longs to start
   ;; with and cope with the way the signed bit works when
   ;; I must.
-  (print "Trying to pack" x "a" (class x) "into offset" n "of"
-         (count dst) "bytes at" dst)
+  (println "Trying to pack" x "a" (class x) "into offset" n "of"
+           (count dst) "bytes at" dst)
   (let [x' (bit-and 0xff x)]
     (aset-byte dst n (- x' 128))
     (let [x (unsigned-bit-shift-right x 8)
