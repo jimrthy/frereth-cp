@@ -9,7 +9,6 @@ b. lein managed dependencies"
   :dependencies [[aleph "0.4.1"]
                  #_[buddy/buddy-core "1.1.1"]  ;; Q: Is there any point to this now?
                  [clj-time "0.12.2"]
-                 [clojurewerkz/buffy "1.0.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
                  ;; is the primary goal.

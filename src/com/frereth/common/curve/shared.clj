@@ -2,8 +2,7 @@
   "For pieces shared among client, server, and messaging"
   (:require [clojure.java.io :as io]
             [clojure.spec :as s]
-            [clojure.string]
-            [clojurewerkz.buffy.core :as buffy])
+            [clojure.string])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            java.security.SecureRandom))
@@ -25,13 +24,25 @@
 (def hello-header "QvnQ5XlH")
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
-(def hello-packet-dscr (buffy/spec :prefix (buffy/string-type 8)
-                                   :srvr-xtn (buffy/bytes-type extension-length)
-                                   :clnt-xtn (buffy/bytes-type extension-length)
-                                   :clnt-short-pk (buffy/bytes-type key-length)
-                                   :zeros (buffy/bytes-type 64)
-                                   :nonce (buffy/long-type)
-                                   :crypto-box (buffy/bytes-type 80)))
+;; Q: Is it worth trying to build serialization
+;; handlers like gloss/buffy from spec?
+;; That *was* one of the awesome features
+;; offered/promised by schema.
+(def hello-packet-dscr (array-map :prefix (s/and string? #(= (count %) 8))
+                                  :srvr-xtn (s/and bytes? #(= (count %) extension-length))
+                                  :clnt-xtn (s/and bytes? #(= (count %) extension-length))
+                                  :clnt-short-pk (s/and bytes? #(= (count %) key-length))
+                                  :zeros (s/and bytes?
+                                                #(= (count %) key-length)
+                                                #(every? zero? %))
+                                  ;; This gets weird/confusing.
+                                  ;; It's a 64-bit number, so 8 octets
+                                  ;; But, really, that's just integer?
+                                  ;; It would probably be more tempting to
+                                  ;; just spec this like that if clojure had
+                                  ;; a better numeric tower
+                                  :nonce (s/and bytes? #(= (count %) 8))
+                                  :crypto-box (s/and bytes? #(= (count %) 8))))
 
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
@@ -145,16 +156,21 @@
     (and (not= 0 (unsigned-bit-shift-right (- 256 diff) 8))
          (= nx ny))))
 
-(def cookie-frame (buffy/spec :header (buffy/string-type 8)
-                              :client-extension (buffy/bytes-type extension-length)
-                              :server-extension (buffy/bytes-type extension-length)
-                              ;; Implicitly prefixed with "CurveCPK"
-                              :nonce (buffy/bytes-type server-nonce-suffix-length)
-                              :cookie (buffy/bytes-type 144)))
+;; Header is only a "string" in the ASCII sense
+(def cookie-frame (array-map :header (s/and bytes? #(= (count %) 8))
+                             :client-extension (s/and bytes? #(= (count %) extension-length))
+                             :server-extension (s/and bytes? #(= (count %) extension-length))
+                             ;; Implicitly prefixed with "CurveCPK"
+                             :nonce (s/and bytes? #(= (count %) server-nonce-suffix-length))
+                             :cookie (s/and bytes? #(= (count %) 144))))
 
 (defn crypto-box-prepare
   [public secret]
   (TweetNaclFast$Box. public secret))
+
+(defn decompose
+  [dscr buf]
+  (throw (RuntimeException. "Is this worth generalizing?")))
 
 (s/fdef default-packet-management
         :args (s/cat)
