@@ -9,6 +9,7 @@ b. lein managed dependencies"
   :dependencies [[aleph "0.4.1"]
                  #_[buddy/buddy-core "1.1.1"]  ;; Q: Is there any point to this now?
                  [clj-time "0.12.2"]
+                 [clojurewerkz/buffy "1.0.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
                  ;; is the primary goal.
@@ -53,10 +54,11 @@ b. lein managed dependencies"
                  ;; Q: Do I really want this?
                  [fullcontact/full.async "1.0.0" :exclusions [org.clojure/clojure
                                                               org.clojure/core.async]]
-                 [gloss "0.2.5" :exclusions [byte-streams
+                 #_[gloss "0.2.5" :exclusions [byte-streams
                                              manifold
                                              potemkin]]
                  [im.chit/hara.event "2.4.8" :exclusions [org.clojure/clojure]]
+                 [integrant "0.1.5"]
                  [io.aviso/config "0.2.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
                  [io.netty/netty-all "4.1.6.Final"]
@@ -83,7 +85,8 @@ b. lein managed dependencies"
   :java-source-paths ["java"]
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
 
-  :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.3"
+  :profiles {:dev {:dependencies [[integrant/repl "0.1.0"]
+                                  [org.clojure/java.classpath "0.2.3"
                                    :exclusions [org.clojure/clojure]]
                                   [org.clojure/test.check "0.9.0"]
                                   [org.clojure/tools.namespace "0.2.11"]]

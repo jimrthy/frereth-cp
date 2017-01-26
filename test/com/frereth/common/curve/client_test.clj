@@ -136,12 +136,13 @@
             (finally
               (let [client-start-outcome (deref client-thread 500 ::awaiting-handshake-start)]
                 (is (not= client-start-outcome ::awaiting-handshake-start))
-                ;; That's actually a deferred chain
-                (let [hand-shake-result (deref client-start-outcome 500 ::awaiting-handshake)]
-                  ;; That timeout is almost definitely too low
-                  ;; But it should short-circuit pretty quickly, once it fails.
-                  ;; Q: Shouldn't it?
-                  (is hand-shake-result))))))
+                (when-not (= client-start-outcome ::awaiting-handshake-start)
+                  ;; That's actually a deferred chain
+                  (let [hand-shake-result (deref client-start-outcome 500 ::awaiting-handshake)]
+                    ;; That timeout is almost definitely too low
+                    ;; But it should short-circuit pretty quickly, once it fails.
+                    ;; Q: Shouldn't it?
+                    (is hand-shake-result)))))))
         (finally
           (strm/close! chan<->server)
           ;; Give that a chance to percolate through...

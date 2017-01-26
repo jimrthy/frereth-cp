@@ -3,7 +3,7 @@
   (:require [clojure.java.io :as io]
             [clojure.spec :as s]
             [clojure.string]
-            [gloss.core :as gloss])
+            [clojurewerkz.buffy.core :as buffy])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            java.security.SecureRandom))
@@ -25,14 +25,13 @@
 (def hello-header "QvnQ5XlH")
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
-(let [dscr (gloss/ordered-map :prefix (gloss/string :utf-8 :length 8)
-                              :srvr-xtn (gloss/finite-block extension-length)
-                              :clnt-xtn (gloss/finite-block extension-length)
-                              :clnt-short-pk (gloss/finite-block key-length)
-                              :zeros (gloss/finite-block 64)
-                              :nonce :int64  ;; This is 8 bytes...right?
-                              :crypto-box (gloss/finite-block 80))]
-  (def hello-packet-dscr (gloss/compile-frame dscr)))
+(def hello-packet-dscr (buffy/spec :prefix (buffy/string-type 8)
+                                   :srvr-xtn (buffy/bytes-type extension-length)
+                                   :clnt-xtn (buffy/bytes-type extension-length)
+                                   :clnt-short-pk (buffy/bytes-type key-length)
+                                   :zeros (buffy/bytes-type 64)
+                                   :nonce (buffy/long-type)
+                                   :crypto-box (buffy/bytes-type 80)))
 
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
@@ -146,12 +145,12 @@
     (and (not= 0 (unsigned-bit-shift-right (- 256 diff) 8))
          (= nx ny))))
 
-(def cookie-frame (gloss/compile-frame (gloss/ordered-map :header (gloss/string :utf-8 :length 8)
-                                                          :client-extension (gloss/finite-block extension-length)
-                                                          :server-extension (gloss/finite-block extension-length)
-                                                          ;; Implicitly prefixed with "CurveCPK"
-                                                          :nonce (gloss/finite-block server-nonce-suffix-length)
-                                                          :cookie (gloss/finite-block 144))))
+(def cookie-frame (buffy/spec :header (buffy/string-type 8)
+                              :client-extension (buffy/bytes-type extension-length)
+                              :server-extension (buffy/bytes-type extension-length)
+                              ;; Implicitly prefixed with "CurveCPK"
+                              :nonce (buffy/bytes-type server-nonce-suffix-length)
+                              :cookie (buffy/bytes-type 144)))
 
 (defn crypto-box-prepare
   [public secret]
@@ -162,7 +161,7 @@
         :ret ::packet-management)
 (defn default-packet-manager
   []
-  {::packet nil
+  {::packet (io.netty.buffer.Unpooled/directBuffer 4096)
    ;; Note that this is distinct from the working-area's nonce
    ;; And it probably needs to be an atom
    ;; Or maybe even a ref (although STM would be a disaster here...

@@ -4,8 +4,6 @@
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.util :as util]
             [com.stuartsierra.component :as cpt]
-            [gloss.core :as gloss-core]
-            [gloss.io :as gloss]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream]))
 

@@ -3,8 +3,6 @@
   (:require [aleph.udp :as udp]
             [clojure.edn :as edn]
             [clojure.spec :as s]
-            [gloss.core :as gloss]
-            [gloss.io :as gloss-io]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream]))
 
@@ -25,20 +23,21 @@
       (stream/splice out
                      (gloss-io/decode-stream s protocol)))))
 
-(defn simplest
-  "Encode a length and a string into a packet
-Then translate the string into EDN.
-This approach is rife for abuse. What happens
-if one side lies about the string length? Or
-sends garbage?"
-  [stream]
-  (comment
-    (let [protocol (gloss/compile-frame
-                    (gloss/finite-frame :uint32
-                                        (gloss/string :utf-8))
-                    pr-str
-                    edn/read-string)]
-      (wrap-gloss-protocol protocol stream))))
+(comment
+  (defn simplest
+    "Encode a length and a string into a packet
+  Then translate the string into EDN.
+  This approach is rife for abuse. What happens
+  if one side lies about the string length? Or
+  sends garbage?"
+    [stream]
+    (comment
+      (let [protocol (gloss/compile-frame
+                      (gloss/finite-frame :uint32
+                                          (gloss/string :utf-8))
+                      pr-str
+                      edn/read-string)]
+        (wrap-gloss-protocol protocol stream)))))
 
 ;; None of the rest of these belong in here...do they?
 (defn put!
@@ -160,20 +159,22 @@ At least conceptually."
   [x]
   (.close x))
 
-(defn start-deferred-client!
-  [host port ssl? insecure?]
-  (comment (deferred/chain (tcp/client {:host host
-                                        :port port
-                                        :ssl? ssl?
-                                        :insecure? insecure?})
-             ;; Honestly, we need a way to specify this.
-             ;; Except that this is the way, right?
-             #(simplest %))))
+(comment
+  (defn start-deferred-client!
+    [host port ssl? insecure?]
+    (comment (deferred/chain (tcp/client {:host host
+                                          :port port
+                                          :ssl? ssl?
+                                          :insecure? insecure?})
+               ;; Honestly, we need a way to specify this.
+               ;; Except that this is the way, right?
+               #(simplest %)))))
 
 (defn start-client!
   "Apparently this doesn't need to be closed"
   ([host port ssl? insecure?]
-   @(start-deferred-client! host port ssl? insecure?))
+   (comment
+     @(start-deferred-client! host port ssl? insecure?)))
   ([host port]
    (start-client! host port false false)))
 
@@ -188,7 +189,7 @@ At least conceptually."
    (comment (tcp/start-server
              (fn [s info]
                (println (java.util.Date.) "Outer server handler")
-               (handler (simplest s) info))
+               (handler (comment (simplest s)) info))
              {:port port
               :ssl-context ssl-context})))
   ([handler port]

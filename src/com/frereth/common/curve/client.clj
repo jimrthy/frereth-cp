@@ -9,11 +9,10 @@
             [clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
+            [clojurewerkz.buffy.core :as buffy]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.schema :as schema]
             [com.stuartsierra.component :as cpt]
-            [gloss.core :as gloss-core]
-            [gloss.io :as gloss]
             [manifold.deferred :as deferred]
             ;; Mixing this and core.async seems dubious, at best
             [manifold.stream :as stream]))
@@ -29,8 +28,8 @@
 
 ;; Q: Does this really belong here?
 ;; It seems like shared would make a lot more sense
-(def cookie (gloss-core/compile-frame (gloss-core/ordered-map :s' (gloss-core/finite-block 32)
-                                                              :black-box (gloss-core/finite-block 96))))
+(def cookie (buffy/spec :s' (buffy/bytes-type 32)
+                        :black-box (buffy/bytes-type 96)))
 
 
 (s/def ::chan<->child ::schema/manifold-stream)
@@ -197,18 +196,37 @@ nor subject to timing attacks because it just won't be called very often."
                      :working-nonce bytes?)
         :ret ::state)
 (defn build-actual-hello-packet
-  [this
+  [{:keys [::shared/packet-management]
+    :as this}
    short-term-nonce
    working-nonce]
-      ;; Q: What kind of performance hit do I take by switching this to gloss?
+  (assert packet-management)
+  (let [raw-hello (build-raw-hello this short-term-nonce working-nonce)
+        {packet ::shared/packet} packet-management
+        _ (assert packet)
+        hello-buffer (buffy/compose-buffer shared/hello-packet-dscr :orig-buffer packet)]
+    ;; Q: What kind of performance hit do I take by switching this to something
+    ;; like gloss or buffy?
     ;; A: This is building the packet to open the handshake.
     ;; It really can't possibly matter.
-    (let [raw-hello (build-raw-hello this short-term-nonce working-nonce)]
-      ;; gloss encodes to a sequence of nio.ByteBuffers
-      ;; Q: Does it make life easier enough to justify the extra conversion?
-      ;; Since netty speaks in Byte Bufs.
-      (gloss/encode shared/hello-packet-dscr raw-hello)))
+    ;; But remember that gloss encodes to a sequence of nio.ByteBuffers
+    ;; Q: Does it make life easier enough to justify the extra conversion?
+    ;; Since netty speaks in Byte Bufs.
+    (buffy/compose hello-buffer
+                   raw-hello)))
 (comment
+  ;; According to Buffy's README, I should be able to hand compose-buffer
+  ;; a netty ByteBuf like the one below just like I'm doing with the
+  ;; nio.ByteBuffer here.
+  ;; But I get an IndexOutOfBounds exception when I try to do that.
+  ;; It looks like that's because buffy is set up to use these for
+  ;; reading, but not writing.
+  (let [packet (io.netty.buffer.Unpooled/directBuffer 4096)
+        sample (buffy/spec :int-field (buffy/int32-type)
+                           :string-field (buffy/string-type 10))
+        buf (buffy/compose-buffer sample :orig-buffer #_packet (java.nio.ByteBuffer/allocate 14))]
+    (buffy/set-field buf :int-field 101)
+    (buffy/get-field buf :int-field))
   (let [my-short (shared/random-key-pair)
         server-long (shared/random-key-pair)
         my<->server (shared/crypto-box-prepare (.getPublicKey server-long)
@@ -222,6 +240,7 @@ nor subject to timing attacks because it just won't be called very often."
                                               0x90 0xa0 0xb0 0xb0
                                               0xc0 0xd0 0xe0 0xf0])
               ::shared/my-keys {::shared/short-pair my-short}
+              ::shared/packet-management (shared/default-packet-manager)
               ::shared-secrets {::client-short<->server-long my<->server}}
         short-nonce 0x03
         ;; Q: How close is this?
@@ -230,16 +249,26 @@ nor subject to timing attacks because it just won't be called very often."
                                    (byte \i) (byte \e) (byte \n) (byte \t) (byte \-)
                                    (byte \H)
                                    0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x03])]
-    (comment)
+    (comment
+      (-> this ::shared/packet-management ::shared/packet .capacity)
+
+      (build-raw-hello this short-nonce working-nonce))
     (def hello-sample
-      (build-actual-hello-packet this
-                                 short-nonce
-                                 working-nonce))
-    (build-raw-hello this short-nonce working-nonce))
+        (build-actual-hello-packet this
+                                   short-nonce
+                                   working-nonce)))
   hello-sample
   (count hello-sample)
   (map #(.capacity %) hello-sample)
-  (def decoded (gloss/decode shared/hello-packet-dscr hello-sample))
+  ;; This seems to be cheating.
+  ;; In order to make this even vaguely realistic, I need to
+  ;; copy the bytes elsewhere,
+  (let [copy (buffy/compose-buffer hello-buffer)]
+    ;; TODO: Need to copy bytes from hello-sample into copy's backing
+    ;; array so I can release hello-sample and decompose copy at my
+    ;; leisure
+    copy)
+  (def decoded (buffy/decompose hello-sample))
   (keys decoded)
   (:prefix :srvr-xtn :clnt-xtn :clnt-short-pk :zeros :nonce :crypto-box)
   (:prefix decoded)
@@ -294,7 +323,8 @@ Note that this is really called for side-effects"
     (let [decrypted (.open_after (::client-short<->server-long shared-secrets) text 0 144 nonce)
           ;; cookie here is a top-level var describing the actual byte format.
           ;; It should probably move over to shared.
-          extracted (gloss/decode cookie decrypted)
+          staked (buffy/compose-buffer cookie :orig-buffer decrypted)
+          extracted (buffy/decompose staked)
           server-short-term-pk (byte-array shared/key-length)
           server-cookie (byte-array 96)
           server-security (assoc (:server-security this)
@@ -311,12 +341,11 @@ Note that this is really called for side-effects"
     :as this}]
   (let [packet (::shared/packet packet-management)]
     ;; Q: How does packet length actually work?
-    ;; A: We have the full length of the byte array here,
-    ;; of course.
-    ;; DONE: switch to using ByteBuffers
-    ;; TODO: more intelligently.
-    (assert (= (count packet) shared/cookie-packet-length))
-    (let [rcvd (gloss/decode shared/cookie-frame packet)]
+    ;; A: We used to have the full length of the byte array here
+    ;; Now that we don't, what's the next step?
+    (assert (= (.readableBytes packet) shared/cookie-packet-length))
+    (let [staked (buffy/compose-buffer shared/cookie-frame :orig-buffer packet)
+          rcvd (buffy/decompose staked)]
       ;; Reference implementation starts by comparing the
       ;; server IP and port vs. what we received.
       ;; Which we don't have here.
