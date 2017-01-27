@@ -177,11 +177,10 @@
   [public secret]
   (TweetNaclFast$Box. public secret))
 
-(declare uint64-pack!)
 (defn compose
   [tmplt fields dst]
   (reduce
-   (fn [ndx k]
+   (fn [_ k]
      (let [dscr (k tmplt)
         cnvrtr (::type dscr)
         v (k fields)]
@@ -189,29 +188,20 @@
          (case cnvrtr
            ::bytes (let [n (::length dscr)]
                      (try
-                       (comment (.setBytes dst ndx v 0 n))
                        (.writeBytes dst v 0 n)
                        (catch IllegalArgumentException ex
                          (throw (ex-info "Setting bytes failed"
                                          {::field k
-                                          ::index ndx
                                           ::length n
                                           ::dst dst
                                           ::dst-length (.capacity dst)
                                           ::src v
                                           ::source-class (class v)
                                           ::description dscr
-                                          ::error ex}))))
-                     (+ ndx n))
-           ::int-64 (let [src (byte-array (take 8 (repeat 0)))]
-                      (uint64-pack! src 0 v)
-                      (comment
-                        (.setBytes dst ndx src 0 8))
-                      (.writeLong dst v)
-                      (+ ndx 8))
+                                          ::error ex})))))
+           ::int-64 (.writeLong dst v)
            ::zeroes (let [n (::length dscr)]
-                      (.writeZero dst n)
-                      (+ ndx n)))
+                      (.writeZero dst n)))
          (catch IllegalArgumentException ex
            (throw (ex-info "Missing clause"
                            {::problem ex
@@ -238,6 +228,14 @@
      (let [dscr (k tmplt)
            cnvrtr (::type dscr)]
        (assoc acc k (case cnvrtr
+                      ;; .readSlice doesn't really seem all that useful here.
+                      ;; Then again, there isn't any point to extracting
+                      ;; anything I don't really need.
+                      ;; By that same token...if I don't really need it, then
+                      ;; why did I consume the bandwidth to get it here?
+                      ;; (Part of that answer is DoS prevention, for some
+                      ;; fields)
+                      ;; Need to contemplate this some more
                       ::bytes (.readSlice src (::length dscr))
                       ::int-64 (.readLong src)
                       ::zeroes (.readSlice src (::length dscr))))))
@@ -249,6 +247,10 @@
         :ret ::packet-management)
 (defn default-packet-manager
   []
+  ;; Highly important:
+  ;; Absolutely must verify that using a directBuffer provides
+  ;; a definite speed increase over a heap buffer.
+  ;; Or, for that matter, just wrapping a Byte Array.
   {::packet (io.netty.buffer.Unpooled/directBuffer 4096)
    ;; Note that this is distinct from the working-area's nonce
    ;; And it probably needs to be an atom

@@ -232,6 +232,7 @@ nor subject to timing attacks because it just won't be called very often."
           (throw ex)))))
   hello-sample
   (.readableBytes hello-sample)
+  (shared/decompose shared/hello-packet-dscr hello-sample)
   )
 
 (defn do-build-hello
