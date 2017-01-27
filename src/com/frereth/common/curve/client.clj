@@ -25,12 +25,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-;; Q: Does this really belong here?
-;; It seems like shared would make a lot more sense
-(def cookie (array-map :s' (byte-array 32)
-                       :black-box (byte-array 96)))
-
-
 (s/def ::chan<->child ::schema/manifold-stream)
 (s/def ::chan<->server ::schema/manifold-stream)
 
@@ -176,17 +170,14 @@ nor subject to timing attacks because it just won't be called very often."
            ::shared-secrets]}
    short-term-nonce
    working-nonce]
-  {:prefix shared/hello-header
-   :srvr-xtn server-extension
-   :clnt-xtn extension
-   :clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
-   ;; Q: How well does it handle this?
-   :zeros (byte-array (subvec (vec shared/all-zeros) 0 64))
-   :nonce short-term-nonce
-   ;; This is getting set to nil.
-   ;; Q: What gives?
-   :crypto-box (.after (::client-short<->server-long shared-secrets)
-                       shared/all-zeros 0 64 working-nonce)})
+  {::shared/prefix shared/hello-header
+   ::shared/srvr-xtn server-extension
+   ::shared/clnt-xtn extension
+   ::shared/clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
+   ::shared/zeros nil
+   ::shared/nonce short-term-nonce
+   ::shared/crypto-box (.after (::client-short<->server-long shared-secrets)
+                               shared/all-zeros 0 64 working-nonce)})
 
 (s/fdef build-actual-hello-packet
         :args (s/cat :this ::state
@@ -202,17 +193,8 @@ nor subject to timing attacks because it just won't be called very often."
   (assert packet-management)
   (let [raw-hello (build-raw-hello this short-term-nonce working-nonce)
         {packet ::shared/packet} packet-management
-        _ (assert packet)
-        #_[hello-buffer (buffy/compose-buffer shared/hello-packet-dscr :orig-buffer packet)]]
-    ;; Q: What kind of performance hit do I take by switching this to something
-    ;; like gloss or buffy?
-    ;; A: This is building the packet to open the handshake.
-    ;; It really can't possibly matter.
-    ;; But remember that gloss encodes to a sequence of nio.ByteBuffers
-    ;; Q: Does it make life easier enough to justify the extra conversion?
-    ;; Since netty speaks in Byte Bufs.
-    (throw (RuntimeException. "Roll this back"))
-    (comment (buffy/compose hello-buffer raw-hello))))
+        _ (assert packet)]
+    (shared/compose shared/hello-packet-dscr raw-hello packet)))
 (comment
   (let [my-short (shared/random-key-pair)
         server-long (shared/random-key-pair)
@@ -241,9 +223,13 @@ nor subject to timing attacks because it just won't be called very often."
 
       (build-raw-hello this short-nonce working-nonce))
     (def hello-sample
+      (try
         (build-actual-hello-packet this
                                    short-nonce
-                                   working-nonce)))
+                                   working-nonce)
+        (catch clojure.lang.ExceptionInfo ex
+          (println "Details:" (.getData ex))
+          (throw ex)))))
   hello-sample
   )
 
@@ -291,9 +277,7 @@ Note that this is really called for side-effects"
     ;; but this doesn't seem to make any sense
     (shared/byte-copy! text 0 144 (-> packet-management ::shared/packet :cookie))
     (let [decrypted (.open_after (::client-short<->server-long shared-secrets) text 0 144 nonce)
-          ;; cookie here is a top-level var describing the actual byte format.
-          ;; It should probably move over to shared.
-          extracted (shared/decompose cookie decrypted)
+          extracted (shared/decompose shared/cookie decrypted)
           server-short-term-pk (byte-array shared/key-length)
           server-cookie (byte-array 96)
           server-security (assoc (:server-security this)
@@ -701,13 +685,18 @@ specifically for something like this might make a lot more sense.
 
 That way I wouldn't be trying to multi-purpose communications channels.
 
-OTOH, they *are* the trigger for this sort of thing."
+OTOH, they *are* the trigger for this sort of thing.
+
+The reference implementation mingles networking with this code.
+That seems like it might make sense as an optimization,
+but not until I have convincing numbers that it's needed.
+Of course, I might also be opening things up for something
+like a timing attack."
   [wrapper]
-  ;; The reference implementation mingles networking with this code.
-  ;; That seems like it might make sense as an optimization,
-  ;; but not until I have convincing numbers that it's needed.
-  ;; Of course, I might also be opening things up for something
-  ;; like a timing attack.
+  (when-let [failure (agent-error wrapper)]
+    (throw (ex-info "Agent already failed"
+                    {:problem failure})))
+
   (let [this @wrapper
         {:keys [::chan<->server]} this
         timeout (current-timeout wrapper)]

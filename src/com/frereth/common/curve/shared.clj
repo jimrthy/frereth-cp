@@ -21,28 +21,26 @@
 (def server-cookie-length 96)
 (def server-name-length 256)
 
-(def hello-header "QvnQ5XlH")
+(def hello-header (.getBytes "QvnQ5XlH"))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
 ;; Q: Is it worth trying to build serialization
 ;; handlers like gloss/buffy from spec?
 ;; That *was* one of the awesome features
 ;; offered/promised by schema.
-(def hello-packet-dscr (array-map :prefix (s/and string? #(= (count %) 8))
-                                  :srvr-xtn (s/and bytes? #(= (count %) extension-length))
-                                  :clnt-xtn (s/and bytes? #(= (count %) extension-length))
-                                  :clnt-short-pk (s/and bytes? #(= (count %) key-length))
-                                  :zeros (s/and bytes?
-                                                #(= (count %) key-length)
-                                                #(every? zero? %))
+(def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length 8}
+                                  ::srvr-xtn {::type ::bytes ::length extension-length}
+                                  ::clnt-xtn {::type ::bytes ::length extension-length}
+                                  ::clnt-short-pk {::type ::bytes ::length key-length}
+                                  ::zeros {::type ::zeroes ::length key-length}
                                   ;; This gets weird/confusing.
                                   ;; It's a 64-bit number, so 8 octets
                                   ;; But, really, that's just integer?
                                   ;; It would probably be more tempting to
                                   ;; just spec this like that if clojure had
                                   ;; a better numeric tower
-                                  :nonce (s/and bytes? #(= (count %) 8))
-                                  :crypto-box (s/and bytes? #(= (count %) 8))))
+                                  ::nonce {::type ::int-64}
+                                  ::crypto-box {::type ::bytes ::length 80}))
 
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
@@ -122,6 +120,25 @@
 (s/def ::packet-management (s/keys :req [::packet-nonce
                                          ::packet]))
 
+;; Header is only a "string" in the ASCII sense
+(def cookie-frame
+  "The boiler plate around a cookie"
+  (array-map ::header {::type ::bytes
+                       ::length 8}
+             ::client-extension {::type ::bytes
+                                 ::length extension-length}
+             ::server-extension {::type ::bytes
+                                 ::length extension-length}
+             ;; Implicitly prefixed with "CurveCPK"
+             ::nonce {::type ::bytes
+                      ::length server-nonce-suffix-length}
+             ::cookie {::type ::bytes
+                       ::length 144}))
+
+(def cookie
+  (array-map ::s' {::type ::bytes ::length key-length}
+             ::black-box {::type ::zeroes ::length 96}))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 (defn byte-copy!
@@ -156,21 +173,50 @@
     (and (not= 0 (unsigned-bit-shift-right (- 256 diff) 8))
          (= nx ny))))
 
-;; Header is only a "string" in the ASCII sense
-(def cookie-frame (array-map :header (s/and bytes? #(= (count %) 8))
-                             :client-extension (s/and bytes? #(= (count %) extension-length))
-                             :server-extension (s/and bytes? #(= (count %) extension-length))
-                             ;; Implicitly prefixed with "CurveCPK"
-                             :nonce (s/and bytes? #(= (count %) server-nonce-suffix-length))
-                             :cookie (s/and bytes? #(= (count %) 144))))
-
 (defn crypto-box-prepare
   [public secret]
   (TweetNaclFast$Box. public secret))
 
+(defn compose
+  [tmplt fields dst]
+  (doseq [k (keys tmplt)]
+    (let [dscr (k tmplt)
+          cnvrtr (::type dscr)
+          val (k fields)]
+      (try
+        (case cnvrtr
+          ::bytes (.writeBytes dst val 0 (::length dscr))
+          ::int-64 (.writeLong dst val)
+          ::zeroes (.writeZero dst (::length dscr)))
+        (catch IllegalArgumentException ex
+          (throw (ex-info "Missing clause"
+                          {::problem ex
+                           ::cause cnvrtr
+                           ::field k
+                           ::description dscr
+                           ::source-value val})))
+        (catch NullPointerException ex
+          (throw (ex-info "NULL"
+                          {::problem ex
+                           ::cause cnvrtr
+                           ::field k
+                           ::description dscr
+                           ::source-value val}))))))
+  dst)
+
 (defn decompose
-  [dscr buf]
-  (throw (RuntimeException. "Is this worth generalizing?")))
+  [tmplt src]
+  (reduce
+   (fn
+     [acc k]
+     (let [dscr (k tmplt)
+           cnvrtr (::type dscr)]
+       (assoc acc k (case cnvrtr
+                      ::bytes (.readSlice src (::length dscr))
+                      ::int-64 (.readLong src)
+                      ::zeroes (.readSlice src (::length dscr))))))
+   {}
+   (keys tmplt)))
 
 (s/fdef default-packet-management
         :args (s/cat)
