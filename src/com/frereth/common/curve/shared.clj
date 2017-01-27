@@ -32,7 +32,7 @@
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-short-pk {::type ::bytes ::length key-length}
-                                  ::zeros {::type ::zeroes ::length key-length}
+                                  ::zeros {::type ::zeroes ::length 64}
                                   ;; This gets weird/confusing.
                                   ;; It's a 64-bit number, so 8 octets
                                   ;; But, really, that's just integer?
@@ -177,31 +177,57 @@
   [public secret]
   (TweetNaclFast$Box. public secret))
 
+(declare uint64-pack!)
 (defn compose
   [tmplt fields dst]
-  (doseq [k (keys tmplt)]
-    (let [dscr (k tmplt)
-          cnvrtr (::type dscr)
-          val (k fields)]
-      (try
-        (case cnvrtr
-          ::bytes (.writeBytes dst val 0 (::length dscr))
-          ::int-64 (.writeLong dst val)
-          ::zeroes (.writeZero dst (::length dscr)))
-        (catch IllegalArgumentException ex
-          (throw (ex-info "Missing clause"
-                          {::problem ex
-                           ::cause cnvrtr
-                           ::field k
-                           ::description dscr
-                           ::source-value val})))
-        (catch NullPointerException ex
-          (throw (ex-info "NULL"
-                          {::problem ex
-                           ::cause cnvrtr
-                           ::field k
-                           ::description dscr
-                           ::source-value val}))))))
+  (reduce
+   (fn [ndx k]
+     (let [dscr (k tmplt)
+        cnvrtr (::type dscr)
+        v (k fields)]
+       (try
+         (case cnvrtr
+           ::bytes (let [n (::length dscr)]
+                     (try
+                       (comment (.setBytes dst ndx v 0 n))
+                       (.writeBytes dst v 0 n)
+                       (catch IllegalArgumentException ex
+                         (throw (ex-info "Setting bytes failed"
+                                         {::field k
+                                          ::index ndx
+                                          ::length n
+                                          ::dst dst
+                                          ::dst-length (.capacity dst)
+                                          ::src v
+                                          ::source-class (class v)
+                                          ::description dscr
+                                          ::error ex}))))
+                     (+ ndx n))
+           ::int-64 (let [src (byte-array (take 8 (repeat 0)))]
+                      (uint64-pack! src 0 v)
+                      (comment
+                        (.setBytes dst ndx src 0 8))
+                      (.writeLong dst v)
+                      (+ ndx 8))
+           ::zeroes (let [n (::length dscr)]
+                      (.writeZero dst n)
+                      (+ ndx n)))
+         (catch IllegalArgumentException ex
+           (throw (ex-info "Missing clause"
+                           {::problem ex
+                            ::cause cnvrtr
+                            ::field k
+                            ::description dscr
+                            ::source-value v})))
+         (catch NullPointerException ex
+           (throw (ex-info "NULL"
+                           {::problem ex
+                            ::cause cnvrtr
+                            ::field k
+                            ::description dscr
+                            ::source-value v}))))))
+   0
+   (keys tmplt))
   dst)
 
 (defn decompose

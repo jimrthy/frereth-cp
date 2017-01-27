@@ -231,6 +231,7 @@ nor subject to timing attacks because it just won't be called very often."
           (println "Details:" (.getData ex))
           (throw ex)))))
   hello-sample
+  (.readableBytes hello-sample)
   )
 
 (defn do-build-hello
