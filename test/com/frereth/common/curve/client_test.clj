@@ -16,11 +16,11 @@
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         server-name (shared/encode-server-name "hypothet.i.cal")]
-    (clnt/ctor {;; It seems wrong for this to be a bidirectional stream
-                ;; instead of a pair of core.async channel that I treat
-                ;; as unidirectional.
-                ;; But this is what aleph is going to give me.
-                ::clnt/chan<->server (strm/stream)
+    (clnt/ctor {;; Aleph supplies a single bi-directional channel.
+                ;; My tests break trying to use that here.
+                ;; For now, take a step back and get them working
+                ::clnt/chan<-server (strm/stream)
+                ::clnt/chan->server (strm/stream)
                 ::clnt/child-spawner child-spawner
                 ::clnt/server-extension server-extension
                 ;; Q: Where do I get the server's public key?
@@ -36,26 +36,41 @@
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"
-    (let [client (raw-client nil)
-          chan<->server (-> client deref ::clnt/chan<->server)]
-        (strm/on-drained chan<->server
-                         #(send client clnt/server-closed!))
-        (send client clnt/do-build-hello)
-        (await-for 150 client)
-        (is @client)
-        (let [basic-check "Did this work?"
-              fut (future (let [d (strm/try-put! chan<->server basic-check 150 ::timed-out)]
-                            (dfrd/on-realized d
-                                              #(is (not= % ::timed-out))
-                                              #(is false (str "put! " %)))))]
-          (let [d' (strm/try-take! chan<->server ::nada 200 ::response-timed-out)]
-            (dfrd/on-realized d'
-                              #(is (= % basic-check))
-                              #(is false (str "take! " %))))))))
+    (let [client-agent (raw-client nil)
+          client @client-agent
+          {:keys [::clnt/chan<-server ::clnt/chan->server]} client]
+        (strm/on-drained chan<-server
+                         #(send client-agent clnt/server-closed!))
+        ;; Q: Doesn't this also need to send the packet?
+        ;; A: Probably.
+        ;; Trying to send a bogus response fails below.
+        (send client-agent clnt/do-build-hello)
+        (if (await-for 150 client-agent)
+          (do
+            (is (not (agent-error client-agent)))
+            (let [cookie-waiter (dfrd/future (clnt/wait-for-cookie))
+                  ;; Q: Worth building a real Cookie response packet instead?
+                  basic-check "Did this work?"
+                  fut (dfrd/future (let [d (strm/try-put! chan<-server basic-check 150 ::timed-out)]
+                                     ;; Important detail:
+                                     ;; This test fails, if you look at the actual output in the
+                                     ;; REPL.
+                                     ;; But it looks like it's succeeding in CIDER.
+                                     (dfrd/on-realized d
+                                                       #(is (not= % ::timed-out))
+                                                       #(is false (str "put! " %)))))]
+              ;; TODO: Need to make sure both cookie-waiter and fut resolve
+              ;; Q: Should they be promises?
+              (is false "Get this working, for real")
+              (let [d' (strm/try-take! chan->server ::nada 200 ::response-timed-out)]
+                (dfrd/on-realized d'
+                                  #(is (= % basic-check))
+                                  #(is false (str "take! " %))))))
+          (is false "Timed out waiting for client agent to build HELLO packet")))))
 
 (deftest build-hello
   (testing "Can I build a Hello packet?"
-    (let [client-agent (raw-client)
+    (let [client-agent (raw-client nil)
           client @client-agent
           updated (clnt/do-build-hello client)]
       (let [p-m (::shared/packet-management updated)
@@ -65,9 +80,12 @@
                  (not= 0 nonce)))
         (let [buffer (::shared/packet p-m)]
           (is buffer)
-          (let [v (subvec (vec buffer) 0 224)]
-            (is (= (subvec v 0 (count shared/hello-header)) (vec shared/hello-header)))
-            (is (= (subvec v 72 136) (take 64 (repeat 0))))))))))
+          (is (= shared/hello-packet-length (.readableBytes buffer)))
+          (let [dst (byte-array shared/hello-packet-length)]
+            (.readBytes buffer dst)
+            (let [v (vec dst)]
+              (is (= (subvec v 0 (count shared/hello-header)) (vec shared/hello-header)))
+              (is (= (subvec v 72 136) (take 64 (repeat 0)))))))))))
 
 (deftest start-stop
   (let [spawner (fn [owner-agent]
@@ -101,6 +119,7 @@
                                         (println "Either way, this is obviously broken")))
                     ch))
         client (raw-client spawner)
+        _ (throw (RuntimeException. "Need to swith to unidirectional versions"))
         chan<->server (-> client deref ::clnt/chan<->server)]
     (if chan<->server
       (try

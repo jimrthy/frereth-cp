@@ -25,8 +25,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(s/def ::chan<->child ::schema/manifold-stream)
-(s/def ::chan<->server ::schema/manifold-stream)
+(s/def ::chan->child ::schema/manifold-stream)
+(s/def ::chan<-child ::schema/manifold-stream)
+(s/def ::chan->server ::schema/manifold-stream)
+(s/def ::chan<-server ::schema/manifold-stream)
 
 ;; Periodically pull the client extension from...wherever it comes from.
 ;; Q: Why?
@@ -75,7 +77,8 @@
                                      ::server-security
                                      ::shared-secrets
                                      ::shared/work-area]
-                               :opt [::chan<->child
+                               :opt [::chan->child
+                                     ::chan<-child
                                      ;; Q: Why am I tempted to store this at all?
                                      ;; A: Well...I might need to resend it if it
                                      ;; gets dropped initially.
@@ -94,14 +97,22 @@
 
 (s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
                             #(s/valid? ::state (deref %))))
+
 ;; Accepts the agent that owns "this" and returns a channel we can
 ;; use to send messages to the child.
 ;; The child will send messages back to us using the standard agent
 ;; (send...)
 ;; Or maybe it should notify us about changes to a shared ring buffer.
 ;; This is where the reference implementation seems to get murky.
+;; And, really, this approach is wrong.
+;; It seems much wiser to let the caller control the child creation
+;; and just supply us with the communication channel(s).
+;; Although it might be a lot more sensible for this to own
+;; ::chan->child and ::chan->server since it's the central
+;; location that will first get the indication that ::chan<-child
+;; or ::chan<-server has closed.
 (s/def ::child-spawner (s/fspec :args (s/cat :this ::state-agent)
-                                :ret ::chan<->child))
+                                :ret ::chan<-child))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -548,22 +559,28 @@ implementation. This is code that I don't understand yet"
 (defn ->message-exchange-mode
   [wrapper
    initial-server-response]
-  (let [{:keys [::chan<->server
-                ::chan<->child]
+  (let [{:keys [::chan<-server
+                ::chan->server
+                ::chan<-child
+                ::chan->child]
          :as this} @wrapper]
     ;; Forward that initial "real" message
     (send wrapper server->child initial-server-response)
     ;; Q: Do I want to block this thread for this?
     (comment (await-for (current-timeout wrapper) wrapper))
+
     ;; And then wire this up to pretty much just pass messages through
-    (stream/connect-via chan<->child #(send wrapper child->server %) chan<->server)
+    ;; Actually, this seems totally broken from any angle, since we need
+    ;; to handle decrypting, at a minimum
+    (stream/connect-via chan<-child #(send wrapper chan->server %) chan->server)
+
     ;; I'd like to just do this in final-wait and take out an indirection
     ;; level.
     ;; But I don't want children to have to know the implementation detail
     ;; that they have to wait for the initial response before the floodgates
     ;; can open.
     ;; So go with this approach until something better comes to mind
-    (stream/connect-via chan<->server #(send wrapper server->child %) chan<->child)))
+    (stream/connect-via chan<-server #(send wrapper chan->child %) chan->child)))
 
 (defn final-wait
   "We've received the cookie and responded with a vouch.
@@ -572,8 +589,8 @@ implementation. This is code that I don't understand yet"
   loop"
   [wrapper _]
   (let [timeout (current-timeout wrapper)
-        chan<->server (::chan<->server @wrapper)
-        taken (stream/try-take! chan<->server ::drained timeout ::initial-response-timed-out)]
+        chan<-server (::chan<-server @wrapper)
+        taken (stream/try-take! chan<-server ::drained timeout ::initial-response-timed-out)]
     (deferred/on-realized taken
       #(send-off wrapper ->message-exchange-mode %)
       (fn [ex]
@@ -634,10 +651,11 @@ TODO: Need to ask around about that."
               this)))))
 
 (defn send-vouch!
+  "Send the Vouch/Initiate packet (along with an initial Message sub-packet)"
   [wrapper]
   (let [timeout (current-timeout wrapper)
-        chan<->server (::chan<->server @wrapper)
-        d (stream/try-put! chan<->server
+        chan->server (::chan->server @wrapper)
+        d (stream/try-put! chan->server
                       timeout
                       ::timedout)]
     (deferred/on-realized d (partial final-wait wrapper)
@@ -663,20 +681,9 @@ TODO: Need to ask around about that."
 
 (defn wait-for-cookie
   [wrapper _]
-  (let [chan<->server (::chan<->server @wrapper)
+  (let [chan<-server (::chan<-server @wrapper)
         timeout (current-timeout wrapper)
-        ;; My unit test is pulling my HELLO packet from here.
-        ;; At least, that's the only thing that makes sense
-        ;; for that fact that we're sending along a 224 byte
-        ;; packet to build-and-send-vouch, even though it's
-        ;; really stopping right after pulling that packet
-        ;; from the stream.
-        ;; So I seem to be experiencing 2 problems here:
-        ;; 1. 2-way comm channels are really easy to mess
-        ;; up if you can pull what you've just pushed
-        ;; 2. It seems like manifold streams allow multiple
-        ;; listeners to pull the same value
-        d (deferred/timeout! (stream/take! chan<->server)
+        d (deferred/timeout! (stream/take! chan<-server)
             timeout
             ::hello-timed-out)]
     (deferred/on-realized d
@@ -715,9 +722,9 @@ like a timing attack."
                     {:problem failure})))
 
   (let [this @wrapper
-        {:keys [::chan<->server]} this
+        {:keys [::chan->server]} this
         timeout (current-timeout wrapper)]
-    (stream/on-drained chan<->server
+    (stream/on-drained chan->server
                        #(send wrapper server-closed!))
     ;; This feels inside-out and backwards.
     ;; But it probably should, since this is very
@@ -735,7 +742,7 @@ like a timing attack."
             ;; that's what netty speaks.
             ;; Really need to just break down and do that translation
             ;; while I know how many bytes I'm sending.
-            _ (println "Putting" packet "onto" chan<->server)
+            _ (println "Putting" packet "onto" chan->server)
             ;; There's still an important break
             ;; with the reference implementation
             ;; here: this should be sending the
@@ -748,14 +755,15 @@ like a timing attack."
             ;; the next, but a major selling point
             ;; is not waiting for TCP buffers
             ;; to expire.
-            d (stream/try-put! chan<->server packet timeout ::hello-timed-out)]
+            d (stream/try-put! chan->server packet timeout ::hello-timed-out)]
         (deferred/on-realized d
           (partial wait-for-cookie wrapper)
           (partial hello-failed! wrapper)))
       (throw (ex-info "Building the hello failed" {:problem (agent-error wrapper)})))))
 
 (s/fdef ctor
-        :args (s/keys :req [::chan<->server
+        :args (s/keys :req [::chan<-server
+                            ::chan->server
                             ::shared/my-keys
                             ::server-security])
         :ret ::state-agent)
@@ -773,4 +781,10 @@ like a timing attack."
       ;; Using a core.async go-loop is almost guaranteed
       ;; to be faster.
       ;; TODO: Verify the "almost" with numbers.
+      ;; The more I try to switching, the more dubious this
+      ;; approach seems.
+      ;; pipelines might not make a lot of sense on the client,
+      ;; since they're at least theoretically about increasing
+      ;; throughput at the expense of latency.
+      ;; But they probably make a lot of sense on some servers.
       agent))
