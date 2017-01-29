@@ -310,9 +310,11 @@ Note that this is really called for side-effects"
     ;; A: We used to have the full length of the byte array here
     ;; Now that we don't, what's the next step?
     (when-not (= (.readableBytes packet) shared/cookie-packet-length)
-      (let [err {:expected-length shared/cookie-packet-length
-                 :actual-length (.readableBytes packet)
-                 :packet packet}]
+      (let [err {::expected-length shared/cookie-packet-length
+                 ::actual-length (.readableBytes packet)
+                 ::packet packet
+                 ;; Because the stack trace hides
+                 ::where 'shared.curve.client/decrypt-cookie-packet}]
         (throw (ex-info "Incoming cookie packet illegal" err))))
     (let [rcvd (shared/decompose shared/cookie-frame packet)]
       ;; Reference implementation starts by comparing the
@@ -670,6 +672,16 @@ TODO: Need to ask around about that."
 
 (defn build-and-send-vouch
   [wrapper cookie-packet]
+  ;; Got a response from server.
+  ;; Theory in the reference implementation is that this is
+  ;; a good signal that it's time to spawn the child to do
+  ;; the real work.
+  ;; That really seems to complect the concerns.
+  ;; Q: Why not set up the child in its own thread and start
+  ;; listening for its activity now?
+  ;; Partial A: original version is geared toward converting
+  ;; existing apps that pipe data over STDIN/OUT so they don't
+  ;; have to be changed at all.
   (send wrapper (partial fork wrapper))
   (send wrapper cookie->vouch cookie-packet)
   (let [timeout (current-timeout wrapper)]
@@ -680,15 +692,31 @@ TODO: Need to ask around about that."
                              %))))))
 
 (defn wait-for-cookie
-  [wrapper _]
-  (let [chan<-server (::chan<-server @wrapper)
-        timeout (current-timeout wrapper)
-        d (deferred/timeout! (stream/take! chan<-server)
-            timeout
-            ::hello-timed-out)]
-    (deferred/on-realized d
-      (partial build-and-send-vouch wrapper)
-      (partial hello-response-timed-out! wrapper))))
+  [wrapper sent]
+  (if (not= sent ::hello-timed-out)
+    (do
+      (println "HELLO sent. Clear packet so we can wait for cookie")
+      (-> wrapper deref ::shared/packet-management ::shared/packet .clear)
+      (println "packet cleared. Waiting for incoming message")
+      (let [chan<-server (::chan<-server @wrapper)
+            timeout (current-timeout wrapper)
+            d (deferred/timeout! (stream/take! chan<-server)
+                timeout
+                ::hello-timed-out)]
+        (deferred/on-realized d
+          (fn [result]
+            ;; In theory, this seems like it would be a better place
+            ;; to .clear the packet we just sent to the server.
+            ;; That would solve the immediate race condition, but
+            ;; not the bigger picture issue that's going to spring
+            ;; up when I get around to implementing the real asynchronous
+            ;; message passing state
+            (println "Incoming response from server:")
+            (pprint result)
+            (println "Building/sending Vouch")
+            (build-and-send-vouch wrapper result))
+          (partial hello-response-timed-out! wrapper))))
+    (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

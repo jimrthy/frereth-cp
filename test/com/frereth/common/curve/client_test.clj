@@ -1,5 +1,6 @@
 (ns com.frereth.common.curve.client-test
-  (:require [clojure.test :refer (deftest is testing)]
+  (:require [clojure.pprint :refer (pprint)]
+            [clojure.test :refer (deftest is testing)]
             [com.frereth.common.curve.client :as clnt]
             [com.frereth.common.curve.shared :as shared]
             [manifold.deferred :as dfrd]
@@ -118,23 +119,38 @@
                                       (fn [ex]
                                         (println "Either way, this is obviously broken")))
                     ch))
-        client (raw-client spawner)
-        _ (throw (RuntimeException. "Need to swith to unidirectional versions"))
-        chan<->server (-> client deref ::clnt/chan<->server)]
-    (if chan<->server
+        client-agent (raw-client spawner)
+        ;; One major advantage of using agents over async-loops:
+        ;; Have state instantly available for the asking
+        client @client-agent
+        {:keys [::clnt/chan->server ::clnt/chan<-server]
+         :as client} client]
+    (if (and chan<-server chan->server)
       (try
-        (let [client-thread (future (clnt/start! client))]
+        (let [client-thread (future (clnt/start! client-agent))]
           (try
-            (let [hello-future (strm/try-take! chan<->server ::drained 500 ::timeout)
+            (let [hello-future (strm/try-take! chan->server ::drained 500 ::timeout)
                   hello (deref hello-future)]
               (if (not (or (= hello ::timeout)
                            (= hello ::drained)))
                 (do
+                  ;; Pretty sure I'm running into a race condition over this shared
+                  ;; resource.
+                  ;; i.e. sender is clearing the packet as soon as I receive it,
+                  ;; before I could have possibly forwarded it along to the server.
+                  ;; Q: Do I have any good alternatives that don't involve creating
+                  ;; copies?
+                  (println "Hello message ready to send to server. Validating it:")
                   ;; Q: Can we do anything else meaningful here?
                   ;; I mean...I have access to the private server key.
                   ;; I could decrypt that packet to see what's in it.
                   ;; But that seems to belong in the actual interactive
-                  ;; tests
+                  ;; tests.
+                  ;; This should probably grow into that, but changes
+                  ;; in behavior here should portend test failures there.
+                  ;; This approach is more tightly couple with the actual
+                  ;; implementation, but that also means it's more likely
+                  ;; to catch problems when that implementation changes.
                   (is (instance? io.netty.buffer.ByteBuf hello))
                   ;; Actually, this is an interesting point:
                   ;; hello should really be a ByteBuffer.
@@ -159,7 +175,8 @@
                                              (byte-array (subvec (vec array) 0
                                                                  (count shared/hello-header))))))
                         ;; Q: What's going on here?
-                        (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct.")))))
+                        (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct."))))
+                  (println "Hello packet verified. Now I'd send it to the server"))
                 (throw (ex-info "Failed pulling hello packet"
                                 {:client-errors (agent-error client)
                                  :client-thread client-thread}))))
@@ -172,12 +189,13 @@
                     ;; That timeout is almost definitely too low
                     ;; But it should short-circuit pretty quickly, once it fails.
                     ;; Q: Shouldn't it?
-                    (is hand-shake-result)))))))
+                    (is hand-shake-result))))
+                )))
         (finally
-          (strm/close! chan<->server)
+          (strm/close! chan<-server)
           ;; Give that a chance to percolate through...
-          (Thread/sleep 0.2)
-          (let [ex (agent-error client)]
+          (Thread/sleep 200)
+          (if-let [ex (agent-error client-agent)]
             (if (instance? clojure.lang.ExceptionInfo ex)
               ;; So far, I haven't had a chance to come up with a better alternative to
               ;; "just set the agent state to an error when a channel closes"
@@ -186,13 +204,18 @@
                   (is true "Not elegant, but this *is* expected")
                   ;; Unexpected failures are worrisome.
                   ;; And some things are failing almost silently
-                  (is false details)))
+                  (do
+                    (is false (with-out-str (pprint details)))
+                    ;; So we can get a stack trace
+                    (deref client-agent))))
               (do
                 ;; I'm winding up with an NPE here, which doesn't seem to make
                 ;; any sense at all
                 (.printStackTrace ex)
-                (is (not ex)))))))
-      (is chan<->server "No channel to pull data from server"))))
+                (is (not ex))))
+            (let [unexpected-success @client-agent]
+              (is (not unexpected-success) "Did I just not wait long enough?")))))
+      (is chan<-server "No channel to pull data from server"))))
 
 (comment
   (def junk (raw-client))
