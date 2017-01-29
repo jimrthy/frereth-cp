@@ -298,7 +298,11 @@ Note that this is really called for side-effects"
     ;; Q: How does packet length actually work?
     ;; A: We used to have the full length of the byte array here
     ;; Now that we don't, what's the next step?
-    (assert (= (.readableBytes packet) shared/cookie-packet-length))
+    (when-not (= (.readableBytes packet) shared/cookie-packet-length)
+      (let [err {:expected-length shared/cookie-packet-length
+                 :actual-length (.readableBytes packet)
+                 :packet packet}]
+        (throw (ex-info "Incoming cookie packet illegal" err))))
     (let [rcvd (shared/decompose shared/cookie-frame packet)]
       ;; Reference implementation starts by comparing the
       ;; server IP and port vs. what we received.
@@ -661,6 +665,17 @@ TODO: Need to ask around about that."
   [wrapper _]
   (let [chan<->server (::chan<->server @wrapper)
         timeout (current-timeout wrapper)
+        ;; My unit test is pulling my HELLO packet from here.
+        ;; At least, that's the only thing that makes sense
+        ;; for that fact that we're sending along a 224 byte
+        ;; packet to build-and-send-vouch, even though it's
+        ;; really stopping right after pulling that packet
+        ;; from the stream.
+        ;; So I seem to be experiencing 2 problems here:
+        ;; 1. 2-way comm channels are really easy to mess
+        ;; up if you can pull what you've just pushed
+        ;; 2. It seems like manifold streams allow multiple
+        ;; listeners to pull the same value
         d (deferred/timeout! (stream/take! chan<->server)
             timeout
             ::hello-timed-out)]
@@ -755,4 +770,7 @@ like a timing attack."
        ;; messing with them
        ::shared/packet-management (shared/default-packet-manager)
        ::shared/work-area (shared/default-work-area))
+      ;; Using a core.async go-loop is almost guaranteed
+      ;; to be faster.
+      ;; TODO: Verify the "almost" with numbers.
       agent))

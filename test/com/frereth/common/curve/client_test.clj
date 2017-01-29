@@ -122,14 +122,25 @@
                   ;; Or a portion of a ByteArray that will be
                   ;; copied into a ByteBuffer.
                   (is (= shared/hello-packet-length (.readableBytes hello)))
-                  (let [backing-array (.array hello)]
-                    ;; Really don't want to mess with the backing array at all.
-                    ;; Especially since, realistically, I should build everything
-                    ;; except the crypto box in a Direct buffer, then copy that in
-                    ;; and send it to the network.
-                    (is (shared/bytes= (.getBytes shared/hello-header)
-                                       (byte-array (subvec (vec backing-array) 0
-                                                           (count shared/hello-header)))))))
+                  (if (.hasArray hello)
+                    (let [backing-array (.array hello)]
+                      ;; Really don't want to mess with the backing array at all.
+                      ;; Especially since, realistically, I should build everything
+                      ;; except the crypto box in a Direct buffer, then copy that in
+                      ;; and send it to the network.
+                      (is (shared/bytes= (.getBytes shared/hello-header)
+                                         (byte-array (subvec (vec backing-array) 0
+                                                             (count shared/hello-header))))))
+                    (do
+                      (if (.isDirect hello)
+                        (let [array (byte-array shared/hello-packet-length)]
+                          (.getBytes hello 0 array)
+                          ;; Q: Anything else useful I can check here?
+                          (is (shared/bytes= shared/hello-header
+                                             (byte-array (subvec (vec array) 0
+                                                                 (count shared/hello-header))))))
+                        ;; Q: What's going on here?
+                        (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct.")))))
                 (throw (ex-info "Failed pulling hello packet"
                                 {:client-errors (agent-error client)
                                  :client-thread client-thread}))))
@@ -151,8 +162,12 @@
             (if (instance? clojure.lang.ExceptionInfo ex)
               ;; So far, I haven't had a chance to come up with a better alternative to
               ;; "just set the agent state to an error when a channel closes"
-              (is (= ::server-closed (-> ex .getData :problem))
-                  "Not elegant, but really should be closed")
+              (let [details (.getData ex)]
+                (if (= ::server-closed (:problem details))
+                  (is true "Not elegant, but this *is* expected")
+                  ;; Unexpected failures are worrisome.
+                  ;; And some things are failing almost silently
+                  (is false details)))
               (do
                 ;; I'm winding up with an NPE here, which doesn't seem to make
                 ;; any sense at all
