@@ -151,31 +151,43 @@
                   ;; This approach is more tightly couple with the actual
                   ;; implementation, but that also means it's more likely
                   ;; to catch problems when that implementation changes.
-                  (is (instance? io.netty.buffer.ByteBuf hello))
+                  (is (or (instance? io.netty.buffer.ByteBuf hello)
+                          ;; Q: What happens if I try to send a byte array
+                          ;; directly?
+                          ;; (it looks like this is probably what needs to
+                          ;; get sent, but the actual answer isn't obvious)
+                          (bytes? hello)))
                   ;; Actually, this is an interesting point:
                   ;; hello should really be a ByteBuffer.
                   ;; Or a portion of a ByteArray that will be
                   ;; copied into a ByteBuffer.
-                  (is (= shared/hello-packet-length (.readableBytes hello)))
-                  (if (.hasArray hello)
-                    (let [backing-array (.array hello)]
-                      ;; Really don't want to mess with the backing array at all.
-                      ;; Especially since, realistically, I should build everything
-                      ;; except the crypto box in a Direct buffer, then copy that in
-                      ;; and send it to the network.
-                      (is (shared/bytes= (.getBytes shared/hello-header)
-                                         (byte-array (subvec (vec backing-array) 0
-                                                             (count shared/hello-header))))))
-                    (do
-                      (if (.isDirect hello)
-                        (let [array (byte-array shared/hello-packet-length)]
-                          (.getBytes hello 0 array)
-                          ;; Q: Anything else useful I can check here?
-                          (is (shared/bytes= shared/hello-header
-                                             (byte-array (subvec (vec array) 0
-                                                                 (count shared/hello-header))))))
-                        ;; Q: What's going on here?
-                        (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct."))))
+                  (is (= shared/hello-packet-length
+                         (if (bytes? hello)
+                           (count hello)
+                           (.readableBytes hello))))
+                  (if-not (bytes? hello)
+                    (if (.hasArray hello)
+                      (let [backing-array (.array hello)]
+                        ;; Really don't want to mess with the backing array at all.
+                        ;; Especially since, realistically, I should build everything
+                        ;; except the crypto box in a Direct buffer, then copy that in
+                        ;; and send it to the network.
+                        (is (shared/bytes= (.getBytes shared/hello-header)
+                                           (byte-array (subvec (vec backing-array) 0
+                                                               (count shared/hello-header))))))
+                      (do
+                        (if (.isDirect hello)
+                          (let [array (byte-array shared/hello-packet-length)]
+                            (.getBytes hello 0 array)
+                            ;; Q: Anything else useful I can check here?
+                            (is (shared/bytes= shared/hello-header
+                                               (byte-array (subvec (vec array) 0
+                                                                   (count shared/hello-header))))))
+                          ;; Q: What's going on here?
+                          (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct."))))
+                    (is (shared/bytes= shared/hello-header
+                                       (byte-array (subvec (vec hello) 0
+                                                           (count shared/hello-header))))))
                   (println "Hello packet verified. Now I'd send it to the server"))
                 (throw (ex-info "Failed pulling hello packet"
                                 {:client-errors (agent-error client)
@@ -189,23 +201,25 @@
                     ;; That timeout is almost definitely too low
                     ;; But it should short-circuit pretty quickly, once it fails.
                     ;; Q: Shouldn't it?
-                    (is hand-shake-result))))
-                )))
+                    (is hand-shake-result)))))))
         (finally
           (strm/close! chan<-server)
           ;; Give that a chance to percolate through...
-          (Thread/sleep 200)
+          (Thread/sleep 500)
           (if-let [ex (agent-error client-agent)]
             (if (instance? clojure.lang.ExceptionInfo ex)
               ;; So far, I haven't had a chance to come up with a better alternative to
               ;; "just set the agent state to an error when a channel closes"
               (let [details (.getData ex)]
-                (if (= ::server-closed (:problem details))
+                (println "Agent *has* moved into an error state after closing")
+                (if (= ::clnt/server-closed (:problem details))
                   (is true "Not elegant, but this *is* expected")
                   ;; Unexpected failures are worrisome.
                   ;; And some things are failing almost silently
                   (do
-                    (is false (with-out-str (pprint details)))
+                    (println "Unexpected failure:" (.getMessage ex)
+                             "\nProblem:" (:problem details))
+                    (is false (with-out-str (pprint (clnt/hide-long-arrays details))))
                     ;; So we can get a stack trace
                     (deref client-agent))))
               (do
@@ -214,6 +228,7 @@
                 (.printStackTrace ex)
                 (is (not ex))))
             (let [unexpected-success @client-agent]
+              ;; Agent really should be in an exception state by now.
               (is (not unexpected-success) "Did I just not wait long enough?")))))
       (is chan<-server "No channel to pull data from server"))))
 

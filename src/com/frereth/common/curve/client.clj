@@ -337,17 +337,22 @@ Note that this is really called for side-effects"
         (decrypt-actual-cookie this rcvd)))))
 
 (defn build-vouch
-  [{:keys [packet-management
-           my-keys
-           shared-secrets
-           text]
+  [{:keys [::shared/packet-management
+           ::shared/my-keys
+           ::shared-secrets
+           ::shared/text]
     :as this}]
   (let [nonce (::shared/nonce packet-management)
-        keydir (::keydir my-keys)]
+        keydir (::shared/keydir my-keys)]
     (shared/byte-copy! nonce shared/vouch-nonce-prefix)
     (shared/safe-nonce nonce keydir shared/client-nonce-prefix-length)
 
     ;; Q: What's the point to these 32 bytes?
+    ;; I thought the C API required a 16-byte zero header.
+    ;; And it really looks like TweetNaCl at least produces the
+    ;; same, so the buffer needs extra space for them (of course
+    ;; it does!)
+    ;; But 32 here just seem weird.
     (shared/byte-copy! text (shared/zero-bytes 32))
     (shared/byte-copy! text shared/key-length shared/key-length (.getPublicKey (::short-pair my-keys)))
     (let [encrypted (.after (::client-long<->server-long shared-secrets) text 0 64 nonce)
@@ -560,21 +565,23 @@ implementation. This is code that I don't understand yet"
 
 (defn ->message-exchange-mode
   [wrapper
-   initial-server-response]
-  (let [{:keys [::chan<-server
+   {:keys [::chan<-server
                 ::chan->server
                 ::chan<-child
                 ::chan->child]
-         :as this} @wrapper]
-    ;; Forward that initial "real" message
-    (send wrapper server->child initial-server-response)
+         :as this}
+   initial-server-response]
+  ;; Forward that initial "real" message
+  (send wrapper server->child initial-server-response)
+
     ;; Q: Do I want to block this thread for this?
-    (comment (await-for (current-timeout wrapper) wrapper))
+  (comment) (await-for (current-timeout wrapper) wrapper)
 
     ;; And then wire this up to pretty much just pass messages through
     ;; Actually, this seems totally broken from any angle, since we need
     ;; to handle decrypting, at a minimum
-    (stream/connect-via chan<-child #(send wrapper chan->server %) chan->server)
+
+  (stream/connect-via chan<-child #(send wrapper chan->server %) chan->server)
 
     ;; I'd like to just do this in final-wait and take out an indirection
     ;; level.
@@ -582,22 +589,29 @@ implementation. This is code that I don't understand yet"
     ;; that they have to wait for the initial response before the floodgates
     ;; can open.
     ;; So go with this approach until something better comes to mind
-    (stream/connect-via chan<-server #(send wrapper chan->child %) chan->child)))
+
+  (stream/connect-via chan<-server #(send wrapper chan->child %) chan->child))
 
 (defn final-wait
   "We've received the cookie and responded with a vouch.
   Now waiting for the server's first real message
   packet so we can switch into the message exchange
   loop"
-  [wrapper _]
-  (let [timeout (current-timeout wrapper)
-        chan<-server (::chan<-server @wrapper)
-        taken (stream/try-take! chan<-server ::drained timeout ::initial-response-timed-out)]
-    (deferred/on-realized taken
-      #(send-off wrapper ->message-exchange-mode %)
-      (fn [ex]
-        (send wrapper #(throw (ex-info "Server vouch response failed"
-                                       (assoc % :problem ex))))))))
+  [wrapper sent]
+  (if (not= send ::sending-vouch-timed-out)
+    (let [timeout (current-timeout wrapper)
+          chan<-server (::chan<-server @wrapper)
+          taken (stream/try-take! chan<-server ::drained timeout ::initial-response-timed-out)]
+      (deferred/on-realized taken
+        ;; Using send-off here because it potentially has to block to wait
+        ;; for the child's initial message.
+        ;; That really should have been ready to go quite a while before,
+        ;; but "should" is a bad word.
+        #(send-off wrapper (partial ->message-exchange-mode wrapper) %)
+        (fn [ex]
+          (send wrapper #(throw (ex-info "Server vouch response failed"
+                                         (assoc % :problem ex)))))))
+    (send wrapper #(throw (ex-info "Timed out trying to send vouch" %)))))
 
 (s/fdef fork
         :args (s/cat :wrapper ::state-agent
@@ -631,89 +645,127 @@ TODO: Need to ask around about that."
   in our packet buffer with the vouch bytes we'll use
   as the response.
 
-  Handling an agent (send)"
+  Handling an agent (send), which means `this` is already dereferenced"
   [this cookie-packet]
   ;; Q: What is really in cookie-packet now?
   ;; (I think it's a netty ByteBuf)
-  (let [this (assoc-in this [:packet-management ::shared/packet] cookie-packet)]
-    (if (decrypt-cookie-packet this)
-      (let [{:keys [::my-keys]} this
-            this (assoc-in this
-                           [::shared-secrets ::client-short<->server-short]
-                           (shared/crypto-box-prepare
-                            (get-in this
-                                    [::server-security
-                                     ::server-short-term-pk])
-                            (.getSecretKey (::short-pair my-keys))))]
-        ;; Note that this supplies new state
-        ;; Though whether it should is debatable
-        (assoc this ::vouch (build-vouch this)))
-      (throw (ex-info
-              "Unable to decrypt server cookie"
-              this)))))
+  (try
+    (let [packet-manager (::shared/packet-management this)
+          packet (::shared/packet packet-manager)]
+      (assert packet)
+      (assert cookie-packet)
+      (.readBytes cookie-packet packet))
+    (catch NullPointerException ex
+      (throw (ex-info "Error trying to copy cookie packet"
+                      {::source cookie-packet
+                       ::source-type (type cookie-packet)
+                       ::packet-manager (::shared/packet-management this)
+                       ::members (keys this)
+                       ::this this
+                       ::failure ex}))))
+  (.release cookie-packet)
+  (if (decrypt-cookie-packet this)
+    (let [{:keys [::shared/my-keys]} this
+          this (assoc-in this
+                         [::shared-secrets ::client-short<->server-short]
+                         (shared/crypto-box-prepare
+                          (get-in this
+                                  [::server-security
+                                   ::server-short-term-pk])
+                          (.getSecretKey (::short-pair my-keys))))]
+      ;; Note that this supplies new state
+      ;; Though whether it should is debatable.
+      ;; After all...why would I put this into ::vouch?
+      (assoc this ::vouch (build-vouch this)))
+    (throw (ex-info
+            "Unable to decrypt server cookie"
+            this))))
 
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)"
   [wrapper]
   (let [timeout (current-timeout wrapper)
-        chan->server (::chan->server @wrapper)
-        d (stream/try-put! chan->server
-                      timeout
-                      ::timedout)]
-    (deferred/on-realized d (partial final-wait wrapper)
-      (fn [failure]
-        ;; Extremely unlikely, but
-        ;; just for the sake of paranoia
-        (send wrapper
-              (fn [this]
-                (throw (ex-info "Timed out sending cookie->vouch response"
-                                (assoc this
-                                       :problem failure)))))))))
+        this @wrapper
+        ;; I've dropped a step here.
+        ;; Sending the packet is worse than pointless until
+        ;; it contains the Vouch. Which simply isn't there yet.
+        ;; The reference implementation has what amounts to
+        ;; build-vouch-packet in an else block centered around
+        ;; line 448 of curvecpclient.c
+        raw-packet (get-in this [::shared/packet-management ::shared/packet])
+        ;; TODO: This also needs to come from a recyclable pool
+        buffer (byte-array (.readableBytes raw-packet))
+        chan->server (::chan->server this)]
+    ;; There is a question of "When?"
+    (throw (RuntimeException. "Still have to build the Vouch packet"))
+    (.readBytes raw-packet buffer)
+    (let [d (stream/try-put!
+             chan->server
+             buffer
+             timeout
+             ::sending-vouchtimed-out)]
+      (deferred/on-realized d
+        (partial final-wait wrapper)
+        (fn [failure]
+          ;; Extremely unlikely, but
+          ;; just for the sake of paranoia
+          (send wrapper
+                (fn [this]
+                  (throw (ex-info "Timed out sending cookie->vouch response"
+                                  (assoc this
+                                         :problem failure))))))))))
 
 (defn build-and-send-vouch
   [wrapper cookie-packet]
-  ;; Got a response from server.
-  ;; Theory in the reference implementation is that this is
-  ;; a good signal that it's time to spawn the child to do
-  ;; the real work.
-  ;; That really seems to complect the concerns.
-  ;; Q: Why not set up the child in its own thread and start
-  ;; listening for its activity now?
-  ;; Partial A: original version is geared toward converting
-  ;; existing apps that pipe data over STDIN/OUT so they don't
-  ;; have to be changed at all.
-  (send wrapper (partial fork wrapper))
-  (send wrapper cookie->vouch cookie-packet)
-  (let [timeout (current-timeout wrapper)]
-    (if (await-for timeout wrapper)
-      (send-vouch! wrapper)
-      (send wrapper
-            #(throw (ex-info "cookie->vouch timed out"
-                             %))))))
+  (if (and (not= cookie-packet ::hello-response-timed-out)
+           (not= cookie-packet ::drained))
+    (do
+      (assert cookie-packet)
+      ;; Got a response from server.
+      ;; Theory in the reference implementation is that this is
+      ;; a good signal that it's time to spawn the child to do
+      ;; the real work.
+      ;; That really seems to complect the concerns.
+      ;; Q: Why not set up the child in its own thread and start
+      ;; listening for its activity now?
+      ;; Partial Answer: original version is geared toward converting
+      ;; existing apps that pipe data over STDIN/OUT so they don't
+      ;; have to be changed at all.
+      (send wrapper (partial fork wrapper))
+      ;; Once that that's ready to start doing its own thing,
+      ;; cope with the cookie we just received
+      (send wrapper cookie->vouch cookie-packet)
+      (let [timeout (current-timeout wrapper)]
+        (if (await-for timeout wrapper)
+          (send-vouch! wrapper)
+          (send wrapper
+                #(throw (ex-info "cookie->vouch timed out" %))))))
+    (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
+                                   (assoc %
+                                          :problem (if (= cookie-packet ::drained)
+                                                     ::server-closed
+                                                     ::response-timeout)))))))
 
 (defn wait-for-cookie
   [wrapper sent]
   (if (not= sent ::hello-timed-out)
     (do
-      (println "HELLO sent. Clear packet so we can wait for cookie")
-      (-> wrapper deref ::shared/packet-management ::shared/packet .clear)
-      (println "packet cleared. Waiting for incoming message")
       (let [chan<-server (::chan<-server @wrapper)
             timeout (current-timeout wrapper)
-            d (deferred/timeout! (stream/take! chan<-server)
-                timeout
-                ::hello-timed-out)]
+            d (stream/try-take! chan<-server
+                                ::drained
+                                timeout
+                                ::hello-response-timed-out)]
         (deferred/on-realized d
           (fn [result]
-            ;; In theory, this seems like it would be a better place
-            ;; to .clear the packet we just sent to the server.
-            ;; That would solve the immediate race condition, but
-            ;; not the bigger picture issue that's going to spring
-            ;; up when I get around to implementing the real asynchronous
-            ;; message passing state
             (println "Incoming response from server:")
             (pprint result)
             (println "Building/sending Vouch")
+            ;; Q: Worth splitting this into 2 separate steps that
+            ;; I call from here?
+            ;; Actually, there's another: decoding the cookie.
+            ;; And verifying that we got a cookie instead of a timeout
+            ;; TODO: Yes, definitely split this up
             (build-and-send-vouch wrapper result))
           (partial hello-response-timed-out! wrapper))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
@@ -760,33 +812,34 @@ like a timing attack."
     ;; with mutable state.
     (send wrapper do-build-hello)
     (if (await-for timeout wrapper)
-      (let [packet (-> wrapper
-                       deref
-                       ::shared/packet-management
-                       ::shared/packet)
-            ;; Major flaw in this implementation: I only want to
-            ;; put 224 bytes here.
-            ;; Pretty sure that needs to be a ByteBuf, since
-            ;; that's what netty speaks.
-            ;; Really need to just break down and do that translation
-            ;; while I know how many bytes I'm sending.
-            _ (println "Putting" packet "onto" chan->server)
-            ;; There's still an important break
-            ;; with the reference implementation
-            ;; here: this should be sending the
-            ;; HELLO packet to multiple server
-            ;; end-points to deal with them
-            ;; going down.
-            ;; I think it's supposed to happen
-            ;; in a delayed interval, to give
-            ;; each a short time to answer before
-            ;; the next, but a major selling point
-            ;; is not waiting for TCP buffers
-            ;; to expire.
-            d (stream/try-put! chan->server packet timeout ::hello-timed-out)]
-        (deferred/on-realized d
-          (partial wait-for-cookie wrapper)
-          (partial hello-failed! wrapper)))
+      (let [raw-packet (-> wrapper
+                           deref
+                           ::shared/packet-management
+                           ::shared/packet)
+            ;; TODO: This should come from a reusable pool
+            buffer (byte-array (.readableBytes raw-packet))]
+        ;; Move bytes from our internal working packet buffer
+        ;; to the one we're going to share
+        (.readBytes raw-packet buffer)
+        ;; And set up our internal buffer to do more work
+        (.clear raw-packet)
+        (println "Putting" buffer "onto" chan->server)
+        ;; There's still an important break
+        ;; with the reference implementation
+        ;; here: this should be sending the
+        ;; HELLO packet to multiple server
+        ;; end-points to deal with them
+        ;; going down.
+        ;; I think it's supposed to happen
+        ;; in a delayed interval, to give
+        ;; each a short time to answer before
+        ;; the next, but a major selling point
+        ;; is not waiting for TCP buffers
+        ;; to expire.
+        (let [d (stream/try-put! chan->server buffer timeout ::hello-timed-out)]
+          (deferred/on-realized d
+            (partial wait-for-cookie wrapper)
+            (partial hello-failed! wrapper))))
       (throw (ex-info "Building the hello failed" {:problem (agent-error wrapper)})))))
 
 (s/fdef ctor
