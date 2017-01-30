@@ -39,6 +39,7 @@
 ;; an exercise that's been left for later
 (s/def ::client-extension-load-time integer?)
 
+(s/def ::server-extension ::shared/extension)
 (s/def ::server-long-term-pk ::shared/public-key)
 (s/def ::server-cookie any?)  ; TODO: Needs a real spec
 (s/def ::server-short-term-pk ::shared/public-key)

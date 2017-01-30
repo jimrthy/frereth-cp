@@ -3,7 +3,6 @@
   (:require [clojure.spec :as s]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.util :as util]
-            [com.stuartsierra.component :as cpt]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream]))
 
@@ -56,82 +55,19 @@
                                     ::sent-nonce
                                     ::shared-secrets]))
 
-(s/def ::state (s/keys :req-un [::cookie-cutter
-                                ::shared/packet-management]))
-
-(declare alloc-client begin! hide-secrets! randomized-cookie-cutter)
-(defrecord State [active-clients
-                  client-chan
-                  cookie-cutter
-                  current-client
-                  event-loop-stopper
-                  extension
-                  max-active-clients
-                  my-keys
-                  packet-management
-                  server-routing
-                  working-area]
-  cpt/Lifecycle
-  (start
-    [{:keys [client-chan
-             extension
-             my-keys]
-      :as this}]
-    {:pre [(and client-chan
-                (:chan client-chan)
-                (::shared/server-name my-keys)
-                (::shared/keydir my-keys)
-                extension
-                ;; Actually, the rule is that it must be
-                ;; 32 hex characters. Which really means
-                ;; a 16-byte array
-                (= (count extension) shared/extension-length))]}
-    (println "CurveCP Server: Starting the server state")
-    ;; Reference implementation starts by allocating the active client structs.
-    ;; This is one area where updating in place simply cannot be worth it.
-    ;; Q: Can it?
-    ;; A: Skip it, for now
-
-    ;; So we're starting by loading up the long-term keys
-    (let [max-active-clients (or (:max-active-clients this) default-max-clients)
-          keydir (::shared/keydir my-keys)
-          long-pair (shared/do-load-keypair keydir)
-          almost (-> this
-                     (assoc :active-clients (atom #{})
-                            :cookie-cutter (randomized-cookie-cutter)
-                            :current-client (alloc-client)
-                            :max-active-clients max-active-clients
-                            :packet-management (shared/default-packet-manager)
-                            :working-area (shared/default-work-area))
-                     (assoc-in [:my-keys :shared/long-pair] long-pair)
-                     (assoc :active-clients {}))]
-      (println "Kicking off event loop. packet-management:" (:packet-management almost))
-      (assoc almost :event-loop-stopper (begin! almost))))
-
-  (stop
-    [this]
-    (println "Stopping server state")
-    (when-let [event-loop-stopper (:event-loop-stopper this)]
-      (println "Sending stop signal to event loop")
-      ;; This is fairly pointless. The client channel Component on which this
-      ;; depends will close shortly after this returns. That will cause the
-      ;; event loop to exit directly.
-      ;; But, just in case that doesn't work, this will tell the event loop to
-      ;; exit the next time it times out.
-      (event-loop-stopper 1))
-    (println "Clearing secrets")
-    (let [outcome
-          (assoc (try
-                   (hide-secrets! this)
-                   (catch Exception ex
-                     (println "WARNING:" ex)
-                     ;; TODO: This really should be fatal.
-                     ;; Make the error-handling go away once hiding secrets actually works
-                     this))
-                 :event-loop-stopper nil)]
-      (println "Secrets hidden")
-      outcome)))
-;;; TODO: Def the State spec
+(s/def ::state (s/keys :req [::active-clients
+                             ::cookie-cutter
+                             ::current-client
+                             ::event-loop-stopper
+                             ::max-active-clients
+                             ::shared/extension
+                             ::shared/keydir
+                             ::shared/my-keys
+                             ::shared/packet-management
+                             ::shared/server-name
+                             ::shared/working-area]
+                       ;; this next seems poorly considered
+                       :req-un [::client-chan]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -322,6 +258,70 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(defn start!
+  [{:keys [client-chan  ; Q: What's this for? And why isn't it namespaced?
+           ::shared/extension
+           ::shared/my-keys]
+    :as this}]
+  {:pre [(and client-chan
+              (:chan client-chan)
+              (::shared/server-name my-keys)
+              (::shared/keydir my-keys)
+              extension
+              ;; Actually, the rule is that it must be
+              ;; 32 hex characters. Which really means
+              ;; a 16-byte array
+              (= (count extension) shared/extension-length))]}
+  (println "CurveCP Server: Starting the server state")
+
+  ;; Reference implementation starts by allocating the active client structs.
+  ;; This is one area where updating in place simply cannot be worth it.
+  ;; Q: Can it?
+  ;; A: Skip it, for now
+
+
+  ;; So we're starting by loading up the long-term keys
+  (let [keydir (::shared/keydir my-keys)
+        long-pair (shared/do-load-keypair keydir)
+        this (assoc-in this [::shared/my-keys ::shared/long-pair] long-pair)
+        almost (assoc this ::cookie-cutter (randomized-cookie-cutter))]
+    (println "Kicking off event loop. packet-management:" (::shared/packet-management almost))
+    (assoc almost ::event-loop-stopper (begin! almost))))
+
+(defn stop!
+  [{:keys [::event-loop-stopper]
+    :as this}]
+  (println "Stopping server state")
+  (when event-loop-stopper
+    (println "Sending stop signal to event loop")
+    ;; This is fairly pointless. The client channel Component on which this
+    ;; depends will close shortly after this returns. That will cause the
+    ;; event loop to exit directly.
+    ;; But, just in case that doesn't work, this will tell the event loop to
+    ;; exit the next time it times out.
+    (event-loop-stopper 1))
+  (println "Clearing secrets")
+
+  (let [outcome
+        (assoc (try
+                 (hide-secrets! this)
+                 (catch Exception ex
+                   (println "WARNING:" ex)
+                   ;; TODO: This really should be fatal.
+                   ;; Make the error-handling go away once hiding secrets actually works
+                   this))
+               ::event-loop-stopper nil)]
+    (println "Secrets hidden")
+    outcome))
+
 (defn ctor
-  [cfg]
-  (map->State cfg))
+  "Just like in the Component lifecycle, this is about setting up a value that's ready to start"
+  [{:keys [::max-active-clients]
+    :or {max-active-clients default-max-clients}
+    :as cfg}]
+  (-> cfg
+      (assoc ::active-clients (atom #{})  ; Q: set or map?
+             ::current-client (alloc-client)  ; Q: What's the point?
+             ::max-active-clients max-active-clients
+             ::shared/packet-management (shared/default-packet-manager)
+             ::shared/working-area (shared/default-work-area))))
