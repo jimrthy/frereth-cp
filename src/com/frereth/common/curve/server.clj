@@ -14,10 +14,11 @@
 (s/def ::last-minute-key ::shared/symmetric-key)
 (s/def ::minute-key ::shared/symmetric-key)
 (s/def ::next-minute integer?)
-(s/def cookie-cutter (s/keys :req [::next-minute
-                                   ::minute-key
-                                   ::last-minute-key]))
+(s/def ::cookie-cutter (s/keys :req [::next-minute
+                                     ::minute-key
+                                     ::last-minute-key]))
 
+;; Q: Move these public key specs into shared?
 (s/def ::long-pk (s/and bytes?
                         #(= (count %) shared/key-length)))
 (s/def ::short-pk (s/and bytes?
@@ -37,6 +38,10 @@
 ;;; them. Especially if I'm coping with address/port at a
 ;;; higher level.
 (s/def ::child-id integer?)
+;;; Note that this is probably too broad, assuming I choose to
+;;; go with this model.
+;;; From this perspective, from-child is really just sourceable?
+;;; while to-child is just sinkable?
 (s/def ::from-child (s/and stream/sinkable?
                            stream/sourceable?))
 (s/def ::to-child (s/and stream/sinkable?
@@ -45,6 +50,14 @@
 (s/def ::child-interaction (s/keys :req [::child-id
                                          ::to-child
                                          ::from-child]))
+
+;; This seems like something that should basically be defined in
+;; shared.
+;; Or, at least, ::chan ought to.
+;; Except that it's a...what?
+;; (it seems like it ought to be an async/chan, but it might really
+;; be a manifold/stream
+(s/def ::client-chan (s/keys :req [::chan]))
 
 (s/def ::client-state (s/keys :req [::child-interaction
                                     ::client-security
@@ -56,6 +69,7 @@
                                     ::shared-secrets]))
 
 (s/def ::state (s/keys :req [::active-clients
+                             ::client-chan
                              ::cookie-cutter
                              ::current-client
                              ::event-loop-stopper
@@ -65,9 +79,7 @@
                              ::shared/my-keys
                              ::shared/packet-management
                              ::shared/server-name
-                             ::shared/working-area]
-                       ;; this next seems poorly considered
-                       :req-un [::client-chan]))
+                             ::shared/working-area]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -98,6 +110,58 @@
   [state msg]
   (throw (ex-info "Not yet written" {:message msg})))
 
+(defn hide-long-arrays
+  "Try to make pretty printing less obnoxious"
+  [state]
+  (-> state
+      ;; TODO: Make sure these are ns-qualified
+      (assoc-in [::current-client ::message] "...")
+      (assoc-in [::shared/packet-management ::shared/packet] "...")
+      (assoc #_[::message "..."]
+             ::shared/working-area "...")))
+
+(defn hide-secrets!
+  [this]
+  (println "Hiding secrets")
+  ;; This is almost the top of the server's for(;;)
+  ;; Missing step: reset timeout
+  ;; Missing step: copy :minute-key into :last-minute-key
+  ;; (that's handled by key rotation. Don't need to bother
+  ;; if we're "just" cleaning up on exit)
+  (let [minute-key-array (get-in this [::cookie-cutter ::minute-key])]
+    (assert minute-key-array)
+    (shared/random-bytes! minute-key-array))
+  ;; Missing step: update cookie-cutter's next-minute
+  ;; (that happens in handle-key-rotation)
+  (let [p-m (::shared/packet-management this)]
+    (shared/random-bytes! (::shared/packet p-m)))
+  (shared/random-bytes! (-> this ::current-client ::client-security ::short-pk))
+  ;; These are all private, so I really can't touch them
+  ;; Q: What *is* the best approach to clearing them then?
+  ;; For now, just explicitly set to nil once we get past these side-effects
+  ;; (i.e. at the bottom)
+  #_(shared/random-bytes (-> this :current-client ::shared-secrets :what?))
+  (let [work-area (::shared/working-area this)]
+    (shared/random-bytes! (::shared/working-nonce work-area))
+    (shared/random-bytes! (::shared/text work-area)))
+  ;; These next two may make more sense once I have a better idea about
+  ;; the actual messaging implementation.
+  ;; Until then, plan on just sending objects across core.async.
+  ;; Of course, the entire point may be messages that are too big
+  ;; and need to be sharded.
+  #_(shared/random-bytes! (-> this :child-buffer ::buf))
+  #_(shared/random-bytes! (-> this :child-buffer ::msg))
+  (when-let [short-term-keys (get-in this [::shared/my-keys ::short-pair])]
+    (shared/random-bytes! (.getPublicKey short-term-keys))
+    (shared/random-bytes! (.getSecretKey short-term-keys)))
+  ;; Clear the shared secrets in the current client
+  ;; Maintaning these anywhere I don't need them seems like an odd choice.
+  ;; Actually, keeping them in 2 different places seems odd.
+  ;; Q: What's the point to current-client at all?
+  (assoc-in this [::current-client ::shared-secrets] {::client-short<->server-long nil
+                                                      ::client-short<->server-short nil
+                                                      ::client-long<->server-long nil}))
+
 (defn handle-key-rotation
   "Doing it this way means that state changes are only seen locally
 
@@ -109,92 +173,43 @@
   But this is very similar to the kinds of state management issues that Om and
   Om next are trying to solve. So that approach might not be as obvious as it
   seems at first."
-  [state]
+  [{:keys [::cookie-cutter]
+    :as state}]
   (try
     (println "Checking whether it's time to rotate keys or not")
     (let [now (System/nanoTime)
-          next-minute (-> state :cookie-cutter ::next-minute)
+          next-minute (::next-minute cookie-cutter)
           _ (println "next-minute:" next-minute "out of" (-> state keys)
-                     "with cookie-cutter" (:cookie-cutter state))
+                     "with cookie-cutter" cookie-cutter)
           timeout (- next-minute now)]
       (println "Top of handle-key-rotation. Remaining timeout:" timeout)
       (if (<= timeout 0)
         (let [timeout (one-minute now)]
           (println "Saving key for previous minute")
           (try
-            (shared/byte-copy! (-> state :cookie-cutter ::last-minute-key)
-                               (-> state :cookie-cutter ::minute-key))
+            (shared/byte-copy! (::last-minute-key cookie-cutter)
+                               (::minute-key cookie-cutter))
+            ;; Q: Why aren't we setting up the next minute-key here and now?
             (catch Exception ex
               (println "Key rotation failed:" ex "a" (class ex))))
           (println "Saved key for previous minute. Hiding:")
           (assoc (hide-secrets! state)
-                 :timeout timeout))
-        (assoc state :timeout timeout)))
+                 ::timeout timeout))
+        (assoc state ::timeout timeout)))
     (catch Exception ex
       (println "Rotation failed:" ex "\nStack trace:")
       (.printtStackTrace ex)
       state)))
 
-(defn hide-long-arrays
-  "Try to make pretty printing less obnoxious"
-  [state]
-  (-> state
-      (assoc-in [:current-client ::message] "...")
-      (assoc-in [:packet-management ::shared/packet] "...")
-      (assoc :message "..."
-             :working-area "...")))
-
-(defn hide-secrets!
-  [this]
-  (println "Hiding secrets")
-  ;; This is almost the top of the server's for(;;)
-  ;; Missing step: reset timeout
-  ;; Missing step: copy :minute-key into :last-minute-key
-  ;; (that's handled by key rotation. Don't need to bother
-  ;; if we're "just" cleaning up on exit)
-  (let [minute-key-array (get-in this [:cookie-cutter ::minute-key])]
-    (assert minute-key-array)
-    (shared/random-bytes! minute-key-array))
-  ;; Missing step: update cookie-cutter's next-minute
-  ;; (that happens in handle-key-rotation)
-  (let [p-m (:packet-management this)]
-    (shared/random-bytes! (::shared/packet p-m)))
-  (shared/random-bytes! (-> this :current-client ::client-security ::short-pk))
-  ;; These are all private, so I really can't touch them
-  ;; Q: What *is* the best approach to clearing them then?
-  ;; For now, just explicitly set to nil once we get past these side-effects
-  ;; (i.e. at the bottom)
-  #_(shared/random-bytes (-> this :current-client ::shared-secrets :what?))
-  (let [work-area (:working-area this)]
-    (shared/random-bytes! (::shared/working-nonce work-area))
-    (shared/random-bytes! (::shared/text work-area)))
-  ;; These next two may make more sense once I have a better idea about
-  ;; the actual messaging implementation.
-  ;; Until then, plan on just sending objects across core.async.
-  ;; Of course, the entire point may be messages that are too big
-  ;; and need to be sharded.
-  #_(shared/random-bytes! (-> this :child-buffer ::buf))
-  #_(shared/random-bytes! (-> this :child-buffer ::msg))
-  (when-let [short-term-keys (get-in this [:my-keys ::short-pair])]
-    (shared/random-bytes! (.getPublicKey short-term-keys))
-    (shared/random-bytes! (.getSecretKey short-term-keys)))
-  ;; Clear the shared secrets in the current client
-  ;; Maintaning these anywhere I don't need them seems like an odd choice.
-  ;; Actually, keeping them in 2 different places seems odd.
-  ;; Q: What's the point to current-client at all?
-  (assoc-in this [:current-client ::shared-secrets] {::client-short<->server-long nil
-                                                     ::client-short<->server-short nil
-                                                     ::client-long<->server-long nil}))
-
 (defn begin!
   "Start the event loop"
-  [{:keys [client-chan]
+  [{:keys [::client-chan]
     :as this}]
   (let [stopper (deferred/deferred)
         stopped (promise)]
     (deferred/loop [this (assoc this
-                                 :timeout (one-minute))]
-      (println "Top of event loop. Timeout: " (:timeout this) "in"
+                                ::timeout (one-minute))]
+      (println "Top of event loop. Timeout: " (::timeout this) "in"
                (util/pretty (hide-long-arrays this)))
       (deferred/chain
         ;; timeout is in nanoseconds.
@@ -202,11 +217,11 @@
         ;; the nanosecond clock
         (stream/try-take! (:chan client-chan) ::drained
                           ;; This is in milliseconds
-                          (inc (/ (:timeout this) shared/nanos-in-milli)) ::timeout)
+                          (inc (/ (::timeout this) shared/nanos-in-milli)) ::timedout)
         (fn [msg]
           (println (str "Top of Server Event loop received " msg))
           (if-not (or (identical? ::drained msg)
-                      (identical? ::timeout msg))
+                      (identical? ::timedout msg))
             (try
               ;; Q: Do I want unhandled exceptions to be fatal errors?
               (let [modified-state (handle-incoming! this msg)]
@@ -252,6 +267,9 @@
   []
   {::minute-key (shared/random-key)
    ::last-minute-key (shared/random-key)
+   ;; Q: Should this be ::timeout?
+   ;; A: No. There's definitely a distinction.
+   ;; Q: Alright, then. What is the difference?
    ::next-minute(+ (System/nanoTime)
                    (one-minute))})
 
@@ -259,19 +277,29 @@
 ;;; Public
 
 (defn start!
-  [{:keys [client-chan  ; Q: What's this for? And why isn't it namespaced?
+  [{:keys [::client-chan
            ::shared/extension
            ::shared/my-keys]
     :as this}]
-  {:pre [(and client-chan
-              (:chan client-chan)
-              (::shared/server-name my-keys)
-              (::shared/keydir my-keys)
-              extension
-              ;; Actually, the rule is that it must be
-              ;; 32 hex characters. Which really means
-              ;; a 16-byte array
-              (= (count extension) shared/extension-length))]}
+  #_{:pre [client-chan
+         (:chan client-chan)
+         #_(::shared/server-name my-keys)
+         #_(::shared/keydir my-keys)
+         extension
+         ;; Actually, the rule is that it must be
+         ;; 32 hex characters. Which really means
+         ;; a 16-byte array
+           (= (count extension) shared/extension-length)]}
+  (throw (ex-info "WTF?" {:client-chan client-chan
+                          ::my-keys my-keys
+                          ::extension extension}))
+  (when-not (= (count extension) shared/extension-length)
+    (throw (RuntimeException. (str "Expected extension-length:" shared/extension-length
+                                   "got:" (count extension)))))
+  (when-not (::shared/server-name my-keys)
+    (throw (RuntimeException. (str my-keys))))
+  (when-not (::shared/keydir my-keys)
+    (throw (RuntimeException. (str my-keys))))
   (println "CurveCP Server: Starting the server state")
 
   ;; Reference implementation starts by allocating the active client structs.

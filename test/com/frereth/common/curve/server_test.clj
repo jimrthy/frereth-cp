@@ -1,6 +1,7 @@
 (ns com.frereth.common.curve.server-test
   (:require [clojure.test :refer (deftest is testing)]
             [com.frereth.common.curve.server :as server]
+            ;; TODO: This also needs to go away
             [com.stuartsierra.component :as cpt]
             [component-dsl.system :as cpt-dsl]
             [manifold.stream :as strm]))

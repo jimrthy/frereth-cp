@@ -777,6 +777,9 @@ TODO: Need to ask around about that."
 (s/fdef start!
         :args (s/cat :this ::state-agent)
         ;; Q: Does this return anything meaningful at all?
+        ;; A: Well, to remain consistent with the Component workflow,
+        ;; it really should return the "started" agent.
+        ;; Even though it really is just called for side-effects.
         :ret any?)
 (defn start!
   "This almost seems like it belongs in ctor.
