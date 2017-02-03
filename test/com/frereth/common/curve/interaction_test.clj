@@ -18,9 +18,9 @@
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         server-name (shared/encode-server-name "test.frereth.com")
-        options {::server #:shared{:extension server-extension
-                                   :my-keys #:shared{:server-name server-name
-                                                     :keydir "curve-test"}}
+        options {::server #::shared{:extension server-extension
+                                    :my-keys #::shared{:server-name server-name
+                                                       :keydir "curve-test"}}
                  ::client {::shared/extension (byte-array [0x10 0x0f 0x0e 0x0d
                                                            0x0c 0x0b 0x0a 0x09
                                                            0x08 0x07 0x06 0x05
@@ -37,7 +37,9 @@
                            ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
                                                    ::shared/server-name server-name}}}
         ;; TODO: This seems like it would be a great place to try switching to integrant
-        unstarted-client (clnt/ctor (::client options))
+        client (clnt/ctor (assoc (::client options)
+                                 ::clnt/chan<-server (strm/stream)
+                                 ::chan->server (strm/stream)))
         unstarted-server (srvr/ctor (::server options))
         ;; Flip the meaning of these channel names,
         ;; because we're looking at things inside out.
@@ -52,26 +54,21 @@
       (println "Starting server based on\n"
                (with-out-str (pprint (srvr/hide-long-arrays unstarted-server))))
       (try
-        ;; This is failing its assertion pre-conditions
         (let [server (srvr/start! (assoc unstarted-server ::srvr/client-chan client-chan))]
-          (let [chan<-server (strm/stream)
-                chan->server (strm/stream)]
-            (try
-              (let [client (assoc unstarted-client
-                                  ::clnt/chan<-server chan<-server
-                                  ::clnt/chan->server chan->server)]
-                ;; Currently just called for side-effects.
-                ;; TODO: Seems like I really should hide that little detail
-                ;; by having it return this.
-                ;; Q: Is there anything interesting about the deferred that it
-                ;; currently returns?
-                (clnt/start! client)
-                (let [fut (deferred/chain (strm/take! (::clnt/chan->server client-chan))
-                            (fn [hello]
-                              (is (= 224 (count hello)))))]
-                  (is (not= (deref fut 500 ::timeout) ::timeout))
-                  (throw (Exception. "Don't stop there!"))))
-              (srvr/stop! server))))
+          (try
+            ;; Currently just called for side-effects.
+            ;; TODO: Seems like I really should hide that little detail
+            ;; by having it return this.
+            ;; Except that that "little detail" really sets off the handshake
+            ;; Q: Is there anything interesting about the deferred that it
+            ;; currently returns?
+            (clnt/start! client)
+            (let [fut (deferred/chain (strm/take! (::clnt/chan->server client-chan))
+                        (fn [hello]
+                          (is (= 224 (count hello)))))]
+              (is (not= (deref fut 500 ::timeout) ::timeout))
+              (throw (Exception. "Don't stop there!")))
+            (srvr/stop! server)))
         (catch clojure.lang.ExceptionInfo ex
           (is (not (.getData ex)))))
       (finally (.stop client-chan)))))

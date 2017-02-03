@@ -110,15 +110,7 @@
   [state msg]
   (throw (ex-info "Not yet written" {:message msg})))
 
-(defn hide-long-arrays
-  "Try to make pretty printing less obnoxious"
-  [state]
-  (-> state
-      ;; TODO: Make sure these are ns-qualified
-      (assoc-in [::current-client ::message] "...")
-      (assoc-in [::shared/packet-management ::shared/packet] "...")
-      (assoc #_[::message "..."]
-             ::shared/working-area "...")))
+(declare hide-long-arrays)
 
 (defn hide-secrets!
   [this]
@@ -276,12 +268,22 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(defn hide-long-arrays
+  "Try to make pretty printing less obnoxious"
+  [state]
+  (-> state
+      ;; TODO: Make sure these are ns-qualified
+      (assoc-in [::current-client ::message] "...")
+      (assoc-in [::shared/packet-management ::shared/packet] "...")
+      (assoc #_[::message "..."]
+             ::shared/working-area "...")))
+
 (defn start!
   [{:keys [::client-chan
            ::shared/extension
            ::shared/my-keys]
     :as this}]
-  #_{:pre [client-chan
+  {:pre [client-chan
          (:chan client-chan)
          #_(::shared/server-name my-keys)
          #_(::shared/keydir my-keys)
@@ -290,16 +292,6 @@
          ;; 32 hex characters. Which really means
          ;; a 16-byte array
            (= (count extension) shared/extension-length)]}
-  (throw (ex-info "WTF?" {:client-chan client-chan
-                          ::my-keys my-keys
-                          ::extension extension}))
-  (when-not (= (count extension) shared/extension-length)
-    (throw (RuntimeException. (str "Expected extension-length:" shared/extension-length
-                                   "got:" (count extension)))))
-  (when-not (::shared/server-name my-keys)
-    (throw (RuntimeException. (str my-keys))))
-  (when-not (::shared/keydir my-keys)
-    (throw (RuntimeException. (str my-keys))))
   (println "CurveCP Server: Starting the server state")
 
   ;; Reference implementation starts by allocating the active client structs.
