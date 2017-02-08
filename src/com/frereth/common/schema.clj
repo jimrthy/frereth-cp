@@ -1,7 +1,7 @@
 (ns com.frereth.common.schema
   "Prismatic schema definitions that are shared pretty much everywhere"
-  (:require [cljeromq.common :as mq-common]
-            [cljeromq.core :as mq]
+  (:require #_[cljeromq.common :as mq-common]
+            #_[cljeromq.core :as mq]
             [clojure.core.async :as async]
             [clojure.spec :as s]
             [com.stuartsierra.component]
@@ -31,12 +31,25 @@ TODO: At the very least, it needs its own spec."
 (def atom-type (class (atom {})))
 (s/def ::atom-type (class-predicate atom-type))
 
-;; Very tempting to deprecate and just use the mq-common versions.
-;; But that does make it more difficult to switch the underlying
-;; message queue implementation
-(def java-byte-array cljeromq.common/byte-array-type)
-(s/def ::byte-array-seq :cljeromq.common/byte-array-seq)
-(s/def ::korks :cljeromq.common/korks)
+(comment
+  ;; Very tempting to deprecate and just use the mq-common versions.
+  ;; But that does make it more difficult to switch the underlying
+  ;; message queue implementation
+  (def java-byte-array cljeromq.common/byte-array-type)
+  (s/def ::byte-array-seq :cljeromq.common/byte-array-seq)
+  (s/def ::korks :cljeromq.common/korks))
+;; As a step toward moving away from that completely,
+;; just copy/paste those definitions I was referencing:
+(def java-byte-array
+  "This isn't a spec. Use bytes? for that.
+But we do need it for places like method dispatch"
+  (Class/forName "[B"))
+
+(s/def ::byte-array-seq (s/coll-of bytes?))
+;; I hated this name the first few times I ran across it in argument lists.
+;; Now that I've typed out the full keyword-or-keywords often enough, I get it.
+(s/def ::korks (s/or :single-key keyword?
+                     :multi-keys (s/coll-of keyword?)))
 
 (def promise-type (class (promise)))
 (s/def ::promise? (class-predicate promise-type))

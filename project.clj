@@ -44,7 +44,7 @@ b. lein managed dependencies"
 
                  ;; If I'm serious about netty and CurveCP, this should just go away
                  ;; TODO: Make that happen
-                 [com.jimrthy/cljeromq "0.1.0-SNAPSHOT" :exclusions [com.stuartsierra/component
+                 #_[com.jimrthy/cljeromq "0.1.0-SNAPSHOT" :exclusions [com.stuartsierra/component
                                                                      org.clojure/clojure
                                                                      prismatic/schema]]
                  [com.jimrthy/component-dsl "0.1.2-SNAPSHOT" :exclusions [org.clojure/clojure]]

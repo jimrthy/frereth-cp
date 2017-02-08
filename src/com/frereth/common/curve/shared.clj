@@ -45,6 +45,25 @@
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
 (def cookie-packet-length 200)
+(def cookie-frame
+  "The boiler plate around a cookie"
+  ;; Header is only a "string" in the ASCII sense
+  (array-map ::header {::type ::bytes
+                       ::length 8}
+             ::client-extension {::type ::bytes
+                                 ::length extension-length}
+             ::server-extension {::type ::bytes
+                                 ::length extension-length}
+             ;; Implicitly prefixed with "CurveCPK"
+             ::nonce {::type ::bytes
+                      ::length server-nonce-suffix-length}
+             ::cookie {::type ::bytes
+                       ::length 144}))
+
+(def cookie
+  (array-map ::s' {::type ::bytes ::length key-length}
+             ::black-box {::type ::zeroes ::length 96}))
+
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 
@@ -96,6 +115,7 @@
 ;; TODO: Verify
 (s/def ::shared-secret any?)
 (s/def ::public-key (s/and bytes? #(= (count %) key-length)))
+(s/def ::secret-key (s/and bytes? #(= (count %) key-length)))
 (s/def ::symmetric-key (s/and bytes? #(= (count %) key-length)))
 
 (s/def ::working-nonce (s/and bytes? #(= (count %) nonce-length)))
@@ -120,24 +140,14 @@
 (s/def ::packet-management (s/keys :req [::packet-nonce
                                          ::packet]))
 
-;; Header is only a "string" in the ASCII sense
-(def cookie-frame
-  "The boiler plate around a cookie"
-  (array-map ::header {::type ::bytes
-                       ::length 8}
-             ::client-extension {::type ::bytes
-                                 ::length extension-length}
-             ::server-extension {::type ::bytes
-                                 ::length extension-length}
-             ;; Implicitly prefixed with "CurveCPK"
-             ::nonce {::type ::bytes
-                      ::length server-nonce-suffix-length}
-             ::cookie {::type ::bytes
-                       ::length 144}))
-
-(def cookie
-  (array-map ::s' {::type ::bytes ::length key-length}
-             ::black-box {::type ::zeroes ::length 96}))
+;;; Want some sort of URI-foundation scheme for
+;;; building the actual connection strings like I
+;;; use in cljeromq. This seems like a reasonable
+;;; starting point.
+;;; Q: Is port really part of it?
+(s/def ::url (s/keys :req [::server-name
+                           ::extension
+                           ::port]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
