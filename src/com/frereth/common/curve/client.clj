@@ -4,7 +4,14 @@
   It seems like it would be nice if I could just declare
   the message exchange, but that approach gets complicated
   on the server side. At least half the point there is
-  reducing DoS."
+  reducing DoS.
+
+  This really doesn't seem to belong in here. I keep going
+  back and forth about that. It seems like it would be
+  cleaner to move this into the frereth.client, and the
+  server component into frereth.server.
+
+  But that makes it much more difficult to test."
   (:require [byte-streams :as b-s]
             [clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
@@ -565,6 +572,8 @@ implementation. This is code that I don't understand yet"
   (throw (RuntimeException. "Not translated")))
 
 (defn ->message-exchange-mode
+  "The idea is that the client agent should convert into
+  message exchange mode after the handshake is complete."
   [wrapper
    {:keys [::chan<-server
                 ::chan->server
@@ -602,7 +611,9 @@ implementation. This is code that I don't understand yet"
   (if (not= send ::sending-vouch-timed-out)
     (let [timeout (current-timeout wrapper)
           chan<-server (::chan<-server @wrapper)
-          taken (stream/try-take! chan<-server ::drained timeout ::initial-response-timed-out)]
+          taken (stream/try-take! chan<-server
+                                  ::drained timeout
+                                  ::initial-response-timed-out)]
       (deferred/on-realized taken
         ;; Using send-off here because it potentially has to block to wait
         ;; for the child's initial message.
@@ -805,8 +816,7 @@ like a timing attack."
     (throw (ex-info "Agent already failed"
                     {:problem failure})))
 
-  (let [this @wrapper
-        {:keys [::chan->server]} this
+  (let [{:keys [::chan->server]} @wrapper
         timeout (current-timeout wrapper)]
     (stream/on-drained chan->server
                        #(send wrapper server-closed!))

@@ -36,10 +36,11 @@
                            ;; hard-code the public key here.
                            ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
                                                    ::shared/server-name server-name}}}
+        chan->server (strm/stream)
         ;; TODO: This seems like it would be a great place to try switching to integrant
         client (clnt/ctor (assoc (::client options)
                                  ::clnt/chan<-server (strm/stream)
-                                 ::chan->server (strm/stream)))
+                                 ::clnt/chan->server chan->server))
         unstarted-server (srvr/ctor (::server options))
         ;; Flip the meaning of these channel names,
         ;; because we're looking at things inside out.
@@ -63,7 +64,14 @@
             ;; Q: Is there anything interesting about the deferred that it
             ;; currently returns?
             (clnt/start! client)
-            (let [fut (deferred/chain (strm/take! (::clnt/chan->server client-chan))
+            ;; Getting a false here.
+            ;; Q: What gives?
+            (let [chan->server2 (:chan client)
+                  _ (when-not (= chan->server chan->server2)
+                      (assert false (str "Client channels don't match.\n"
+                                         "Expected:" chan->server
+                                         "\nHave:" chan->server2)))
+                  fut (deferred/chain (strm/take! chan->server2)
                         (fn [hello]
                           (is (= 224 (count hello)))))]
               (is (not= (deref fut 500 ::timeout) ::timeout))
