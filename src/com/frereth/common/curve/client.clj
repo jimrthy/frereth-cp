@@ -150,7 +150,11 @@ nor subject to timing attacks because it just won't be called very often."
     :as this}]
   {:pre [(and client-extension-load-time recent)]}
   (let [reload (>= recent client-extension-load-time)
-        _ (println "Reloading extension:" reload "(currently:" extension  ") in"
+        _ (println "curve.client/clientextension-init:"
+                   reload
+                   "(currently:"
+                   extension
+                   ") in"
                    #_(with-out-str (pprint (hide-long-arrays this)))
                    (keys (hide-long-arrays this)))
         client-extension-load-time (if reload

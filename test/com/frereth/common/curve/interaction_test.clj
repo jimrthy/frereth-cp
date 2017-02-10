@@ -8,6 +8,55 @@
             [manifold.deferred :as deferred]
             [manifold.stream :as strm]))
 
+(defn retrieve-hello
+  [client-chan hello]
+  (println "Pulled HELLO from client")
+  (println "Have" (count hello) "bytes to write to " client-chan)
+  (if (= 224 (count hello))
+    (strm/put! (:chan client-chan) hello)
+    (throw (RuntimeException. "Bad Hello"))))
+
+(defn wrote-hello
+  [client-chan success]
+  (println "B")
+  (is success "Failed to write hello to server")
+  ;; TODO: I'm pretty sure I need to split
+  ;; this into 2 channels so I don't pull back
+  ;; the hello that I just put on there
+  (strm/try-take! client-chan ::drained 500 ::timeout))
+
+(defn forward-cookie
+  [client<-server cookie]
+  (println "C")
+  (is (= 200 (count cookie)))
+  (strm/try-put! client<-server cookie 500 ::timeout))
+
+(defn wrote-cookie
+  [clnt->srvr success]
+  (println "D")
+  (is success)
+  (is (not= success ::timeout))
+  (strm/try-take! clnt->srvr ::drained 500 ::timeout))
+
+(defn vouch->server
+  [client-chan vouch]
+  (if (and (not= vouch ::drained)
+           (not= vouch ::timeout))
+    (strm/try-put! client-chan vouch 500 ::timeout)
+    (throw (ex-info "Retrieving Vouch from client failed"
+                    {:failure vouch}))))
+
+(defn wrote-vouch
+  [client-chan success]
+  (if success
+    (strm/try-take! client-chan ::drained 500 ::timeout)
+    (throw (RuntimeException. "Failed writing Vouch to client"))))
+
+(defn finalize
+  [client<-server response]
+  (is response "Handshake should be complete")
+  (strm/try-put! client<-server response 500 ::timeout))
+
 (deftest handshake
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
@@ -54,7 +103,7 @@
         client-chan (.start unstarted-client-chan)]
     (try
       (println "Starting server based on\n"
-               (comment (with-out-str (pprint (srvr/hide-long-arrays unstarted-server))))
+               #_(with-out-str (pprint (srvr/hide-long-arrays unstarted-server)))
                "...stuff...")
       (try
         (let [server (srvr/start! (assoc unstarted-server ::srvr/client-chan client-chan))]
@@ -65,56 +114,53 @@
             ;; Except that that "little detail" really sets off the handshake
             ;; Q: Is there anything interesting about the deferred that it
             ;; currently returns?
-            (let [eventually-started (clnt/start! client)]
-              ;; Getting a false here.
-              ;; Q: What gives?
-              (let [chan->server2 (::clnt/chan->server @client)
-                    _ (when-not (= chan->server chan->server2)
-                        (assert false (str "Client channels don't match.\n"
-                                           "Expected:" chan->server
-                                           "\nHave:" chan->server2)))
+            (let [eventually-started (clnt/start! client)
+                  chan->server2 (::clnt/chan->server @client)]
+              (when-not (= chan->server chan->server2)
+                (assert false (str "Client channels don't match.\n"
+                                   "Expected:" chan->server
+                                   "\nHave:" chan->server2)))
+              (let [
+
+                    ;; There's a wrapper layer around the stream
+                    ;; that I actually want to use.
+                    ;; Ancient history that I've been too busy
+                    ;; to clean up.
                     clnt->srvr (:chan chan->server2)
+                    ;; Failing here. At least I've tracked down
+                    ;; where this blowup is happening.
+                    _ (assert clnt->srvr)
+                    write-hello (partial retrieve-hello client-chan)
+                    get-cookie (partial wrote-hello client-chan)
+                    write-cookie (partial forward-cookie chan<-server)
+                    get-cookie (partial wrote-cookie clnt->srvr)
+                    write-vouch (partial vouch->server client-chan)
+                    get-server-response (partial wrote-vouch client-chan)
+                    write-server-response (partial finalize chan<-server)
+                    _ (println "Starting the stream from " clnt->srvr)
                     fut (deferred/chain (strm/take! clnt->srvr)
-                          (fn [hello]
-                            (println "Have" (count hello) "bytes to write to " client-chan)
-                            (if (= 224 (count hello))
-                              (strm/put! (:chan client-chan) hello)
-                              (throw (RuntimeException. "Bad Hello"))))
-                          (fn [success]
-                            (is success "Failed to write hello to server")
-                            ;; TODO: I'm pretty sure I need to split
-                            ;; this into 2 channels so I don't pull back
-                            ;; the hello that I just put on there
-                            (strm/try-take! client-chan ::drained 500 ::timeout))
-                          (fn [cookie]
-                            (is (= 200 (count cookie)))
-                            (strm/try-put! chan<-server cookie 500 ::timeout))
-                          (fn [success]
-                            (is success)
-                            (is (not= success ::timeout))
-                            (strm/try-take! clnt->srvr ::drained 500 ::timeout))
-                          (fn [vouch]
-                            (if (and (not= vouch ::drained)
-                                     (not= vouch ::timeout))
-                              (strm/try-put! client-chan vouch 500 ::timeout)
-                              (throw (ex-info "Retrieving Vouch from client failed"
-                                              {:failure vouch}))))
-                          (fn [success]
-                            (if success
-                              (strm/try-take! client-chan ::drained 500 ::timeout)
-                              (throw (RuntimeException. "Failed writing Vouch to client"))))
-                          (fn [response]
-                            (is response "Handshake should be complete")
-                            (strm/try-put! chan<-server response 500 ::timeout))
-                          (fn [responded]
-                            (is (not= responded ::timeout))))]
+                          write-hello
+                          get-cookie
+                          write-cookie
+                          get-cookie
+                          write-vouch
+                          get-server-response
+                          write-server-response
+                          (fn [wrote]
+                            (is (not= wrote ::timeout))))]
+                (println "Dereferencing the deferreds set up by handshake")
                 (is (not= (deref fut 500 ::timeout) ::timeout))
                 ;; This really should have been completed as soon as
                 ;; I read from chan->server2 the first time
                 ;; Q: Right?
                 (is (not= (deref eventually-started 500 ::timeout)
                           ::timeout))))
+            (catch Exception ex
+              (println "Unhandled exception escaped!")
+              (.printStackTrace ex)
+              (is (not ex)))
             (finally
+              (println "Test done. Stopping server.")
               (srvr/stop! server))))
         (catch clojure.lang.ExceptionInfo ex
           (is (not (.getData ex)))))

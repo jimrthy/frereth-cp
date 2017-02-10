@@ -311,15 +311,27 @@ And encrypted with a passphrase, of course."
 (comment (let [encoded (encode-server-name "foo..bacon.com")]
            (vec encoded)))
 
-(defn random-bytes!
-  "Fills dst with random bytes"
-  [#^bytes dst]
-  (TweetNaclFast/randombytes dst))
-
 (defn random-array
   "Returns an array of n random bytes"
   [^Long n]
   (TweetNaclFast/randombytes n))
+
+(defn randomize-buffer!
+  "Fills the bytes of dst with crypto-random ints"
+  [^io.netty.buffer.ByteBuf dst]
+  ;; Move the readable bytes to the beginning of the
+  ;; buffer to consolidate the already-read and writeable
+  ;; areas.
+  ;; Note that this isn't what I actually want to do.
+  ;; (if this was called, it's time to wipe the entire
+  ;; buffer. Readers missed their chance)
+  (.clear dst)
+  (.setBytes dst 0 (random-array (.capacity dst))))
+
+(defn random-bytes!
+  "Fills dst with random bytes"
+  [#^bytes dst]
+  (TweetNaclFast/randombytes dst))
 
 (defn random-key
   "Returns a byte array suitable for use as a random key"

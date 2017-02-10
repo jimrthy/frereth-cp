@@ -118,14 +118,14 @@
   ;; Missing step: copy :minute-key into :last-minute-key
   ;; (that's handled by key rotation. Don't need to bother
   ;; if we're "just" cleaning up on exit)
-  (let [minute-key-array (get-in this [:cookie-cutter ::minute-key])]
+  (let [minute-key-array (get-in this [::cookie-cutter ::minute-key])]
     (assert minute-key-array)
     (shared/random-bytes! minute-key-array))
 
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
   (let [p-m (::shared/packet-management this)]
-    (shared/random-bytes! (::shared/packet p-m)))
+    (shared/randomize-buffer! (::shared/packet p-m)))
   (shared/random-bytes! (-> this ::current-client ::client-security ::short-pk))
   ;; These are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
@@ -319,7 +319,7 @@
 (defn stop!
   [{:keys [::event-loop-stopper]
     :as this}]
-  (println "Stopping server state")
+  (println "curve.server/stop!")
   (when event-loop-stopper
     (println "Sending stop signal to event loop")
     ;; This is fairly pointless. The client channel Component on which this
@@ -333,8 +333,11 @@
   (let [outcome
         (assoc (try
                  (hide-secrets! this)
+                 (catch RuntimeException ex
+                   (println "ERROR: " ex)
+                   this)
                  (catch Exception ex
-                   (println "WARNING:" ex)
+                   (println "FATAL:" ex)
                    ;; TODO: This really should be fatal.
                    ;; Make the error-handling go away once hiding secrets actually works
                    this))
