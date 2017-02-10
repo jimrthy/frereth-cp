@@ -206,15 +206,17 @@
         stopped (promise)]
     (deferred/loop [this (assoc this
                                 ::timeout (one-minute))]
-      (println "Top of event loop. Timeout: " (::timeout this) "in"
-               (util/pretty (hide-long-arrays this)))
+      (println "Top of Server event loop. Timeout: " (::timeout this) "in"
+               (comment (util/pretty (hide-long-arrays this)))
+               "...[this]...")
       (deferred/chain
-        ;; timeout is in nanoseconds.
         ;; The timeout is in milliseconds, but state's timeout uses
         ;; the nanosecond clock
-        (stream/try-take! (:chan client-chan) ::drained
-                          ;; This is in milliseconds
-                          (inc (/ (::timeout this) shared/nanos-in-milli)) ::timedout)
+        (stream/try-take! (:chan client-chan)
+                          ::drained
+                          ;; Need to convert nanoseconds into milliseconds
+                          (inc (/ (::timeout this) shared/nanos-in-milli))
+                          ::timedout)
         (fn [msg]
           (println (str "Top of Server Event loop received " msg))
           (if-not (or (identical? ::drained msg)
@@ -233,7 +235,7 @@
               (catch Exception ex
                 (println "Major problem escaped handler" ex (.getStackTrace ex))))
             (do
-              (println "Took from the client:" msg)
+              (println "Server recv from" (:chan client-chan) ":" msg)
               (if (identical? msg ::drained)
                 msg
                 this))))

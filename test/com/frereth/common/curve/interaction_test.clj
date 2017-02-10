@@ -37,9 +37,10 @@
                            ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
                                                    ::shared/server-name server-name}}}
         chan->server (strm/stream)
+        chan<-server (strm/stream)
         ;; TODO: This seems like it would be a great place to try switching to integrant
         client (clnt/ctor (assoc (::client options)
-                                 ::clnt/chan<-server (strm/stream)
+                                 ::clnt/chan<-server chan<-server
                                  ::clnt/chan->server chan->server))
         unstarted-server (srvr/ctor (::server options))
         ;; Flip the meaning of these channel names,
@@ -53,7 +54,8 @@
         client-chan (.start unstarted-client-chan)]
     (try
       (println "Starting server based on\n"
-               (with-out-str (pprint (srvr/hide-long-arrays unstarted-server))))
+               (comment (with-out-str (pprint (srvr/hide-long-arrays unstarted-server))))
+               "...stuff...")
       (try
         (let [server (srvr/start! (assoc unstarted-server ::srvr/client-chan client-chan))]
           (try
@@ -63,19 +65,54 @@
             ;; Except that that "little detail" really sets off the handshake
             ;; Q: Is there anything interesting about the deferred that it
             ;; currently returns?
-            (clnt/start! client)
-            ;; Getting a false here.
-            ;; Q: What gives?
-            (let [chan->server2 (:chan client)
-                  _ (when-not (= chan->server chan->server2)
-                      (assert false (str "Client channels don't match.\n"
-                                         "Expected:" chan->server
-                                         "\nHave:" chan->server2)))
-                  fut (deferred/chain (strm/take! chan->server2)
-                        (fn [hello]
-                          (is (= 224 (count hello)))))]
-              (is (not= (deref fut 500 ::timeout) ::timeout))
-              (throw (Exception. "Don't stop there!")))
+            (let [eventually-started (clnt/start! client)]
+              ;; Getting a false here.
+              ;; Q: What gives?
+              (let [chan->server2 (::clnt/chan->server @client)
+                    _ (when-not (= chan->server chan->server2)
+                        (assert false (str "Client channels don't match.\n"
+                                           "Expected:" chan->server
+                                           "\nHave:" chan->server2)))
+                    clnt->srvr (:chan chan->server2)
+                    fut (deferred/chain (strm/take! clnt->srvr)
+                          (fn [hello]
+                            (is (= 224 (count hello)))
+                            (strm/put! client-chan hello))
+                          (fn [success]
+                            (is success "Failed to write hello to server")
+                            ;; TODO: I'm pretty sure I need to split
+                            ;; this into 2 channels so I don't pull back
+                            ;; the hello that I just put on there
+                            (strm/try-take! client-chan ::drained 500 ::timeout))
+                          (fn [cookie]
+                            (is (= 200 (count cookie)))
+                            (strm/try-put! chan<-server cookie 500 ::timeout))
+                          (fn [success]
+                            (is success)
+                            (is (not= success ::timeout))
+                            (strm/try-take! clnt->srvr ::drained 500 ::timeout))
+                          (fn [vouch]
+                            (if (and (not= vouch ::drained)
+                                     (not= vouch ::timeout))
+                              (strm/try-put! client-chan vouch 500 ::timeout)
+                              (throw (ex-info "Retrieving Vouch from client failed"
+                                              {:failure vouch}))))
+                          (fn [success]
+                            (if success
+                              (strm/try-take! client-chan ::drained 500 ::timeout)
+                              (throw (RuntimeException. "Failed writing Vouch to client"))))
+                          (fn [response]
+                            (is response "Handshake should be complete")
+                            (strm/try-put! chan<-server response 500 ::timeout))
+                          (fn [responded]
+                            (is (not= responded ::timeout))))]
+                (is (not= (deref fut 500 ::timeout) ::timeout))
+                ;; This really should have been completed as soon as
+                ;; I read from chan->server2 the first time
+                ;; Q: Right?
+                (is (not= (deref eventually-started 500 ::timeout)
+                          ::timeout))
+                (throw (Exception. "Don't stop there!"))))
             (srvr/stop! server)))
         (catch clojure.lang.ExceptionInfo ex
           (is (not (.getData ex)))))

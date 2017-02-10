@@ -760,8 +760,9 @@ TODO: Need to ask around about that."
 
 (defn wait-for-cookie
   [wrapper sent]
-  (if (not= sent ::hello-timed-out)
+  (if (not= sent ::sending-hello-timed-out)
     (do
+      (println "client/wait-for-cookie -- Sent to server:" sent)
       (let [chan<-server (::chan<-server @wrapper)
             timeout (current-timeout wrapper)
             d (stream/try-take! chan<-server
@@ -772,13 +773,15 @@ TODO: Need to ask around about that."
           (fn [result]
             (println "Incoming response from server:")
             (pprint result)
-            (println "Building/sending Vouch")
-            ;; Q: Worth splitting this into 2 separate steps that
-            ;; I call from here?
-            ;; Actually, there's another: decoding the cookie.
-            ;; And verifying that we got a cookie instead of a timeout
-            ;; TODO: Yes, definitely split this up
-            (build-and-send-vouch wrapper result))
+            (when-not (or (= result ::drained)
+                          (= result ::hello-response-timed-out))
+              (println "Building/sending Vouch")
+              ;; Q: Worth splitting this into 2 separate steps that
+              ;; I call from here?
+              ;; Actually, there's another: decoding the cookie.
+              ;; And verifying that we got a cookie instead of a timeout
+              ;; TODO: Yes, definitely split this up
+              (build-and-send-vouch wrapper result)))
           (partial hello-response-timed-out! wrapper))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
 
@@ -837,7 +840,7 @@ like a timing attack."
         (.readBytes raw-packet buffer)
         ;; And set up our internal buffer to do more work
         (.clear raw-packet)
-        (println "Putting" buffer "onto" chan->server)
+        (println "client/start! Putting" buffer "onto" chan->server)
         ;; There's still an important break
         ;; with the reference implementation
         ;; here: this should be sending the
@@ -850,7 +853,10 @@ like a timing attack."
         ;; the next, but a major selling point
         ;; is not waiting for TCP buffers
         ;; to expire.
-        (let [d (stream/try-put! chan->server buffer timeout ::hello-timed-out)]
+        (let [d (stream/try-put! chan->server
+                                 buffer
+                                 timeout
+                                 ::sending-hello-timed-out)]
           (deferred/on-realized d
             (partial wait-for-cookie wrapper)
             (partial hello-failed! wrapper))))
@@ -864,8 +870,9 @@ like a timing attack."
         :ret ::state-agent)
 (defn ctor
   [opts]
-  (-> (initialize-immutable-values opts)
-      (initialize-mutable-state!)
+  (-> opts
+      initialize-immutable-values
+      initialize-mutable-state!
       (assoc
        ;; This seems very cheese-ball, but they
        ;; *do* need to be part of the agent.
