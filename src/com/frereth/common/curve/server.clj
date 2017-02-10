@@ -207,7 +207,7 @@
     (deferred/loop [this (assoc this
                                 ::timeout (one-minute))]
       (println "Top of Server event loop. Timeout: " (::timeout this) "in"
-               (comment (util/pretty (hide-long-arrays this)))
+               #_(util/pretty (hide-long-arrays this))
                "...[this]...")
       (deferred/chain
         ;; The timeout is in milliseconds, but state's timeout uses
@@ -218,7 +218,9 @@
                           (inc (/ (::timeout this) shared/nanos-in-milli))
                           ::timedout)
         (fn [msg]
-          (println (str "Top of Server Event loop received " msg))
+          (println (str "Top of Server Event loop received " msg
+                        "\nfrom " (:chan client-chan)
+                        "\nin " client-chan))
           (if-not (or (identical? ::drained msg)
                       (identical? ::timedout msg))
             (try

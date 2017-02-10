@@ -76,8 +76,10 @@
                     clnt->srvr (:chan chan->server2)
                     fut (deferred/chain (strm/take! clnt->srvr)
                           (fn [hello]
-                            (is (= 224 (count hello)))
-                            (strm/put! client-chan hello))
+                            (println "Have" (count hello) "bytes to write to " client-chan)
+                            (if (= 224 (count hello))
+                              (strm/put! (:chan client-chan) hello)
+                              (throw (RuntimeException. "Bad Hello"))))
                           (fn [success]
                             (is success "Failed to write hello to server")
                             ;; TODO: I'm pretty sure I need to split
@@ -111,9 +113,9 @@
                 ;; I read from chan->server2 the first time
                 ;; Q: Right?
                 (is (not= (deref eventually-started 500 ::timeout)
-                          ::timeout))
-                (throw (Exception. "Don't stop there!"))))
-            (srvr/stop! server)))
+                          ::timeout))))
+            (finally
+              (srvr/stop! server))))
         (catch clojure.lang.ExceptionInfo ex
           (is (not (.getData ex)))))
       (finally (.stop client-chan)))))
