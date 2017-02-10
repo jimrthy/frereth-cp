@@ -121,12 +121,15 @@
                                    "Expected:" chan->server
                                    "\nHave:" chan->server2)))
               (let [
-
                     ;; There's a wrapper layer around the stream
                     ;; that I actually want to use.
                     ;; Ancient history that I've been too busy
                     ;; to clean up.
-                    clnt->srvr (:chan chan->server2)
+                    ;; Actually, it looks like I wasn't.
+                    ;; Peel back the layers, and it looks like
+                    ;; I wind up back where I started.
+                    ;; TODO: Get rid of the pointless wrapping/unwrapping
+                    clnt->srvr #_(:chan chan->server2) chan->server2
                     ;; Failing here. At least I've tracked down
                     ;; where this blowup is happening.
                     _ (assert clnt->srvr)
@@ -137,7 +140,8 @@
                     write-vouch (partial vouch->server client-chan)
                     get-server-response (partial wrote-vouch client-chan)
                     write-server-response (partial finalize chan<-server)
-                    _ (println "Starting the stream from " clnt->srvr)
+                    _ (println "interaction-test: Starting the stream "
+                               clnt->srvr)
                     fut (deferred/chain (strm/take! clnt->srvr)
                           write-hello
                           get-cookie

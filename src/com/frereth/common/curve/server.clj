@@ -108,7 +108,10 @@
 
 (defn handle-incoming!
   [state msg]
-  (throw (ex-info "Not yet written" {:message msg})))
+  ;; Yay! I'm finally reaching here!
+  (throw (ex-info "curve.server/handle-incoming!"
+                  {:message msg
+                   :problem "Not yet written"})))
 
 (defn hide-secrets!
   [this]
@@ -248,7 +251,8 @@
             (if-not (identical? this ::drained)
               (if-not (realized? stopper)
                 (do
-                  (println "Rotating" (util/pretty (hide-long-arrays this)))
+                  (println "curve.server/event-loop-bottom Rotating"
+                           (util/pretty (hide-long-arrays this)))
                   (deferred/recur (handle-key-rotation this)))
                 (do
                   (println "Received stop signal")
