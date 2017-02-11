@@ -109,9 +109,16 @@
 (defn handle-incoming!
   [state msg]
   ;; Yay! I'm finally reaching here!
-  (throw (ex-info "curve.server/handle-incoming!"
+  #_(throw (ex-info "curve.server/handle-incoming!"
                   {:message msg
-                   :problem "Not yet written"})))
+                   :problem "Not yet written"}))
+  (println "=============================================\n"
+           "=\n"
+           "curve.server/handle-incoming! -- What should I do?\n"
+           "=\n"
+           "=============================================")
+  ;;; Doing nothing is pretty definitely the wrong thing.
+  state)
 
 (defn hide-secrets!
   [this]

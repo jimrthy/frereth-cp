@@ -87,6 +87,7 @@
                                      ::shared/work-area]
                                :opt [::chan->child
                                      ::chan<-child
+                                     ::child
                                      ;; Q: Why am I tempted to store this at all?
                                      ;; A: Well...I might need to resend it if it
                                      ;; gets dropped initially.
@@ -106,6 +107,11 @@
 (s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
                             #(s/valid? ::state (deref %))))
 
+;; Because, for now, I need somewhere to hang onto the future
+(s/def ::child any?)
+;; Q: More sensible to check for strm/source and sink protocols?
+(s/def ::reader ::chan<-child)
+(s/def ::writer ::chan->child)
 ;; Accepts the agent that owns "this" and returns a channel we can
 ;; use to send messages to the child.
 ;; The child will send messages back to us using the standard agent
@@ -120,7 +126,9 @@
 ;; location that will first get the indication that ::chan<-child
 ;; or ::chan<-server has closed.
 (s/def ::child-spawner (s/fspec :args (s/cat :this ::state-agent)
-                                :ret ::chan<-child))
+                                :ret (s/keys :req [::child
+                                                   ::reader
+                                                   ::writer])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -652,8 +660,19 @@ TODO: Need to ask around about that."
   [wrapper
    {:keys [::child-spawner]
     :as this}]
+  (println "Spawning child!!")
   (assert child-spawner)
-  (assoc this ::chan->child (child-spawner wrapper)))
+  ;;; This needs to return something that, at least in theory,
+  ;;; should use send/send-off to notify the agent about bytes
+  ;;; that are buffered and ready to transmit.
+  ;;; Or maybe that should happen over the stream that I'm
+  ;;; storing in reader.
+  ;;; This part definitely needs more work.
+  (let [{:keys [::child ::reader ::writer]} (child-spawner wrapper)]
+    (assoc this
+           ::chan->child reader
+           ::chan<-child writer
+           ::child child)))
 
 (defn cookie->vouch
   "Got a cookie from the server.
@@ -738,6 +757,7 @@ TODO: Need to ask around about that."
            (not= cookie-packet ::drained))
     (do
       (assert cookie-packet)
+      (println "Received cookie. Forking child")
       ;; Got a response from server.
       ;; Theory in the reference implementation is that this is
       ;; a good signal that it's time to spawn the child to do
@@ -780,6 +800,10 @@ TODO: Need to ask around about that."
             (pprint result)
             (when-not (or (= result ::drained)
                           (= result ::hello-response-timed-out))
+              ;; I'm not actually getting here because that's timing
+              ;; out.
+              ;; Probably because its handle-incoming! function
+              ;; does nothing.
               (println "Building/sending Vouch")
               ;; Q: Worth splitting this into 2 separate steps that
               ;; I call from here?

@@ -59,23 +59,20 @@
 
 (defn client-child-spawner
   [client-agent]
+  (comment (spit "/home/james/hey-you.txt" "Spawning child"))
+  (println "Top of client-child-spawner")
   ;; Q: What should this really do?
-  (let [result (strm/stream)]
-    ;; Well, this is obnoxious. It seems like it's garbage-collected
-    ;; before it ever runs.
-    ;; At least, I don't see either message it should be printing,
-    ;; and it doesn't seem to be getting the garbage that I'm trying
-    ;; to put on it.
-    ;; But, really, just returning the channel by itself was never
-    ;; a great idea.
-    (future
-      (println "Client child sending bytes to server via client")
-      (let [written (strm/try-put! result
-                                   "Hello, out there!"
-                                   2500
-                                   ::timedout)]
-        (println "Client-child send result:" @written)))
-    result))
+  (let [result (strm/stream)
+        child (future
+                (println "Client child sending bytes to server via client")
+                (let [written (strm/try-put! result
+                                             "Hello, out there!"
+                                             2500
+                                             ::timedout)]
+                  (println "Client-child send result:" @written)))]
+    {::clnt/child child
+     ::clnt/reader result
+     ::clnt/writer strm/stream}))
 
 (deftest handshake
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
