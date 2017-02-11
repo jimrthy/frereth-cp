@@ -652,6 +652,7 @@ TODO: Need to ask around about that."
   [wrapper
    {:keys [::child-spawner]
     :as this}]
+  (assert child-spawner)
   (assoc this ::chan->child (child-spawner wrapper)))
 
 (defn cookie->vouch

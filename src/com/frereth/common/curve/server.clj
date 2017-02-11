@@ -252,7 +252,8 @@
               (if-not (realized? stopper)
                 (do
                   (println "curve.server/event-loop-bottom Rotating"
-                           (util/pretty (hide-long-arrays this)))
+                           #_(util/pretty (hide-long-arrays this))
+                           "...this...")
                   (deferred/recur (handle-key-rotation this)))
                 (do
                   (println "Received stop signal")

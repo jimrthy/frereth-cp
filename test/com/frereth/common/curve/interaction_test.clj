@@ -6,7 +6,8 @@
             [com.frereth.common.curve.server-test :as server-test]
             [com.frereth.common.curve.shared :as shared]
             [manifold.deferred :as deferred]
-            [manifold.stream :as strm]))
+            [manifold.stream :as strm])
+  (:import [clojure.lang ExceptionInfo]))
 
 (defn retrieve-hello
   [client-chan hello]
@@ -18,7 +19,6 @@
 
 (defn wrote-hello
   [client-chan success]
-  (println "B")
   (is success "Failed to write hello to server")
   ;; TODO: I'm pretty sure I need to split
   ;; this into 2 channels so I don't pull back
@@ -27,9 +27,9 @@
 
 (defn forward-cookie
   [client<-server cookie]
-  (println "C")
-  (is (= 200 (count cookie)))
-  (strm/try-put! client<-server cookie 500 ::timeout))
+  (when-not (keyword? cookie)
+    (is (= 200 (count cookie)))
+    (strm/try-put! client<-server cookie 500 ::timeout)))
 
 (defn wrote-cookie
   [clnt->srvr success]
@@ -57,6 +57,26 @@
   (is response "Handshake should be complete")
   (strm/try-put! client<-server response 500 ::timeout))
 
+(defn client-child-spawner
+  [client-agent]
+  ;; Q: What should this really do?
+  (let [result (strm/stream)]
+    ;; Well, this is obnoxious. It seems like it's garbage-collected
+    ;; before it ever runs.
+    ;; At least, I don't see either message it should be printing,
+    ;; and it doesn't seem to be getting the garbage that I'm trying
+    ;; to put on it.
+    ;; But, really, just returning the channel by itself was never
+    ;; a great idea.
+    (future
+      (println "Client child sending bytes to server via client")
+      (let [written (strm/try-put! result
+                                   "Hello, out there!"
+                                   2500
+                                   ::timedout)]
+        (println "Client-child send result:" @written)))
+    result))
+
 (deftest handshake
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
@@ -74,6 +94,7 @@
                                                            0x0c 0x0b 0x0a 0x09
                                                            0x08 0x07 0x06 0x05
                                                            0x04 0x03 0x02 0x01])
+                           ::clnt/child-spawner client-child-spawner
                            ::clnt/server-extension server-extension
                            ;; Q: Where do I get the server's public key?
                            ;; A: Right now, I just have the secret key's 32 bytes encoded as
@@ -115,24 +136,12 @@
             ;; Q: Is there anything interesting about the deferred that it
             ;; currently returns?
             (let [eventually-started (clnt/start! client)
-                  chan->server2 (::clnt/chan->server @client)]
-              (when-not (= chan->server chan->server2)
+                  clnt->srvr (::clnt/chan->server @client)]
+              (when-not (= chan->server clnt->srvr)
                 (assert false (str "Client channels don't match.\n"
                                    "Expected:" chan->server
-                                   "\nHave:" chan->server2)))
-              (let [
-                    ;; There's a wrapper layer around the stream
-                    ;; that I actually want to use.
-                    ;; Ancient history that I've been too busy
-                    ;; to clean up.
-                    ;; Actually, it looks like I wasn't.
-                    ;; Peel back the layers, and it looks like
-                    ;; I wind up back where I started.
-                    ;; TODO: Get rid of the pointless wrapping/unwrapping
-                    clnt->srvr #_(:chan chan->server2) chan->server2
-                    ;; Failing here. At least I've tracked down
-                    ;; where this blowup is happening.
-                    _ (assert clnt->srvr)
+                                   "\nHave:" clnt->srvr)))
+              (let [_ (assert clnt->srvr)
                     write-hello (partial retrieve-hello client-chan)
                     get-cookie (partial wrote-hello client-chan)
                     write-cookie (partial forward-cookie chan<-server)
@@ -153,7 +162,19 @@
                           (fn [wrote]
                             (is (not= wrote ::timeout))))]
                 (println "Dereferencing the deferreds set up by handshake")
-                (is (not= (deref fut 500 ::timeout) ::timeout))
+                (let [outcome (deref fut 5000 ::timeout)]
+                  (when (instance? Exception outcome)
+                    (if (instance? RuntimeException outcome)
+                      (if (instance? ExceptionInfo outcome)
+                        (do
+                          (println "FAIL:" outcome)
+                          (pprint (.getData outcome)))
+                        (do
+                          (println "Ugly failure:" outcome)))
+                      (println "Low Level Failure:" outcome))
+                    (.printStackTrace outcome)
+                    (throw outcome))
+                  (is (not= outcome ::timeout)))
                 ;; This really should have been completed as soon as
                 ;; I read from chan->server2 the first time
                 ;; Q: Right?
