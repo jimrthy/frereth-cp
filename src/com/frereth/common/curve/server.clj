@@ -107,18 +107,17 @@
    (+ (one-minute) now)))
 
 (defn handle-incoming!
+  "So...what *should* happen here?"
   [state msg]
   ;; Yay! I'm finally reaching here!
-  #_(throw (ex-info "curve.server/handle-incoming!"
-                  {:message msg
-                   :problem "Not yet written"}))
   (println "=============================================\n"
            "=\n"
            "curve.server/handle-incoming! -- What should I do?\n"
            "=\n"
            "=============================================")
-  ;;; Doing nothing is pretty definitely the wrong thing.
-  state)
+  (throw (ex-info "curve.server/handle-incoming!"
+                  {:message msg
+                   :problem "Not yet written"})))
 
 (defn hide-secrets!
   [this]
@@ -236,7 +235,8 @@
             (try
               ;; Q: Do I want unhandled exceptions to be fatal errors?
               (let [modified-state (handle-incoming! this msg)]
-                (println "Updated state based on incoming msg:" (hide-long-arrays modified-state))
+                (println "Updated state based on incoming msg:"
+                         (hide-long-arrays modified-state))
                 modified-state)
               (catch clojure.lang.ExceptionInfo ex
                 (println "handle-incoming! failed" ex (.getStackTrace ex))
@@ -256,8 +256,11 @@
         (fn [this]
           (if this
             (if-not (identical? this ::drained)
+              ;; Weren't called to explicitly close
               (if-not (realized? stopper)
                 (do
+                  ;; The promise that tells us to stop hasn't
+                  ;; been fulfillef
                   (println "curve.server/event-loop-bottom Rotating"
                            #_(util/pretty (hide-long-arrays this))
                            "...this...")
@@ -290,7 +293,9 @@
 ;;; Public
 
 (defn hide-long-arrays
-  "Try to make pretty printing less obnoxious"
+  "Try to make pretty printing less obnoxious
+
+  By hiding the vectors that take up huge amounts of screen space"
   [state]
   (-> state
       (assoc-in [::current-client ::message] "...")
@@ -305,8 +310,8 @@
     :as this}]
   {:pre [client-chan
          (:chan client-chan)
-         #_(::shared/server-name my-keys)
-         #_(::shared/keydir my-keys)
+         (::shared/server-name my-keys)
+         (::shared/keydir my-keys)
          extension
          ;; Actually, the rule is that it must be
          ;; 32 hex characters. Which really means
