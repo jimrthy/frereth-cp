@@ -9,6 +9,8 @@
 
 (def default-max-clients 100)
 (def message-len 1104)
+(def minimum-initiate-packet-length 560)
+(def minimum-message-packet-length 112)
 
 ;; For maintaining a secret symmetric pair of encryption
 ;; keys for the cookies.
@@ -68,6 +70,7 @@
                                     ::received-nonce
                                     ::sent-nonce
                                     ::shared-secrets]))
+(s/def ::current-client ::client-state)
 
 (s/def ::state (s/keys :req [::active-clients
                              ::client-chan
@@ -107,23 +110,95 @@
   ([now]
    (+ (one-minute) now)))
 
+(s/fdef check-packet-length
+        :args (s/cat :packet bytes?)
+        :ret boolean?)
+(defn check-packet-length
+  "Could this packet possibly be a valid CurveCP packet, based on its size?"
+  [packet]
+  (let [r (count packet)]
+    (and (>= r 80)
+         (<= r 1184)
+         (= (bit-and r 0xf)))))
+
+(s/fdef verify-my-packet
+        :args (s/cat :packet bytes?)
+        :ret boolean?)
+(defn verify-my-packet
+  "Was this packet really intended for this server?"
+  [{:keys [::shared/extension]}
+   packet]
+  (not= 0
+        ;; Q: Why did DJB use a bitwise and here?
+        ;; And does that reason go away when you factor in the hoops
+        ;; have to jump through to jump between bitwise and logical
+        ;; operations?
+   (bit-and (if (shared/bytes= (.getBytes shared/client-header-prefix)
+                               packet)
+              -1 0)
+            (if (shared/bytes= extension (-> packet
+                                             vec
+                                             (subvec 8 25)
+                                             byte-array))
+              -1 0))))
+
+(defn handle-hello!
+  [state packet]
+  (when (= (count packet) shared/hello-packet-length)
+    ;; Q: Worth using my shiny deserialization library?
+    (let [client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
+      (shared/byte-copy! client-short-pk
+                         0 shared/key-length packet 40)
+      (let [shared-secret (shared/crypto-box-prepare client-short-pk
+                                                     (-> state
+                                                         (get-in [::shared/my-keys ::long-pair])
+                                                         .getSecretKey))
+            state (assoc-in state [::current-client ::shared-secrets ::client-short<->server-long]
+                            shared-secret)
+            ;; Q: How do I combine these to handle this all at once?
+            ;; Better Q: Is that a good idea?
+            {:keys [::working-area]} state
+            {:keys [::text ::working-nonce]} working-area]
+        (shared/byte-copy! working-nonce
+                           shared/hello-nonce-prefix)
+        (shared/byte-copy! working-nonce 16 8 packet 136)
+        ;; Q: Do I need this step?
+        (shared/byte-copy! text 0 shared/box-zero-bytes shared/all-zeros)
+        (shared/byte-copy! text shared/box-zero-bytes 80 packet 144)
+        (when-let [_ (.open_after shared-secret text 0 96 working-nonce)]
+          (throw (ex-info "Don't stop here!"
+                          {:what "Send cookie"})))))))
+
+(defn handle-initiate!
+  [state packet]
+  (when (>= (count packet) minimum-initiate-packet-length)
+    (throw (ex-info "Don't stop here!"
+                    {:what "Send cookie"}))))
+
+(defn handle-message!
+  [state packet]
+  (when (>= (count packet) minimum-message-packet-length)
+    (throw (ex-info "Don't stop here!"
+                    {:what "Send cookie"}))))
+
 (s/fdef handle-incoming
         :args (s/cat :state ::state
                      :msg bytes?)
         :ret ::state)
 (defn handle-incoming!
   "So...what *should* happen here?"
-  [state msg]
-  ;; Yay! I'm finally reaching here!
-  (log/warn "=============================================\n"
-            "=\n"
-            "curve.server/handle-incoming! -- What should I do?\n"
-            "=\n"
-            "=============================================")
-  (throw (ex-info "curve.server/handle-incoming!"
-                  {:message msg
-                   :class (class msg)
-                   :problem "Not yet written"})))
+  [state packet]
+  (when (and (check-packet-length packet)
+             (verify-my-packet state packet))
+    (shared/byte-copy! (get-in state [::current-client ::shared/extension])
+                       packet
+                       0 shared/extension-length packet (+ shared/client-header-length
+                                                           shared/extension-length))
+    (let [packet-type-id (char (aget packet (dec shared/client-header-length)))]
+      (case packet-type-id
+        \H (handle-hello! state packet)
+        \I (handle-initiate! state packet)
+        \M (handle-message! state packet)))))
 
 (declare hide-long-arrays)
 

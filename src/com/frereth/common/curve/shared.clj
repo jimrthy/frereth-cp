@@ -22,7 +22,9 @@
 (def server-cookie-length 96)
 (def server-name-length 256)
 
-(def hello-header (.getBytes "QvnQ5XlH"))
+(def client-header-length 8)
+(def client-header-prefix "QvnQ5Xl")
+(def hello-header (.getBytes (str client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
 ;; Q: Is it worth trying to build serialization
@@ -50,7 +52,7 @@
   "The boiler plate around a cookie"
   ;; Header is only a "string" in the ASCII sense
   (array-map ::header {::type ::bytes
-                       ::length 8}
+                       ::length client-header-length}
              ::client-extension {::type ::bytes
                                  ::length extension-length}
              ::server-extension {::type ::bytes
@@ -68,7 +70,7 @@
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 
-(def initiate-header (.getBytes "QvnQ5XlI"))
+(def initiate-header (.getBytes (str client-header-prefix "I")))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 
 (def max-unsigned-long -1)
@@ -169,23 +171,35 @@
                       (aget src (+ m src-offset))))
          (range n))))
 
+(s/fdef bytes=
+        :args (s/cat :x bytes?
+                     :y bytes?)
+        :ret boolean?)
 (defn bytes=
   [x y]
   ;; This has to take constant time.
   ;; No short-cutting!
   (let [nx (count x)
         ny (count y)
-        diff
-        (reduce (fn [acc n]
-                  (let [xv (aget x n)
-                        yv (aget y n)]
-                    (bit-or acc (bit-xor xv yv))))
-                0 (range (min nx ny)))]
+        diff (reduce (fn [acc n]
+                       (let [xv (aget x n)
+                             yv (aget y n)]
+                         (bit-or acc (bit-xor xv yv))))
+                     0
+                     (range (min nx ny)))]
     (and (not= 0 (unsigned-bit-shift-right (- 256 diff) 8))
          (= nx ny))))
 
 (defn crypto-box-prepare
+  ""
   [public secret]
+  ;; Q: Do I want to do this?
+  ;; Or just use .before?
+  ;; Or maybe the key is that I should create
+  ;; it and call .before immediately so it's
+  ;; ready to use.
+  ;; TODO: Need to dig into this particular detail.
+  ;; It seems like it's probably really important.
   (TweetNaclFast$Box. public secret))
 
 (defn compose
