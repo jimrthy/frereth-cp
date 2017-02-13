@@ -2,7 +2,8 @@
   "For pieces shared among client, server, and messaging"
   (:require [clojure.java.io :as io]
             [clojure.spec :as s]
-            [clojure.string])
+            [clojure.string]
+            [clojure.tools.logging :as log])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            java.security.SecureRandom))
@@ -439,8 +440,8 @@ that implementation instead"
   ;; Maybe I should just be using primitive longs to start
   ;; with and cope with the way the signed bit works when
   ;; I must.
-  (println "Trying to pack" x "a" (class x) "into offset" n "of"
-           (count dst) "bytes at" dst)
+  (log/debug "Trying to pack" x "a" (class x) "into offset" n "of"
+             (count dst) "bytes at" dst)
   (let [x' (bit-and 0xff x)]
     (aset-byte dst n (- x' 128))
     (let [x (unsigned-bit-shift-right x 8)

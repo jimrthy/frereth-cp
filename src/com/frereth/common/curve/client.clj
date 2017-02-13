@@ -16,6 +16,7 @@
             [clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
+            [clojure.tools.logging :as log]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.schema :as schema]
             [com.stuartsierra.component :as cpt]
@@ -158,13 +159,13 @@ nor subject to timing attacks because it just won't be called very often."
     :as this}]
   {:pre [(and client-extension-load-time recent)]}
   (let [reload (>= recent client-extension-load-time)
-        _ (println "curve.client/clientextension-init:"
-                   reload
-                   "(currently:"
-                   extension
-                   ") in"
-                   #_(with-out-str (pprint (hide-long-arrays this)))
-                   (keys (hide-long-arrays this)))
+        _ (log/debug "curve.client/clientextension-init:"
+                     reload
+                     "(currently:"
+                     extension
+                     ") in"
+                     #_(with-out-str (pprint (hide-long-arrays this)))
+                     (keys (hide-long-arrays this)))
         client-extension-load-time (if reload
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
@@ -176,11 +177,12 @@ nor subject to timing attacks because it just won't be called very often."
                              (subs 0 16)
                              .getBytes)
                          (catch java.io.FileNotFoundException _
-                           (println "Missing extension file")
+                           ;; This really isn't all that unexpected
+                           (log/warn "Missing extension file")
                            (shared/zero-bytes 16)))
                     extension)]
     (assert (= (count extension) shared/extension-length))
-    (println "Loaded extension:" (vec extension))
+    (log/info "Loaded extension:" (vec extension))
     (assoc this
            ::client-extension-load-time client-extension-load-time
            ::shared/extension extension)))
@@ -259,7 +261,7 @@ nor subject to timing attacks because it just won't be called very often."
                                    short-nonce
                                    working-nonce)
         (catch clojure.lang.ExceptionInfo ex
-          (println "Details:" (.getData ex))
+          (log/error "Details:" (.getData ex))
           (throw ex)))))
   hello-sample
   (.readableBytes hello-sample)
@@ -346,7 +348,7 @@ Note that this is really called for side-effects"
       ;; and commons.logging (looks like I added this one)
       ;; here.
       ;; TODO: Really should log to one or the other
-      (println "WARNING: Verify that this packet came from the appropriate server")
+      (log/warn "TODO: Verify that this packet came from the appropriate server")
       ;; Q: How accurate/useful is this approach?
       ;; A: Not at all.
       ;; (i.e. mostly comparing byte arrays
@@ -660,7 +662,7 @@ TODO: Need to ask around about that."
   [wrapper
    {:keys [::child-spawner]
     :as this}]
-  (println "Spawning child!!")
+  (log/warn "Spawning child!!")
   (assert child-spawner)
   ;;; This needs to return something that, at least in theory,
   ;;; should use send/send-off to notify the agent about bytes
@@ -757,7 +759,7 @@ TODO: Need to ask around about that."
            (not= cookie-packet ::drained))
     (do
       (assert cookie-packet)
-      (println "Received cookie. Forking child")
+      (log/info "Received cookie. Forking child")
       ;; Got a response from server.
       ;; Theory in the reference implementation is that this is
       ;; a good signal that it's time to spawn the child to do
@@ -787,7 +789,7 @@ TODO: Need to ask around about that."
   [wrapper sent]
   (if (not= sent ::sending-hello-timed-out)
     (do
-      (println "client/wait-for-cookie -- Sent to server:" sent)
+      (log/info "client/wait-for-cookie -- Sent to server:" sent)
       (let [chan<-server (::chan<-server @wrapper)
             timeout (current-timeout wrapper)
             d (stream/try-take! chan<-server
@@ -796,15 +798,15 @@ TODO: Need to ask around about that."
                                 ::hello-response-timed-out)]
         (deferred/on-realized d
           (fn [result]
-            (println "Incoming response from server:")
-            (pprint result)
+            (log/info "Incoming response from server:\n"
+                      (with-out-str (pprint result)))
             (when-not (or (= result ::drained)
                           (= result ::hello-response-timed-out))
               ;; I'm not actually getting here because that's timing
               ;; out.
               ;; Probably because its handle-incoming! function
               ;; does nothing.
-              (println "Building/sending Vouch")
+              (log/debug "Building/sending Vouch")
               ;; Q: Worth splitting this into 2 separate steps that
               ;; I call from here?
               ;; Actually, there's another: decoding the cookie.
@@ -869,7 +871,7 @@ like a timing attack."
         (.readBytes raw-packet buffer)
         ;; And set up our internal buffer to do more work
         (.clear raw-packet)
-        (println "client/start! Putting" buffer "onto" chan->server)
+        (log/debug "client/start! Putting" buffer "onto" chan->server)
         ;; There's still an important break
         ;; with the reference implementation
         ;; here: this should be sending the
