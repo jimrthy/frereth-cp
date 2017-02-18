@@ -1,11 +1,14 @@
 (ns com.frereth.common.curve.server
   "Implement the server half of the CurveCP protocol"
   (:require [clojure.spec :as s]
+            ;; TODO: Really need millisecond precision (at least)
+            ;; associated with this log formatter
             [clojure.tools.logging :as log]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.util :as util]
             [manifold.deferred :as deferred]
-            [manifold.stream :as stream]))
+            [manifold.stream :as stream])
+  (:import io.netty.buffer.Unpooled))
 
 (def default-max-clients 100)
 (def message-len 1104)
@@ -116,7 +119,11 @@
 (defn check-packet-length
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
   [packet]
+  ;; So far, for unit tests, I'm getting the [B I expect
+  (log/debug (str "Incoming: " packet ", a " (class packet)))
+  ;; For now, retain the name r for compatibility/historical reasons
   (let [r (count packet)]
+    (log/info (str "Incoming packet contains " r " bytes"))
     (and (>= r 80)
          (<= r 1184)
          (= (bit-and r 0xf)))))
@@ -128,80 +135,193 @@
   "Was this packet really intended for this server?"
   [{:keys [::shared/extension]}
    packet]
-  (not= 0
-        ;; Q: Why did DJB use a bitwise and here?
-        ;; And does that reason go away when you factor in the hoops
-        ;; have to jump through to jump between bitwise and logical
-        ;; operations?
-   (bit-and (if (shared/bytes= (.getBytes shared/client-header-prefix)
-                               packet)
-              -1 0)
-            (if (shared/bytes= extension (-> packet
-                                             vec
-                                             (subvec 8 25)
-                                             byte-array))
-              -1 0))))
+  ;; This test is failing.
+  ;; TODO: Figure out why
+  (throw (RuntimeException. "Start here"))
+  (let [verified
+        (not= 0
+              ;; Q: Why did DJB use a bitwise and here?
+              ;; And does that reason go away when you factor in the hoops I
+              ;; have to jump through to jump between bitwise and logical
+              ;; operations?
+              (bit-and (if (shared/bytes= (.getBytes shared/client-header-prefix)
+                                          packet)
+                         -1 0)
+                       (if (shared/bytes= extension (-> packet
+                                                        vec
+                                                        (subvec shared/header-length (inc (+ shared/header-length
+                                                                                             shared/extension-length)))
+                                                        byte-array))
+                         -1 0)))]
+    (when-not verified
+      (log/warn "Dropping packet intended for someone else"))
+    verified))
+
+(defn prepare-cookie!
+  [{:keys [::client-short<->server-long
+           ::client-short-pk
+           ::minute-key
+           ::plain-text
+           ::text
+           ::working-nonce]}]
+  (let [keys (shared/random-key-pair)
+        ;; This is just going to get thrown away, leading
+        ;; to potential GC issues.
+        ;; Probably need another static buffer for building
+        ;; and encrypting things like this
+        buffer (Unpooled/buffer shared/server-cookie-length)]
+    (assert (.hasArray buffer))
+    (.writeBytes buffer shared/all-zeros 0 32)
+    (.writeBytes buffer client-short-pk 0 shared/key-length)
+    (.writeBytes buffer (.getSecretKey keys) 0 shared/key-length)
+
+    (shared/byte-copy! working-nonce shared/cookie-nonce-minute-prefix)
+    (shared/safe-nonce working-nonce nil shared/server-nonce-prefix-length)
+
+    ;; Reference implementation is really doing pointer math with the array
+    ;; to make this work.
+    ;; It's encrypting from (+ plain-text 64) over itself.
+    ;; There just isn't a good way to do the same thing in java.
+    ;; (The problem, really, is that I have to copy the plaintext
+    ;; so it winds up at the start of the array).
+    ;; Note that this is a departure from the reference implementation!
+    (let [actual (.array buffer)]
+      (shared/secret-box actual actual shared/server-cookie-length working-nonce minute-key)
+      ;; Copy that encrypted cookie into the text working area
+      (.getBytes buffer 64 text)
+      ;; Along with the nonce
+      (shared/byte-copy! text 64 shared/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
+
+      ;; And now we need to encrypt that.
+      ;; This really belongs in its own function
+      (shared/byte-copy! text 0 32 shared/all-zeros)
+      (shared/byte-copy! text 32 shared/key-length (.getPublicKey keys))
+      ;; Reuse the other 16 bytes
+      (shared/byte-copy! working-nonce 0 shared/server-nonce-prefix-length shared/cookie-nonce-prefix)
+      (.after client-short<->server-long text 0 160 working-nonce))))
+
+(defn build-cookie-packet!
+  [packet client-extension server-extension working-nonce text]
+  (shared/compose shared/cookie-frame {::shared/header shared/cookie-header
+                                       ::shared/client-extension client-extension
+                                       ::shared/server-extension server-extension
+                                       ::shared/nonce (Unpooled/wrappedBuffer working-nonce
+                                                                              shared/server-nonce-prefix-length
+                                                                              shared/server-nonce-suffix-length)
+                                       ;; This is also a great big FAIL:
+                                       ;; Have to drop the first 16 bytes
+                                       ::shared/cookie (Unpooled/wrappedBuffer text
+                                                                               shared/box-zero-bytes
+                                                                               144)}
+                  packet))
 
 (defn handle-hello!
   [state packet]
   (when (= (count packet) shared/hello-packet-length)
-    ;; Q: Worth using my shiny deserialization library?
-    (let [client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
+    (let [;; Q: Is this worth the performance hit?
+          {:keys [::shared/srvr-xtn ::shared/clnt-xtn ::clnt-short-pk]} (shared/decompose shared/hello-packet-dscr packet)
+          client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
       (shared/byte-copy! client-short-pk
-                         0 shared/key-length packet 40)
-      (let [shared-secret (shared/crypto-box-prepare client-short-pk
+                         0 shared/key-length clnt-short-pk)
+      (let [shared-secret (shared/crypto-box-prepare clnt-short-pk
                                                      (-> state
                                                          (get-in [::shared/my-keys ::long-pair])
                                                          .getSecretKey))
+            ;; Q: Is this worth doing?
+            ;; (it generally seems like a terrible idea)
             state (assoc-in state [::current-client ::shared-secrets ::client-short<->server-long]
                             shared-secret)
             ;; Q: How do I combine these to handle this all at once?
-            ;; Better Q: Is that a good idea?
+            ;; I think I could do something like:
+            ;; {:keys [{:keys [::text ::working-nonce] :as ::working-area}]} state
+            ;; (that fails spec validation)
+            ;; Better Q: Would that a good idea, if it worked?
             {:keys [::working-area]} state
-            {:keys [::text ::working-nonce]} working-area]
+            {:keys [::text ::working-nonce]} working-area
+            minute-key (get-in state [::cookie-cutter ::minute-key])]
+        (assert minute-key)
         (shared/byte-copy! working-nonce
                            shared/hello-nonce-prefix)
         (shared/byte-copy! working-nonce 16 8 packet 136)
-        ;; Q: Do I need this step?
+        ;; Q: Does tweetnacl handle this for me?
+        ;; (honestly: I mostly hope not).
         (shared/byte-copy! text 0 shared/box-zero-bytes shared/all-zeros)
         (shared/byte-copy! text shared/box-zero-bytes 80 packet 144)
-        (when-let [_ (.open_after shared-secret text 0 96 working-nonce)]
-          (throw (ex-info "Don't stop here!"
-                          {:what "Send cookie"})))))))
+        (if-let [plain-text (.open_after shared-secret text 0 96 working-nonce)]
+          (do
+            (prepare-cookie! {::client-short<->server-long shared-secret
+                              ::client-short-pk clnt-short-pk
+                              ::minute-key minute-key
+                              ::plain-text plain-text
+                              ::text text
+                              ::working-nonce working-nonce})
+            (build-cookie-packet! packet clnt-xtn srvr-xtn working-nonce text)
+            (let [dst (::client-chan state)]
+              ;; This seems like it must be wrong.
+              ;; It wouldn't work for raw netty. That requires the actual
+              ;; client channel associated with the incoming UDP packet
+              ;; to be able to send a response.
+              ;; This may be fine here, though it doesn't seem likely.
+              ;; The basic approach is doomed to failure as soon as I
+              ;; start sending back unsolicited packets.
+              ;; Or is aleph doing something more clever under the covers
+              ;; so each server instance winds up with its own "connected"
+              ;; client socket?
+              ;; That seems really dubious, but it would be nice if it
+              ;; worked.
+              (stream/put! dst packet)
+              state))
+          (do
+            (log/warn "Garbage in: dropping")
+            state))))))
 
 (defn handle-initiate!
   [state packet]
   (when (>= (count packet) minimum-initiate-packet-length)
     (throw (ex-info "Don't stop here!"
-                    {:what "Send cookie"}))))
+                    {:what "Cope with vouch/initiate"}))))
 
 (defn handle-message!
   [state packet]
   (when (>= (count packet) minimum-message-packet-length)
     (throw (ex-info "Don't stop here!"
-                    {:what "Send cookie"}))))
+                    {:what "Interesting part: incoming message"}))))
 
-(s/fdef handle-incoming
+(s/fdef handle-incoming!
         :args (s/cat :state ::state
                      :msg bytes?)
         :ret ::state)
 (defn handle-incoming!
-  "So...what *should* happen here?"
+  "Packet arrived from client. Do something with it."
   [state packet]
-  (when (and (check-packet-length packet)
-             (verify-my-packet state packet))
-    (shared/byte-copy! (get-in state [::current-client ::shared/extension])
-                       packet
-                       0 shared/extension-length packet (+ shared/client-header-length
-                                                           shared/extension-length))
-    (let [packet-type-id (char (aget packet (dec shared/client-header-length)))]
-      (case packet-type-id
-        \H (handle-hello! state packet)
-        \I (handle-initiate! state packet)
-        \M (handle-message! state packet)))))
+  (log/info "Incoming")
+  (println "Check logs in *nrepl-server common* (or in the CLI where you're running things)")
+  (if (and (check-packet-length packet)
+           (verify-my-packet state packet))
+    (do
+      ;; Wait, what? Why is this copy happening?
+      ;; Didn't we just verify that this is already true?
+      (log/info "This packet really is for me")
+      (shared/byte-copy! (get-in state [::current-client ::shared/extension])
+                         packet
+                         0 shared/extension-length packet (+ shared/header-length
+                                                             shared/extension-length))
+      (let [packet-type-id (char (aget packet (dec shared/header-length)))]
+        (try
+          (case packet-type-id
+            \H (handle-hello! state packet)
+            \I (handle-initiate! state packet)
+            \M (handle-message! state packet))
+          (catch Exception ex
+            (log/error ex (str "Failed handling packet type: " packet-type-id))
+            state))))
+    (do
+      (log/info "Ignoring gibberish")
+      state)))
 
+;;; This next seems generally useful enough that I'm making it public.
+;;; At least for now.
 (declare hide-long-arrays)
-
 (defn hide-secrets!
   [this]
   (log/info "Hiding secrets")

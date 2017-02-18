@@ -19,10 +19,9 @@
 (def client-nonce-suffix-length 8)
 (def server-nonce-prefix-length 8)
 (def server-nonce-suffix-length 16)
-(def server-cookie-length 96)
 (def server-name-length 256)
 
-(def client-header-length 8)
+(def header-length 8)
 (def client-header-prefix "QvnQ5Xl")
 (def hello-header (.getBytes (str client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
@@ -47,12 +46,14 @@
 
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
+(def cookie-nonce-minute-prefix (.getBytes "minute-k"))
+(def server-cookie-length 96)
 (def cookie-packet-length 200)
 (def cookie-frame
   "The boiler plate around a cookie"
   ;; Header is only a "string" in the ASCII sense
   (array-map ::header {::type ::bytes
-                       ::length client-header-length}
+                       ::length header-length}
              ::client-extension {::type ::bytes
                                  ::length extension-length}
              ::server-extension {::type ::bytes
@@ -202,46 +203,48 @@
   ;; It seems like it's probably really important.
   (TweetNaclFast$Box. public secret))
 
-(defn compose
-  [tmplt fields dst]
-  (reduce
-   (fn [_ k]
-     (let [dscr (k tmplt)
+(defn composition-reduction
+  [tmplt fields dst k]
+  (let [dscr (k tmplt)
         cnvrtr (::type dscr)
         v (k fields)]
-       (try
-         (case cnvrtr
-           ::bytes (let [n (::length dscr)]
-                     (try
-                       (.writeBytes dst v 0 n)
-                       (catch IllegalArgumentException ex
-                         (throw (ex-info "Setting bytes failed"
-                                         {::field k
-                                          ::length n
-                                          ::dst dst
-                                          ::dst-length (.capacity dst)
-                                          ::src v
-                                          ::source-class (class v)
-                                          ::description dscr
-                                          ::error ex})))))
-           ::int-64 (.writeLong dst v)
-           ::zeroes (let [n (::length dscr)]
-                      (.writeZero dst n)))
-         (catch IllegalArgumentException ex
-           (throw (ex-info "Missing clause"
-                           {::problem ex
-                            ::cause cnvrtr
-                            ::field k
-                            ::description dscr
-                            ::source-value v})))
-         (catch NullPointerException ex
-           (throw (ex-info "NULL"
-                           {::problem ex
-                            ::cause cnvrtr
-                            ::field k
-                            ::description dscr
-                            ::source-value v}))))))
-   0
+    (try
+      (case cnvrtr
+        ::bytes (let [n (::length dscr)]
+                  (try
+                    (.writeBytes dst v 0 n)
+                    (catch IllegalArgumentException ex
+                      (throw (ex-info "Setting bytes failed"
+                                      {::field k
+                                       ::length n
+                                       ::dst dst
+                                       ::dst-length (.capacity dst)
+                                       ::src v
+                                       ::source-class (class v)
+                                       ::description dscr
+                                       ::error ex})))))
+        ::int-64 (.writeLong dst v)
+        ::zeroes (let [n (::length dscr)]
+                   (.writeZero dst n)))
+      (catch IllegalArgumentException ex
+        (throw (ex-info "Missing clause"
+                        {::problem ex
+                         ::cause cnvrtr
+                         ::field k
+                         ::description dscr
+                         ::source-value v})))
+      (catch NullPointerException ex
+        (throw (ex-info "NULL"
+                        {::problem ex
+                         ::cause cnvrtr
+                         ::field k
+                         ::description dscr
+                         ::source-value v}))))))
+
+(defn compose
+  [tmplt fields dst]
+  (run!
+   (partial composition-reduction tmplt fields dst)
    (keys tmplt))
   dst)
 
@@ -410,6 +413,21 @@ Or maybe that's (dec n)"
           tmp (byte-array n)]
       (.randomBytes tmp)
       (byte-copy! dst offset n tmp))))
+
+(defn secret-box
+  "Symmetric encryption"
+  [dst cleartext length nonce key]
+  (TweetNaclFast/crypto_secretbox dst cleartext
+                                  length nonce key))
+
+(defn secret-unbox
+  "Symmetric-key decryption"
+  [dst ciphertext length nonce key]
+  (TweetNaclFast/crypto_secretbox_open dst
+                                       ciphertext
+                                       length
+                                       nonce
+                                       key))
 
 (defn slurp-bytes
   "Slurp the bytes from a slurpable thing
