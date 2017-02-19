@@ -137,24 +137,26 @@
    packet]
   ;; This test is failing.
   ;; TODO: Figure out why
-  (throw (RuntimeException. "Start here"))
-  (let [verified
-        (not= 0
-              ;; Q: Why did DJB use a bitwise and here?
-              ;; And does that reason go away when you factor in the hoops I
-              ;; have to jump through to jump between bitwise and logical
-              ;; operations?
-              (bit-and (if (shared/bytes= (.getBytes shared/client-header-prefix)
-                                          packet)
-                         -1 0)
-                       (if (shared/bytes= extension (-> packet
-                                                        vec
-                                                        (subvec shared/header-length (inc (+ shared/header-length
-                                                                                             shared/extension-length)))
-                                                        byte-array))
-                         -1 0)))]
+  (let [pkt-vec (vec packet)
+        rcvd-prfx (byte-array (subvec pkt-vec 0 (dec shared/header-length)))
+        rcvd-xtn (subvec pkt-vec shared/header-length (+ shared/header-length
+                                                         shared/extension-length))
+        verified (not= 0
+                       ;; Q: Why did DJB use a bitwise and here?
+                       ;; (most likely current guess: it doesn't shortcut)
+                       ;; And does that reason go away when you factor in the hoops I
+                       ;; have to jump through to jump between bitwise and logical
+                       ;; operations?
+                       (bit-and (if (shared/bytes= (.getBytes shared/client-header-prefix)
+                                                   rcvd-prfx)
+                                  -1 0)
+                                (if (shared/bytes= extension
+                                                   (byte-array rcvd-xtn))
+                                  -1 0)))]
     (when-not verified
-      (log/warn "Dropping packet intended for someone else"))
+      (log/warn "Dropping packet intended for someone else. Expected" (String. shared/client-header-prefix)
+                "and" (vec extension)
+                "\nGot" (String. rcvd-prfx) "and" rcvd-xtn))
     verified))
 
 (defn prepare-cookie!
@@ -303,9 +305,11 @@
       ;; Didn't we just verify that this is already true?
       (log/info "This packet really is for me")
       (shared/byte-copy! (get-in state [::current-client ::shared/extension])
+                         0
+                         shared/extension-length
                          packet
-                         0 shared/extension-length packet (+ shared/header-length
-                                                             shared/extension-length))
+                         (+ shared/header-length
+                            shared/extension-length))
       (let [packet-type-id (char (aget packet (dec shared/header-length)))]
         (try
           (case packet-type-id

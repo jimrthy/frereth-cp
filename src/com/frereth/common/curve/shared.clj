@@ -249,6 +249,7 @@
   dst)
 
 (defn decompose
+  "Note that this very strongly assumes that I have a ByteBuf here."
   [tmplt src]
   (reduce
    (fn
