@@ -134,13 +134,12 @@
 (defn verify-my-packet
   "Was this packet really intended for this server?"
   [{:keys [::shared/extension]}
-   packet]
-  ;; Now I have a io.netty.buffer.UnpooledHeapByteBuf.
-  ;; This changes things drastically.
-  (let [pkt-vec (vec packet)
-        rcvd-prfx (byte-array (subvec pkt-vec 0 (dec shared/header-length)))
-        rcvd-xtn (subvec pkt-vec shared/header-length (+ shared/header-length
-                                                         shared/extension-length))
+   header
+   rcvd-xtn]
+  (let [rcvd-prfx (-> header
+                      vec
+                      (subvec 0 (dec shared/header-length))
+                      byte-array)
         verified (not= 0
                        ;; Q: Why did DJB use a bitwise and here?
                        ;; (most likely current guess: it doesn't shortcut)
@@ -151,12 +150,12 @@
                                                    rcvd-prfx)
                                   -1 0)
                                 (if (shared/bytes= extension
-                                                   (byte-array rcvd-xtn))
+                                                   rcvd-xtn)
                                   -1 0)))]
     (when-not verified
       (log/warn "Dropping packet intended for someone else. Expected" (String. shared/client-header-prefix)
                 "and" (vec extension)
-                "\nGot" (String. rcvd-prfx) "and" rcvd-xtn))
+                "\nGot" (String. rcvd-prfx) "and" (vec rcvd-xtn)))
     verified))
 
 (defn prepare-cookie!
@@ -217,65 +216,112 @@
                                                                                144)}
                   packet))
 
+(defn open-hello-crypto-box
+  [{:keys [::client-short-pk
+           ::cookie-cutter
+           ::shared/my-keys
+           ::shared/working-area]
+    :as state}
+   message
+   crypto-box]
+  (let [long-keys (::shared/long-pair my-keys)]
+    (when-not long-keys
+      (if my-keys
+        (log/error "Missing ::shared/long-pair among" (keys my-keys))
+        (log/error "Missing ::shared/my-keys among" (keys state)))
+      (throw (ex-info "Missing long-term keypair" state)))
+    (let [my-sk (.getSecretKey long-keys)
+          shared-secret (shared/crypto-box-prepare client-short-pk my-sk)
+          ;; Q: Is this worth doing?
+          ;; (it generally seems like a terrible idea, and I don't really think I'm using it anywhere else)
+          state (assoc-in state [::current-client
+                                 ::shared-secrets
+                                 ::client-short<->server-long]
+                          shared-secret)
+          ;; Q: How do I combine these to handle this all at once?
+          ;; I think I should be able to do something like:
+          ;; {:keys [{:keys [::text ::working-nonce] :as ::working-area}]}
+          ;; state
+          ;; (that fails spec validation)
+          ;; Better Q: Would that a good idea, if it worked?
+          {:keys [::shared/text ::shared/working-nonce]} working-area]
+      (shared/byte-copy! working-nonce
+                         shared/hello-nonce-prefix)
+      ;; Q: Is the index screwed up here because I decomposed it?
+      ;; It's more than a little obnoxious that I can't just use the nonce integer I decomposed
+      (.getBytes message  136 working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
+      ;; Q: Does tweetnacl handle this for me?
+      ;; (honestly: I mostly hope not).
+      (shared/byte-copy! text 0 shared/box-zero-bytes shared/all-zeros)
+      (.readBytes crypto-box text shared/box-zero-bytes shared/hello-crypto-box-length)
+      {::opened
+       (.open_after shared-secret text 0 shared/hello-crypto-box-length working-nonce)
+       ::shared-secret shared-secret})))
+
 (defn handle-hello!
-  [state packet]
-  (when (= (count packet) shared/hello-packet-length)
-    (let [;; Q: Is this worth the performance hit?
-          {:keys [::shared/srvr-xtn ::shared/clnt-xtn ::clnt-short-pk]} (shared/decompose shared/hello-packet-dscr packet)
-          client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
-      (shared/byte-copy! client-short-pk
-                         0 shared/key-length clnt-short-pk)
-      (let [shared-secret (shared/crypto-box-prepare clnt-short-pk
-                                                     (-> state
-                                                         (get-in [::shared/my-keys ::long-pair])
-                                                         .getSecretKey))
-            ;; Q: Is this worth doing?
-            ;; (it generally seems like a terrible idea)
-            state (assoc-in state [::current-client ::shared-secrets ::client-short<->server-long]
-                            shared-secret)
-            ;; Q: How do I combine these to handle this all at once?
-            ;; I think I could do something like:
-            ;; {:keys [{:keys [::text ::working-nonce] :as ::working-area}]} state
-            ;; (that fails spec validation)
-            ;; Better Q: Would that a good idea, if it worked?
-            {:keys [::working-area]} state
-            {:keys [::text ::working-nonce]} working-area
-            minute-key (get-in state [::cookie-cutter ::minute-key])]
-        (assert minute-key)
-        (shared/byte-copy! working-nonce
-                           shared/hello-nonce-prefix)
-        (shared/byte-copy! working-nonce 16 8 packet 136)
-        ;; Q: Does tweetnacl handle this for me?
-        ;; (honestly: I mostly hope not).
-        (shared/byte-copy! text 0 shared/box-zero-bytes shared/all-zeros)
-        (shared/byte-copy! text shared/box-zero-bytes 80 packet 144)
-        (if-let [plain-text (.open_after shared-secret text 0 96 working-nonce)]
-          (do
-            (prepare-cookie! {::client-short<->server-long shared-secret
-                              ::client-short-pk clnt-short-pk
-                              ::minute-key minute-key
-                              ::plain-text plain-text
-                              ::text text
-                              ::working-nonce working-nonce})
-            (build-cookie-packet! packet clnt-xtn srvr-xtn working-nonce text)
-            (let [dst (::client-chan state)]
-              ;; This seems like it must be wrong.
-              ;; It wouldn't work for raw netty. That requires the actual
-              ;; client channel associated with the incoming UDP packet
-              ;; to be able to send a response.
-              ;; This may be fine here, though it doesn't seem likely.
-              ;; The basic approach is doomed to failure as soon as I
-              ;; start sending back unsolicited packets.
-              ;; Or is aleph doing something more clever under the covers
-              ;; so each server instance winds up with its own "connected"
-              ;; client socket?
-              ;; That seems really dubious, but it would be nice if it
-              ;; worked.
-              (stream/put! dst packet)
-              state))
-          (do
-            (log/warn "Garbage in: dropping")
-            state))))))
+  [{:keys [::shared/working-area]
+    :as state}
+   {:keys [host message part]
+    :as packet}]
+  (log/info "Have what looks like a HELLO packet")
+  (if (= (.readableBytes message) shared/hello-packet-length)
+    (do
+      (log/info "This is the correct size")
+      (let [;; Q: Is the convenience here worth the performance hit?
+            {:keys [::shared/srvr-xtn ::shared/clnt-xtn ::shared/clnt-short-pk ::shared/crypto-box]
+             :as decomposed} (shared/decompose shared/hello-packet-dscr message)
+            client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
+        (assert client-short-pk)
+        (assert clnt-short-pk)
+        (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
+        (.getBytes clnt-short-pk 0 client-short-pk)
+        (let [unboxed (open-hello-crypto-box (assoc state
+                                                          ::client-short-pk client-short-pk)
+                                                   message
+                                                   crypto-box)
+              plain-text (::opened unboxed)]
+          (if plain-text
+            (let [shared-secret (::shared-secret unboxed)
+                  minute-key (::minute-key state)
+                  {:keys [::shared/text
+                          ::shared/working-nonce]} working-area]
+              (assert minute-key)
+              ;; We don't actually care about the contents of the bytes we just decrypted.
+              ;; They should be all zeroes for now, but that's really an area for possible future
+              ;; expansion.
+              ;; For now, the point is that they unboxed correctly.
+              (prepare-cookie! {::client-short<->server-long shared-secret
+                                ::client-short-pk clnt-short-pk
+                                ::minute-key minute-key
+                                ::plain-text plain-text
+                                ::text text
+                                ::working-nonce working-nonce})
+              (build-cookie-packet! packet clnt-xtn srvr-xtn working-nonce text)
+              (log/info "Cookie packet built. Returning it.")
+              (try
+                (let [dst (::client-chan state)
+                      success (stream/try-put! dst
+                                               (assoc packet
+                                                      :message packet)
+                                               20
+                                               ::timed-out)]
+                  (log/info "Cookie packet scheduled to send")
+                  (deferred/on-realized success
+                    (fn [result]
+                      (log/info "Sending Cookie succeeded:" result))
+                    (fn [result]
+                      (log/error "Sending Cookie failed:" result)))
+                  state)
+                (catch Exception ex
+                  (log/error ex "Failed to send Cookie response")
+                  state)))
+            (do
+              (log/warn "Unable to open the HELLO crypto-box: dropping")
+              state)))))
+    (log/info "Wrong size for a HELLO packet. Need"
+              shared/hello-packet-length
+              "got"
+              (.readableBytes message))))
 
 (defn handle-initiate!
   [state packet]
@@ -300,34 +346,42 @@
            message
            port]
     :as packet}]
-  (log/info "Incoming")
-  (println "Check logs in *nrepl-server common* (or in the CLI where you're running things)")
-  (if (and (check-packet-length message)
-           (verify-my-packet state message))
-    (do
-      (log/info "This packet really is for me")
-      ;; Wait, what? Why is this copy happening?
-      ;; Didn't we just verify that this is already true?
-      ;; TODO: I strongly suspect something like a copy/paste
-      ;; failure on my part
-      (shared/byte-copy! (get-in state [::current-client ::shared/extension])
-                         0
-                         shared/extension-length
-                         message
-                         (+ shared/header-length
-                            shared/extension-length))
-      (let [packet-type-id (char (aget packet (dec shared/header-length)))]
-        (try
-          (case packet-type-id
-            \H (handle-hello! state packet)
-            \I (handle-initiate! state packet)
-            \M (handle-message! state packet))
-          (catch Exception ex
-            (log/error ex (str "Failed handling packet type: " packet-type-id))
-            state))))
-    (do
-      (log/debug "Ignoring gibberish")
-      state)))
+  (log/debug "Incoming")
+  (if (check-packet-length message)
+    (let [header (byte-array shared/header-length)
+          extension (byte-array shared/extension-length)
+          current-reader-index (.readerIndex message)]
+      (.readBytes message header)
+      (.readBytes message extension)
+      ;; This means that I'll wind up reading the header/extension
+      ;; again in the individual handlers.
+      ;; Which seems wasteful.
+      ;; TODO: Set up alternative reader templates which
+      ;; exclude those fields so I don't need to do this.
+      (.readerIndex message current-reader-index)
+      (if (verify-my-packet state header extension)
+        (do
+          (log/debug "This packet really is for me")
+          ;; Wait, what? Why is this copy happening?
+          ;; Didn't we just verify that this is already true?
+          ;; TODO: I strongly suspect something like a copy/paste
+          ;; failure on my part
+          (shared/byte-copy! (get-in state [::current-client ::shared/extension])
+                             extension)
+          (let [packet-type-id (char (aget header (dec shared/header-length)))]
+            (try
+              (case packet-type-id
+                \H (handle-hello! state packet)
+                \I (handle-initiate! state packet)
+                \M (handle-message! state packet))
+              (catch Exception ex
+                (log/error ex (str "Failed handling packet type: " packet-type-id))
+                state)))
+          (do (log/debug "Ignoring packet intended for someone else")
+              state))
+        (do
+          (log/debug "Ignoring packet of illegal length")
+          state)))))
 
 ;;; This next seems generally useful enough that I'm making it public.
 ;;; At least for now.
@@ -440,7 +494,7 @@
                           (inc (/ (::timeout this) shared/nanos-in-milli))
                           ::timedout)
         (fn [msg]
-          (log/debug (str "Top of Server Event loop received " msg
+          (log/info (str "Top of Server Event loop received " msg
                         "\nfrom " (:chan client-chan)
                         "\nin " client-chan))
           (if-not (or (identical? ::drained msg)
@@ -448,7 +502,7 @@
             (try
               ;; Q: Do I want unhandled exceptions to be fatal errors?
               (let [modified-state (handle-incoming! this msg)]
-                (log/debug "Updated state based on incoming msg:"
+                (log/info "Updated state based on incoming msg:"
                          (hide-long-arrays modified-state))
                 modified-state)
               (catch clojure.lang.ExceptionInfo ex
@@ -474,7 +528,7 @@
                 (do
                   ;; The promise that tells us to stop hasn't
                   ;; been fulfilled
-                  (log/debug "Rotating"
+                  (log/debug "Possibly Rotating"
                            #_(util/pretty (hide-long-arrays this))
                            "...this...")
                   (deferred/recur (handle-key-rotation this)))

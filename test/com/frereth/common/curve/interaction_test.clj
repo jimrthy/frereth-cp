@@ -16,13 +16,14 @@
   "This is really a server-side method"
   [client-chan hello]
   (println "Pulled HELLO from client")
-  (println "Have" (count hello) "bytes to write to " client-chan)
-  (if (= 224 (count hello))
-    (strm/put! (:chan client-chan)
-               {:message (Unpooled/wrappedBuffer hello)
-                :host "test-client"
-                :port 65536})
-    (throw (RuntimeException. "Bad Hello"))))
+  (let [n (.readableBytes hello)]
+    (println "Have" n "bytes to write to " client-chan)
+    (if (= 224 n)
+      (strm/put! (:chan client-chan)
+                 {:message (Unpooled/wrappedBuffer hello)
+                  :host "test-client"
+                  :port 65536})
+      (throw (RuntimeException. "Bad Hello")))))
 
 (defn wrote-hello
   [client-chan success]
@@ -32,30 +33,32 @@
   ;; the hello that I just put on there
   ;; Although it would be really sweet if ztellman
   ;; handled this for me.
-  (strm/try-take! client-chan ::drained 500 ::timeout))
+  (strm/try-take! (:chan client-chan) ::drained 500 ::timeout))
 
 (defn forward-cookie
   [client<-server cookie]
-  (when-not (keyword? cookie)
-    (is (= 200 (count cookie)))
-    (strm/try-put! client<-server
-                   {:message cookie
-                    :host "interaction-test-server"
-                    :port -1}
-                   500
-                   ::timeout)))
+  (println "Received cookie packet from server:" cookie)
+  (if-not (keyword? cookie)
+    (do
+      (is (= 200 (count (:message cookie))))
+      (strm/try-put! client<-server
+                     cookie
+                     500
+                     ::timeout))
+    (throw (ex-info "Bad cookie"
+                    {:problem cookie}))))
 
 (defn wrote-cookie
   [clnt->srvr success]
-  (println "Server cookie sent, for better or worse")
+  (println "Server cookie sent. Waiting for vouch")
   (is success)
   (is (not= success ::timeout))
   (strm/try-take! clnt->srvr ::drained 500 ::timeout))
 
 (defn vouch->server
   [client-chan vouch]
-  (if (and (not= vouch ::drained)
-           (not= vouch ::timeout))
+  (if-not (or (= vouch ::drained)
+              (= vouch ::timeout))
     (strm/try-put! client-chan
                    {:message vouch
                     :host "tester"
@@ -158,15 +161,15 @@
             ;; currently returns?
             (let [eventually-started (clnt/start! client)
                   clnt->srvr (::clnt/chan->server @client)]
-              (when-not (= chan->server clnt->srvr)
-                (assert false (str "Client channels don't match.\n"
-                                   "Expected:" chan->server
-                                   "\nHave:" clnt->srvr)))
-              (let [_ (assert clnt->srvr)
-                    write-hello (partial retrieve-hello client-chan)
-                    get-cookie (partial wrote-hello client-chan)
+              (assert (= chan->server clnt->srvr)
+                      (str "Client channels don't match.\n"
+                           "Expected:" chan->server
+                           "\nHave:" clnt->srvr))
+              (assert clnt->srvr)
+              (let [write-hello (partial retrieve-hello client-chan)
+                    build-cookie (partial wrote-hello client-chan)
                     write-cookie (partial forward-cookie chan<-server)
-                    get-cookie (partial wrote-cookie clnt->srvr)
+                    get-cookie (partial wrote-cookie client-chan)
                     write-vouch (partial vouch->server client-chan)
                     get-server-response (partial wrote-vouch client-chan)
                     write-server-response (partial finalize chan<-server)
@@ -174,7 +177,7 @@
                                clnt->srvr)
                     fut (deferred/chain (strm/take! clnt->srvr)
                           write-hello
-                          get-cookie
+                          build-cookie
                           write-cookie
                           get-cookie
                           write-vouch
@@ -204,6 +207,10 @@
             (catch Exception ex
               (println "Unhandled exception escaped!")
               (.printStackTrace ex)
+              (println "Client state:" (with-out-str (pprint (clnt/hide-long-arrays @client))))
+              (if-let [err (agent-error client)]
+                (println "Client failure:\n" err)
+                (println "(client agent thinks everything is fine)"))
               (is (not ex)))
             (finally
               (println "Test done. Stopping server.")

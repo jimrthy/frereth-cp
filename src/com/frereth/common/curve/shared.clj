@@ -26,6 +26,7 @@
 (def hello-header (.getBytes (str client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
+(def hello-crypto-box-length 80)
 ;; Q: Is it worth trying to build serialization
 ;; handlers like gloss/buffy from spec?
 ;; That *was* one of the awesome features
@@ -42,11 +43,13 @@
                                   ;; just spec this like that if clojure had
                                   ;; a better numeric tower
                                   ::nonce {::type ::int-64}
-                                  ::crypto-box {::type ::bytes ::length 80}))
+                                  ::crypto-box {::type ::bytes
+                                                ::length hello-crypto-box-length}))
 
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
+(def cookie-position-in-packet 80)
 (def server-cookie-length 96)
 (def cookie-packet-length 200)
 (def cookie-frame

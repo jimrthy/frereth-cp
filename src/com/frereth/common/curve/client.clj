@@ -688,10 +688,12 @@ TODO: Need to ask around about that."
   ;; Q: What is really in cookie-packet now?
   ;; (I think it's a netty ByteBuf)
   (try
-    (let [packet-manager (::shared/packet-management this)
-          packet (::shared/packet packet-manager)]
+    (let [packet (get-in this
+                         [::shared/packet-management
+                          ::shared/packet])]
       (assert packet)
       (assert cookie-packet)
+      (.clear packet)
       (.readBytes cookie-packet packet))
     (catch NullPointerException ex
       (throw (ex-info "Error trying to copy cookie packet"
@@ -798,21 +800,20 @@ TODO: Need to ask around about that."
                                 ::hello-response-timed-out)]
         (deferred/on-realized d
           (fn [result]
+            ;; I'm getting here with a timeout.
             (log/info "Incoming response from server:\n"
                       (with-out-str (pprint result)))
-            (when-not (or (= result ::drained)
-                          (= result ::hello-response-timed-out))
-              ;; I'm not actually getting here because that's timing
-              ;; out.
-              ;; Probably because its handle-incoming! function
-              ;; does nothing.
-              (log/debug "Building/sending Vouch")
-              ;; Q: Worth splitting this into 2 separate steps that
-              ;; I call from here?
-              ;; Actually, there's another: decoding the cookie.
-              ;; And verifying that we got a cookie instead of a timeout
-              ;; TODO: Yes, definitely split this up
-              (build-and-send-vouch wrapper result)))
+            (if-not (or (= result ::drained)
+                        (= result ::hello-response-timed-out))
+              (do
+                (log/info "Building/sending Vouch")
+                ;; Q: Worth splitting this into 2 separate steps that
+                ;; I call from here?
+                ;; Actually, there's another: decoding the cookie.
+                ;; And verifying that we got a cookie instead of a timeout
+                ;; TODO: Yes, definitely split this up
+                (build-and-send-vouch wrapper result))
+              (log/error "Server didn't respond to HELLO.")))
           (partial hello-response-timed-out! wrapper))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
 
@@ -847,31 +848,25 @@ Of course, I might also be opening things up for something
 like a timing attack."
   [wrapper]
   (when-let [failure (agent-error wrapper)]
-    (throw (ex-info "Agent already failed"
+    (throw (ex-info "Agent failed before we started"
                     {:problem failure})))
 
   (let [{:keys [::chan->server]} @wrapper
         timeout (current-timeout wrapper)]
     (stream/on-drained chan->server
-                       #(send wrapper server-closed!))
+                       (fn []
+                         (log/warn "Channel->server closed")
+                         (send wrapper server-closed!)))
     ;; This feels inside-out and backwards.
     ;; But it probably should, since this is very
     ;; explicitly place-oriented programming working
     ;; with mutable state.
     (send wrapper do-build-hello)
     (if (await-for timeout wrapper)
-      (let [raw-packet (-> wrapper
-                           deref
-                           ::shared/packet-management
-                           ::shared/packet)
-            ;; TODO: This should come from a reusable pool
-            buffer (byte-array (.readableBytes raw-packet))]
-        ;; Move bytes from our internal working packet buffer
-        ;; to the one we're going to share
-        (.readBytes raw-packet buffer)
-        ;; And set up our internal buffer to do more work
-        (.clear raw-packet)
-        (log/debug "client/start! Putting" buffer "onto" chan->server)
+      (let [raw-packet (get-in @wrapper
+                               [::shared/packet-management
+                                ::shared/packet])]
+        (log/debug "client/start! Putting" raw-packet "onto" chan->server)
         ;; There's still an important break
         ;; with the reference implementation
         ;; here: this should be sending the
@@ -885,7 +880,7 @@ like a timing attack."
         ;; is not waiting for TCP buffers
         ;; to expire.
         (let [d (stream/try-put! chan->server
-                                 buffer
+                                 raw-packet
                                  timeout
                                  ::sending-hello-timed-out)]
           (deferred/on-realized d
