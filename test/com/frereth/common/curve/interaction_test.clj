@@ -1,39 +1,53 @@
 (ns com.frereth.common.curve.interaction-test
-  (:require [clojure.pprint :refer (pprint)]
-            [clojure.test :refer (deftest is)]
+  (:require [aleph.udp :as udp]
+            [byte-streams :as bs]
+            [clojure.pprint :refer (pprint)]
+            [clojure.test :refer (deftest is testing)]
             [com.frereth.common.curve.client :as clnt]
             [com.frereth.common.curve.server :as srvr]
             [com.frereth.common.curve.server-test :as server-test]
             [com.frereth.common.curve.shared :as shared]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
-  (:import [clojure.lang ExceptionInfo]))
+  (:import clojure.lang.ExceptionInfo
+           io.netty.buffer.Unpooled))
 
 (defn retrieve-hello
+  "This is really a server-side method"
   [client-chan hello]
   (println "Pulled HELLO from client")
   (println "Have" (count hello) "bytes to write to " client-chan)
   (if (= 224 (count hello))
-    (strm/put! (:chan client-chan) hello)
+    (strm/put! (:chan client-chan)
+               {:message (Unpooled/wrappedBuffer hello)
+                :host "test-client"
+                :port 65536})
     (throw (RuntimeException. "Bad Hello"))))
 
 (defn wrote-hello
   [client-chan success]
   (is success "Failed to write hello to server")
-  ;; TODO: I'm pretty sure I need to split
+  ;; I'm pretty sure I need to split
   ;; this into 2 channels so I don't pull back
   ;; the hello that I just put on there
+  ;; Although it would be really sweet if ztellman
+  ;; handled this for me.
   (strm/try-take! client-chan ::drained 500 ::timeout))
 
 (defn forward-cookie
   [client<-server cookie]
   (when-not (keyword? cookie)
     (is (= 200 (count cookie)))
-    (strm/try-put! client<-server cookie 500 ::timeout)))
+    (strm/try-put! client<-server
+                   {:message cookie
+                    :host "interaction-test-server"
+                    :port -1}
+                   500
+                   ::timeout)))
 
 (defn wrote-cookie
   [clnt->srvr success]
-  (println "D")
+  (println "Server cookie sent, for better or worse")
   (is success)
   (is (not= success ::timeout))
   (strm/try-take! clnt->srvr ::drained 500 ::timeout))
@@ -42,7 +56,12 @@
   [client-chan vouch]
   (if (and (not= vouch ::drained)
            (not= vouch ::timeout))
-    (strm/try-put! client-chan vouch 500 ::timeout)
+    (strm/try-put! client-chan
+                   {:message vouch
+                    :host "tester"
+                    :port 65536}
+                   500
+                   ::timeout)
     (throw (ex-info "Retrieving Vouch from client failed"
                     {:failure vouch}))))
 
@@ -55,7 +74,12 @@
 (defn finalize
   [client<-server response]
   (is response "Handshake should be complete")
-  (strm/try-put! client<-server response 500 ::timeout))
+  (strm/try-put! client<-server
+                 {:message response
+                  :host "interaction-test-server"
+                  :port -1}
+                 500
+                 ::timeout))
 
 (defn client-child-spawner
   [client-agent]
@@ -187,3 +211,63 @@
         (catch clojure.lang.ExceptionInfo ex
           (is (not (.getData ex)))))
       (finally (.stop client-chan)))))
+
+(defn translate-raw-incoming
+  [{:keys [host message port]
+    :as packet}]
+  (println "Server received a map:" packet "with a" (class message) ":message")
+  (assoc packet :translated (Unpooled/wrappedBuffer message)))
+
+(deftest basic-udp-handler
+  (testing "Really just verifying that I receive byte arrays and can trivially convert them to ByteBuf."
+    ;; Although it also demonstrates the basic point behind writing responses.
+    ;; It isn't complicated, but I'm responsible for the details
+    (let [port 26453
+          client1-socket @(udp/socket {})]
+      (try
+        (let [client2-socket @(udp/socket {})]
+          (try
+            (let [server-socket @(udp/socket {:port port})]
+              (try
+                (testing "Sending"
+                  (->> server-socket
+                       (strm/map translate-raw-incoming)
+                       (strm/consume (fn [incoming]
+                                       (let [buf (:translated incoming)
+                                             n (.readLong buf)]
+                                         (println "Server read:" n)
+                                         (let [write (strm/try-put! server-socket
+                                                                    {:message (byte-array [0 0 0 0 0 0 0 (inc n)])
+                                                                     :host (:host incoming)
+                                                                     :port (:port incoming)}
+                                                                    10
+                                                                    ::timed-out)]
+                                           (is (not= @write ::timed-out)))
+                                         ))))
+                  (let [put1 @(strm/try-put! client1-socket
+                                             {:message (byte-array [0 0 0 0 0 0 0 1])
+                                              :host "localhost"
+                                              :port port}
+                                             10
+                                             ::timed-out)]
+                    (is (not= put1 ::timed-out)))
+                  (let [put2 @(strm/try-put! client2-socket
+                                             {:message (byte-array [0 0 0 0 0 0 0 16])
+                                              :host "localhost"
+                                              :port port}
+                                             10
+                                             ::timed-out)]
+                    (is (not= put2 ::timed-out))))
+                (testing "Response"
+                  ;; To make this realistic, I should convert the :message pieces to ByteBuf
+                  ;; and call .readInt.
+                  (let [pull1 @(strm/try-take! client1-socket ::drained 20 ::timed-out)]
+                    (is (= 2 (aget (:message pull1) 7))))
+                  (let [pull2 @(strm/try-take! client2-socket ::drained 20 ::timed-out)]
+                    (is (= 17 (aget (:message pull2) 7)))))
+                (finally
+                  (strm/close! server-socket))))
+            (finally
+              (strm/close! client2-socket))))
+        (finally
+          (strm/close! client1-socket))))))

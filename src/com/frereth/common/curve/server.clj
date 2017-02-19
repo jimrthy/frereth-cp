@@ -122,7 +122,7 @@
   ;; So far, for unit tests, I'm getting the [B I expect
   (log/debug (str "Incoming: " packet ", a " (class packet)))
   ;; For now, retain the name r for compatibility/historical reasons
-  (let [r (count packet)]
+  (let [r (.readableBytes packet)]
     (log/info (str "Incoming packet contains " r " bytes"))
     (and (>= r 80)
          (<= r 1184)
@@ -135,8 +135,8 @@
   "Was this packet really intended for this server?"
   [{:keys [::shared/extension]}
    packet]
-  ;; This test is failing.
-  ;; TODO: Figure out why
+  ;; Now I have a io.netty.buffer.UnpooledHeapByteBuf.
+  ;; This changes things drastically.
   (let [pkt-vec (vec packet)
         rcvd-prfx (byte-array (subvec pkt-vec 0 (dec shared/header-length)))
         rcvd-xtn (subvec pkt-vec shared/header-length (+ shared/header-length
@@ -295,19 +295,25 @@
         :ret ::state)
 (defn handle-incoming!
   "Packet arrived from client. Do something with it."
-  [state packet]
+  [state
+   {:keys [host
+           message
+           port]
+    :as packet}]
   (log/info "Incoming")
   (println "Check logs in *nrepl-server common* (or in the CLI where you're running things)")
-  (if (and (check-packet-length packet)
-           (verify-my-packet state packet))
+  (if (and (check-packet-length message)
+           (verify-my-packet state message))
     (do
+      (log/info "This packet really is for me")
       ;; Wait, what? Why is this copy happening?
       ;; Didn't we just verify that this is already true?
-      (log/info "This packet really is for me")
+      ;; TODO: I strongly suspect something like a copy/paste
+      ;; failure on my part
       (shared/byte-copy! (get-in state [::current-client ::shared/extension])
                          0
                          shared/extension-length
-                         packet
+                         message
                          (+ shared/header-length
                             shared/extension-length))
       (let [packet-type-id (char (aget packet (dec shared/header-length)))]
@@ -320,7 +326,7 @@
             (log/error ex (str "Failed handling packet type: " packet-type-id))
             state))))
     (do
-      (log/info "Ignoring gibberish")
+      (log/debug "Ignoring gibberish")
       state)))
 
 ;;; This next seems generally useful enough that I'm making it public.
