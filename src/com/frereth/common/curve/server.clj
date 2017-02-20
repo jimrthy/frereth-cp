@@ -1,6 +1,7 @@
 (ns com.frereth.common.curve.server
   "Implement the server half of the CurveCP protocol"
-  (:require [clojure.spec :as s]
+  (:require [byte-streams :as bs]
+            [clojure.spec :as s]
             ;; TODO: Really need millisecond precision (at least)
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
@@ -219,6 +220,7 @@
 (defn open-hello-crypto-box
   [{:keys [::client-short-pk
            ::cookie-cutter
+           ::nonce-suffix
            ::shared/my-keys
            ::shared/working-area]
     :as state}
@@ -231,31 +233,37 @@
         (log/error "Missing ::shared/my-keys among" (keys state)))
       (throw (ex-info "Missing long-term keypair" state)))
     (let [my-sk (.getSecretKey long-keys)
-          shared-secret (shared/crypto-box-prepare client-short-pk my-sk)
-          ;; Q: Is this worth doing?
-          ;; (it generally seems like a terrible idea, and I don't really think I'm using it anywhere else)
-          state (assoc-in state [::current-client
-                                 ::shared-secrets
-                                 ::client-short<->server-long]
-                          shared-secret)
+          shared-secret (shared/before-nm client-short-pk my-sk)
           ;; Q: How do I combine these to handle this all at once?
           ;; I think I should be able to do something like:
           ;; {:keys [{:keys [::text ::working-nonce] :as ::working-area}]}
           ;; state
           ;; (that fails spec validation)
           ;; Better Q: Would that a good idea, if it worked?
+          ;; (Pretty sure this is/was the main thrust behind a plumatic library)
           {:keys [::shared/text ::shared/working-nonce]} working-area]
       (shared/byte-copy! working-nonce
                          shared/hello-nonce-prefix)
-      ;; Q: Is the index screwed up here because I decomposed it?
-      ;; It's more than a little obnoxious that I can't just use the nonce integer I decomposed
-      (.getBytes message  136 working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
-      ;; Q: Does tweetnacl handle this for me?
-      ;; (honestly: I mostly hope not).
-      (shared/byte-copy! text 0 shared/box-zero-bytes shared/all-zeros)
-      (.readBytes crypto-box text shared/box-zero-bytes shared/hello-crypto-box-length)
-      {::opened
-       (.open_after shared-secret text 0 shared/hello-crypto-box-length working-nonce)
+      (.readBytes nonce-suffix working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
+      ;; Note that TweetNacl copes with the initial buffer padding for me
+      (.readBytes crypto-box text 0 shared/hello-crypto-box-length)
+      (let [msg (str "Trying to open "
+                     shared/hello-crypto-box-length
+                     " bytes of\n"
+                     (with-out-str (bs/print-bytes text))
+                     "\nencrypted from\n"
+                     (with-out-str (bs/print-bytes client-short-pk))
+                     "\nto\n"
+                     (with-out-str (bs/print-bytes (.getPublicKey long-keys)))
+                     "\nusing nonce\n"
+                     (with-out-str (bs/print-bytes working-nonce)))]
+        (log/info msg))
+      {::opened (shared/open-after
+                 text
+                 0
+                 shared/hello-crypto-box-length
+                 working-nonce
+                 shared-secret)
        ::shared-secret shared-secret})))
 
 (defn handle-hello!
@@ -266,9 +274,13 @@
   (log/info "Have what looks like a HELLO packet")
   (if (= (.readableBytes message) shared/hello-packet-length)
     (do
-      (log/info "This is the correct size")
+      (log/debug "This is the correct size")
       (let [;; Q: Is the convenience here worth the performance hit?
-            {:keys [::shared/srvr-xtn ::shared/clnt-xtn ::shared/clnt-short-pk ::shared/crypto-box]
+            {:keys [::shared/clnt-xtn
+                    ::shared/clnt-short-pk
+                    ::shared/crypto-box
+                    ::shared/nonce
+                    ::shared/srvr-xtn]
              :as decomposed} (shared/decompose shared/hello-packet-dscr message)
             client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
         (assert client-short-pk)
@@ -276,9 +288,10 @@
         (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
         (.getBytes clnt-short-pk 0 client-short-pk)
         (let [unboxed (open-hello-crypto-box (assoc state
-                                                          ::client-short-pk client-short-pk)
-                                                   message
-                                                   crypto-box)
+                                                    ::client-short-pk client-short-pk
+                                                    ::nonce-suffix nonce)
+                                             message
+                                             crypto-box)
               plain-text (::opened unboxed)]
           (if plain-text
             (let [shared-secret (::shared-secret unboxed)

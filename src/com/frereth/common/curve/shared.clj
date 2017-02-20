@@ -14,6 +14,7 @@
 (def box-zero-bytes 16)
 (def extension-length 16)
 (def key-length 32)
+(def shared-key-length 32)
 (def nonce-length 24)
 (def client-nonce-prefix-length 16)
 (def client-nonce-suffix-length 8)
@@ -31,7 +32,7 @@
 ;; handlers like gloss/buffy from spec?
 ;; That *was* one of the awesome features
 ;; offered/promised by schema.
-(def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length 8}
+(def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length header-length}
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-short-pk {::type ::bytes ::length key-length}
@@ -42,7 +43,8 @@
                                   ;; It would probably be more tempting to
                                   ;; just spec this like that if clojure had
                                   ;; a better numeric tower
-                                  ::nonce {::type ::int-64}
+                                  ::nonce {::type ::bytes
+                                           ::length client-nonce-suffix-length}
                                   ::crypto-box {::type ::bytes
                                                 ::length hello-crypto-box-length}))
 
@@ -158,6 +160,13 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(defn before-nm
+  [their-public my-secret]
+  (let [shared (byte-array shared-key-length)]
+    (TweetNaclFast/crypto_box_beforenm shared their-public my-secret)
+    shared))
+
 (defn byte-copy!
   "Copies the bytes from src to dst"
   ([dst src]
@@ -195,7 +204,10 @@
          (= nx ny))))
 
 (defn crypto-box-prepare
-  ""
+  "Set up shared secret so I can avoid the if logic to see whether it's been done.
+  At least, I think that's the point.
+
+  In general, this approach doesn't seem all that popular."
   [public secret]
   ;; Q: Do I want to do this?
   ;; Or just use .before?
@@ -204,7 +216,9 @@
   ;; ready to use.
   ;; TODO: Need to dig into this particular detail.
   ;; It seems like it's probably really important.
-  (TweetNaclFast$Box. public secret))
+  (let [box (TweetNaclFast$Box. public secret)]
+    (.before box)
+    box))
 
 (defn composition-reduction
   [tmplt fields dst k]
@@ -333,6 +347,32 @@ And encrypted with a passphrase, of course."
 (comment (let [encoded (encode-server-name "foo..bacon.com")]
            (vec encoded)))
 
+(defn open-after
+  [box box-offset box-length nonce shared-key]
+  (if (and (not (nil? box))
+           (>= (count box) (+ box-offset box-length))
+           (>= box-length box-zero-bytes))
+    (do
+      (log/info "Box is long enough")
+      (let [n (+ box-length box-zero-bytes)
+            plain-text (byte-array n)
+            cipher-text (byte-array n)]
+        (doseq [i (range box-length)]
+          (aset-byte cipher-text
+                     (+ box-zero-bytes i)
+                     (aget box (+ i box-offset))))
+        ;; Q: Where does shared-key come from?
+        ;; A: crypto_box_beforenm
+        (when
+            (TweetNaclFast/crypto_box_open_afternm plain-text cipher-text
+                                                   (count cipher-text) nonce
+                                                   shared-key)
+          (throw (RuntimeException. "Opening box failed"))
+          (-> plain-text
+              vec
+              (subvec box-zero-bytes)))))
+    (throw (RuntimeException. "Box too small"))))
+
 (defn random-array
   "Returns an array of n random bytes"
   [^Long n]
@@ -453,6 +493,19 @@ Or there's probably something similar in guava"
     (with-open [in (clojure.java.io/input-stream bs)]
       (clojure.java.io/copy in out))))
 
+(defn sub-byte-array
+  "Return an array that copies a portion of the source"
+  ([src beg]
+   (-> src
+       vec
+       (subvec beg)
+       byte-array))
+  ([src beg end]
+   (-> src
+       vec
+       (subvec beg end)
+       byte-array)))
+
 (defn uint64-pack!
   "Sets 8 bytes in dst (starting at offset n) to x
 
@@ -462,45 +515,31 @@ Box.generateNonce.
 If that's really all this is used for, should definitely use
 that implementation instead"
   [^bytes dst n ^Long x]
-  ;; This is failing because bit operations aren't supported
-  ;; on BigInt.
-  ;; Note that I do inherit guava 19.0 from the google closure
-  ;; compiler.
-  ;; Which is almost an accident from component-dsl including
-  ;; clojurescript.
-  ;; Guava's unsigned long is slightly slower than using
-  ;; primitive longs, with the trade-off of strong typing.
-  ;; That seems like a fairly dumb trade-off.
-  ;; Especially since the bit twiddling here almost has
-  ;; to be for performance/timing reasons.
-  ;; Maybe I should just be using primitive longs to start
-  ;; with and cope with the way the signed bit works when
-  ;; I must.
-  (log/debug "Trying to pack" x "a" (class x) "into offset" n "of"
+  (log/info "Trying to pack" x "a" (class x) "into offset" n "of"
              (count dst) "bytes at" dst)
   (let [x' (bit-and 0xff x)]
-    (aset-byte dst n (- x' 128))
+    (aset-byte dst n x')
     (let [x (unsigned-bit-shift-right x 8)
           x' (bit-and 0xff x)]
-      (aset-byte dst (inc n) (- x' 128))
+      (aset-byte dst (inc n) x')
       (let [x (unsigned-bit-shift-right x 8)
             x' (bit-and 0xff x)]
-        (aset-byte dst (+ n 2) (- x' 128))
+        (aset-byte dst (+ n 2) x')
         (let [x (unsigned-bit-shift-right x 8)
               x' (bit-and 0xff x)]
-          (aset-byte dst (+ n 3) (- x' 128))
+          (aset-byte dst (+ n 3) x')
           (let [x (unsigned-bit-shift-right x 8)
                 x' (bit-and 0xff x)]
-            (aset-byte dst (+ n 4) (- x' 128))
+            (aset-byte dst (+ n 4) x')
             (let [x (unsigned-bit-shift-right x 8)
                   x' (bit-and 0xff x)]
-              (aset-byte dst (+ n 5) (- x' 128))
+              (aset-byte dst (+ n 5) x')
               (let [x (unsigned-bit-shift-right x 8)
                     x' (bit-and 0xff x)]
-                (aset-byte dst (+ n 6) (- x' 128))
+                (aset-byte dst (+ n 6) x')
                 (let [x (unsigned-bit-shift-right x 8)
                       x' (bit-and 0xff x)]
-                  (aset-byte dst (+ n 7) (- x' 128)))))))))))
+                  (aset-byte dst (+ n 7) x'))))))))))
 
 (defn zero-bytes
   [n]

@@ -200,17 +200,36 @@ nor subject to timing attacks because it just won't be called very often."
   [{:keys [::server-extension
            ::shared/extension
            ::shared/my-keys
-           ::shared-secrets]}
+           ::shared-secrets]
+    :as this}
    short-term-nonce
    working-nonce]
-  {::shared/prefix shared/hello-header
-   ::shared/srvr-xtn server-extension
-   ::shared/clnt-xtn extension
-   ::shared/clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
-   ::shared/zeros nil
-   ::shared/nonce short-term-nonce
-   ::shared/crypto-box (.after (::client-short<->server-long shared-secrets)
-                               shared/all-zeros 0 64 working-nonce)})
+
+  (let [my-short<->their-long (::client-short<->server-long shared-secrets)
+        _ (assert my-short<->their-long)
+        ;; Note that this definitely inserts the 16-byte prefix for me
+        boxed (.after my-short<->their-long
+                      shared/all-zeros 0 64 working-nonce)
+        msg (str "Hello crypo-box:\n"
+                 (with-out-str (b-s/print-bytes boxed))
+                 "\nencrypted with nonce\n"
+                 (with-out-str (b-s/print-bytes working-nonce))
+                 "\nfrom\n"
+                 (with-out-str (-> my-keys
+                                   ::shared/short-pair
+                                   .getPublicKey
+                                   b-s/print-bytes))
+                 "\nto\n"
+                 (with-out-str (b-s/print-bytes (get-in this [::server-security
+                                                             ::server-long-term-pk]))))]
+    (log/info msg)
+    {::shared/prefix shared/hello-header
+     ::shared/srvr-xtn server-extension
+     ::shared/clnt-xtn extension
+     ::shared/clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
+     ::shared/zeros nil
+     ::shared/nonce (shared/sub-byte-array working-nonce shared/client-nonce-prefix-length)
+     ::shared/crypto-box boxed}))
 
 (s/fdef build-actual-hello-packet
         :args (s/cat :this ::state
@@ -225,8 +244,8 @@ nor subject to timing attacks because it just won't be called very often."
    working-nonce]
   (assert packet-management)
   (let [raw-hello (build-raw-hello this short-term-nonce working-nonce)
-        {packet ::shared/packet} packet-management
-        _ (assert packet)]
+        {packet ::shared/packet} packet-management]
+    (assert packet)
     (shared/compose shared/hello-packet-dscr raw-hello packet)))
 (comment
   (let [my-short (shared/random-key-pair)
@@ -245,12 +264,11 @@ nor subject to timing attacks because it just won't be called very often."
               ::shared/packet-management (shared/default-packet-manager)
               ::shared-secrets {::client-short<->server-long my<->server}}
         short-nonce 0x03
-        ;; Q: How close is this?
         working-nonce (byte-array [(byte \C) (byte \u) (byte \r) (byte \v) (byte \e)
                                    (byte \C) (byte \P) (byte \-) (byte \c) (byte \l)
                                    (byte \i) (byte \e) (byte \n) (byte \t) (byte \-)
                                    (byte \H)
-                                   0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x03])]
+                                   0x03 0x00 0x00 0x00 0x00 0x00 0x00 0x00])]
     (comment
       (-> this ::shared/packet-management ::shared/packet .capacity)
 
@@ -283,6 +301,8 @@ Note that this is really called for side-effects"
         short-term-nonce (update-client-short-term-nonce packet-nonce)]
     (shared/byte-copy! working-nonce shared/hello-nonce-prefix)
     (shared/uint64-pack! working-nonce shared/client-nonce-prefix-length short-term-nonce)
+    (log/info (str short-term-nonce " packed into\n"
+                   (with-out-str (b-s/print-bytes working-nonce))))
 
     (let [packet (build-actual-hello-packet this short-term-nonce working-nonce)]
       (update this ::shared/packet-management
