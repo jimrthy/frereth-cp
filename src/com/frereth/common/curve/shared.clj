@@ -1,5 +1,7 @@
 (ns com.frereth.common.curve.shared
-  "For pieces shared among client, server, and messaging"
+  "For pieces shared among client, server, and messaging.
+
+This is getting big enough that I really need to split it up"
   (:require [clojure.java.io :as io]
             [clojure.spec :as s]
             [clojure.string]
@@ -162,6 +164,11 @@
 ;;; Public
 
 (defn before-nm
+  "Prepare a shared key byte array for low-level operations.
+
+TODO: Deprecate this and just use crypto-box-prepare instead.
+
+The duplication is a prime example of this namespace being too big."
   [their-public my-secret]
   (let [shared (byte-array shared-key-length)]
     (TweetNaclFast/crypto_box_beforenm shared their-public my-secret)
@@ -205,22 +212,14 @@
 
 (defn crypto-box-prepare
   "Set up shared secret so I can avoid the if logic to see whether it's been done.
-  At least, I think that's the point.
-
-  In general, this approach doesn't seem all that popular."
+  At least, I think that's the point."
   [public secret]
-  ;; Q: Do I want to do this?
-  ;; Or just use .before?
-  ;; Or maybe the key is that I should create
-  ;; it and call .before immediately so it's
-  ;; ready to use.
-  ;; TODO: Need to dig into this particular detail.
-  ;; It seems like it's probably really important.
-  (let [box (TweetNaclFast$Box. public secret)]
-    (.before box)
-    box))
+  (let [shared (byte-array shared-key-length)]
+    (TweetNaclFast/crypto_box_beforenm shared public secret)
+    shared))
 
 (defn composition-reduction
+  "Reduction function associated for run!ing from compose."
   [tmplt fields dst k]
   (let [dscr (k tmplt)
         cnvrtr (::type dscr)
@@ -347,30 +346,53 @@ And encrypted with a passphrase, of course."
 (comment (let [encoded (encode-server-name "foo..bacon.com")]
            (vec encoded)))
 
+(s/fdef open-after
+        :args (s/cat :box bytes?
+                     :box-offset integer?
+                     :box-length integer?
+                     :nonce bytes?
+                     ;; This is a major reason you might use this:
+                     ;; Don't go through the overhead of wrapping
+                     ;; a byte array inside a class.
+                     ;; Plus, there are fewer function calls to get
+                     ;; to the point.
+                     :shared-key bytes?)
+        :ret vector?)
 (defn open-after
+  "Low-level direct crypto box opening"
   [box box-offset box-length nonce shared-key]
+  {:pre [(bytes? shared-key)]}
   (if (and (not (nil? box))
            (>= (count box) (+ box-offset box-length))
            (>= box-length box-zero-bytes))
     (do
-      (log/info "Box is long enough")
+      (log/info "Box is large enough")
       (let [n (+ box-length box-zero-bytes)
-            plain-text (byte-array n)
-            cipher-text (byte-array n)]
+            cipher-text (byte-array n)
+            plain-text (byte-array n)]
         (doseq [i (range box-length)]
           (aset-byte cipher-text
                      (+ box-zero-bytes i)
                      (aget box (+ i box-offset))))
         ;; Q: Where does shared-key come from?
         ;; A: crypto_box_beforenm
-        (when
-            (TweetNaclFast/crypto_box_open_afternm plain-text cipher-text
-                                                   (count cipher-text) nonce
-                                                   shared-key)
-          (throw (RuntimeException. "Opening box failed"))
+        (let [success
+              (TweetNaclFast/crypto_box_open_afternm plain-text cipher-text
+                                                     n nonce
+                                                     shared-key)]
+          (when (not= 0 success)
+            (throw (RuntimeException. "Opening box failed")))
+          ;; The * 2 on the zero bytes is important.
+          ;; The encryption starts with 0's and prepends them.
+          ;; The decryption requires another bunch (of zeros?) in front of that.
+          ;; We have to strip them both to get back to the real plain text.
+          (comment (log/info "Decrypted" box-length "bytes into" n "starting with" (aget plain-text (* 2 box-zero-bytes))))
+          ;; TODO: Compare the speed of doing this with allocating a new
+          ;; byte array without the 0-prefix padding and copying it back over
+          ;; Keep in mind that we're limited to 1088 bytes per message.
           (-> plain-text
               vec
-              (subvec box-zero-bytes)))))
+              (subvec (* 2 box-zero-bytes))))))
     (throw (RuntimeException. "Box too small"))))
 
 (defn random-array

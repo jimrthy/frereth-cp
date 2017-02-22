@@ -10,6 +10,7 @@
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
+           com.iwebpp.crypto.TweetNaclFast$Box
            io.netty.buffer.Unpooled))
 
 (defn retrieve-hello
@@ -100,6 +101,55 @@
     {::clnt/child child
      ::clnt/reader result
      ::clnt/writer strm/stream}))
+
+(deftest verify-keys
+  (let [server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
+                                    51 -105 -107 -125 -120 -41 83 -46
+                                    -23 -72 109 -58 -100 87 115 95
+                                    89 -74 -21 -33 20 21 110 95])
+        keydir "curve-test"
+        server-pair (shared/do-load-keypair keydir)]
+    (let [pk (.getPublicKey server-pair)]
+      (is (shared/bytes= pk server-long-pk)))
+    (let [client-pair (shared/random-key-pair)
+          client-shared (TweetNaclFast$Box.
+                         server-long-pk
+                         (.getSecretKey client-pair))
+          server-shared (TweetNaclFast$Box.
+                         (.getPublicKey client-pair)
+                         (.getSecretKey server-pair))
+          server-shared-nm (shared/crypto-box-prepare
+                            (.getPublicKey client-pair)
+                            (.getSecretKey server-pair))
+          block-length 50
+          plain-text (byte-array (range block-length))
+          nonce (byte-array shared/nonce-length)]
+      ;; TODO: Enable this check after I get the java code recompiled
+      (comment (is shared/bytes= server-shared-nm (.-sharedKey server-shared)))
+      ;; This is fairly arbitrary...24 random-bytes would be better
+      (aset-byte nonce 7 1)
+      (let [crypto-text (.after client-shared plain-text 0 block-length nonce)
+            crypto-text2 (.box client-shared plain-text 0 block-length nonce)]
+        (is crypto-text)
+        (is crypto-text2)
+        (is (shared/bytes= crypto-text crypto-text2))
+        (is (> (count crypto-text) (count plain-text)))
+        (is (not= crypto-text plain-text))
+        (println "Getting ready to try to decrypt. Including using" server-shared-nm "a" (class server-shared-nm)
+                 "containing" (count server-shared-nm) "bytes")
+        (let [de2 (.open server-shared crypto-text nonce)  ; easiest, slowest approach
+              ;; This is the approach that almost everyone will use
+              decrypted (.open_after server-shared crypto-text 0 (count crypto-text) nonce)
+              ;; This is the approach that I really should use
+              de3 (shared/open-after crypto-text 0 (count crypto-text) nonce server-shared-nm)]
+          (is de2)
+          (is decrypted)
+          (is de3)
+          (is (shared/bytes= decrypted plain-text))
+          (is (shared/bytes= de2 plain-text))
+          ;; This is fun: it looks/acts like I'm succeeding, but I'm getting gibberish back
+          (let [bs (byte-array de3)]
+            (is (shared/bytes= bs plain-text))))))))
 
 (deftest handshake
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
