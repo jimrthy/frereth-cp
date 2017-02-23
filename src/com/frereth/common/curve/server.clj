@@ -250,24 +250,26 @@
           ;; (Pretty sure this is/was the main thrust behind a plumatic library)
           {:keys [::shared/text ::shared/working-nonce]} working-area]
       (b-t/byte-copy! working-nonce
-                         shared/hello-nonce-prefix)
+                      shared/hello-nonce-prefix)
       (.readBytes nonce-suffix working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
-      (.readBytes crypto-box text K/decrypt-box-zero-bytes shared/hello-crypto-box-length)
+      (.readBytes crypto-box text #_K/decrypt-box-zero-bytes 0 shared/hello-crypto-box-length)
       (let [msg (str "Trying to open "
                      shared/hello-crypto-box-length
                      " bytes of\n"
-                     (with-out-str (bs/print-bytes text))
+                     (with-out-str (bs/print-bytes (b-t/sub-byte-array text 0 (+ 32 shared/hello-crypto-box-length))))
+                     "\nusing nonce\n"
+                     (with-out-str (bs/print-bytes working-nonce))
                      "\nencrypted from\n"
                      (with-out-str (bs/print-bytes client-short-pk))
-                     "\nto\n"
-                     (with-out-str (bs/print-bytes (.getPublicKey long-keys)))
-                     "\nusing nonce\n"
-                     (with-out-str (bs/print-bytes working-nonce)))]
+                     "\nto (FAILURE! Secret Key, just for debugging!!)\n"
+                     (with-out-str (bs/print-bytes (.getSecretKey long-keys)))
+                     "\nwhich generated shared secret\n"
+                     (with-out-str (bs/print-bytes shared-secret)))]
         (log/info msg))
       {::opened (crypto/open-after
                  text
                  0
-                 shared/hello-crypto-box-length
+                 (+ shared/hello-crypto-box-length K/box-zero-bytes)
                  working-nonce
                  shared-secret)
        ::shared-secret shared-secret})))

@@ -211,20 +211,22 @@ nor subject to timing attacks because it just won't be called very often."
   (let [my-short<->their-long (::client-short<->server-long shared-secrets)
         _ (assert my-short<->their-long)
         ;; Note that this definitely inserts the 16-byte prefix for me
-        boxed (.after my-short<->their-long
-                      shared/all-zeros 0 64 working-nonce)
+        boxed (crypto/box-after my-short<->their-long
+                                shared/all-zeros 64 working-nonce)
         msg (str "Hello crypo-box:\n"
                  (with-out-str (b-s/print-bytes boxed))
                  "\nencrypted with nonce\n"
                  (with-out-str (b-s/print-bytes working-nonce))
-                 "\nfrom\n"
+                 "\nfrom (FAILURE! Secret Key, just for debugging!!)\n"
                  (with-out-str (-> my-keys
                                    ::shared/short-pair
-                                   .getPublicKey
+                                   .getSecretKey
                                    b-s/print-bytes))
                  "\nto\n"
                  (with-out-str (b-s/print-bytes (get-in this [::server-security
-                                                             ::server-long-term-pk]))))]
+                                                              ::server-long-term-pk])))
+                 "\nshared\n"
+                 (with-out-str (b-s/print-bytes my-short<->their-long)))]
     (log/info msg)
     {::shared/prefix shared/hello-header
      ::shared/srvr-xtn server-extension

@@ -2,12 +2,32 @@
   "Wrap up the low-level crypto functions"
   (:require [clojure.spec :as s]
             [clojure.tools.logging :as log]
+            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
             [com.frereth.common.curve.shared.constants :as K])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(defn box-after
+  ;; TODO: Make sure both these versions work
+  ([key plain-text length nonce]
+   (when (<= length (count plain-text))
+     (let [padded-length (+ length K/box-zero-bytes)
+           cipher-text (byte-array padded-length)
+           plain-buffer (byte-array padded-length)]
+       (b-t/byte-copy! plain-buffer K/box-zero-bytes length plain-text)
+       (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key)
+       cipher-text)))
+  ([key plain-text offset length nonce]
+   (when (< (+ length offset) (count plain-text))
+     (let [padded-length (+ length K/box-zero-bytes)
+           cipher-text (byte-array padded-length)
+           plain-buffer (byte-array padded-length)]
+       (b-t/byte-copy! plain-buffer K/box-zero-bytes length plain-text offset)
+       (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key)
+       cipher-text))))
 
 (defn box-prepare
   "Set up shared secret so I can avoid the if logic to see whether it's been done.
@@ -30,7 +50,10 @@
                      :shared-key bytes?)
         :ret vector?)
 (defn open-after
-  "Low-level direct crypto box opening"
+  "Low-level direct crypto box opening
+
+parameter box-offset: first byte of box to start opening
+parameter box-length: how many bytes of box to open"
   [box box-offset box-length nonce shared-key]
   {:pre [(bytes? shared-key)]}
   (if (and (not (nil? box))
