@@ -7,6 +7,8 @@
             [com.frereth.common.curve.server :as srvr]
             [com.frereth.common.curve.server-test :as server-test]
             [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.curve.shared.crypto :as crypto]
+            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
@@ -110,29 +112,29 @@
         keydir "curve-test"
         server-pair (shared/do-load-keypair keydir)]
     (let [pk (.getPublicKey server-pair)]
-      (is (shared/bytes= pk server-long-pk)))
-    (let [client-pair (shared/random-key-pair)
+      (is (b-t/bytes= pk server-long-pk)))
+    (let [client-pair (crypto/random-key-pair)
           client-shared (TweetNaclFast$Box.
                          server-long-pk
                          (.getSecretKey client-pair))
           server-shared (TweetNaclFast$Box.
                          (.getPublicKey client-pair)
                          (.getSecretKey server-pair))
-          server-shared-nm (shared/crypto-box-prepare
+          server-shared-nm (crypto/box-prepare
                             (.getPublicKey client-pair)
                             (.getSecretKey server-pair))
           block-length 50
           plain-text (byte-array (range block-length))
           nonce (byte-array shared/nonce-length)]
       ;; TODO: Enable this check after I get the java code recompiled
-      (comment (is shared/bytes= server-shared-nm (.-sharedKey server-shared)))
+      (comment (is b-t/bytes= server-shared-nm (.-sharedKey server-shared)))
       ;; This is fairly arbitrary...24 random-bytes would be better
       (aset-byte nonce 7 1)
       (let [crypto-text (.after client-shared plain-text 0 block-length nonce)
             crypto-text2 (.box client-shared plain-text 0 block-length nonce)]
         (is crypto-text)
         (is crypto-text2)
-        (is (shared/bytes= crypto-text crypto-text2))
+        (is (b-t/bytes= crypto-text crypto-text2))
         (is (> (count crypto-text) (count plain-text)))
         (is (not= crypto-text plain-text))
         (println "Getting ready to try to decrypt. Including using" server-shared-nm "a" (class server-shared-nm)
@@ -141,15 +143,15 @@
               ;; This is the approach that almost everyone will use
               decrypted (.open_after server-shared crypto-text 0 (count crypto-text) nonce)
               ;; This is the approach that I really should use
-              de3 (shared/open-after crypto-text 0 (count crypto-text) nonce server-shared-nm)]
+              de3 (crypto/open-after crypto-text 0 (count crypto-text) nonce server-shared-nm)]
           (is de2)
           (is decrypted)
           (is de3)
-          (is (shared/bytes= decrypted plain-text))
-          (is (shared/bytes= de2 plain-text))
+          (is (b-t/bytes= decrypted plain-text))
+          (is (b-t/bytes= de2 plain-text))
           ;; This is fun: it looks/acts like I'm succeeding, but I'm getting gibberish back
           (let [bs (byte-array de3)]
-            (is (shared/bytes= bs plain-text))))))))
+            (is (b-t/bytes= bs plain-text))))))))
 
 (deftest handshake
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04

@@ -6,6 +6,9 @@
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
             [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
+            [com.frereth.common.curve.shared.constants :as K]
+            [com.frereth.common.curve.shared.crypto :as crypto]
             [com.frereth.common.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream])
@@ -27,9 +30,9 @@
 
 ;; Q: Move these public key specs into shared?
 (s/def ::long-pk (s/and bytes?
-                        #(= (count %) shared/key-length)))
+                        #(= (count %) K/key-length)))
 (s/def ::short-pk (s/and bytes?
-                         #(= (count %) shared/key-length)))
+                         #(= (count %) K/key-length)))
 (s/def ::client-security (s/keys :req [::long-pk
                                        ::short-pk]))
 
@@ -98,15 +101,15 @@
 (defn alloc-client
   []
   (let [interact {::child-id -1}
-        sec {::long-pk (shared/random-key)
-             ::short-pk (shared/random-key)}]
+        sec {::long-pk (crypto/random-key)
+             ::short-pk (crypto/random-key)}]
     {::child-interaction interact
      ::client-security sec
-     ::shared/extension (shared/random-bytes! (byte-array 16))
-     ::message (shared/random-bytes! (byte-array message-len))
+     ::shared/extension (crypto/random-bytes! (byte-array 16))
+     ::message (crypto/random-bytes! (byte-array message-len))
      ::message-len 0
      ::received-nonce 0
-     ::sent-nonce (shared/random-nonce)}))
+     ::sent-nonce (crypto/random-nonce)}))
 
 (defn one-minute
   ([]
@@ -147,10 +150,10 @@
                        ;; And does that reason go away when you factor in the hoops I
                        ;; have to jump through to jump between bitwise and logical
                        ;; operations?
-                       (bit-and (if (shared/bytes= (.getBytes shared/client-header-prefix)
+                       (bit-and (if (b-t/bytes= (.getBytes shared/client-header-prefix)
                                                    rcvd-prfx)
                                   -1 0)
-                                (if (shared/bytes= extension
+                                (if (b-t/bytes= extension
                                                    rcvd-xtn)
                                   -1 0)))]
     (when-not verified
@@ -166,7 +169,7 @@
            ::plain-text
            ::text
            ::working-nonce]}]
-  (let [keys (shared/random-key-pair)
+  (let [keys (crypto/random-key-pair)
         ;; This is just going to get thrown away, leading
         ;; to potential GC issues.
         ;; Probably need another static buffer for building
@@ -174,10 +177,10 @@
         buffer (Unpooled/buffer shared/server-cookie-length)]
     (assert (.hasArray buffer))
     (.writeBytes buffer shared/all-zeros 0 32)
-    (.writeBytes buffer client-short-pk 0 shared/key-length)
-    (.writeBytes buffer (.getSecretKey keys) 0 shared/key-length)
+    (.writeBytes buffer client-short-pk 0 K/key-length)
+    (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
 
-    (shared/byte-copy! working-nonce shared/cookie-nonce-minute-prefix)
+    (b-t/byte-copy! working-nonce shared/cookie-nonce-minute-prefix)
     (shared/safe-nonce working-nonce nil shared/server-nonce-prefix-length)
 
     ;; Reference implementation is really doing pointer math with the array
@@ -188,18 +191,21 @@
     ;; so it winds up at the start of the array).
     ;; Note that this is a departure from the reference implementation!
     (let [actual (.array buffer)]
-      (shared/secret-box actual actual shared/server-cookie-length working-nonce minute-key)
+      ;; I don't seem to be calling unbox anywhere.
+      ;; TODO: Figure out where that's supposed to happen and what
+      ;; I've missed.
+      (crypto/secret-box actual actual shared/server-cookie-length working-nonce minute-key)
       ;; Copy that encrypted cookie into the text working area
       (.getBytes buffer 64 text)
       ;; Along with the nonce
-      (shared/byte-copy! text 64 shared/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
+      (b-t/byte-copy! text 64 shared/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
 
       ;; And now we need to encrypt that.
       ;; This really belongs in its own function
-      (shared/byte-copy! text 0 32 shared/all-zeros)
-      (shared/byte-copy! text 32 shared/key-length (.getPublicKey keys))
+      (b-t/byte-copy! text 0 32 shared/all-zeros)
+      (b-t/byte-copy! text 32 K/key-length (.getPublicKey keys))
       ;; Reuse the other 16 bytes
-      (shared/byte-copy! working-nonce 0 shared/server-nonce-prefix-length shared/cookie-nonce-prefix)
+      (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length shared/cookie-nonce-prefix)
       (.after client-short<->server-long text 0 160 working-nonce))))
 
 (defn build-cookie-packet!
@@ -213,7 +219,7 @@
                                        ;; This is also a great big FAIL:
                                        ;; Have to drop the first 16 bytes
                                        ::shared/cookie (Unpooled/wrappedBuffer text
-                                                                               shared/box-zero-bytes
+                                                                               K/box-zero-bytes
                                                                                144)}
                   packet))
 
@@ -228,12 +234,13 @@
    crypto-box]
   (let [long-keys (::shared/long-pair my-keys)]
     (when-not long-keys
+      ;; Log whichever was missing and throw
       (if my-keys
         (log/error "Missing ::shared/long-pair among" (keys my-keys))
         (log/error "Missing ::shared/my-keys among" (keys state)))
       (throw (ex-info "Missing long-term keypair" state)))
     (let [my-sk (.getSecretKey long-keys)
-          shared-secret (shared/before-nm client-short-pk my-sk)
+          shared-secret (crypto/box-prepare client-short-pk my-sk)
           ;; Q: How do I combine these to handle this all at once?
           ;; I think I should be able to do something like:
           ;; {:keys [{:keys [::text ::working-nonce] :as ::working-area}]}
@@ -242,11 +249,10 @@
           ;; Better Q: Would that a good idea, if it worked?
           ;; (Pretty sure this is/was the main thrust behind a plumatic library)
           {:keys [::shared/text ::shared/working-nonce]} working-area]
-      (shared/byte-copy! working-nonce
+      (b-t/byte-copy! working-nonce
                          shared/hello-nonce-prefix)
       (.readBytes nonce-suffix working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
-      ;; Note that TweetNacl copes with the initial buffer padding for me
-      (.readBytes crypto-box text 0 shared/hello-crypto-box-length)
+      (.readBytes crypto-box text K/decrypt-box-zero-bytes shared/hello-crypto-box-length)
       (let [msg (str "Trying to open "
                      shared/hello-crypto-box-length
                      " bytes of\n"
@@ -258,7 +264,7 @@
                      "\nusing nonce\n"
                      (with-out-str (bs/print-bytes working-nonce)))]
         (log/info msg))
-      {::opened (shared/open-after
+      {::opened (crypto/open-after
                  text
                  0
                  shared/hello-crypto-box-length
@@ -285,6 +291,7 @@
             client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
         (assert client-short-pk)
         (assert clnt-short-pk)
+        ;; Q: Is there any real point to this?
         (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
         (.getBytes clnt-short-pk 0 client-short-pk)
         (let [unboxed (open-hello-crypto-box (assoc state
@@ -379,7 +386,7 @@
           ;; Didn't we just verify that this is already true?
           ;; TODO: I strongly suspect something like a copy/paste
           ;; failure on my part
-          (shared/byte-copy! (get-in state [::current-client ::shared/extension])
+          (b-t/byte-copy! (get-in state [::current-client ::shared/extension])
                              extension)
           (let [packet-type-id (char (aget header (dec shared/header-length)))]
             (try
@@ -409,31 +416,31 @@
   ;; if we're "just" cleaning up on exit)
   (let [minute-key-array (get-in this [::cookie-cutter ::minute-key])]
     (assert minute-key-array)
-    (shared/random-bytes! minute-key-array))
+    (crypto/random-bytes! minute-key-array))
 
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
   (let [p-m (::shared/packet-management this)]
-    (shared/randomize-buffer! (::shared/packet p-m)))
-  (shared/random-bytes! (-> this ::current-client ::client-security ::short-pk))
+    (crypto/randomize-buffer! (::shared/packet p-m)))
+  (crypto/random-bytes! (-> this ::current-client ::client-security ::short-pk))
   ;; These are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
   ;; For now, just explicitly set to nil once we get past these side-effects
   ;; (i.e. at the bottom)
-  #_(shared/random-bytes (-> this :current-client ::shared-secrets :what?))
+  #_(crypto/random-bytes (-> this :current-client ::shared-secrets :what?))
   (let [work-area (::shared/working-area this)]
     ;; These next two may make more sense once I have a better idea about
     ;; the actual messaging implementation.
     ;; Until then, plan on just sending objects across core.async.
     ;; Of course, the entire point may be messages that are too big
     ;; and need to be sharded.
-    #_(shared/random-bytes! (-> this :child-buffer ::buf))
-    #_(shared/random-bytes! (-> this :child-buffer ::msg))
-    (shared/random-bytes! (::shared/working-nonce work-area))
-    (shared/random-bytes! (::shared/text work-area)))
+    #_(crypto/random-bytes! (-> this :child-buffer ::buf))
+    #_(crypto/random-bytes! (-> this :child-buffer ::msg))
+    (crypto/random-bytes! (::shared/working-nonce work-area))
+    (crypto/random-bytes! (::shared/text work-area)))
   (when-let [short-term-keys (get-in this [::shared/my-keys ::short-pair])]
-    (shared/random-bytes! (.getPublicKey short-term-keys))
-    (shared/random-bytes! (.getSecretKey short-term-keys)))
+    (crypto/random-bytes! (.getPublicKey short-term-keys))
+    (crypto/random-bytes! (.getSecretKey short-term-keys)))
   ;; Clear the shared secrets in the current client
   ;; Maintaning these anywhere I don't need them seems like an odd choice.
   ;; Actually, keeping them in 2 different places seems odd.
@@ -467,7 +474,7 @@
         (let [timeout (one-minute now)]
           (log/info "Saving key for previous minute")
           (try
-            (shared/byte-copy! (::last-minute-key cookie-cutter)
+            (b-t/byte-copy! (::last-minute-key cookie-cutter)
                                (::minute-key cookie-cutter))
             ;; Q: Why aren't we setting up the next minute-key here and now?
             (catch Exception ex
@@ -561,8 +568,8 @@
 
 (defn randomized-cookie-cutter
   []
-  {::minute-key (shared/random-key)
-   ::last-minute-key (shared/random-key)
+  {::minute-key (crypto/random-key)
+   ::last-minute-key (crypto/random-key)
    ;; Q: Should this be ::timeout?
    ;; A: No. There's definitely a distinction.
    ;; Q: Alright, then. What is the difference?

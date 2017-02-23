@@ -5,18 +5,21 @@ This is getting big enough that I really need to split it up"
   (:require [clojure.java.io :as io]
             [clojure.spec :as s]
             [clojure.string]
-            [clojure.tools.logging :as log])
+            [clojure.tools.logging :as log]
+            [com.frereth.common.curve.shared.bit-twiddling :as bit-twiddling]
+            [com.frereth.common.curve.shared.constants :as K]
+            ;; Honestly, this has no place here.
+            ;; But it's useful for refactoring
+            [com.frereth.common.curve.shared.crypto :as crypto])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            java.security.SecureRandom))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
+;;; TODO: Pretty much all of these should move into constants
 
-(def box-zero-bytes 16)
 (def extension-length 16)
-(def key-length 32)
-(def shared-key-length 32)
 (def nonce-length 24)
 (def client-nonce-prefix-length 16)
 (def client-nonce-suffix-length 8)
@@ -37,7 +40,7 @@ This is getting big enough that I really need to split it up"
 (def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length header-length}
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-xtn {::type ::bytes ::length extension-length}
-                                  ::clnt-short-pk {::type ::bytes ::length key-length}
+                                  ::clnt-short-pk {::type ::bytes ::length K/key-length}
                                   ::zeros {::type ::zeroes ::length 64}
                                   ;; This gets weird/confusing.
                                   ;; It's a 64-bit number, so 8 octets
@@ -72,7 +75,7 @@ This is getting big enough that I really need to split it up"
                        ::length 144}))
 
 (def cookie
-  (array-map ::s' {::type ::bytes ::length key-length}
+  (array-map ::s' {::type ::bytes ::length K/key-length}
              ::black-box {::type ::zeroes ::length 96}))
 
 
@@ -85,8 +88,6 @@ This is getting big enough that I really need to split it up"
 (def millis-in-second 1000)
 (def nanos-in-milli (long (Math/pow 10 6)))
 (def nanos-in-second (* nanos-in-milli millis-in-second))
-
-(def max-random-nonce (long (Math/pow 2 48)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -125,9 +126,9 @@ This is getting big enough that I really need to split it up"
 ;; I think this is a TweetNaclFast$Box
 ;; TODO: Verify
 (s/def ::shared-secret any?)
-(s/def ::public-key (s/and bytes? #(= (count %) key-length)))
-(s/def ::secret-key (s/and bytes? #(= (count %) key-length)))
-(s/def ::symmetric-key (s/and bytes? #(= (count %) key-length)))
+(s/def ::public-key (s/and bytes? #(= (count %) K/key-length)))
+(s/def ::secret-key (s/and bytes? #(= (count %) K/key-length)))
+(s/def ::symmetric-key (s/and bytes? #(= (count %) K/key-length)))
 
 (s/def ::working-nonce (s/and bytes? #(= (count %) nonce-length)))
 (s/def ::text bytes?)
@@ -162,61 +163,6 @@ This is getting big enough that I really need to split it up"
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
-
-(defn before-nm
-  "Prepare a shared key byte array for low-level operations.
-
-TODO: Deprecate this and just use crypto-box-prepare instead.
-
-The duplication is a prime example of this namespace being too big."
-  [their-public my-secret]
-  (let [shared (byte-array shared-key-length)]
-    (TweetNaclFast/crypto_box_beforenm shared their-public my-secret)
-    shared))
-
-(defn byte-copy!
-  "Copies the bytes from src to dst"
-  ([dst src]
-   (let [m (count src)]
-     (run! (fn [n]
-             (aset-byte dst n (aget src n)))
-           (range m))))
-  ([dst offset n src]
-   (run! (fn [m]
-           (aset-byte dst (+ m offset) (aget src m)))
-         (range n)))
-  ([dst offset n src src-offset]
-   (run! (fn [m]
-           (aset-byte dst (+ m offset)
-                      (aget src (+ m src-offset))))
-         (range n))))
-
-(s/fdef bytes=
-        :args (s/cat :x bytes?
-                     :y bytes?)
-        :ret boolean?)
-(defn bytes=
-  [x y]
-  ;; This has to take constant time.
-  ;; No short-cutting!
-  (let [nx (count x)
-        ny (count y)
-        diff (reduce (fn [acc n]
-                       (let [xv (aget x n)
-                             yv (aget y n)]
-                         (bit-or acc (bit-xor xv yv))))
-                     0
-                     (range (min nx ny)))]
-    (and (not= 0 (unsigned-bit-shift-right (- 256 diff) 8))
-         (= nx ny))))
-
-(defn crypto-box-prepare
-  "Set up shared secret so I can avoid the if logic to see whether it's been done.
-  At least, I think that's the point."
-  [public secret]
-  (let [shared (byte-array shared-key-length)]
-    (TweetNaclFast/crypto_box_beforenm shared public secret)
-    shared))
 
 (defn composition-reduction
   "Reduction function associated for run!ing from compose."
@@ -312,16 +258,18 @@ The duplication is a prime example of this namespace being too big."
   {::working-nonce (byte-array nonce-length)
    ::text (byte-array 2048)})
 
-(declare random-key-pair slurp-bytes)
+(declare slurp-bytes)
 (defn do-load-keypair
   "Honestly, these should be stored with something like base64 encoding.
 
-And encrypted with a passphrase, of course."
+And encrypted with a passphrase, of course.
+
+This really belongs in the crypto ns, but then where does slurp-bytes move?"
   [keydir]
   (if keydir
     (let [secret (slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))]
       (TweetNaclFast$Box/keyPair_fromSecretKey secret))
-    (random-key-pair)))
+    (crypto/random-key-pair)))
 
 (s/fdef encode-server-name
         :args (s/cat :name ::dns-string)
@@ -346,128 +294,6 @@ And encrypted with a passphrase, of course."
 (comment (let [encoded (encode-server-name "foo..bacon.com")]
            (vec encoded)))
 
-(s/fdef open-after
-        :args (s/cat :box bytes?
-                     :box-offset integer?
-                     :box-length integer?
-                     :nonce bytes?
-                     ;; This is a major reason you might use this:
-                     ;; Don't go through the overhead of wrapping
-                     ;; a byte array inside a class.
-                     ;; Plus, there are fewer function calls to get
-                     ;; to the point.
-                     :shared-key bytes?)
-        :ret vector?)
-(defn open-after
-  "Low-level direct crypto box opening"
-  [box box-offset box-length nonce shared-key]
-  {:pre [(bytes? shared-key)]}
-  (if (and (not (nil? box))
-           (>= (count box) (+ box-offset box-length))
-           (>= box-length box-zero-bytes))
-    (do
-      (log/info "Box is large enough")
-      (let [n (+ box-length box-zero-bytes)
-            cipher-text (byte-array n)
-            plain-text (byte-array n)]
-        (doseq [i (range box-length)]
-          (aset-byte cipher-text
-                     (+ box-zero-bytes i)
-                     (aget box (+ i box-offset))))
-        ;; Q: Where does shared-key come from?
-        ;; A: crypto_box_beforenm
-        (let [success
-              (TweetNaclFast/crypto_box_open_afternm plain-text cipher-text
-                                                     n nonce
-                                                     shared-key)]
-          (when (not= 0 success)
-            (throw (RuntimeException. "Opening box failed")))
-          ;; The * 2 on the zero bytes is important.
-          ;; The encryption starts with 0's and prepends them.
-          ;; The decryption requires another bunch (of zeros?) in front of that.
-          ;; We have to strip them both to get back to the real plain text.
-          (comment (log/info "Decrypted" box-length "bytes into" n "starting with" (aget plain-text (* 2 box-zero-bytes))))
-          ;; TODO: Compare the speed of doing this with allocating a new
-          ;; byte array without the 0-prefix padding and copying it back over
-          ;; Keep in mind that we're limited to 1088 bytes per message.
-          (-> plain-text
-              vec
-              (subvec (* 2 box-zero-bytes))))))
-    (throw (RuntimeException. "Box too small"))))
-
-(defn random-array
-  "Returns an array of n random bytes"
-  [^Long n]
-  (TweetNaclFast/randombytes n))
-
-(defn randomize-buffer!
-  "Fills the bytes of dst with crypto-random ints"
-  [^io.netty.buffer.ByteBuf dst]
-  ;; Move the readable bytes to the beginning of the
-  ;; buffer to consolidate the already-read and writeable
-  ;; areas.
-  ;; Note that this isn't what I actually want to do.
-  ;; (if this was called, it's time to wipe the entire
-  ;; buffer. Readers missed their chance)
-  (.clear dst)
-  (.setBytes dst 0 (random-array (.capacity dst))))
-
-(defn random-bytes!
-  "Fills dst with random bytes"
-  [#^bytes dst]
-  (TweetNaclFast/randombytes dst))
-
-(defn random-key
-  "Returns a byte array suitable for use as a random key"
-  []
-  (random-array key-length))
-
-(s/fdef random-key-pair
-        :args (s/cat)
-        :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
-(defn random-key-pair
-  "Generates a pair of random keys"
-  []
-  (TweetNaclFast$Box/keyPair))
-
-(defn random-mod
-  "Returns a cryptographically secure random number between 0 and n
-
-Or maybe that's (dec n)"
-  [n]
-  (let [default 0N]
-    (if (<= n 1)
-      default
-      ;; Q: Is this seemingly arbitrary number related to
-      ;; key length?
-      (let [bs (random-array 32)]
-        ;; Q: How does this compare with just calling
-        ;; (.nextLong rng) ?
-        ;; A (from crypto.stackexchange.com):
-        ;; If you start with a (uniform) random number in
-        ;; {0, 1, ..., N-1} and take the result module n,
-        ;; the result will differ from a uniform distribution
-        ;; by statistical distance of less than
-        ;; (/ (quot N n) N)
-        ;; The actual value needed for that ratio has a lot
-        ;; to do with the importance of the data you're trying
-        ;; to protect.
-        ;; (He recommended 2^-30 for protecting your collection
-        ;; of pirated music and 2^-80 for nuclear launch codes.
-        ;; Note that this was written several years ago
-        ;; So definitely stick with this until an expert tells
-        ;; me otherwise
-        (reduce (fn [^clojure.lang.BigInt acc ^Byte b]
-                  ;; Note that b is signed
-                  (mod (+ (* 256 acc) b 128) n))
-                default
-                bs)))))
-
-(defn random-nonce
-  "Generates a number suitable for use as a cryptographically secure random nonce"
-  []
-  (long (random-mod max-random-nonce)))
-
 (defn safe-nonce
   [dst keydir offset]
   (if keydir
@@ -478,22 +304,7 @@ Or maybe that's (dec n)"
     (let [n (- (count dst) offset)
           tmp (byte-array n)]
       (.randomBytes tmp)
-      (byte-copy! dst offset n tmp))))
-
-(defn secret-box
-  "Symmetric encryption"
-  [dst cleartext length nonce key]
-  (TweetNaclFast/crypto_secretbox dst cleartext
-                                  length nonce key))
-
-(defn secret-unbox
-  "Symmetric-key decryption"
-  [dst ciphertext length nonce key]
-  (TweetNaclFast/crypto_secretbox_open dst
-                                       ciphertext
-                                       length
-                                       nonce
-                                       key))
+      (bit-twiddling/byte-copy! dst offset n tmp))))
 
 (defn slurp-bytes
   "Slurp the bytes from a slurpable thing
@@ -514,54 +325,6 @@ Or there's probably something similar in guava"
   (with-open [out (clojure.java.io/output-stream f)]
     (with-open [in (clojure.java.io/input-stream bs)]
       (clojure.java.io/copy in out))))
-
-(defn sub-byte-array
-  "Return an array that copies a portion of the source"
-  ([src beg]
-   (-> src
-       vec
-       (subvec beg)
-       byte-array))
-  ([src beg end]
-   (-> src
-       vec
-       (subvec beg end)
-       byte-array)))
-
-(defn uint64-pack!
-  "Sets 8 bytes in dst (starting at offset n) to x
-
-Note that this looks/smells very similar to TweetNaclFast's
-Box.generateNonce.
-
-If that's really all this is used for, should definitely use
-that implementation instead"
-  [^bytes dst n ^Long x]
-  (log/info "Trying to pack" x "a" (class x) "into offset" n "of"
-             (count dst) "bytes at" dst)
-  (let [x' (bit-and 0xff x)]
-    (aset-byte dst n x')
-    (let [x (unsigned-bit-shift-right x 8)
-          x' (bit-and 0xff x)]
-      (aset-byte dst (inc n) x')
-      (let [x (unsigned-bit-shift-right x 8)
-            x' (bit-and 0xff x)]
-        (aset-byte dst (+ n 2) x')
-        (let [x (unsigned-bit-shift-right x 8)
-              x' (bit-and 0xff x)]
-          (aset-byte dst (+ n 3) x')
-          (let [x (unsigned-bit-shift-right x 8)
-                x' (bit-and 0xff x)]
-            (aset-byte dst (+ n 4) x')
-            (let [x (unsigned-bit-shift-right x 8)
-                  x' (bit-and 0xff x)]
-              (aset-byte dst (+ n 5) x')
-              (let [x (unsigned-bit-shift-right x 8)
-                    x' (bit-and 0xff x)]
-                (aset-byte dst (+ n 6) x')
-                (let [x (unsigned-bit-shift-right x 8)
-                      x' (bit-and 0xff x)]
-                  (aset-byte dst (+ n 7) x'))))))))))
 
 (defn zero-bytes
   [n]

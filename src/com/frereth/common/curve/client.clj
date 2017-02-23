@@ -18,6 +18,9 @@
             [clojure.spec :as s]
             [clojure.tools.logging :as log]
             [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
+            [com.frereth.common.curve.shared.crypto :as crypto]
+            [com.frereth.common.curve.shared.constants :as K]
             [com.frereth.common.schema :as schema]
             [com.stuartsierra.component :as cpt]
             [manifold.deferred :as deferred]
@@ -228,7 +231,7 @@ nor subject to timing attacks because it just won't be called very often."
      ::shared/clnt-xtn extension
      ::shared/clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
      ::shared/zeros nil
-     ::shared/nonce (shared/sub-byte-array working-nonce shared/client-nonce-prefix-length)
+     ::shared/nonce (b-t/sub-byte-array working-nonce shared/client-nonce-prefix-length)
      ::shared/crypto-box boxed}))
 
 (s/fdef build-actual-hello-packet
@@ -248,10 +251,10 @@ nor subject to timing attacks because it just won't be called very often."
     (assert packet)
     (shared/compose shared/hello-packet-dscr raw-hello packet)))
 (comment
-  (let [my-short (shared/random-key-pair)
-        server-long (shared/random-key-pair)
-        my<->server (shared/crypto-box-prepare (.getPublicKey server-long)
-                                               (.getSecretKey my-short))
+  (let [my-short (crypto/random-key-pair)
+        server-long (crypto/random-key-pair)
+        my<->server (crypto/box-prepare (.getPublicKey server-long)
+                                        (.getSecretKey my-short))
         this {::server-extension (byte-array [0x01 0x02 0x03 0x04
                                               0x05 0x06 0x07 0x08
                                               0x09 0x0a 0x0b 0x0b
@@ -299,8 +302,8 @@ Note that this is really called for side-effects"
         working-nonce (::shared/working-nonce work-area)
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (update-client-short-term-nonce packet-nonce)]
-    (shared/byte-copy! working-nonce shared/hello-nonce-prefix)
-    (shared/uint64-pack! working-nonce shared/client-nonce-prefix-length short-term-nonce)
+    (b-t/byte-copy! working-nonce shared/hello-nonce-prefix)
+    (b-t/uint64-pack! working-nonce shared/client-nonce-prefix-length short-term-nonce)
     (log/info (str short-term-nonce " packed into\n"
                    (with-out-str (b-s/print-bytes working-nonce))))
 
@@ -319,27 +322,27 @@ Note that this is really called for side-effects"
     :as this}
    rcvd]
   (let [nonce (::shared/nonce packet-management)]
-    (shared/byte-copy! nonce shared/cookie-nonce-prefix)
-    (shared/byte-copy! nonce
-                       shared/server-nonce-prefix-length
-                       shared/server-nonce-suffix-length
-                       ;; This one is neither namespaced (for now)
-                       ;; nor part of shared
-                       (:nonce rcvd))
+    (b-t/byte-copy! nonce shared/cookie-nonce-prefix)
+    (b-t/byte-copy! nonce
+                    shared/server-nonce-prefix-length
+                    shared/server-nonce-suffix-length
+                    ;; This one is neither namespaced (for now)
+                    ;; nor part of shared
+                    (:nonce rcvd))
     ;; Wait...what?
     ;; Where's :cookie coming from?!
     ;; (I can see it coming from the packet after I've used gloss to decode it,
     ;; but this doesn't seem to make any sense
-    (shared/byte-copy! text 0 144 (-> packet-management ::shared/packet :cookie))
+    (b-t/byte-copy! text 0 144 (-> packet-management ::shared/packet :cookie))
     (let [decrypted (.open_after (::client-short<->server-long shared-secrets) text 0 144 nonce)
           extracted (shared/decompose shared/cookie decrypted)
-          server-short-term-pk (byte-array shared/key-length)
+          server-short-term-pk (byte-array K/key-length)
           server-cookie (byte-array 96)
           server-security (assoc (:server-security this)
                                  ::server-short-term-pk server-short-term-pk
                                  ::server-cookie server-cookie)]
-      (shared/byte-copy! server-short-term-pk (:s' extracted))
-      (shared/byte-copy! server-cookie (:cookie extracted))
+      (b-t/byte-copy! server-short-term-pk (:s' extracted))
+      (b-t/byte-copy! server-cookie (:cookie extracted))
       (assoc this ::server-security server-security))))
 
 (defn decrypt-cookie-packet
@@ -372,10 +375,10 @@ Note that this is really called for side-effects"
       ;; Q: How accurate/useful is this approach?
       ;; A: Not at all.
       ;; (i.e. mostly comparing byte arrays
-      (when (and (shared/bytes= shared/cookie-header
+      (when (and (b-t/bytes= shared/cookie-header
                                 (String. (:header rcvd)))
-                 (shared/bytes= extension (:client-extension rcvd))
-                 (shared/bytes= server-extension (:server-extension rcvd)))
+                 (b-t/bytes= extension (:client-extension rcvd))
+                 (b-t/bytes= server-extension (:server-extension rcvd)))
         (decrypt-actual-cookie this rcvd)))))
 
 (defn build-vouch
@@ -386,7 +389,7 @@ Note that this is really called for side-effects"
     :as this}]
   (let [nonce (::shared/nonce packet-management)
         keydir (::shared/keydir my-keys)]
-    (shared/byte-copy! nonce shared/vouch-nonce-prefix)
+    (b-t/byte-copy! nonce shared/vouch-nonce-prefix)
     (shared/safe-nonce nonce keydir shared/client-nonce-prefix-length)
 
     ;; Q: What's the point to these 32 bytes?
@@ -395,20 +398,20 @@ Note that this is really called for side-effects"
     ;; same, so the buffer needs extra space for them (of course
     ;; it does!)
     ;; But 32 here just seem weird.
-    (shared/byte-copy! text (shared/zero-bytes 32))
-    (shared/byte-copy! text shared/key-length shared/key-length (.getPublicKey (::short-pair my-keys)))
+    (b-t/byte-copy! text (shared/zero-bytes 32))
+    (b-t/byte-copy! text K/key-length K/key-length (.getPublicKey (::short-pair my-keys)))
     (let [encrypted (.after (::client-long<->server-long shared-secrets) text 0 64 nonce)
           vouch (byte-array 64)]
-      (shared/byte-copy! vouch
-                         0
-                         shared/server-nonce-suffix-length
-                         nonce
-                         shared/server-nonce-prefix-length)
-      (shared/byte-copy! vouch
-                         shared/server-nonce-suffix-length
-                         48
-                         encrypted
-                         shared/server-nonce-suffix-length)
+      (b-t/byte-copy! vouch
+                      0
+                      shared/server-nonce-suffix-length
+                      nonce
+                      shared/server-nonce-prefix-length)
+      (b-t/byte-copy! vouch
+                      shared/server-nonce-suffix-length
+                      48
+                      encrypted
+                      shared/server-nonce-suffix-length)
       vouch)))
 
 (defn extract-child-message
@@ -453,7 +456,7 @@ implementation. This is code that I don't understand yet"
                             short-term-nonce (update-client-short-term-nonce
                                               packet-nonce)
                             working-nonce (:shared/working-nonce work-area)]
-                        (shared/uint64-pack! working-nonce shared/client-nonce-prefix-length
+                        (b-t/uint64-pack! working-nonce shared/client-nonce-prefix-length
                                              short-term-nonce)
                         ;; This is where the original splits, depending on whether
                         ;; we've received a message back from the server or not.
@@ -473,56 +476,62 @@ implementation. This is code that I don't understand yet"
                           (when (or (< r 16)
                                     (> r 640))
                             (throw (ex-info "done" {})))
-                          (shared/byte-copy! working-nonce 0 shared/client-nonce-prefix-length
-                                             shared/initiate-nonce-prefix)
-                                    ;; Reference version starts by zeroing first 32 bytes.
-                                    ;; I thought we just needed 16 for the encryption buffer
-                                    ;; And that doesn't really seem to apply here
-                                    ;; Q: What's up with this?
-                                    ;; (it doesn't seem to match the spec, either)
-                                    (shared/byte-copy! text 0 32 shared/all-zeros)
-                                    (shared/byte-copy! text 32 shared/key-length
-                                                       (.getPublicKey (::long-pair my-keys)))
-                                    (shared/byte-copy! text 64 64 vouch)
-                                    (shared/byte-copy! text
-                                                       128
-                                                       shared/server-name-length
-                                                       (::server-name server-security))
-                                    ;; First byte is a magical length marker
-                                    (shared/byte-copy! text 384 r msg 1)
-                                    (let [box (.after (::client-short<->server-short shared-secrets)
-                                                      text
-                                                      0
-                                                      (+ r 384)
-                                                      working-nonce)]
-                                      (shared/byte-copy! packet
-                                                         0
-                                                         shared/server-nonce-prefix-length
-                                                         shared/initiate-header)
-                                      (let [offset shared/server-nonce-prefix-length]
-                                        (shared/byte-copy! packet offset
-                                                           shared/extension-length server-extension)
-                                        (let [offset (+ offset shared/extension-length)]
-                                          (shared/byte-copy! packet offset
-                                                             shared/extension-length extension)
-                                          (let [offset (+ offset shared/extension-length)]
-                                            (shared/byte-copy! packet offset shared/key-length
-                                                               (.getPublicKey (::short-pair my-keys)))
-                                            (let [offset (+ offset shared/key-length)]
-                                              (shared/byte-copy! packet
-                                                                 offset
-                                                                 shared/server-cookie-length
-                                                                 (::server-cookie server-security))
-                                              (let [offset (+ offset shared/server-cookie-length)]
-                                                (shared/byte-copy! packet offset
-                                                                   shared/server-nonce-prefix-length
-                                                                   working-nonce
-                                                                   shared/server-nonce-suffix-length))))))
-                                      ;; Actually, the original version sends off the packet, updates
-                                      ;; msg-len to 0, and goes back to pulling date from child/server.
-                                      (throw (ex-info "How should this really work?"
-                                                      {:problem "Need to break out of loop here"})))))
-                                (assoc acc :msg-len msg-len))))
+                          (b-t/byte-copy! working-nonce 0 shared/client-nonce-prefix-length
+                                          shared/initiate-nonce-prefix)
+                          ;; Reference version starts by zeroing first 32 bytes.
+                          ;; I thought we just needed 16 for the encryption buffer
+                          ;; And that doesn't really seem to apply here
+                          ;; Q: What's up with this?
+                          ;; (it doesn't seem to match the spec, either)
+                          (b-t/byte-copy! text 0 32 shared/all-zeros)
+                          (b-t/byte-copy! text 32 K/key-length
+                                          (.getPublicKey (::long-pair my-keys)))
+                          (b-t/byte-copy! text 64 64 vouch)
+                          (b-t/byte-copy! text
+                                          128
+                                          shared/server-name-length
+                                          (::server-name server-security))
+                          ;; First byte is a magical length marker
+                          ;; TODO: Double-check the original.
+                          ;; This doesn't look right at all.
+                          ;; I think I need a 32-byte offset for the decryption
+                          ;; padding.
+                          ;; And the call to open-after really seems like it should start
+                          ;; at offset 384 instead of 0
+                          (b-t/byte-copy! text 384 r msg 1)
+                          (let [box (crypto/open-after (::client-short<->server-short shared-secrets)
+                                                       text
+                                                       0
+                                                       (+ r 384)
+                                                       working-nonce)]
+                            (b-t/byte-copy! packet
+                                            0
+                                            shared/server-nonce-prefix-length
+                                            shared/initiate-header)
+                            (let [offset shared/server-nonce-prefix-length]
+                              (b-t/byte-copy! packet offset
+                                              shared/extension-length server-extension)
+                              (let [offset (+ offset shared/extension-length)]
+                                (b-t/byte-copy! packet offset
+                                                shared/extension-length extension)
+                                (let [offset (+ offset shared/extension-length)]
+                                  (b-t/byte-copy! packet offset K/key-length
+                                                  (.getPublicKey (::short-pair my-keys)))
+                                  (let [offset (+ offset K/key-length)]
+                                    (b-t/byte-copy! packet
+                                                    offset
+                                                    shared/server-cookie-length
+                                                    (::server-cookie server-security))
+                                    (let [offset (+ offset shared/server-cookie-length)]
+                                      (b-t/byte-copy! packet offset
+                                                      shared/server-nonce-prefix-length
+                                                      working-nonce
+                                                      shared/server-nonce-suffix-length))))))
+                            ;; Actually, the original version sends off the packet, updates
+                            ;; msg-len to 0, and goes back to pulling date from child/server.
+                            (throw (ex-info "How should this really work?"
+                                            {:problem "Need to break out of loop here"})))))
+                      (assoc acc :msg-len msg-len))))
         extracted (reduce reducer
                           {:buf (byte-array 4096)
                            :buf-len 0
@@ -536,7 +545,7 @@ implementation. This is code that I don't understand yet"
 (defn load-keys
   [my-keys]
   (let [long-pair (shared/do-load-keypair (::shared/keydir my-keys))
-        short-pair (shared/random-key-pair)]
+        short-pair (crypto/random-key-pair)]
     (assoc my-keys
            ::shared/long-pair long-pair
            ::shared/short-pair short-pair)))
@@ -569,10 +578,10 @@ implementation. This is code that I don't understand yet"
            ;; A: Who am I to argue with an expert?
            ::server-security server-security
            ::shared/extension nil
-           ::shared-secrets {::client-long<->server-long (shared/crypto-box-prepare
+           ::shared-secrets {::client-long<->server-long (crypto/box-prepare
                                                           server-long-term-pk
                                                           (.getSecretKey short-pair))
-                             ::client-short<->server-long (shared/crypto-box-prepare
+                             ::client-short<->server-long (crypto/box-prepare
                                                            server-long-term-pk
                                                            (.getSecretKey long-pair))}})))
 
@@ -728,7 +737,7 @@ TODO: Need to ask around about that."
     (let [{:keys [::shared/my-keys]} this
           this (assoc-in this
                          [::shared-secrets ::client-short<->server-short]
-                         (shared/crypto-box-prepare
+                         (crypto/box-prepare
                           (get-in this
                                   [::server-security
                                    ::server-short-term-pk])

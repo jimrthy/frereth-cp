@@ -3,6 +3,8 @@
             [clojure.test :refer (deftest is testing)]
             [com.frereth.common.curve.client :as clnt]
             [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
+            [com.frereth.common.curve.shared.crypto :as crypto]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))
 
@@ -172,7 +174,7 @@
                         ;; Especially since, realistically, I should build everything
                         ;; except the crypto box in a Direct buffer, then copy that in
                         ;; and send it to the network.
-                        (is (shared/bytes= (.getBytes shared/hello-header)
+                        (is (b-t/bytes= (.getBytes shared/hello-header)
                                            (byte-array (subvec (vec backing-array) 0
                                                                (count shared/hello-header))))))
                       (do
@@ -180,12 +182,12 @@
                           (let [array (byte-array shared/hello-packet-length)]
                             (.getBytes hello 0 array)
                             ;; Q: Anything else useful I can check here?
-                            (is (shared/bytes= shared/hello-header
+                            (is (b-t/bytes= shared/hello-header
                                                (byte-array (subvec (vec array) 0
                                                                    (count shared/hello-header))))))
                           ;; Q: What's going on here?
                           (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct."))))
-                    (is (shared/bytes= shared/hello-header
+                    (is (b-t/bytes= shared/hello-header
                                        (byte-array (subvec (vec hello) 0
                                                            (count shared/hello-header))))))
                   (println "Hello packet verified. Now I'd send it to the server"))
@@ -244,17 +246,17 @@
 (defn basic-test
   "This should probably go away"
   []
-  (let [client-keys (shared/random-key-pair)
+  (let [client-keys (crypto/random-key-pair)
         ;; Q: Do I want to use this or TweetNaclFast/keyPair?
-        server-keys (shared/random-key-pair)
+        server-keys (crypto/random-key-pair)
         msg "Hold on, my child needs my attention"
         bs (.getBytes msg)
         nonce (byte-array [1 2 3 4 5 6 7 8 9 10
                            11 12 13 14 15 16 17
                            18 19 20 21 22 23 24])
-        boxer (shared/crypto-box-prepare (.getPublicKey server-keys) (.getSecretKey client-keys))
+        boxer (crypto/box-prepare (.getPublicKey server-keys) (.getSecretKey client-keys))
         ;; This seems likely to get confused due to arity issues
         boxed (.box boxer bs nonce)
-        unboxer (shared/crypto-box-prepare (.getPublicKey client-keys) (.getSecretKey server-keys))]
+        unboxer (crypto/box-prepare (.getPublicKey client-keys) (.getSecretKey server-keys))]
     (String. (.open unboxer boxed nonce))))
 (comment (basic-test))
