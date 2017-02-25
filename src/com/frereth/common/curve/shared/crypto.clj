@@ -10,13 +10,33 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(s/fdef box-after
+        :args (s/or :offset-0 (s/cat :key (s/and bytes?
+                                                 #(= (count %) K/key-length))
+                                     :plain-text bytes?
+                                     :length integer?
+                                     :nonce (s/and bytes?
+                                                   #(= (count %) K/nonce-length)))
+                    :offset-n (s/cat :key (s/and bytes?
+                                                 #(= (count %) K/key-length))
+                                     :plain-text bytes?
+                                     :offset integer?
+                                     :length integer?
+                                     :nonce (s/and bytes?
+                                                   #(= (count %) K/nonce-length))))
+        :fn (s/and #(>= (-> % :args :plain-text count)
+                        (+ (-> % :args :length)
+                           (or (-> % :args :offset) 0)))
+                   #(= (count (:ret %))
+                       (+ (-> % :args :offset) K/box-zero-bytes)))
+        :ret bytes?)
 (defn box-after
-  ;; TODO: Make sure both these versions work
   ([key plain-text length nonce]
    (when (<= length (count plain-text))
      (let [padded-length (+ length K/box-zero-bytes)
            cipher-text (byte-array padded-length)
            plain-buffer (byte-array padded-length)]
+       (log/info (str "Encrypting " length " bytes into " padded-length))
        (b-t/byte-copy! plain-buffer K/box-zero-bytes length plain-text)
        (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key)
        cipher-text)))
@@ -48,6 +68,14 @@
                      ;; Plus, there are fewer function calls to get
                      ;; to the point.
                      :shared-key bytes?)
+        :fn (s/and #(>= (-> (% :args :box count))
+                        (+ (get-in % [:args :box-offset])
+                           (get-in % [:args :box-length])))
+                   #(= (-> % :args :nonce count) K/nonce-length)
+                   #(= (-> % :ret count)
+                       (- (+ (-> % :args :box-offset)
+                             (-> % :args :box-length))
+                          K/nonce-length)))
         :ret vector?)
 (defn open-after
   "Low-level direct crypto box opening

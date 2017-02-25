@@ -6,4 +6,5 @@
 (def decrypt-box-zero-bytes 32)
 (def key-length 32)
 (def max-random-nonce (long (Math/pow 2 48)))
+(def nonce-length 24)
 (def shared-key-length key-length)

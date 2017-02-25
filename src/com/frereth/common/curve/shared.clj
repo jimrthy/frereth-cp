@@ -20,7 +20,6 @@ This is getting big enough that I really need to split it up"
 ;;; TODO: Pretty much all of these should move into constants
 
 (def extension-length 16)
-(def nonce-length 24)
 (def client-nonce-prefix-length 16)
 (def client-nonce-suffix-length 8)
 (def server-nonce-prefix-length 8)
@@ -130,7 +129,7 @@ This is getting big enough that I really need to split it up"
 (s/def ::secret-key (s/and bytes? #(= (count %) K/key-length)))
 (s/def ::symmetric-key (s/and bytes? #(= (count %) K/key-length)))
 
-(s/def ::working-nonce (s/and bytes? #(= (count %) nonce-length)))
+(s/def ::working-nonce (s/and bytes? #(= (count %) K/nonce-length)))
 (s/def ::text bytes?)
 (s/def ::working-area (s/keys :req [::text ::working-nonce]))
 
@@ -255,7 +254,7 @@ This is getting big enough that I really need to split it up"
         :ret ::working-area)
 (defn default-work-area
   []
-  {::working-nonce (byte-array nonce-length)
+  {::working-nonce (byte-array K/nonce-length)
    ::text (byte-array 2048)})
 
 (declare slurp-bytes)

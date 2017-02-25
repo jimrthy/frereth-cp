@@ -7,6 +7,7 @@
             [com.frereth.common.curve.server :as srvr]
             [com.frereth.common.curve.server-test :as server-test]
             [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.curve.shared.constants :as K]
             [com.frereth.common.curve.shared.crypto :as crypto]
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]
             [manifold.deferred :as deferred]
@@ -104,20 +105,41 @@
      ::clnt/reader result
      ::clnt/writer strm/stream}))
 
+(deftest basic-sanity
+  (testing "Does the basic idea work?"
+      (let [server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
+                                        51 -105 -107 -125 -120 -41 83 -46
+                                        -23 -72 109 -58 -100 87 115 95
+                                        89 -74 -21 -33 20 21 110 95])
+            keydir "curve-test"
+            server-pair (shared/do-load-keypair keydir)
+            client-pair (crypto/random-key-pair)
+            client-shared (TweetNaclFast$Box. server-long-pk (.getSecretKey client-pair))
+            server-shared (TweetNaclFast$Box.
+                           (.getPublicKey client-pair)
+                           (.getSecretKey server-pair))
+            block-length 50
+            plain-text (byte-array (range block-length))
+            nonce (byte-array K/nonce-length)]
+        (aset-byte nonce 7 1)
+        (let [crypto-text (.box client-shared plain-text nonce)
+              decrypted (.open server-shared crypto-text nonce)]
+          (is (b-t/bytes= decrypted plain-text))))))
+
 (deftest verify-keys
+  "Did I botch up my server keys?"
   (let [server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
                                     51 -105 -107 -125 -120 -41 83 -46
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         keydir "curve-test"
-        server-pair (shared/do-load-keypair keydir)]
-    (let [pk (.getPublicKey server-pair)]
-      (is (b-t/bytes= pk server-long-pk)))
+        server-pair (shared/do-load-keypair keydir)
+        pk (.getPublicKey server-pair)]
+    (testing "Disk matches hard-coded in-memory"
+        (is (b-t/bytes= pk server-long-pk)))
     (let [client-pair (crypto/random-key-pair)
-          client-shared #_(TweetNaclFast$Box.
-                           server-long-pk
-                           (.getSecretKey client-pair))
-          (crypto/box-prepare server-long-pk (.getSecretKey client-pair))
+          client-shared-bytes (crypto/box-prepare server-long-pk (.getSecretKey client-pair))
+          client-standard-shared (TweetNaclFast$Box. server-long-pk (.getSecretKey client-pair))
           server-shared (TweetNaclFast$Box.
                          (.getPublicKey client-pair)
                          (.getSecretKey server-pair))
@@ -128,40 +150,78 @@
           plain-text (byte-array (range block-length))
           offset 32
           offset-text (byte-array (+ offset block-length))
-          nonce (byte-array shared/nonce-length)]
+          nonce (byte-array K/nonce-length)]
       (b-t/byte-copy! offset-text offset block-length plain-text)
       ;; TODO: Roll back my debugging changes to the java code
       ;; to get back to the canonical version.
-      ;; Then never change that one again.
-      (comment (is b-t/bytes= server-shared-nm (.-sharedKey server-shared)))
-      ;; This is fairly arbitrary...24 random-bytes would be better
+      ;; Then work with copies and never change that one again.
+      ;; Getting public access to the shared key like this was one
+      ;; of the more drastic changes
+      ;; Q: Why can't I access this?
+      (comment)
+      (is (b-t/bytes= client-shared-bytes (.-sharedKey client-standard-shared)))
+      (is (b-t/bytes= server-shared-nm (.-sharedKey server-shared)))
+      ;; This is fairly arbitrary...24 random-bytes seems better
       (aset-byte nonce 7 1)
-      (let [crypto-text (crypto/box-after client-shared plain-text block-length nonce)
-            crypto-text2 (crypto/box-after client-shared offset-text offset block-length nonce)]
-        (is crypto-text)
-        (comment
-          (is crypto-text2 "Figure out a good way to make this version work"))
-        (is (> (count crypto-text) (count plain-text)))
-        (is (not= crypto-text plain-text))
-        (println "Getting ready to try to decrypt. Including using" server-shared-nm "a" (class server-shared-nm)
-                 "containing" (count server-shared-nm) "bytes")
-        (let [de2 (.open server-shared crypto-text nonce)  ; easiest, slowest approach
-              ;; This is the approach that almost everyone will use
-              decrypted (.open_after server-shared crypto-text 0 (count crypto-text) nonce)]
-          (if de2
-            (is (b-t/bytes= de2 plain-text))
-            (is false "Simplest decryption failed"))
-          (if decrypted
-            (is (b-t/bytes= decrypted plain-text))
-            (is false "Most common decryption approach failed"))
-
-          (try
-            (let [;; This is the approach that I really should use
-                  de3 (crypto/open-after crypto-text 0 (count crypto-text) nonce server-shared-nm)]
-              (if de3
-                (let [bs (byte-array de3)]
-                  (is (b-t/bytes= bs plain-text)))
-                (is false "Failed to open the box I care about")))))))))
+      (testing "Offset and standard boxing"
+        (let [crypto-text (crypto/box-after client-shared-bytes plain-text block-length nonce)
+              crypto-text2 (crypto/box-after client-shared-bytes offset-text offset block-length nonce)
+              crypto-text3 (.box client-standard-shared plain-text nonce)]
+          (testing "Low-level crypto I want"
+            (is crypto-text)
+            (testing "Encrypted box length"
+                (is (= (count crypto-text) (+ (count plain-text)
+                                              K/box-zero-bytes))))
+            (testing "Something happened"
+              (is (not (b-t/bytes= crypto-text plain-text)))))
+          (comment
+            (is crypto-text2 "Figure out a good way to make this version work"))
+          (testing "High-level interface"
+            (is crypto-text3))
+          ;; Something really strange is going on here.
+          ;; This comparison succeeds.
+          ;; The two sets of bytes are absolutely *not* equal.
+          ;; Maybe it's computing a hash, and there's a collision?
+          ;; I can regularly decrypt crypto-text3, but not crypto-text.
+          (is (b-t/bytes= crypto-text crypto-text3))
+          (testing "Hashing vs. byte-wise"
+            ;; Demonstrate that, really, those values look totally different
+            ;; to someone as clueless as I.
+            (is (= 0 (bs/compare-bytes crypto-text crypto-text3))
+                (str "Just proved that\n"
+                     (with-out-str (bs/print-bytes crypto-text))
+                     "==\n"
+                     (with-out-str (bs/print-bytes crypto-text3))
+                     "even though they really are not")))
+          (testing "Decryption"
+            (let [de2 (.open server-shared crypto-text3 nonce)  ; easiest, slowest approach
+                  ;; This is the approach that almost everyone will use
+                  decrypted (.open_after server-shared crypto-text3 0 (count crypto-text) nonce)]
+              (testing "Most likely decryption approach"
+                (if decrypted
+                  (is (b-t/bytes= decrypted plain-text))
+                  (is false "Most common decryption approach failed")))
+              (testing "Most obvious high level decryption"
+                (if de2
+                  (is (b-t/bytes= de2 plain-text))
+                  (is false (str "Simplest decryption failed\n"
+                                 "Trying to decrypt\n"
+                                 (with-out-str (bs/print-bytes crypto-text)))))))
+            (testing "Low-level 'nm' decryption"
+              (try
+                (println "Getting ready to try to decrypt. Including using" server-shared-nm "a" (class server-shared-nm)
+                         "containing" (count server-shared-nm) "bytes")
+                (let [;; This is the approach that I really should use
+                      de3 (crypto/open-after crypto-text3 0 (count crypto-text) nonce server-shared-nm)
+                      de4 (crypto/open-after crypto-text 0 (count crypto-text) nonce server-shared-nm)]
+                  (if de3
+                    (let [bs (byte-array de3)]
+                      (is (b-t/bytes= bs plain-text)))
+                    (is false "Failed to open the box I care about"))
+                  (if de4
+                    (let [bs (byte-array de4)]
+                      (is (= 0 (bs/compare-bytes bs plain-text))))
+                    (is false "Failed to open the box I care about")))))))))))
 
 (deftest handshake
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
