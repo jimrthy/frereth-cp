@@ -152,15 +152,20 @@
           offset-text (byte-array (+ offset block-length))
           nonce (byte-array K/nonce-length)]
       (b-t/byte-copy! offset-text offset block-length plain-text)
+
       ;; TODO: Roll back my debugging changes to the java code
       ;; to get back to the canonical version.
       ;; Then work with copies and never change that one again.
       ;; Getting public access to the shared key like this was one
       ;; of the more drastic changes
-      ;; Q: Why can't I access this?
-      (comment)
-      (is (b-t/bytes= client-shared-bytes (.-sharedKey client-standard-shared)))
-      (is (b-t/bytes= server-shared-nm (.-sharedKey server-shared)))
+      (testing "That keys match"
+        (let [official (.-sharedKey client-standard-shared)]
+          (is (b-t/bytes= client-shared-bytes official))
+          (is (= 0 (bs/compare-bytes client-shared-bytes official))))
+        (let [official (.-sharedKey server-shared)]
+          (is (b-t/bytes= server-shared-nm official))
+          (is (= 0 (bs/compare-bytes server-shared-nm official)))))
+
       ;; This is fairly arbitrary...24 random-bytes seems better
       (aset-byte nonce 7 1)
       (testing "Offset and standard boxing"
@@ -171,7 +176,7 @@
             (is crypto-text)
             (testing "Encrypted box length"
                 (is (= (count crypto-text) (+ (count plain-text)
-                                              K/box-zero-bytes))))
+                                              #_K/box-zero-bytes))))
             (testing "Something happened"
               (is (not (b-t/bytes= crypto-text plain-text)))))
           (comment
