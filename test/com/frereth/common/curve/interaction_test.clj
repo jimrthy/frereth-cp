@@ -16,95 +16,6 @@
            com.iwebpp.crypto.TweetNaclFast$Box
            io.netty.buffer.Unpooled))
 
-(defn retrieve-hello
-  "This is really a server-side method"
-  [client-chan hello]
-  (println "Pulled HELLO from client")
-  (let [n (.readableBytes hello)]
-    (println "Have" n "bytes to write to " client-chan)
-    (if (= 224 n)
-      (strm/put! (:chan client-chan)
-                 {:message (Unpooled/wrappedBuffer hello)
-                  :host "test-client"
-                  :port 65536})
-      (throw (RuntimeException. "Bad Hello")))))
-
-(defn wrote-hello
-  [client-chan success]
-  (is success "Failed to write hello to server")
-  ;; I'm pretty sure I need to split
-  ;; this into 2 channels so I don't pull back
-  ;; the hello that I just put on there
-  ;; Although it would be really sweet if ztellman
-  ;; handled this for me.
-  (strm/try-take! (:chan client-chan) ::drained 500 ::timeout))
-
-(defn forward-cookie
-  [client<-server cookie]
-  (println "Received cookie packet from server:" cookie)
-  (if-not (keyword? cookie)
-    (do
-      (is (= 200 (count (:message cookie))))
-      (strm/try-put! client<-server
-                     cookie
-                     500
-                     ::timeout))
-    (throw (ex-info "Bad cookie"
-                    {:problem cookie}))))
-
-(defn wrote-cookie
-  [clnt->srvr success]
-  (println "Server cookie sent. Waiting for vouch")
-  (is success)
-  (is (not= success ::timeout))
-  (strm/try-take! clnt->srvr ::drained 500 ::timeout))
-
-(defn vouch->server
-  [client-chan vouch]
-  (if-not (or (= vouch ::drained)
-              (= vouch ::timeout))
-    (strm/try-put! client-chan
-                   {:message vouch
-                    :host "tester"
-                    :port 65536}
-                   500
-                   ::timeout)
-    (throw (ex-info "Retrieving Vouch from client failed"
-                    {:failure vouch}))))
-
-(defn wrote-vouch
-  [client-chan success]
-  (if success
-    (strm/try-take! client-chan ::drained 500 ::timeout)
-    (throw (RuntimeException. "Failed writing Vouch to client"))))
-
-(defn finalize
-  [client<-server response]
-  (is response "Handshake should be complete")
-  (strm/try-put! client<-server
-                 {:message response
-                  :host "interaction-test-server"
-                  :port -1}
-                 500
-                 ::timeout))
-
-(defn client-child-spawner
-  [client-agent]
-  (comment (spit "/home/james/hey-you.txt" "Spawning child"))
-  (println "Top of client-child-spawner")
-  ;; Q: What should this really do?
-  (let [result (strm/stream)
-        child (future
-                (println "Client child sending bytes to server via client")
-                (let [written (strm/try-put! result
-                                             "Hello, out there!"
-                                             2500
-                                             ::timedout)]
-                  (println "Client-child send result:" @written)))]
-    {::clnt/child child
-     ::clnt/reader result
-     ::clnt/writer strm/stream}))
-
 (deftest basic-sanity
   (testing "Does the basic idea work?"
       (let [server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
@@ -234,6 +145,95 @@
                     (let [bs (byte-array de4)]
                       (is (= 0 (bs/compare-bytes bs plain-text))))
                     (is false "Failed to open the box I care about")))))))))))
+
+(defn retrieve-hello
+  "This is really a server-side method"
+  [client-chan hello]
+  (println "Pulled HELLO from client")
+  (let [n (.readableBytes hello)]
+    (println "Have" n "bytes to write to " client-chan)
+    (if (= 224 n)
+      (strm/put! (:chan client-chan)
+                 {:message (Unpooled/wrappedBuffer hello)
+                  :host "test-client"
+                  :port 65536})
+      (throw (RuntimeException. "Bad Hello")))))
+
+(defn wrote-hello
+  [client-chan success]
+  (is success "Failed to write hello to server")
+  ;; I'm pretty sure I need to split
+  ;; this into 2 channels so I don't pull back
+  ;; the hello that I just put on there
+  ;; Although it would be really sweet if ztellman
+  ;; handled this for me.
+  (strm/try-take! (:chan client-chan) ::drained 500 ::timeout))
+
+(defn forward-cookie
+  [client<-server cookie]
+  (println "Received cookie packet from server:" cookie)
+  (if-not (keyword? cookie)
+    (do
+      (is (= 200 (count (:message cookie))))
+      (strm/try-put! client<-server
+                     cookie
+                     500
+                     ::timeout))
+    (throw (ex-info "Bad cookie"
+                    {:problem cookie}))))
+
+(defn wrote-cookie
+  [clnt->srvr success]
+  (println "Server cookie sent. Waiting for vouch")
+  (is success)
+  (is (not= success ::timeout))
+  (strm/try-take! clnt->srvr ::drained 500 ::timeout))
+
+(defn vouch->server
+  [client-chan vouch]
+  (if-not (or (= vouch ::drained)
+              (= vouch ::timeout))
+    (strm/try-put! client-chan
+                   {:message vouch
+                    :host "tester"
+                    :port 65536}
+                   500
+                   ::timeout)
+    (throw (ex-info "Retrieving Vouch from client failed"
+                    {:failure vouch}))))
+
+(defn wrote-vouch
+  [client-chan success]
+  (if success
+    (strm/try-take! client-chan ::drained 500 ::timeout)
+    (throw (RuntimeException. "Failed writing Vouch to client"))))
+
+(defn finalize
+  [client<-server response]
+  (is response "Handshake should be complete")
+  (strm/try-put! client<-server
+                 {:message response
+                  :host "interaction-test-server"
+                  :port -1}
+                 500
+                 ::timeout))
+
+(defn client-child-spawner
+  [client-agent]
+  (comment (spit "/home/james/hey-you.txt" "Spawning child"))
+  (println "Top of client-child-spawner")
+  ;; Q: What should this really do?
+  (let [result (strm/stream)
+        child (future
+                (println "Client child sending bytes to server via client")
+                (let [written (strm/try-put! result
+                                             "Hello, out there!"
+                                             2500
+                                             ::timedout)]
+                  (println "Client-child send result:" @written)))]
+    {::clnt/child child
+     ::clnt/reader result
+     ::clnt/writer strm/stream}))
 
 (deftest handshake
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
