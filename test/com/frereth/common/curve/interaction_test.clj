@@ -126,8 +126,8 @@
               decrypted (.open server-shared crypto-text nonce)]
           (is (b-t/bytes= decrypted plain-text))))))
 
-(deftest verify-keys
-  "Did I botch up my server keys?"
+(deftest verify-basic-round-trips
+  "Can I encrypt/decrypt using the keys from the handshake test?"
   (let [server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
                                     51 -105 -107 -125 -120 -41 83 -46
                                     -23 -72 109 -58 -100 87 115 95
@@ -183,19 +183,19 @@
                 (is (= (count crypto-text) (count crypto-text3))))
             (testing "Accomplished *something*"
               (is (not (b-t/bytes= crypto-text plain-text)))))
-          (comment
-            (is crypto-text2 "Figure out a good way to make this version work"))
+          (is crypto-text2 "Figure out a good way to make this version work")
           (testing "High-level interface"
             (is crypto-text3))
-          ;; Something really strange is going on here.
-          ;; This comparison succeeds.
-          ;; The two sets of bytes are absolutely *not* equal.
-          ;; Maybe it's computing a hash, and there's a collision?
-          ;; I can regularly decrypt crypto-text3, but not crypto-text.
-          (is (b-t/bytes= crypto-text crypto-text3))
           (testing "Hashing vs. byte-wise"
-            ;; Demonstrate that, really, those values look totally different
-            ;; to someone as clueless as I.
+            ;; When I was handling the initial padding incorrectly
+            ;; (just prepending 16 zero bytes, and then returning
+            ;; what that created without dropping anything,
+            ;; as opposed to starting with 32 zero prefix bytes and
+            ;; dropping 16 of them),
+            ;; bytes= returned true.
+            ;; That's what this particular part of this test
+            ;; was all about
+            (is (b-t/bytes= crypto-text crypto-text3))
             (is (= 0 (bs/compare-bytes crypto-text crypto-text3))
                 (str "Just proved that\n"
                      (with-out-str (bs/print-bytes crypto-text))
@@ -221,10 +221,10 @@
                                  (with-out-str (bs/print-bytes crypto-text)))))))
             (testing "Low-level 'nm' decryption"
               (try
-                (println "Getting ready to try to decrypt. Including using" server-shared-nm "a" (class server-shared-nm)
-                         "containing" (count server-shared-nm) "bytes")
-                (let [;; This is the approach that I really should use
+                (let [;; This is the approach that I really think I should use
                       de3 (crypto/open-after crypto-text3 0 (count crypto-text) nonce server-shared-nm)
+                      ;; Verify that my low-level open function can decrypt a box that was
+                      ;; wrapped using the high-level approach
                       de4 (crypto/open-after crypto-text 0 (count crypto-text) nonce server-shared-nm)]
                   (if de3
                     (let [bs (byte-array de3)]

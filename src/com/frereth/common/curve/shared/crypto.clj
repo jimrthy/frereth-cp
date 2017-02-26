@@ -33,10 +33,11 @@
 (defn box-after
   "Accept some plain text and turn it into cipher text"
   ([key plain-text length nonce]
-   ;; Really tempting to just call (box-after key plain-text 0 length nonce)
-   ;; instead of maintaining two almost-identical versions
-   ;; TODO: More benchmarking to see how much difference that makes.
-   ;; Once this works.
+   ;; TODO: More benchmarking to see how much difference it makes
+   ;; to have 2 separate implementations that allow this one to
+   ;; avoid an extra 0 addition.
+   ;; Since this has to touch every single byte that flows through
+   ;; the system, it might be noticeable.
    (comment
      (when (and (<= length (count plain-text))
                 nonce
@@ -59,12 +60,10 @@
            plain-buffer (byte-array padded-length)]
        (b-t/byte-copy! plain-buffer K/decrypt-box-zero-bytes length plain-text offset)
        (when (= 0 (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key))
-         (comment cipher-text)
-         ;; This is what .after does.
-         ;; And .box is just a thin wrapper over that.
-         ;; Q: What am I missing?
-         (comment) (b-t/sub-byte-array cipher-text K/box-zero-bytes)
-         )))))
+         ;; After it's encrypted, we can discard the first 16 bytes.
+         ;; But not the other extra 16.
+         ;; This is an annoying API pitfall that leads to a lot of annoyance/confusion.
+         (b-t/sub-byte-array cipher-text K/box-zero-bytes))))))
 
 (defn box-prepare
   "Set up shared secret so I can avoid the if logic to see whether it's been done.
