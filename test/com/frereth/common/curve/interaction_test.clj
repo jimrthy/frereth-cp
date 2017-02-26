@@ -75,7 +75,9 @@
           (is (= 0 (bs/compare-bytes client-shared-bytes official))))
         (let [official (.-sharedKey server-shared)]
           (is (b-t/bytes= server-shared-nm official))
-          (is (= 0 (bs/compare-bytes server-shared-nm official)))))
+          (is (= 0 (bs/compare-bytes server-shared-nm official))))
+        (testing "symmetric"
+          (is (= 0 (bs/compare-bytes server-shared-nm client-shared-bytes)))))
 
       ;; This is fairly arbitrary...24 random-bytes seems better
       (aset-byte nonce 7 1)
@@ -94,7 +96,7 @@
                 (is (= (count crypto-text) (count crypto-text3))))
             (testing "Accomplished *something*"
               (is (not (b-t/bytes= crypto-text plain-text)))))
-          (is crypto-text2 "Figure out a good way to make this version work")
+          (is crypto-text2 "Encrypting w/ offset failed")
           (testing "High-level interface"
             (is crypto-text3))
           (testing "Hashing vs. byte-wise"

@@ -184,7 +184,7 @@ nor subject to timing attacks because it just won't be called very often."
                            (log/warn "Missing extension file")
                            (shared/zero-bytes 16)))
                     extension)]
-    (assert (= (count extension) shared/extension-length))
+    (assert (= (count extension) K/extension-length))
     (log/info "Loaded extension:" (vec extension))
     (assoc this
            ::client-extension-load-time client-extension-load-time
@@ -212,15 +212,15 @@ nor subject to timing attacks because it just won't be called very often."
         _ (assert my-short<->their-long)
         ;; Note that this definitely inserts the 16-byte prefix for me
         boxed (crypto/box-after my-short<->their-long
-                                shared/all-zeros 64 working-nonce)
+                                shared/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes) working-nonce)
         msg (str "Hello crypo-box:\n"
                  (with-out-str (b-s/print-bytes boxed))
                  "\nencrypted with nonce\n"
                  (with-out-str (b-s/print-bytes working-nonce))
-                 "\nfrom (FAILURE! Secret Key, just for debugging!!)\n"
+                 "\nfrom\n"
                  (with-out-str (-> my-keys
                                    ::shared/short-pair
-                                   .getSecretKey
+                                   .getPublicKey
                                    b-s/print-bytes))
                  "\nto\n"
                  (with-out-str (b-s/print-bytes (get-in this [::server-security
@@ -512,11 +512,11 @@ implementation. This is code that I don't understand yet"
                                             shared/initiate-header)
                             (let [offset shared/server-nonce-prefix-length]
                               (b-t/byte-copy! packet offset
-                                              shared/extension-length server-extension)
-                              (let [offset (+ offset shared/extension-length)]
+                                              K/extension-length server-extension)
+                              (let [offset (+ offset K/extension-length)]
                                 (b-t/byte-copy! packet offset
-                                                shared/extension-length extension)
-                                (let [offset (+ offset shared/extension-length)]
+                                                K/extension-length extension)
+                                (let [offset (+ offset K/extension-length)]
                                   (b-t/byte-copy! packet offset K/key-length
                                                   (.getPublicKey (::short-pair my-keys)))
                                   (let [offset (+ offset K/key-length)]
@@ -576,16 +576,16 @@ implementation. This is code that I don't understand yet"
            ;; random port.
            ;; Hopefully, someday, operating systems will have some mechanism for
            ;; rotating these automatically
-           ;; Q: Is this really better than just picking something random here?
-           ;; A: Who am I to argue with an expert?
-           ::server-security server-security
+           ;; Q: Is nil really better than just picking something random here?
+           ;; A: Who am I to argue with one of the experts?
            ::shared/extension nil
            ::shared-secrets {::client-long<->server-long (crypto/box-prepare
                                                           server-long-term-pk
-                                                          (.getSecretKey short-pair))
+                                                          (.getSecretKey long-pair))
                              ::client-short<->server-long (crypto/box-prepare
                                                            server-long-term-pk
-                                                           (.getSecretKey long-pair))}})))
+                                                           (.getSecretKey short-pair))}
+           ::server-security server-security})))
 
 (defn child-exited!
   [this]

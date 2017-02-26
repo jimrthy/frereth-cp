@@ -19,7 +19,6 @@ This is getting big enough that I really need to split it up"
 ;;; Magic constants
 ;;; TODO: Pretty much all of these should move into constants
 
-(def extension-length 16)
 (def client-nonce-prefix-length 16)
 (def client-nonce-suffix-length 8)
 (def server-nonce-prefix-length 8)
@@ -31,7 +30,6 @@ This is getting big enough that I really need to split it up"
 (def hello-header (.getBytes (str client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
-(def hello-crypto-box-length 80)
 ;; Q: Is it worth trying to build serialization
 ;; handlers like gloss/buffy from spec?
 ;; That *was* one of the awesome features

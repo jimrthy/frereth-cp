@@ -249,6 +249,13 @@
           ;; Better Q: Would that a good idea, if it worked?
           ;; (Pretty sure this is/was the main thrust behind a plumatic library)
           {:keys [::shared/text ::shared/working-nonce]} working-area]
+      (log/info (str "Incoming HELLO\n"
+                     "Client short-term PK:\n"
+                     (with-out-str (bs/print-bytes client-short-pk))
+                     "\nMy long-term PK:\n"
+                     (with-out-str (bs/print-bytes (.getPublicKey long-keys)))
+                     "\nOur shared secret:\n"
+                     (with-out-str (bs/print-bytes shared-secret))))
       (b-t/byte-copy! working-nonce
                       shared/hello-nonce-prefix)
       (.readBytes nonce-suffix working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
@@ -261,15 +268,15 @@
                      (with-out-str (bs/print-bytes working-nonce))
                      "\nencrypted from\n"
                      (with-out-str (bs/print-bytes client-short-pk))
-                     "\nto (FAILURE! Secret Key, just for debugging!!)\n"
-                     (with-out-str (bs/print-bytes (.getSecretKey long-keys)))
+                     "\nto\n"
+                     (with-out-str (bs/print-bytes (.getPublicKey long-keys)))
                      "\nwhich generated shared secret\n"
                      (with-out-str (bs/print-bytes shared-secret)))]
         (log/info msg))
       {::opened (crypto/open-after
                  text
                  0
-                 (+ shared/hello-crypto-box-length K/box-zero-bytes)
+                 (+ K/hello-crypto-box-length #_K/box-zero-bytes)
                  working-nonce
                  shared-secret)
        ::shared-secret shared-secret})))
@@ -371,7 +378,7 @@
   (log/debug "Incoming")
   (if (check-packet-length message)
     (let [header (byte-array shared/header-length)
-          extension (byte-array shared/extension-length)
+          extension (byte-array K/extension-length)
           current-reader-index (.readerIndex message)]
       (.readBytes message header)
       (.readBytes message extension)
@@ -606,7 +613,7 @@
          ;; Actually, the rule is that it must be
          ;; 32 hex characters. Which really means
          ;; a 16-byte array
-           (= (count extension) shared/extension-length)]}
+           (= (count extension) K/extension-length)]}
   (log/warn "CurveCP Server: Starting the server state")
 
   ;; Reference implementation starts by allocating the active client structs.
