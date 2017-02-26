@@ -171,13 +171,17 @@
       (testing "Offset and standard boxing"
         (let [crypto-text (crypto/box-after client-shared-bytes plain-text block-length nonce)
               crypto-text2 (crypto/box-after client-shared-bytes offset-text offset block-length nonce)
-              crypto-text3 (.box client-standard-shared plain-text nonce)]
+              crypto-text3 (.box client-standard-shared plain-text nonce)
+              crypto-text3a (.box client-standard-shared plain-text nonce)]
           (testing "Low-level crypto I want"
             (is crypto-text)
             (testing "Encrypted box length"
                 (is (= (count crypto-text) (+ (count plain-text)
-                                              #_K/box-zero-bytes))))
-            (testing "Something happened"
+                                              K/box-zero-bytes)))
+                (when-not (= (count crypto-text) (count crypto-text3))
+                  (println "My version is" (count crypto-text) "bytes long. The real thing is" (count crypto-text3)))
+                (is (= (count crypto-text) (count crypto-text3))))
+            (testing "Accomplished *something*"
               (is (not (b-t/bytes= crypto-text plain-text)))))
           (comment
             (is crypto-text2 "Figure out a good way to make this version work"))
@@ -197,7 +201,10 @@
                      (with-out-str (bs/print-bytes crypto-text))
                      "==\n"
                      (with-out-str (bs/print-bytes crypto-text3))
-                     "even though they really are not")))
+                     "even though they really are not"))
+            (testing "Encryption is purely functional"
+              ;; But the two boxed values really are the same
+              (is (= 0 (bs/compare-bytes crypto-text3a crypto-text3)))))
           (testing "Decryption"
             (let [de2 (.open server-shared crypto-text3 nonce)  ; easiest, slowest approach
                   ;; This is the approach that almost everyone will use

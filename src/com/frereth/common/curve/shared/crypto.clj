@@ -37,26 +37,34 @@
    ;; instead of maintaining two almost-identical versions
    ;; TODO: More benchmarking to see how much difference that makes.
    ;; Once this works.
-   (when (and (<= length (count plain-text))
-              nonce
-              (= (count nonce) K/nonce-length))
-     (let [padded-length (+ length K/box-zero-bytes)
-           plain-buffer (byte-array padded-length)
-           cipher-text (byte-array padded-length)]
-       (log/info (str "Encrypting " length " bytes into " padded-length))
-       (b-t/byte-copy! plain-buffer K/box-zero-bytes length plain-text)
-       (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key)
-       (b-t/sub-byte-array cipher-text K/box-zero-bytes))))
+   (comment
+     (when (and (<= length (count plain-text))
+                nonce
+                (= (count nonce) K/nonce-length))
+       (let [padded-length (+ length K/box-zero-bytes)
+             plain-buffer (byte-array padded-length)
+             cipher-text (byte-array padded-length)]
+         (log/info (str "Encrypting " length " bytes into " padded-length))
+         (b-t/byte-copy! plain-buffer K/box-zero-bytes length plain-text)
+         (when (= 0
+                  (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key))
+           (b-t/sub-byte-array cipher-text K/box-zero-bytes)))))
+   (box-after key plain-text 0 length nonce))
   ([key plain-text offset length nonce]
-   (when (and (< (+ length offset) (count plain-text))
+   (when (and (<= (+ length offset) (count plain-text))
               nonce
               (= (count nonce) K/nonce-length))
-     (let [padded-length (+ length K/box-zero-bytes)
+     (let [padded-length (+ length K/decrypt-box-zero-bytes)
            cipher-text (byte-array padded-length)
            plain-buffer (byte-array padded-length)]
-       (b-t/byte-copy! plain-buffer K/box-zero-bytes length plain-text offset)
-       (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key)
-       (b-t/sub-byte-array cipher-text K/box-zero-bytes)))))
+       (b-t/byte-copy! plain-buffer K/decrypt-box-zero-bytes length plain-text offset)
+       (when (= 0 (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key))
+         (comment cipher-text)
+         ;; This is what .after does.
+         ;; And .box is just a thin wrapper over that.
+         ;; Q: What am I missing?
+         (comment) (b-t/sub-byte-array cipher-text K/box-zero-bytes)
+         )))))
 
 (defn box-prepare
   "Set up shared secret so I can avoid the if logic to see whether it's been done.
