@@ -67,7 +67,8 @@
 ;; Except that it's a...what?
 ;; (it seems like it ought to be an async/chan, but it might really
 ;; be a manifold/stream
-(s/def ::client-chan (s/keys :req [::chan]))
+(s/def ::client-read-chan (s/keys :req [::chan]))
+(s/def ::client-write-chan (s/keys :req [::chan]))
 
 (s/def ::client-state (s/keys :req [::child-interaction
                                     ::client-security
@@ -80,7 +81,8 @@
 (s/def ::current-client ::client-state)
 
 (s/def ::state (s/keys :req [::active-clients
-                             ::client-chan
+                             ::client-read-chan
+                             ::client-write-chan
                              ::cookie-cutter
                              ::current-client
                              ::event-loop-stopper
@@ -199,7 +201,7 @@
       ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
       ;; Go with the assumption that those are the initial garbage 0 bytes that should
       ;; be discarded anyway
-      (b-t/byte-copy! text 64 shared/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
+      (b-t/byte-copy! text 64 K/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
 
       ;; And now we need to encrypt that.
       ;; This really belongs in its own function
@@ -207,17 +209,17 @@
       (b-t/byte-copy! text 0 K/decrypt-box-zero-bytes shared/all-zeros)
       (b-t/byte-copy! text 32 K/key-length (.getPublicKey keys))
       ;; Reuse the other 16 bytes
-      (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length shared/cookie-nonce-prefix)
+      (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length K/cookie-nonce-prefix)
       (crypto/box-after client-short<->server-long text 160 working-nonce))))
 
 (defn build-cookie-packet!
   [packet client-extension server-extension working-nonce text]
-  (shared/compose shared/cookie-frame {::shared/header shared/cookie-header
+  (shared/compose shared/cookie-frame {::shared/header K/cookie-header
                                        ::shared/client-extension client-extension
                                        ::shared/server-extension server-extension
                                        ::shared/nonce (Unpooled/wrappedBuffer working-nonce
                                                                               shared/server-nonce-prefix-length
-                                                                              shared/server-nonce-suffix-length)
+                                                                              K/server-nonce-suffix-length)
                                        ;; This is also a great big FAIL:
                                        ;; Have to drop the first 16 bytes
                                        ;; Q: Have I fixed that yet?
@@ -246,7 +248,7 @@
           shared-secret (crypto/box-prepare client-short-pk my-sk)
           ;; Q: How do I combine these to handle this all at once?
           ;; I think I should be able to do something like:
-          ;; {:keys [{:keys [::text ::working-nonce] :as ::working-area}]}
+          ;; {:keys [{:keys [::text ::working-nonce] :as ::work-area}]}
           ;; state
           ;; (that fails spec validation)
           ;; Better Q: Would that a good idea, if it worked?
@@ -262,11 +264,11 @@
       (b-t/byte-copy! working-nonce
                       shared/hello-nonce-prefix)
       (.readBytes nonce-suffix working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
-      (.readBytes crypto-box text #_K/decrypt-box-zero-bytes 0 shared/hello-crypto-box-length)
+      (.readBytes crypto-box text #_K/decrypt-box-zero-bytes 0 K/hello-crypto-box-length)
       (let [msg (str "Trying to open "
-                     shared/hello-crypto-box-length
+                     K/hello-crypto-box-length
                      " bytes of\n"
-                     (with-out-str (bs/print-bytes (b-t/sub-byte-array text 0 (+ 32 shared/hello-crypto-box-length))))
+                     (with-out-str (bs/print-bytes (b-t/sub-byte-array text 0 (+ 32 K/hello-crypto-box-length))))
                      "\nusing nonce\n"
                      (with-out-str (bs/print-bytes working-nonce))
                      "\nencrypted from\n"
@@ -334,11 +336,12 @@
               ;; Which seems dangerous, but it very deliberately is longer than
               ;; our response.
               ;; And it does save a malloc/GC.
+              ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
               (.clear message)
               (build-cookie-packet! message clnt-xtn srvr-xtn working-nonce text)
               (log/info "Cookie packet built. Returning it.")
               (try
-                (let [dst (get-in state [::client-chan :chan])
+                (let [dst (get-in state [::client-write-chan :chan])
                       success (stream/try-put! dst
                                                packet
                                                20
@@ -514,7 +517,7 @@
 
 (defn begin!
   "Start the event loop"
-  [{:keys [::client-chan]
+  [{:keys [::client-read-chan]
     :as this}]
   (let [stopper (deferred/deferred)
         stopped (promise)]
@@ -526,15 +529,15 @@
       (deferred/chain
         ;; The timeout is in milliseconds, but state's timeout uses
         ;; the nanosecond clock
-        (stream/try-take! (:chan client-chan)
+        (stream/try-take! (:chan client-read-chan)
                           ::drained
                           ;; Need to convert nanoseconds into milliseconds
                           (inc (/ (::timeout this) shared/nanos-in-milli))
                           ::timedout)
         (fn [msg]
           (log/info (str "Top of Server Event loop received " msg
-                        "\nfrom " (:chan client-chan)
-                        "\nin " client-chan))
+                        "\nfrom " (:chan client-read-chan)
+                        "\nin " client-read-chan))
           (if-not (or (identical? ::drained msg)
                       (identical? ::timedout msg))
             (try
@@ -552,7 +555,7 @@
               (catch Exception ex
                 (log/error "Major problem escaped handler" ex (.getStackTrace ex))))
             (do
-              (log/debug "Server recv from" (:chan client-chan) ":" msg)
+              (log/debug "Server recv from" (:chan client-read-chan) ":" msg)
               (if (identical? msg ::drained)
                 msg
                 this))))
@@ -610,12 +613,15 @@
              ::shared/working-area "...")))
 
 (defn start!
-  [{:keys [::client-chan
+  [{:keys [::client-read-chan
+           ::client-write-chan
            ::shared/extension
            ::shared/my-keys]
     :as this}]
-  {:pre [client-chan
-         (:chan client-chan)
+  {:pre [client-read-chan
+         (:chan client-read-chan)
+         client-write-chan
+         (:chan client-write-chan)
          (::shared/server-name my-keys)
          (::shared/keydir my-keys)
          extension

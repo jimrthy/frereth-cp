@@ -176,7 +176,7 @@
   (println "Received cookie packet from server:" cookie)
   (if-not (keyword? cookie)
     (do
-      (is (= 200 (count (:message cookie))))
+      (is (= 200 (.readableBytes (:message cookie))))
       (strm/try-put! client<-server
                      cookie
                      500
@@ -273,21 +273,16 @@
                                  ::clnt/chan<-server chan<-server
                                  ::clnt/chan->server chan->server))
         unstarted-server (srvr/ctor (::server options))
-        ;; Flip the meaning of these channel names,
-        ;; because we're looking at things inside out.
-        ;; From the perspective of the client, this is
-        ;; the stream it uses to communicate with the
-        ;; server.
-        ;; But it's the one we use to communicate with
-        ;; the client.
-        unstarted-client-chan (server-test/chan-ctor nil)
-        client-chan (.start unstarted-client-chan)]
+        server<-client {:chan (strm/stream)}
+        server->client {:chan (strm/stream)}]
     (try
       (println "Starting server based on\n"
                #_(with-out-str (pprint (srvr/hide-long-arrays unstarted-server)))
                "...stuff...")
       (try
-        (let [server (srvr/start! (assoc unstarted-server ::srvr/client-chan client-chan))]
+        (let [server (srvr/start! (assoc unstarted-server
+                                         ::srvr/client-read-chan server<-client
+                                         ::srvr/client-write-chan server->client))]
           (try
             ;; Currently just called for side-effects.
             ;; TODO: Seems like I really should hide that little detail
@@ -302,12 +297,12 @@
                            "Expected:" chan->server
                            "\nHave:" clnt->srvr))
               (assert clnt->srvr)
-              (let [write-hello (partial retrieve-hello client-chan)
-                    build-cookie (partial wrote-hello client-chan)
+              (let [write-hello (partial retrieve-hello server<-client)
+                    build-cookie (partial wrote-hello server->client)
                     write-cookie (partial forward-cookie chan<-server)
-                    get-cookie (partial wrote-cookie client-chan)
-                    write-vouch (partial vouch->server client-chan)
-                    get-server-response (partial wrote-vouch client-chan)
+                    get-cookie (partial wrote-cookie chan->server)
+                    write-vouch (partial vouch->server server<-client)
+                    get-server-response (partial wrote-vouch server->client)
                     write-server-response (partial finalize chan<-server)
                     _ (println "interaction-test: Starting the stream "
                                clnt->srvr)
@@ -353,7 +348,8 @@
               (srvr/stop! server))))
         (catch clojure.lang.ExceptionInfo ex
           (is (not (.getData ex)))))
-      (finally (.stop client-chan)))))
+      (finally (strm/close! (:chan server->client))
+               (strm/close! (:chan server<-client))))))
 
 (defn translate-raw-incoming
   [{:keys [host message port]

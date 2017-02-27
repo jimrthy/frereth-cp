@@ -7,6 +7,7 @@
             [manifold.stream :as strm]))
 
 (defrecord StreamOwner [chan]
+  ;; TODO: Make this just totally go away
   cpt/Lifecycle
   (start
     [this]

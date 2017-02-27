@@ -318,23 +318,37 @@ Note that this is really called for side-effects"
 
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet-management
+           ::shared/work-area
            ::shared-secrets
            ::server-security
            ::shared/text]
     :as this}
    rcvd]
-  (let [nonce (::shared/nonce packet-management)]
-    (b-t/byte-copy! nonce shared/cookie-nonce-prefix)
-    (b-t/byte-copy! nonce
-                    shared/server-nonce-prefix-length
-                    shared/server-nonce-suffix-length
-                    ;; This one is neither namespaced (for now)
-                    ;; nor part of shared
-                    (:nonce rcvd))
+  (let [nonce (::shared/working-nonce work-area)]
+    (when-not nonce
+      (log/error (str "Missing nonce buffer amongst\n"
+                      (keys work-area)
+                      "\nin\n"
+                      (keys this)))
+      (assert nonce))
+    ;; This next form fails because the packet-nonce is
+    ;; actually a long.
+    ;; Q: Is there any real value in that?
+    (log/info (str "Copying from\n"
+                   K/cookie-nonce-prefix
+                   "\ninto\n"
+                   nonce))
+    (b-t/byte-copy! nonce K/cookie-nonce-prefix)
+    (.readBytes (::K/nonce rcvd) nonce shared/server-nonce-prefix-length K/server-nonce-suffix-length)
+
     ;; Wait...what?
     ;; Where's :cookie coming from?!
-    ;; (I can see it coming from the packet after I've used gloss to decode it,
-    ;; but this doesn't seem to make any sense
+    ;; (I can see it coming from the packet after I've decomposed it,
+    ;; but this doesn't seem to make any sense)
+
+    (throw (ex-info "This is enough for one evening"
+                    {:start ::here
+                     :problem ::npe}))
     (b-t/byte-copy! text 0 144 (-> packet-management ::shared/packet :cookie))
     (let [decrypted (.open_after (::client-short<->server-long shared-secrets) text 0 144 nonce)
           extracted (shared/decompose shared/cookie decrypted)
@@ -356,31 +370,45 @@ Note that this is really called for side-effects"
     ;; Q: How does packet length actually work?
     ;; A: We used to have the full length of the byte array here
     ;; Now that we don't, what's the next step?
-    (when-not (= (.readableBytes packet) shared/cookie-packet-length)
-      (let [err {::expected-length shared/cookie-packet-length
+    (when-not (= (.readableBytes packet) K/cookie-packet-length)
+      (let [err {::expected-length K/cookie-packet-length
                  ::actual-length (.readableBytes packet)
                  ::packet packet
                  ;; Because the stack trace hides
                  ::where 'shared.curve.client/decrypt-cookie-packet}]
         (throw (ex-info "Incoming cookie packet illegal" err))))
-    (let [rcvd (shared/decompose shared/cookie-frame packet)]
+    (let [rcvd (shared/decompose K/cookie-frame packet)
+          hdr (byte-array K/header-length)
+          xtnsn (byte-array K/extension-length)
+          srvr-xtnsn (byte-array K/extension-length)]
       ;; Reference implementation starts by comparing the
       ;; server IP and port vs. what we received.
       ;; Which we don't have here.
+      ;; Q: Do we?
+      ;; A: Not really. The original incoming message did have them,
+      ;; under :host and :port, though.
+      ;; Actually, those are the details about our socket.
+      ;; So probably not very useful.
       ;; That's a really important detail.
-      ;; We have access to both org.clojure/tools.logging
-      ;; (from aleph)
-      ;; and commons.logging (looks like I added this one)
-      ;; here.
-      ;; TODO: Really should log to one or the other
       (log/warn "TODO: Verify that this packet came from the appropriate server")
       ;; Q: How accurate/useful is this approach?
+      ;; (i.e. mostly comparing byte array hashes)
       ;; A: Not at all.
-      ;; (i.e. mostly comparing byte arrays
-      (when (and (b-t/bytes= shared/cookie-header
-                                (String. (:header rcvd)))
-                 (b-t/bytes= extension (:client-extension rcvd))
-                 (b-t/bytes= server-extension (:server-extension rcvd)))
+      ;; Well, it's slightly better than nothing.
+      ;; But it's trivial to forge.
+      ;; Q: How does the reference implementation handle this?
+      ;; Well, the proof *is* in the pudding.
+      ;; The most important point is whether the other side sent
+      ;; us a cookie we can decrypt using our shared key.
+      (.readBytes (::K/header rcvd) hdr)
+      (.readBytes (::K/client-extension rcvd) xtnsn)
+      (.readBytes (::K/server-extension rcvd) srvr-xtnsn)
+      (log/info (str "Verifying that "
+                     hdr
+                     " looks like it belongs to a Cookie packet"))
+      (when (and (b-t/bytes= K/cookie-header hdr)
+                 (b-t/bytes= extension xtnsn)
+                 (b-t/bytes= server-extension srvr-xtnsn))
         (decrypt-actual-cookie this rcvd)))))
 
 (defn build-vouch
@@ -406,14 +434,14 @@ Note that this is really called for side-effects"
           vouch (byte-array 64)]
       (b-t/byte-copy! vouch
                       0
-                      shared/server-nonce-suffix-length
+                      K/server-nonce-suffix-length
                       nonce
                       shared/server-nonce-prefix-length)
       (b-t/byte-copy! vouch
-                      shared/server-nonce-suffix-length
+                      K/server-nonce-suffix-length
                       48
                       encrypted
-                      shared/server-nonce-suffix-length)
+                      K/server-nonce-suffix-length)
       vouch)))
 
 (defn extract-child-message
@@ -529,7 +557,7 @@ implementation. This is code that I don't understand yet"
                                       (b-t/byte-copy! packet offset
                                                       shared/server-nonce-prefix-length
                                                       working-nonce
-                                                      shared/server-nonce-suffix-length))))))
+                                                      K/server-nonce-suffix-length))))))
                             ;; Actually, the original version sends off the packet, updates
                             ;; msg-len to 0, and goes back to pulling date from child/server.
                             (throw (ex-info "How should this really work?"
@@ -694,8 +722,10 @@ TODO: Need to ask around about that."
   [wrapper
    {:keys [::child-spawner]
     :as this}]
-  (log/warn "Spawning child!!")
-  (assert child-spawner)
+  (log/info "Spawning child!!")
+  (when-not child-spawner
+    (assert child-spawner (str "No way to spawn child.\nAvailable keys:\n"
+                               (keys this))))
   ;;; This needs to return something that, at least in theory,
   ;;; should use send/send-off to notify the agent about bytes
   ;;; that are buffered and ready to transmit.
@@ -717,41 +747,49 @@ TODO: Need to ask around about that."
 
   Handling an agent (send), which means `this` is already dereferenced"
   [this cookie-packet]
-  ;; Q: What is really in cookie-packet now?
-  ;; (I think it's a netty ByteBuf)
   (try
-    (let [packet (get-in this
-                         [::shared/packet-management
-                          ::shared/packet])]
-      (assert packet)
-      (assert cookie-packet)
-      (.clear packet)
-      (.readBytes cookie-packet packet))
-    (catch NullPointerException ex
-      (throw (ex-info "Error trying to copy cookie packet"
-                      {::source cookie-packet
-                       ::source-type (type cookie-packet)
-                       ::packet-manager (::shared/packet-management this)
-                       ::members (keys this)
-                       ::this this
-                       ::failure ex}))))
-  (.release cookie-packet)
-  (if (decrypt-cookie-packet this)
-    (let [{:keys [::shared/my-keys]} this
-          this (assoc-in this
-                         [::shared-secrets ::client-short<->server-short]
-                         (crypto/box-prepare
-                          (get-in this
-                                  [::server-security
-                                   ::server-short-term-pk])
-                          (.getSecretKey (::short-pair my-keys))))]
-      ;; Note that this supplies new state
-      ;; Though whether it should is debatable.
-      ;; After all...why would I put this into ::vouch?
-      (assoc this ::vouch (build-vouch this)))
-    (throw (ex-info
-            "Unable to decrypt server cookie"
-            this))))
+    (try
+      (let [packet (get-in this
+                           [::shared/packet-management
+                            ::shared/packet])]
+        (assert packet)
+        (assert cookie-packet)
+        ;; Don't even try to pretend that this approach is thread-safe
+        (.clear packet)
+        (.readBytes (:message cookie-packet) packet 0 K/cookie-packet-length)
+        ;; That isn't modifying the ByteBuf to let it know it has bytes available
+        ;; So brute-force it.
+        (.writerIndex packet K/cookie-packet-length))
+      (catch NullPointerException ex
+        (throw (ex-info "Error trying to copy cookie packet"
+                        {::source cookie-packet
+                         ::source-type (type cookie-packet)
+                         ::packet-manager (::shared/packet-management this)
+                         ::members (keys this)
+                         ::this this
+                         ::failure ex}))))
+    (if (decrypt-cookie-packet this)
+      (let [{:keys [::shared/my-keys]} this
+            this (assoc-in this
+                           [::shared-secrets ::client-short<->server-short]
+                           (crypto/box-prepare
+                            (get-in this
+                                    [::server-security
+                                     ::server-short-term-pk])
+                            (.getSecretKey (::short-pair my-keys))))]
+        ;; Note that this supplies new state
+        ;; Though whether it should is debatable.
+        ;; After all...why would I put this into ::vouch?
+        (assoc this ::vouch (build-vouch this)))
+      (throw (ex-info
+              "Unable to decrypt server cookie"
+              this)))
+    (finally
+      ;; Can't do this until I'm really done with its contents.
+      ;; It acts as though readBytes into a ByteBuf just creates another
+      ;; reference without increasing the reference count.
+      ;; This seems incredibly brittle.
+      (.release (:message cookie-packet)))))
 
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)"
@@ -811,8 +849,12 @@ TODO: Need to ask around about that."
       (let [timeout (current-timeout wrapper)]
         (if (await-for timeout wrapper)
           (send-vouch! wrapper)
-          (send wrapper
-                #(throw (ex-info "cookie->vouch timed out" %))))))
+          (do
+            (log/error (str "Converting cookie to vouch took longer than "
+                            timeout
+                            " milliseconds.\nSwitching agent into an error state"))
+            (send wrapper
+                  #(throw (ex-info "cookie->vouch timed out" %)))))))
     (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
                                    (assoc %
                                           :problem (if (= cookie-packet ::drained)

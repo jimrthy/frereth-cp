@@ -22,10 +22,8 @@ This is getting big enough that I really need to split it up"
 (def client-nonce-prefix-length 16)
 (def client-nonce-suffix-length 8)
 (def server-nonce-prefix-length 8)
-(def server-nonce-suffix-length 16)
 (def server-name-length 256)
 
-(def header-length 8)
 (def client-header-prefix "QvnQ5Xl")
 (def hello-header (.getBytes (str client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
@@ -34,9 +32,9 @@ This is getting big enough that I really need to split it up"
 ;; handlers like gloss/buffy from spec?
 ;; That *was* one of the awesome features
 ;; offered/promised by schema.
-(def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length header-length}
-                                  ::srvr-xtn {::type ::bytes ::length extension-length}
-                                  ::clnt-xtn {::type ::bytes ::length extension-length}
+(def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length K/header-length}
+                                  ::srvr-xtn {::type ::bytes ::length K/extension-length}
+                                  ::clnt-xtn {::type ::bytes ::length K/extension-length}
                                   ::clnt-short-pk {::type ::bytes ::length K/key-length}
                                   ::zeros {::type ::zeroes ::length 64}
                                   ;; This gets weird/confusing.
@@ -48,31 +46,13 @@ This is getting big enough that I really need to split it up"
                                   ::nonce {::type ::bytes
                                            ::length client-nonce-suffix-length}
                                   ::crypto-box {::type ::bytes
-                                                ::length hello-crypto-box-length}))
+                                                ::length K/hello-crypto-box-length}))
 
-(def cookie-header (.getBytes "RL3aNMXK"))
-(def cookie-nonce-prefix (.getBytes "CurveCPK"))
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def cookie-position-in-packet 80)
-(def cookie-packet-length 200)
-(def cookie-frame
-  "The boiler plate around a cookie"
-  ;; Header is only a "string" in the ASCII sense
-  (array-map ::header {::type ::bytes
-                       ::length header-length}
-             ::client-extension {::type ::bytes
-                                 ::length extension-length}
-             ::server-extension {::type ::bytes
-                                 ::length extension-length}
-             ;; Implicitly prefixed with "CurveCPK"
-             ::nonce {::type ::bytes
-                      ::length server-nonce-suffix-length}
-             ::cookie {::type ::bytes
-                       ::length 144}))
-
 (def cookie
   (array-map ::s' {::type ::bytes ::length K/key-length}
-             ::black-box {::type ::zeroes ::length 96}))
+             ::black-box {::type ::zeroes ::length K/server-cookie-length}))
 
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
@@ -128,7 +108,7 @@ This is getting big enough that I really need to split it up"
 
 (s/def ::working-nonce (s/and bytes? #(= (count %) K/nonce-length)))
 (s/def ::text bytes?)
-(s/def ::working-area (s/keys :req [::text ::working-nonce]))
+(s/def ::work-area (s/keys :req [::text ::working-nonce]))
 
 (comment
   (s/def ::packet-length (s/and integer?
@@ -207,25 +187,47 @@ This is getting big enough that I really need to split it up"
   dst)
 
 (defn decompose
-  "Note that this very strongly assumes that I have a ByteBuf here."
+  "Note that this very strongly assumes that I have a ByteBuf here.
+
+And that it's a victim of mid-stream refactoring.
+
+Some of the templates are defined here. Others have moved to constants.
+
+TODO: Clean this up and move it (and compose, and helpers) into their
+own ns"
   [tmplt src]
   (reduce
    (fn
      [acc k]
      (let [dscr (k tmplt)
-           cnvrtr (::type dscr)]
+           cnvrtr (or (::type dscr)
+                      (::K/type dscr))]
+       ;; This can no longer decompose cookie packets.
+       ;; That packet description has moved over to constants.
+       ;; Honestly, it does belong there.
+       ;; Can't just convert this to use keywords namespaced only
+       ;; there, which is the obvious approach.
+       ;; That would break whatever templates I've written and haven't
+       ;; moved.
+       ;; Can't realistically just translate that template to use this
+       ;; namespace for its keywords, since that would mean circular
+       ;; imports.
+       ;; The correct approach would be to move this (and compose)
+       ;; into its own tiny ns that everything else can use.
+       ;; That's also more work than I have time for at the moment.
        (assoc acc k (case cnvrtr
-                      ;; .readSlice doesn't really seem all that useful here.
-                      ;; Then again, there isn't any point to extracting
-                      ;; anything I don't really need.
-                      ;; By that same token...if I don't really need it, then
-                      ;; why did I consume the bandwidth to get it here?
-                      ;; (Part of that answer is DoS prevention, for some
-                      ;; fields)
-                      ;; Need to contemplate this some more
-                      ::bytes (.readSlice src (::length dscr))
+                      ::bytes (.readBytes src (::length dscr))
+                      ::K/bytes (.readBytes src (::K/length dscr))
                       ::int-64 (.readLong src)
-                      ::zeroes (.readSlice src (::length dscr))))))
+                      ::K/int-64 (.readLong src)
+                      ::zeroes (.readSlice src (::length dscr))
+                      ::K/zeroes (.readSlice src (::K/length dscr))
+                      (throw (ex-info "Missing case clause"
+                                      {::failure cnvrtr
+                                       ::acc acc
+                                       ::key k
+                                       ::template tmplt
+                                       ::source src}))))))
    {}
    (keys tmplt)))
 
@@ -248,7 +250,7 @@ This is getting big enough that I really need to split it up"
 
 (s/fdef default-work-area
         :args (s/cat)
-        :ret ::working-area)
+        :ret ::work-area)
 (defn default-work-area
   []
   {::working-nonce (byte-array K/nonce-length)
