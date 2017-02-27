@@ -174,9 +174,10 @@
         ;; to potential GC issues.
         ;; Probably need another static buffer for building
         ;; and encrypting things like this
-        buffer (Unpooled/buffer shared/server-cookie-length)]
+        buffer (Unpooled/buffer K/server-cookie-length)]
     (assert (.hasArray buffer))
-    (.writeBytes buffer shared/all-zeros 0 32)
+    ;; TODO: Rewrite this using compose
+    (.writeBytes buffer shared/all-zeros 0 K/decrypt-box-zero-bytes)
     (.writeBytes buffer client-short-pk 0 K/key-length)
     (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
 
@@ -191,22 +192,23 @@
     ;; so it winds up at the start of the array).
     ;; Note that this is a departure from the reference implementation!
     (let [actual (.array buffer)]
-      ;; I don't seem to be calling unbox anywhere.
-      ;; TODO: Figure out where that's supposed to happen and what
-      ;; I've missed.
-      (crypto/secret-box actual actual shared/server-cookie-length working-nonce minute-key)
+      (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
       ;; Copy that encrypted cookie into the text working area
-      (.getBytes buffer 64 text)
+      (.getBytes buffer 0 text 64 K/server-cookie-length)
       ;; Along with the nonce
+      ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
+      ;; Go with the assumption that those are the initial garbage 0 bytes that should
+      ;; be discarded anyway
       (b-t/byte-copy! text 64 shared/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
 
       ;; And now we need to encrypt that.
       ;; This really belongs in its own function
-      (b-t/byte-copy! text 0 32 shared/all-zeros)
+      ;; And it's another place where I should probably call compose
+      (b-t/byte-copy! text 0 K/decrypt-box-zero-bytes shared/all-zeros)
       (b-t/byte-copy! text 32 K/key-length (.getPublicKey keys))
       ;; Reuse the other 16 bytes
       (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length shared/cookie-nonce-prefix)
-      (.after client-short<->server-long text 0 160 working-nonce))))
+      (crypto/box-after client-short<->server-long text 160 working-nonce))))
 
 (defn build-cookie-packet!
   [packet client-extension server-extension working-nonce text]
@@ -218,6 +220,7 @@
                                                                               shared/server-nonce-suffix-length)
                                        ;; This is also a great big FAIL:
                                        ;; Have to drop the first 16 bytes
+                                       ;; Q: Have I fixed that yet?
                                        ::shared/cookie (Unpooled/wrappedBuffer text
                                                                                K/box-zero-bytes
                                                                                144)}
@@ -276,7 +279,7 @@
       {::opened (crypto/open-after
                  text
                  0
-                 (+ K/hello-crypto-box-length #_K/box-zero-bytes)
+                 K/hello-crypto-box-length
                  working-nonce
                  shared-secret)
        ::shared-secret shared-secret})))
@@ -311,10 +314,12 @@
               plain-text (::opened unboxed)]
           (if plain-text
             (let [shared-secret (::shared-secret unboxed)
-                  minute-key (::minute-key state)
+                  minute-key (get-in state [::cookie-cutter ::minute-key])
                   {:keys [::shared/text
                           ::shared/working-nonce]} working-area]
+              (log/debug "asserting minute-key" minute-key "among" (keys state))
               (assert minute-key)
+              (log/debug "Preparing cookie")
               ;; We don't actually care about the contents of the bytes we just decrypted.
               ;; They should be all zeroes for now, but that's really an area for possible future
               ;; expansion.
@@ -325,13 +330,17 @@
                                 ::plain-text plain-text
                                 ::text text
                                 ::working-nonce working-nonce})
-              (build-cookie-packet! packet clnt-xtn srvr-xtn working-nonce text)
+              ;; Note that this overrides the incoming message in place
+              ;; Which seems dangerous, but it very deliberately is longer than
+              ;; our response.
+              ;; And it does save a malloc/GC.
+              (.clear message)
+              (build-cookie-packet! message clnt-xtn srvr-xtn working-nonce text)
               (log/info "Cookie packet built. Returning it.")
               (try
-                (let [dst (::client-chan state)
+                (let [dst (get-in state [::client-chan :chan])
                       success (stream/try-put! dst
-                                               (assoc packet
-                                                      :message packet)
+                                               packet
                                                20
                                                ::timed-out)]
                   (log/info "Cookie packet scheduled to send")

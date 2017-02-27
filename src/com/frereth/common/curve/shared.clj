@@ -54,7 +54,6 @@ This is getting big enough that I really need to split it up"
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def cookie-position-in-packet 80)
-(def server-cookie-length 96)
 (def cookie-packet-length 200)
 (def cookie-frame
   "The boiler plate around a cookie"
@@ -300,7 +299,7 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
     ;; would be much nicer
     (let [n (- (count dst) offset)
           tmp (byte-array n)]
-      (.randomBytes tmp)
+      (crypto/random-bytes! tmp)
       (bit-twiddling/byte-copy! dst offset n tmp))))
 
 (defn slurp-bytes

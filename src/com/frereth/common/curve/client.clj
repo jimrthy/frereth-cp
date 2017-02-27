@@ -339,7 +339,7 @@ Note that this is really called for side-effects"
     (let [decrypted (.open_after (::client-short<->server-long shared-secrets) text 0 144 nonce)
           extracted (shared/decompose shared/cookie decrypted)
           server-short-term-pk (byte-array K/key-length)
-          server-cookie (byte-array 96)
+          server-cookie (byte-array K/server-cookie-length)
           server-security (assoc (:server-security this)
                                  ::server-short-term-pk server-short-term-pk
                                  ::server-cookie server-cookie)]
@@ -506,6 +506,7 @@ implementation. This is code that I don't understand yet"
                                                        0
                                                        (+ r 384)
                                                        working-nonce)]
+                            ;; TODO: Switch to compose for this
                             (b-t/byte-copy! packet
                                             0
                                             shared/server-nonce-prefix-length
@@ -522,9 +523,9 @@ implementation. This is code that I don't understand yet"
                                   (let [offset (+ offset K/key-length)]
                                     (b-t/byte-copy! packet
                                                     offset
-                                                    shared/server-cookie-length
+                                                    K/server-cookie-length
                                                     (::server-cookie server-security))
-                                    (let [offset (+ offset shared/server-cookie-length)]
+                                    (let [offset (+ offset K/server-cookie-length)]
                                       (b-t/byte-copy! packet offset
                                                       shared/server-nonce-prefix-length
                                                       working-nonce

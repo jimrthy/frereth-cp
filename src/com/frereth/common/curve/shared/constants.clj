@@ -13,3 +13,6 @@
 
 ;;; Hello packets
 (def hello-crypto-box-length 80)
+
+;;; Cookie packets
+(def server-cookie-length 96)
