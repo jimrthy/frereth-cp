@@ -25,7 +25,8 @@
             [com.stuartsierra.component :as cpt]
             [manifold.deferred :as deferred]
             ;; Mixing this and core.async seems dubious, at best
-            [manifold.stream :as stream]))
+            [manifold.stream :as stream])
+  (:import io.netty.buffer.Unpooled))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -320,46 +321,57 @@ Note that this is really called for side-effects"
   [{:keys [::shared/packet-management
            ::shared/work-area
            ::shared-secrets
-           ::server-security
-           ::shared/text]
+           ::server-security]
     :as this}
-   rcvd]
-  (let [nonce (::shared/working-nonce work-area)]
-    (when-not nonce
+   {:keys [::K/header
+           ::K/client-extension
+           ::K/server-extension
+           ::K/nonce
+           ::K/cookie]
+    :as rcvd}]
+  (log/info "Getting ready to try to extract cookie from" cookie)
+  (let [{:keys [::shared/working-nonce
+                ::shared/text]} work-area]
+    (when-not working-nonce
       (log/error (str "Missing nonce buffer amongst\n"
                       (keys work-area)
                       "\nin\n"
                       (keys this)))
-      (assert nonce))
-    ;; This next form fails because the packet-nonce is
-    ;; actually a long.
-    ;; Q: Is there any real value in that?
-    (log/info (str "Copying from\n"
-                   K/cookie-nonce-prefix
-                   "\ninto\n"
-                   nonce))
-    (b-t/byte-copy! nonce K/cookie-nonce-prefix)
-    (.readBytes (::K/nonce rcvd) nonce shared/server-nonce-prefix-length K/server-nonce-suffix-length)
+      (assert working-nonce))
+    (log/debug (str "Copying nonce prefix from\n"
+                    K/cookie-nonce-prefix
+                    "\ninto\n"
+                    working-nonce))
+    (b-t/byte-copy! working-nonce K/cookie-nonce-prefix)
+    (.readBytes nonce working-nonce shared/server-nonce-prefix-length K/server-nonce-suffix-length)
 
-    ;; Wait...what?
-    ;; Where's :cookie coming from?!
-    ;; (I can see it coming from the packet after I've decomposed it,
-    ;; but this doesn't seem to make any sense)
-
-    (throw (ex-info "This is enough for one evening"
-                    {:start ::here
-                     :problem ::npe}))
-    (b-t/byte-copy! text 0 144 (-> packet-management ::shared/packet :cookie))
-    (let [decrypted (.open_after (::client-short<->server-long shared-secrets) text 0 144 nonce)
-          extracted (shared/decompose shared/cookie decrypted)
-          server-short-term-pk (byte-array K/key-length)
-          server-cookie (byte-array K/server-cookie-length)
-          server-security (assoc (:server-security this)
-                                 ::server-short-term-pk server-short-term-pk
-                                 ::server-cookie server-cookie)]
-      (b-t/byte-copy! server-short-term-pk (:s' extracted))
-      (b-t/byte-copy! server-cookie (:cookie extracted))
-      (assoc this ::server-security server-security))))
+    (log/debug "Copying encrypted cookie into " text "from" (keys this))
+    (.readBytes cookie text 0 144)
+    (let [shared (::client-short<->server-long shared-secrets)]
+      ;; This shows some interesting points
+      ;; 1. 1st 16 bytes of text are zeros
+      ;; That seems very wrong
+      ;; 2. The nonce seems like gibberish
+      ;; That seems plausible/likely
+      (log/info (str "Trying to decrypt\n"
+                     (with-out-str (b-s/print-bytes text))
+                     "using nonce\n"
+                     (with-out-str (b-s/print-bytes working-nonce))
+                     "and shared secret\n"
+                     (with-out-str (b-s/print-bytes shared))))
+      ;; TODO: If/when an exception is thrown here, it would be nice
+      ;; to notify callers immediately
+      (throw (RuntimeException. "This is going to fail"))
+      (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
+            extracted (shared/decompose K/cookie (Unpooled/wrappedBuffer decrypted))
+            server-short-term-pk (byte-array K/key-length)
+            server-cookie (byte-array K/server-cookie-length)
+            server-security (assoc (:server-security this)
+                                   ::server-short-term-pk server-short-term-pk
+                                   ::server-cookie server-cookie)]
+        (b-t/byte-copy! server-short-term-pk (::K/s' extracted))
+        (b-t/byte-copy! server-cookie (::K/black-box extracted))
+        (assoc this ::server-security server-security)))))
 
 (defn decrypt-cookie-packet
   [{:keys [::shared/extension

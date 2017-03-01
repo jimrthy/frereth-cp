@@ -36,3 +36,7 @@
                       ::length server-nonce-suffix-length}
              ::cookie {::type ::bytes
                        ::length 144}))
+
+(def cookie
+  (array-map ::s' {::type ::bytes ::length key-length}
+             ::black-box {::type ::zeroes ::length server-cookie-length}))

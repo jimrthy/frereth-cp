@@ -96,8 +96,28 @@
 (defn open-after
   "Low-level direct crypto box opening
 
-parameter box-offset: first byte of box to start opening
-parameter box-length: how many bytes of box to open"
+  parameter box: crypto box byte array to open
+  parameter box-offset: first byte of box to start opening
+  parameter box-length: how many bytes of box to open
+  parameter nonce: Number used Once for this specific box
+  parameter shared-key: combination of their-public and my-private
+
+The parameter order is screwy to match the java API.
+
+Which was probably modeled to match the C API.
+
+It's annoying and subject to change at a a whim. The only
+reason it hasn't yet is that I'm giving this entire translation
+the white-glove treatment.
+
+If nothing else, the shared-key should come first to match the
+instance-level API and allow me to set it up as a partial.
+
+It would also be nice to be able to provide a reusable buffer byte
+array destination that could just be reused without GC.
+
+That looks like it would get into the gory implementation details
+which I'm really not qualified to touch."
   [box box-offset box-length nonce shared-key]
   {:pre [(bytes? shared-key)]}
   (if (and (not (nil? box))

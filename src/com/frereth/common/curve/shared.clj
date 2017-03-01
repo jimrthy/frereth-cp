@@ -50,10 +50,6 @@ This is getting big enough that I really need to split it up"
 
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def cookie-position-in-packet 80)
-(def cookie
-  (array-map ::s' {::type ::bytes ::length K/key-length}
-             ::black-box {::type ::zeroes ::length K/server-cookie-length}))
-
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 
