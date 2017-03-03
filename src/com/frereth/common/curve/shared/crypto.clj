@@ -227,7 +227,12 @@ Or maybe that's (dec n)"
   (long (random-mod K/max-random-nonce)))
 
 (defn secret-box
-  "Symmetric encryption"
+  "Symmetric encryption
+
+Note that this does not do anything about the initial padding.
+
+It may be an implementation detail, but box-after above is really
+just a wrapper around this"
   [dst cleartext length nonce key]
   (TweetNaclFast/crypto_secretbox dst cleartext
                                   length nonce key))

@@ -192,27 +192,36 @@
     ;; There just isn't a good way to do the same thing in java.
     ;; (The problem, really, is that I have to copy the plaintext
     ;; so it winds up at the start of the array).
+    #_(throw (RuntimeException. "Look at this really closely"))
     ;; Note that this is a departure from the reference implementation!
     (let [actual (.array buffer)]
       (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
+      (log/info (str "Encrypted cookie:\n"
+                     (with-out-str (bs/print-bytes actual))))
       ;; Copy that encrypted cookie into the text working area
-      (.getBytes buffer 0 text 64 K/server-cookie-length)
+      (.getBytes buffer 0 text 32 K/server-cookie-length)
+      (log/info (str "After copying " K/server-cookie-length " bytes of that into text, it looks like\n"
+                     (with-out-str (bs/print-bytes text))))
       ;; Along with the nonce
       ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
       ;; Go with the assumption that those are the initial garbage 0 bytes that should
       ;; be discarded anyway
-      (b-t/byte-copy! text 64 K/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
+      (b-t/byte-copy! text 32 K/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
 
       ;; And now we need to encrypt that.
       ;; This really belongs in its own function
       ;; And it's another place where I should probably call compose
-      (b-t/byte-copy! text 0 K/decrypt-box-zero-bytes shared/all-zeros)
-      (b-t/byte-copy! text 32 K/key-length (.getPublicKey keys))
-      ;; Reuse the other 16 bytes
+      ;; I don't think we actually need/want/can use this initial padding
+      #_(b-t/byte-copy! text 0 K/decrypt-box-zero-bytes shared/all-zeros)
+      (b-t/byte-copy! text 0 K/key-length (.getPublicKey keys))
+      ;; Reuse the other 16 byte suffix that came in from the client
       (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length K/cookie-nonce-prefix)
-      (crypto/box-after client-short<->server-long text 160 working-nonce))))
+      (let [cookie (crypto/box-after client-short<->server-long text 128 working-nonce)]
+        (log/info (str "Cookie going to client:\n"
+                       (with-out-str (bs/print-bytes cookie))))
+        cookie))))
 
-(defn build-cookie-packet!
+(defn build-cookie-packet
   [packet client-extension server-extension working-nonce text]
   (shared/compose shared/cookie-frame {::shared/header K/cookie-header
                                        ::shared/client-extension client-extension
@@ -338,24 +347,26 @@
               ;; And it does save a malloc/GC.
               ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
               (.clear message)
-              (build-cookie-packet! message clnt-xtn srvr-xtn working-nonce text)
-              (log/info "Cookie packet built. Returning it.")
-              (try
-                (let [dst (get-in state [::client-write-chan :chan])
-                      success (stream/try-put! dst
-                                               packet
-                                               20
-                                               ::timed-out)]
-                  (log/info "Cookie packet scheduled to send")
-                  (deferred/on-realized success
-                    (fn [result]
-                      (log/info "Sending Cookie succeeded:" result))
-                    (fn [result]
-                      (log/error "Sending Cookie failed:" result)))
-                  state)
-                (catch Exception ex
-                  (log/error ex "Failed to send Cookie response")
-                  state)))
+              (let [packet
+                    (build-cookie-packet! message clnt-xtn srvr-xtn working-nonce text)]
+                (log/info "Cookie packet built. Returning it.\n"
+                          (with-out-str (bs/print-bytes packet)))
+                (try
+                  (let [dst (get-in state [::client-write-chan :chan])
+                        success (stream/try-put! dst
+                                                 packet
+                                                 20
+                                                 ::timed-out)]
+                    (log/info "Cookie packet scheduled to send")
+                    (deferred/on-realized success
+                      (fn [result]
+                        (log/info "Sending Cookie succeeded:" result))
+                      (fn [result]
+                        (log/error "Sending Cookie failed:" result)))
+                    state)
+                  (catch Exception ex
+                    (log/error ex "Failed to send Cookie response")
+                    state))))
             (do
               (log/warn "Unable to open the HELLO crypto-box: dropping")
               state)))))

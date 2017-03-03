@@ -361,7 +361,6 @@ Note that this is really called for side-effects"
                      (with-out-str (b-s/print-bytes shared))))
       ;; TODO: If/when an exception is thrown here, it would be nice
       ;; to notify callers immediately
-      (throw (RuntimeException. "This is going to fail"))
       (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
             extracted (shared/decompose K/cookie (Unpooled/wrappedBuffer decrypted))
             server-short-term-pk (byte-array K/key-length)
@@ -389,6 +388,8 @@ Note that this is really called for side-effects"
                  ;; Because the stack trace hides
                  ::where 'shared.curve.client/decrypt-cookie-packet}]
         (throw (ex-info "Incoming cookie packet illegal" err))))
+    (log/info (str "Incoming packet that looks like it might be a cookie:\n"
+                   (with-out-str (b-s/print-bytes packet))))
     (let [rcvd (shared/decompose K/cookie-frame packet)
           hdr (byte-array K/header-length)
           xtnsn (byte-array K/extension-length)
@@ -759,6 +760,10 @@ TODO: Need to ask around about that."
 
   Handling an agent (send), which means `this` is already dereferenced"
   [this cookie-packet]
+  ;; This is failing because cookie-packet already has a 0 refCnt
+  (log/warn (str "Getting ready to fail to convert cookie\n"
+                 (with-out-str (b-s/print-bytes cookie-packet))
+                 "into a Vouch"))
   (try
     (try
       (let [packet (get-in this
@@ -771,6 +776,7 @@ TODO: Need to ask around about that."
         (.readBytes (:message cookie-packet) packet 0 K/cookie-packet-length)
         ;; That isn't modifying the ByteBuf to let it know it has bytes available
         ;; So brute-force it.
+        (log/info "c")
         (.writerIndex packet K/cookie-packet-length))
       (catch NullPointerException ex
         (throw (ex-info "Error trying to copy cookie packet"
@@ -789,6 +795,7 @@ TODO: Need to ask around about that."
                                     [::server-security
                                      ::server-short-term-pk])
                             (.getSecretKey (::short-pair my-keys))))]
+        (log/info "Managed to decrypt the cookie!")
         ;; Note that this supplies new state
         ;; Though whether it should is debatable.
         ;; After all...why would I put this into ::vouch?
@@ -801,7 +808,11 @@ TODO: Need to ask around about that."
       ;; It acts as though readBytes into a ByteBuf just creates another
       ;; reference without increasing the reference count.
       ;; This seems incredibly brittle.
-      (.release (:message cookie-packet)))))
+      (if-let [msg (:message cookie-packet)]
+        (.release msg)
+        (log/error "Null message in\n"
+                   cookie-packet
+                   "\nQ: What happened?")))))
 
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)"
