@@ -1,6 +1,6 @@
 (ns com.frereth.common.curve.server
   "Implement the server half of the CurveCP protocol"
-  (:require [byte-streams :as bs]
+  (:require [byte-streams :as b-s]
             [clojure.spec :as s]
             ;; TODO: Really need millisecond precision (at least)
             ;; associated with this log formatter
@@ -144,7 +144,7 @@
    rcvd-xtn]
   (let [rcvd-prfx (-> header
                       vec
-                      (subvec 0 (dec shared/header-length))
+                      (subvec 0 (dec K/header-length))
                       byte-array)
         verified (not= 0
                        ;; Q: Why did DJB use a bitwise and here?
@@ -197,11 +197,11 @@
     (let [actual (.array buffer)]
       (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
       (log/info (str "Encrypted cookie:\n"
-                     (with-out-str (bs/print-bytes actual))))
+                     (with-out-str (b-s/print-bytes actual))))
       ;; Copy that encrypted cookie into the text working area
       (.getBytes buffer 0 text 32 K/server-cookie-length)
       (log/info (str "After copying " K/server-cookie-length " bytes of that into text, it looks like\n"
-                     (with-out-str (bs/print-bytes text))))
+                     (with-out-str (b-s/print-bytes text))))
       ;; Along with the nonce
       ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
       ;; Go with the assumption that those are the initial garbage 0 bytes that should
@@ -218,23 +218,23 @@
       (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length K/cookie-nonce-prefix)
       (let [cookie (crypto/box-after client-short<->server-long text 128 working-nonce)]
         (log/info (str "Cookie going to client:\n"
-                       (with-out-str (bs/print-bytes cookie))))
+                       (with-out-str (b-s/print-bytes cookie))))
         cookie))))
 
 (defn build-cookie-packet
   [packet client-extension server-extension working-nonce text]
-  (shared/compose shared/cookie-frame {::shared/header K/cookie-header
-                                       ::shared/client-extension client-extension
-                                       ::shared/server-extension server-extension
-                                       ::shared/nonce (Unpooled/wrappedBuffer working-nonce
-                                                                              shared/server-nonce-prefix-length
-                                                                              K/server-nonce-suffix-length)
-                                       ;; This is also a great big FAIL:
-                                       ;; Have to drop the first 16 bytes
-                                       ;; Q: Have I fixed that yet?
-                                       ::shared/cookie (Unpooled/wrappedBuffer text
-                                                                               K/box-zero-bytes
-                                                                               144)}
+  (shared/compose K/cookie-frame {::shared/header K/cookie-header
+                                  ::shared/client-extension client-extension
+                                  ::shared/server-extension server-extension
+                                  ::shared/nonce (Unpooled/wrappedBuffer working-nonce
+                                                                         shared/server-nonce-prefix-length
+                                                                         K/server-nonce-suffix-length)
+                                  ;; This is also a great big FAIL:
+                                  ;; Have to drop the first 16 bytes
+                                  ;; Q: Have I fixed that yet?
+                                  ::shared/cookie (Unpooled/wrappedBuffer text
+                                                                          K/box-zero-bytes
+                                                                          144)}
                   packet))
 
 (defn open-hello-crypto-box
@@ -265,11 +265,11 @@
           {:keys [::shared/text ::shared/working-nonce]} working-area]
       (log/info (str "Incoming HELLO\n"
                      "Client short-term PK:\n"
-                     (with-out-str (bs/print-bytes client-short-pk))
+                     (with-out-str (b-s/print-bytes client-short-pk))
                      "\nMy long-term PK:\n"
-                     (with-out-str (bs/print-bytes (.getPublicKey long-keys)))
+                     (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))
                      "\nOur shared secret:\n"
-                     (with-out-str (bs/print-bytes shared-secret))))
+                     (with-out-str (b-s/print-bytes shared-secret))))
       (b-t/byte-copy! working-nonce
                       shared/hello-nonce-prefix)
       (.readBytes nonce-suffix working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
@@ -277,15 +277,15 @@
       (let [msg (str "Trying to open "
                      K/hello-crypto-box-length
                      " bytes of\n"
-                     (with-out-str (bs/print-bytes (b-t/sub-byte-array text 0 (+ 32 K/hello-crypto-box-length))))
+                     (with-out-str (b-s/print-bytes (b-t/sub-byte-array text 0 (+ 32 K/hello-crypto-box-length))))
                      "\nusing nonce\n"
-                     (with-out-str (bs/print-bytes working-nonce))
+                     (with-out-str (b-s/print-bytes working-nonce))
                      "\nencrypted from\n"
-                     (with-out-str (bs/print-bytes client-short-pk))
+                     (with-out-str (b-s/print-bytes client-short-pk))
                      "\nto\n"
-                     (with-out-str (bs/print-bytes (.getPublicKey long-keys)))
+                     (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))
                      "\nwhich generated shared secret\n"
-                     (with-out-str (bs/print-bytes shared-secret)))]
+                     (with-out-str (b-s/print-bytes shared-secret)))]
         (log/info msg))
       {::opened (crypto/open-after
                  text
@@ -348,9 +348,9 @@
               ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
               (.clear message)
               (let [packet
-                    (build-cookie-packet! message clnt-xtn srvr-xtn working-nonce text)]
+                    (build-cookie-packet message clnt-xtn srvr-xtn working-nonce text)]
                 (log/info "Cookie packet built. Returning it.\n"
-                          (with-out-str (bs/print-bytes packet)))
+                          (with-out-str (b-s/print-bytes packet)))
                 (try
                   (let [dst (get-in state [::client-write-chan :chan])
                         success (stream/try-put! dst
@@ -400,7 +400,7 @@
     :as packet}]
   (log/debug "Incoming")
   (if (check-packet-length message)
-    (let [header (byte-array shared/header-length)
+    (let [header (byte-array K/header-length)
           extension (byte-array K/extension-length)
           current-reader-index (.readerIndex message)]
       (.readBytes message header)
@@ -420,7 +420,7 @@
           ;; failure on my part
           (b-t/byte-copy! (get-in state [::current-client ::shared/extension])
                              extension)
-          (let [packet-type-id (char (aget header (dec shared/header-length)))]
+          (let [packet-type-id (char (aget header (dec K/header-length)))]
             (try
               (case packet-type-id
                 \H (handle-hello! state packet)
