@@ -295,7 +295,7 @@
 (defn handle-hello!
   [{:keys [::shared/working-area]
     :as state}
-   {:keys [host message part]
+   {:keys [host message port]
     :as packet}]
   (log/debug "Have what looks like a HELLO packet")
   (if (= (.readableBytes message) shared/hello-packet-length)
@@ -344,14 +344,15 @@
               ;; And it does save a malloc/GC.
               ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
               (.clear message)
-              (let [packet
+              (let [response
                     (build-cookie-packet message clnt-xtn srvr-xtn working-nonce text)]
                 (log/info "Cookie packet built. Returning it.\n"
-                          (with-out-str (b-s/print-bytes packet)))
+                          (with-out-str (b-s/print-bytes response)))
                 (try
                   (let [dst (get-in state [::client-write-chan :chan])
                         success (stream/try-put! dst
-                                                 packet
+                                                 (assoc packet
+                                                        :message response)
                                                  20
                                                  ::timed-out)]
                     (log/info "Cookie packet scheduled to send")
