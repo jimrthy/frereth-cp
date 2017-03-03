@@ -3,6 +3,7 @@
             [byte-streams :as bs]
             [clojure.pprint :refer (pprint)]
             [clojure.test :refer (deftest is testing)]
+            [clojure.tools.logging :as log]
             [com.frereth.common.curve.client :as clnt]
             [com.frereth.common.curve.server :as srvr]
             [com.frereth.common.curve.server-test :as server-test]
@@ -173,7 +174,7 @@
 
 (defn forward-cookie
   [client<-server cookie]
-  (println "Received cookie packet from server:" cookie)
+  (log/info "Received cookie packet from server:" cookie)
   (if-not (keyword? cookie)
     (let [msg (.readableBytes (:message cookie))]
       (is (= 200 msg))
@@ -239,6 +240,7 @@
      ::clnt/writer strm/stream}))
 
 (deftest handshake
+  (log/info "**********************************\nNew Hand-Shake test")
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
                                       0x09 0x0a 0x0b 0x0c

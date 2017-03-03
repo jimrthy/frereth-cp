@@ -297,16 +297,16 @@
     :as state}
    {:keys [host message part]
     :as packet}]
-  (log/info "Have what looks like a HELLO packet")
+  (log/debug "Have what looks like a HELLO packet")
   (if (= (.readableBytes message) shared/hello-packet-length)
     (do
-      (log/debug "This is the correct size")
+      (log/info "This is the correct size")
       (let [;; Q: Is the convenience here worth the performance hit?
-            {:keys [::shared/clnt-xtn
-                    ::shared/clnt-short-pk
-                    ::shared/crypto-box
-                    ::shared/nonce
-                    ::shared/srvr-xtn]
+            {:keys [::K/clnt-xtn
+                    ::K/clnt-short-pk
+                    ::K/crypto-box
+                    ::K/nonce
+                    ::K/srvr-xtn]
              :as decomposed} (shared/decompose K/hello-packet-dscr message)
             client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
         (assert client-short-pk)
@@ -367,7 +367,7 @@
             (do
               (log/warn "Unable to open the HELLO crypto-box: dropping")
               state)))))
-    (log/info "Wrong size for a HELLO packet. Need"
+    (log/warn "Wrong size for a HELLO packet. Need"
               shared/hello-packet-length
               "got"
               (.readableBytes message))))
