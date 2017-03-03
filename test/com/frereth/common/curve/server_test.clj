@@ -1,10 +1,13 @@
 (ns com.frereth.common.curve.server-test
   (:require [clojure.test :refer (deftest is testing)]
             [com.frereth.common.curve.server :as server]
+            [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.curve.shared.constants :as K]
             ;; TODO: This also needs to go away
             [com.stuartsierra.component :as cpt]
             [component-dsl.system :as cpt-dsl]
-            [manifold.stream :as strm]))
+            [manifold.stream :as strm])
+  (:import io.netty.buffer.Unpooled))
 
 (defrecord StreamOwner [chan]
   ;; TODO: Make this just totally go away
@@ -79,3 +82,27 @@
       (finally
         (println "Triggering event loop exit")
         (cpt/stop started)))))
+
+(deftest test-cookie-composition
+  (let [client-extension (byte-array (take 16 (repeat 0)))
+        server-extension (byte-array (take 16 (range)))
+        working-nonce (byte-array (take 24 (drop 40 (range))))
+        boxed (byte-array 200)
+        dst (Unpooled/buffer 400)
+        to-encode {::K/header K/cookie-header
+                   ::K/client-extension client-extension
+                   ::K/server-extension server-extension
+                   ::K/nonce (Unpooled/wrappedBuffer working-nonce
+                                                     shared/server-nonce-prefix-length
+                                                     K/server-nonce-suffix-length)
+                   ;; This is also a great big FAIL:
+                   ;; Have to drop the first 16 bytes
+                   ;; Q: Have I fixed that yet?
+                   ::K/cookie (Unpooled/wrappedBuffer boxed
+                                                      K/box-zero-bytes
+                                                      144)}]
+    (try
+      (let [composed (shared/compose K/cookie-frame to-encode dst)]
+        (is composed))
+      (catch clojure.lang.ExceptionInfo ex
+        (is (not (.getData ex)))))))

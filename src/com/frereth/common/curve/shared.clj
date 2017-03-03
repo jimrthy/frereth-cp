@@ -3,6 +3,7 @@
 
 This is getting big enough that I really need to split it up"
   (:require [clojure.java.io :as io]
+            [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
@@ -19,8 +20,6 @@ This is getting big enough that I really need to split it up"
 ;;; Magic constants
 ;;; TODO: Pretty much all of these should move into constants
 
-(def client-nonce-prefix-length 16)
-(def client-nonce-suffix-length 8)
 (def server-nonce-prefix-length 8)
 (def server-name-length 256)
 
@@ -28,25 +27,6 @@ This is getting big enough that I really need to split it up"
 (def hello-header (.getBytes (str client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
-;; Q: Is it worth trying to build serialization
-;; handlers like gloss/buffy from spec?
-;; That *was* one of the awesome features
-;; offered/promised by schema.
-(def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length K/header-length}
-                                  ::srvr-xtn {::type ::bytes ::length K/extension-length}
-                                  ::clnt-xtn {::type ::bytes ::length K/extension-length}
-                                  ::clnt-short-pk {::type ::bytes ::length K/key-length}
-                                  ::zeros {::type ::zeroes ::length 64}
-                                  ;; This gets weird/confusing.
-                                  ;; It's a 64-bit number, so 8 octets
-                                  ;; But, really, that's just integer?
-                                  ;; It would probably be more tempting to
-                                  ;; just spec this like that if clojure had
-                                  ;; a better numeric tower
-                                  ::nonce {::type ::bytes
-                                           ::length client-nonce-suffix-length}
-                                  ::crypto-box {::type ::bytes
-                                                ::length K/hello-crypto-box-length}))
 
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def cookie-position-in-packet 80)
@@ -140,26 +120,29 @@ This is getting big enough that I really need to split it up"
   "Reduction function associated for run!ing from compose."
   [tmplt fields dst k]
   (let [dscr (k tmplt)
-        cnvrtr (::type dscr)
+        cnvrtr (::K/type dscr)
         v (k fields)]
     (try
       (case cnvrtr
-        ::bytes (let [n (::length dscr)]
-                  (try
-                    (.writeBytes dst v 0 n)
-                    (catch IllegalArgumentException ex
-                      (throw (ex-info "Setting bytes failed"
-                                      {::field k
-                                       ::length n
-                                       ::dst dst
-                                       ::dst-length (.capacity dst)
-                                       ::src v
-                                       ::source-class (class v)
-                                       ::description dscr
-                                       ::error ex})))))
-        ::int-64 (.writeLong dst v)
-        ::zeroes (let [n (::length dscr)]
-                   (.writeZero dst n)))
+        ::K/bytes (let [n (::K/length dscr)]
+                    (try
+                      (.writeBytes dst v 0 n)
+                      (catch IllegalArgumentException ex
+                        (throw (ex-info "Setting bytes failed"
+                                        {::field k
+                                         ::length n
+                                         ::dst dst
+                                         ::dst-length (.capacity dst)
+                                         ::src v
+                                         ::source-class (class v)
+                                         ::description dscr
+                                         ::error ex})))))
+        ::K/int-64 (.writeLong dst v)
+        ::K/zeroes (let [n (::K/length dscr)]
+                     (log/info "Getting ready to write " n " zeros to " dst " based on "
+                               (with-out-str (pprint dscr)))
+                     (.writeZero dst n))
+        (throw (ex-info "No matching clause" dscr)))
       (catch IllegalArgumentException ex
         (throw (ex-info "Missing clause"
                         {::problem ex
@@ -177,6 +160,9 @@ This is getting big enough that I really need to split it up"
 
 (defn compose
   [tmplt fields dst]
+  ;; Q: How much do I gain by supplying dst?
+  ;; It does let callers reuse the buffer, which
+  ;; will definitely help with GC pressure.
   (run!
    (partial composition-reduction tmplt fields dst)
    (keys tmplt))

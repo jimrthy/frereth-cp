@@ -229,13 +229,13 @@ nor subject to timing attacks because it just won't be called very often."
                  "\nshared\n"
                  (with-out-str (b-s/print-bytes my-short<->their-long)))]
     (log/info msg)
-    {::shared/prefix shared/hello-header
-     ::shared/srvr-xtn server-extension
-     ::shared/clnt-xtn extension
-     ::shared/clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
-     ::shared/zeros nil
-     ::shared/nonce (b-t/sub-byte-array working-nonce shared/client-nonce-prefix-length)
-     ::shared/crypto-box boxed}))
+    {::K/prefix shared/hello-header
+     ::K/srvr-xtn server-extension
+     ::K/clnt-xtn extension
+     ::K/clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
+     ::K/zeros nil
+     ::K/nonce (b-t/sub-byte-array working-nonce K/client-nonce-prefix-length)
+     ::K/crypto-box boxed}))
 
 (s/fdef build-actual-hello-packet
         :args (s/cat :this ::state
@@ -252,45 +252,11 @@ nor subject to timing attacks because it just won't be called very often."
   (let [raw-hello (build-raw-hello this short-term-nonce working-nonce)
         {packet ::shared/packet} packet-management]
     (assert packet)
-    (shared/compose shared/hello-packet-dscr raw-hello packet)))
-(comment
-  (let [my-short (crypto/random-key-pair)
-        server-long (crypto/random-key-pair)
-        my<->server (crypto/box-prepare (.getPublicKey server-long)
-                                        (.getSecretKey my-short))
-        this {::server-extension (byte-array [0x01 0x02 0x03 0x04
-                                              0x05 0x06 0x07 0x08
-                                              0x09 0x0a 0x0b 0x0b
-                                              0x0c 0x0d 0x0e 0x0f])
-              ::shared/extension (byte-array [0x10 0x20 0x30 0x40
-                                              0x50 0x60 0x70 0x80
-                                              0x90 0xa0 0xb0 0xb0
-                                              0xc0 0xd0 0xe0 0xf0])
-              ::shared/my-keys {::shared/short-pair my-short}
-              ::shared/packet-management (shared/default-packet-manager)
-              ::shared-secrets {::client-short<->server-long my<->server}}
-        short-nonce 0x03
-        working-nonce (byte-array [(byte \C) (byte \u) (byte \r) (byte \v) (byte \e)
-                                   (byte \C) (byte \P) (byte \-) (byte \c) (byte \l)
-                                   (byte \i) (byte \e) (byte \n) (byte \t) (byte \-)
-                                   (byte \H)
-                                   0x03 0x00 0x00 0x00 0x00 0x00 0x00 0x00])]
-    (comment
-      (-> this ::shared/packet-management ::shared/packet .capacity)
-
-      (build-raw-hello this short-nonce working-nonce))
-    (def hello-sample
-      (try
-        (build-actual-hello-packet this
-                                   short-nonce
-                                   working-nonce)
-        (catch clojure.lang.ExceptionInfo ex
-          (log/error "Details:" (.getData ex))
-          (throw ex)))))
-  hello-sample
-  (.readableBytes hello-sample)
-  (shared/decompose shared/hello-packet-dscr hello-sample)
-  )
+    (log/info (str "Building Hello based on\n"
+                   "Description:\n\t" (with-out-str (pprint K/hello-packet-dscr))
+                   "\nRaw:\n\t" (with-out-str (pprint raw-hello))
+                   "\nPacket:\n\t" packet))
+    (shared/compose K/hello-packet-dscr raw-hello packet)))
 
 (defn do-build-hello
   "Puts plain-text hello packet into packet-management
@@ -306,7 +272,7 @@ Note that this is really called for side-effects"
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (update-client-short-term-nonce packet-nonce)]
     (b-t/byte-copy! working-nonce shared/hello-nonce-prefix)
-    (b-t/uint64-pack! working-nonce shared/client-nonce-prefix-length short-term-nonce)
+    (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length short-term-nonce)
     (log/info (str short-term-nonce " packed into\n"
                    (with-out-str (b-s/print-bytes working-nonce))))
 
@@ -433,7 +399,7 @@ Note that this is really called for side-effects"
   (let [nonce (::shared/nonce packet-management)
         keydir (::shared/keydir my-keys)]
     (b-t/byte-copy! nonce shared/vouch-nonce-prefix)
-    (shared/safe-nonce nonce keydir shared/client-nonce-prefix-length)
+    (shared/safe-nonce nonce keydir K/client-nonce-prefix-length)
 
     ;; Q: What's the point to these 32 bytes?
     ;; I thought the C API required a 16-byte zero header.
@@ -499,7 +465,7 @@ implementation. This is code that I don't understand yet"
                             short-term-nonce (update-client-short-term-nonce
                                               packet-nonce)
                             working-nonce (:shared/working-nonce work-area)]
-                        (b-t/uint64-pack! working-nonce shared/client-nonce-prefix-length
+                        (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length
                                              short-term-nonce)
                         ;; This is where the original splits, depending on whether
                         ;; we've received a message back from the server or not.
@@ -519,7 +485,7 @@ implementation. This is code that I don't understand yet"
                           (when (or (< r 16)
                                     (> r 640))
                             (throw (ex-info "done" {})))
-                          (b-t/byte-copy! working-nonce 0 shared/client-nonce-prefix-length
+                          (b-t/byte-copy! working-nonce 0 K/client-nonce-prefix-length
                                           shared/initiate-nonce-prefix)
                           ;; Reference version starts by zeroing first 32 bytes.
                           ;; I thought we just needed 16 for the encryption buffer
@@ -855,7 +821,7 @@ TODO: Need to ask around about that."
     (do
       (assert cookie-packet)
       (log/info "Received cookie. Forking child")
-      ;; Got a response from server.
+      ;; Got a Cookie response packet from server.
       ;; Theory in the reference implementation is that this is
       ;; a good signal that it's time to spawn the child to do
       ;; the real work.
@@ -896,20 +862,14 @@ TODO: Need to ask around about that."
                                 timeout
                                 ::hello-response-timed-out)]
         (deferred/on-realized d
-          (fn [result]
-            ;; I'm getting here with a timeout.
+          (fn [cookie]
             (log/info "Incoming response from server:\n"
-                      (with-out-str (pprint result)))
-            (if-not (or (= result ::drained)
-                        (= result ::hello-response-timed-out))
+                      (with-out-str (pprint cookie)))
+            (if-not (or (= cookie ::drained)
+                        (= cookie ::hello-response-timed-out))
               (do
                 (log/info "Building/sending Vouch")
-                ;; Q: Worth splitting this into 2 separate steps that
-                ;; I call from here?
-                ;; Actually, there's another: decoding the cookie.
-                ;; And verifying that we got a cookie instead of a timeout
-                ;; TODO: Yes, definitely split this up
-                (build-and-send-vouch wrapper result))
+                (build-and-send-vouch wrapper cookie))
               (log/error "Server didn't respond to HELLO.")))
           (partial hello-response-timed-out! wrapper))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))

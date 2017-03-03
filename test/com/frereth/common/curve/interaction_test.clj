@@ -175,8 +175,9 @@
   [client<-server cookie]
   (println "Received cookie packet from server:" cookie)
   (if-not (keyword? cookie)
-    (do
-      (is (= 200 (.readableBytes (:message cookie))))
+    (let [msg (.readableBytes (:message cookie))]
+      (is (= 200 msg))
+      (is (< 0 (.refCnt msg)))
       (strm/try-put! client<-server
                      cookie
                      500

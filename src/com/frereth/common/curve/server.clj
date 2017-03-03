@@ -192,7 +192,6 @@
     ;; There just isn't a good way to do the same thing in java.
     ;; (The problem, really, is that I have to copy the plaintext
     ;; so it winds up at the start of the array).
-    #_(throw (RuntimeException. "Look at this really closely"))
     ;; Note that this is a departure from the reference implementation!
     (let [actual (.array buffer)]
       (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
@@ -211,8 +210,6 @@
       ;; And now we need to encrypt that.
       ;; This really belongs in its own function
       ;; And it's another place where I should probably call compose
-      ;; I don't think we actually need/want/can use this initial padding
-      #_(b-t/byte-copy! text 0 K/decrypt-box-zero-bytes shared/all-zeros)
       (b-t/byte-copy! text 0 K/key-length (.getPublicKey keys))
       ;; Reuse the other 16 byte suffix that came in from the client
       (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length K/cookie-nonce-prefix)
@@ -223,18 +220,18 @@
 
 (defn build-cookie-packet
   [packet client-extension server-extension working-nonce text]
-  (shared/compose K/cookie-frame {::shared/header K/cookie-header
-                                  ::shared/client-extension client-extension
-                                  ::shared/server-extension server-extension
-                                  ::shared/nonce (Unpooled/wrappedBuffer working-nonce
-                                                                         shared/server-nonce-prefix-length
-                                                                         K/server-nonce-suffix-length)
+  (shared/compose K/cookie-frame {::K/header K/cookie-header
+                                  ::K/client-extension client-extension
+                                  ::K/server-extension server-extension
+                                  ::K/nonce (Unpooled/wrappedBuffer working-nonce
+                                                                    shared/server-nonce-prefix-length
+                                                                    K/server-nonce-suffix-length)
                                   ;; This is also a great big FAIL:
                                   ;; Have to drop the first 16 bytes
                                   ;; Q: Have I fixed that yet?
-                                  ::shared/cookie (Unpooled/wrappedBuffer text
-                                                                          K/box-zero-bytes
-                                                                          144)}
+                                  ::K/cookie (Unpooled/wrappedBuffer text
+                                                                     K/box-zero-bytes
+                                                                     144)}
                   packet))
 
 (defn open-hello-crypto-box
@@ -272,7 +269,7 @@
                      (with-out-str (b-s/print-bytes shared-secret))))
       (b-t/byte-copy! working-nonce
                       shared/hello-nonce-prefix)
-      (.readBytes nonce-suffix working-nonce shared/client-nonce-prefix-length shared/client-nonce-suffix-length)
+      (.readBytes nonce-suffix working-nonce K/client-nonce-prefix-length K/client-nonce-suffix-length)
       (.readBytes crypto-box text #_K/decrypt-box-zero-bytes 0 K/hello-crypto-box-length)
       (let [msg (str "Trying to open "
                      K/hello-crypto-box-length
@@ -310,7 +307,7 @@
                     ::shared/crypto-box
                     ::shared/nonce
                     ::shared/srvr-xtn]
-             :as decomposed} (shared/decompose shared/hello-packet-dscr message)
+             :as decomposed} (shared/decompose K/hello-packet-dscr message)
             client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
         (assert client-short-pk)
         (assert clnt-short-pk)
