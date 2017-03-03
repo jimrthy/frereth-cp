@@ -1,5 +1,6 @@
 (ns com.frereth.common.curve.interaction-test
-  (:require [aleph.udp :as udp]
+  (:require [aleph.netty :as netty]
+            [aleph.udp :as udp]
             [byte-streams :as bs]
             [clojure.pprint :refer (pprint)]
             [clojure.test :refer (deftest is testing)]
@@ -176,9 +177,23 @@
   [client<-server cookie]
   (log/info "Received cookie packet from server:" cookie)
   (if-not (keyword? cookie)
-    (let [msg (.readableBytes (:message cookie))]
-      (is (= 200 msg))
-      (is (< 0 (.refCnt msg)))
+    (let [msg (:message cookie)]
+      ;; Q: So...how/when can I call release?
+      (netty/acquire msg)
+      (let [msg-size (.readableBytes msg)]
+        (is (= 200 msg-size)))
+      (when-not (< 0 (.refCnt msg))
+        (log/error (str msg
+                        ", a " (class msg)
+                        "\nhas already been released.\n"
+                        "This is going to be a very short trip.")))
+        ;; Important detail: client/server are responsible
+        ;; for coping with managing address/port manipulation
+        ;; details.
+        ;; This couples them more tightly than I like to aleph,
+        ;; but life will get messy no matter what if/when I try
+        ;; to switch to something like raw netty.
+
       (strm/try-put! client<-server
                      cookie
                      500
@@ -224,8 +239,7 @@
 
 (defn client-child-spawner
   [client-agent]
-  (comment (spit "/home/james/hey-you.txt" "Spawning child"))
-  (println "Top of client-child-spawner")
+  (log/info "Top of client-child-spawner")
   ;; Q: What should this really do?
   (let [result (strm/stream)
         child (future
@@ -274,85 +288,88 @@
         ;; TODO: This seems like it would be a great place to try switching to integrant
         client (clnt/ctor (assoc (::client options)
                                  ::clnt/chan<-server chan<-server
-                                 ::clnt/chan->server chan->server))
-        unstarted-server (srvr/ctor (::server options))
-        server<-client {:chan (strm/stream)}
-        server->client {:chan (strm/stream)}]
+                                 ::clnt/chan->server chan->server))]
     (try
-      (println "Starting server based on\n"
-               #_(with-out-str (pprint (srvr/hide-long-arrays unstarted-server)))
-               "...stuff...")
-      (try
-        (let [server (srvr/start! (assoc unstarted-server
-                                         ::srvr/client-read-chan server<-client
-                                         ::srvr/client-write-chan server->client))]
+      (let [unstarted-server (srvr/ctor (::server options))
+            server<-client {:chan (strm/stream)}
+            server->client {:chan (strm/stream)}]
+        (try
+          (log/debug "Starting server based on\n"
+                     #_(with-out-str (pprint (srvr/hide-long-arrays unstarted-server)))
+                     "...stuff...")
           (try
-            ;; Currently just called for side-effects.
-            ;; TODO: Seems like I really should hide that little detail
-            ;; by having it return this.
-            ;; Except that that "little detail" really sets off the handshake
-            ;; Q: Is there anything interesting about the deferred that it
-            ;; currently returns?
-            (let [eventually-started (clnt/start! client)
-                  clnt->srvr (::clnt/chan->server @client)]
-              (assert (= chan->server clnt->srvr)
-                      (str "Client channels don't match.\n"
-                           "Expected:" chan->server
-                           "\nHave:" clnt->srvr))
-              (assert clnt->srvr)
-              (let [write-hello (partial retrieve-hello server<-client)
-                    build-cookie (partial wrote-hello server->client)
-                    write-cookie (partial forward-cookie chan<-server)
-                    get-cookie (partial wrote-cookie chan->server)
-                    write-vouch (partial vouch->server server<-client)
-                    get-server-response (partial wrote-vouch server->client)
-                    write-server-response (partial finalize chan<-server)
-                    _ (println "interaction-test: Starting the stream "
-                               clnt->srvr)
-                    fut (deferred/chain (strm/take! clnt->srvr)
-                          write-hello
-                          build-cookie
-                          write-cookie
-                          get-cookie
-                          write-vouch
-                          get-server-response
-                          write-server-response
-                          (fn [wrote]
-                            (is (not= wrote ::timeout))))]
-                (println "Dereferencing the deferreds set up by handshake")
-                (let [outcome (deref fut 5000 ::timeout)]
-                  (when (instance? Exception outcome)
-                    (if (instance? RuntimeException outcome)
-                      (if (instance? ExceptionInfo outcome)
-                        (do
-                          (println "FAIL:" outcome)
-                          (pprint (.getData outcome)))
-                        (do
-                          (println "Ugly failure:" outcome)))
-                      (println "Low Level Failure:" outcome))
-                    (.printStackTrace outcome)
-                    (throw outcome))
-                  (is (not= outcome ::timeout)))
-                ;; This really should have been completed as soon as
-                ;; I read from chan->server2 the first time
-                ;; Q: Right?
-                (is (not= (deref eventually-started 500 ::timeout)
-                          ::timeout))))
-            (catch Exception ex
-              (println "Unhandled exception escaped!")
-              (.printStackTrace ex)
-              (println "Client state:" (with-out-str (pprint (clnt/hide-long-arrays @client))))
-              (if-let [err (agent-error client)]
-                (println "Client failure:\n" err)
-                (println "(client agent thinks everything is fine)"))
-              (is (not ex)))
-            (finally
-              (println "Test done. Stopping server.")
-              (srvr/stop! server))))
-        (catch clojure.lang.ExceptionInfo ex
-          (is (not (.getData ex)))))
-      (finally (strm/close! (:chan server->client))
-               (strm/close! (:chan server<-client))))))
+            (let [server (srvr/start! (assoc unstarted-server
+                                             ::srvr/client-read-chan server<-client
+                                             ::srvr/client-write-chan server->client))]
+              (try
+                ;; Currently just called for side-effects.
+                ;; TODO: Seems like I really should hide that little detail
+                ;; by having it return this.
+                ;; Except that that "little detail" really sets off the handshake
+                ;; Q: Is there anything interesting about the deferred that it
+                ;; currently returns?
+                (let [eventually-started (clnt/start! client)
+                      clnt->srvr (::clnt/chan->server @client)]
+                  (assert (= chan->server clnt->srvr)
+                          (str "Client channels don't match.\n"
+                               "Expected:" chan->server
+                               "\nHave:" clnt->srvr))
+                  (assert clnt->srvr)
+                  (let [write-hello (partial retrieve-hello server<-client)
+                        build-cookie (partial wrote-hello server->client)
+                        write-cookie (partial forward-cookie chan<-server)
+                        get-cookie (partial wrote-cookie chan->server)
+                        write-vouch (partial vouch->server server<-client)
+                        get-server-response (partial wrote-vouch server->client)
+                        write-server-response (partial finalize chan<-server)
+                        _ (println "interaction-test: Starting the stream "
+                                   clnt->srvr)
+                        fut (deferred/chain (strm/take! clnt->srvr)
+                              write-hello
+                              build-cookie
+                              write-cookie
+                              get-cookie
+                              write-vouch
+                              get-server-response
+                              write-server-response
+                              (fn [wrote]
+                                (is (not= wrote ::timeout))))]
+                    (println "Dereferencing the deferreds set up by handshake")
+                    (let [outcome (deref fut 5000 ::timeout)]
+                      (when (instance? Exception outcome)
+                        (if (instance? RuntimeException outcome)
+                          (if (instance? ExceptionInfo outcome)
+                            (do
+                              (println "FAIL:" outcome)
+                              (pprint (.getData outcome)))
+                            (do
+                              (println "Ugly failure:" outcome)))
+                          (println "Low Level Failure:" outcome))
+                        (.printStackTrace outcome)
+                        (throw outcome))
+                      (is (not= outcome ::timeout)))
+                    ;; This really should have been completed as soon as
+                    ;; I read from chan->server2 the first time
+                    ;; Q: Right?
+                    (is (not= (deref eventually-started 500 ::timeout)
+                              ::timeout))))
+                (catch Exception ex
+                  (println "Unhandled exception escaped!")
+                  (.printStackTrace ex)
+                  (println "Client state:" (with-out-str (pprint (clnt/hide-long-arrays @client))))
+                  (if-let [err (agent-error client)]
+                    (println "Client failure:\n" err)
+                    (println "(client agent thinks everything is fine)"))
+                  (is (not ex)))
+                (finally
+                  (println "Test done. Stopping server.")
+                  (srvr/stop! server))))
+            (catch clojure.lang.ExceptionInfo ex
+              (is (not (.getData ex)))))
+          (finally (strm/close! (:chan server->client))
+                   (strm/close! (:chan server<-client)))))
+      (finally
+        (clnt/stop! client)))))
 
 (defn translate-raw-incoming
   [{:keys [host message port]

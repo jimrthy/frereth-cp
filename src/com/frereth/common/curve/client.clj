@@ -725,10 +725,11 @@ TODO: Need to ask around about that."
   as the response.
 
   Handling an agent (send), which means `this` is already dereferenced"
-  [this cookie-packet]
+  [this {:keys [host port message]
+         :as cookie-packet}]
   ;; This is failing because cookie-packet already has a 0 refCnt
   (log/warn (str "Getting ready to fail to convert cookie\n"
-                 (with-out-str (b-s/print-bytes cookie-packet))
+                 (with-out-str (b-s/print-bytes message))
                  "into a Vouch"))
   (try
     (try
@@ -739,10 +740,9 @@ TODO: Need to ask around about that."
         (assert cookie-packet)
         ;; Don't even try to pretend that this approach is thread-safe
         (.clear packet)
-        (.readBytes (:message cookie-packet) packet 0 K/cookie-packet-length)
+        (.readBytes message packet 0 K/cookie-packet-length)
         ;; That isn't modifying the ByteBuf to let it know it has bytes available
         ;; So brute-force it.
-        (log/info "c")
         (.writerIndex packet K/cookie-packet-length))
       (catch NullPointerException ex
         (throw (ex-info "Error trying to copy cookie packet"
@@ -770,13 +770,13 @@ TODO: Need to ask around about that."
               "Unable to decrypt server cookie"
               this)))
     (finally
-      ;; Can't do this until I'm really done with its contents.
+      ;; Can't do this until I really done with its contents.
       ;; It acts as though readBytes into a ByteBuf just creates another
       ;; reference without increasing the reference count.
       ;; This seems incredibly brittle.
-      (if-let [msg (:message cookie-packet)]
-        (.release msg)
-        (log/error "Null message in\n"
+      (if message
+        (comment (.release message))
+        (log/error "False-y message in\n"
                    cookie-packet
                    "\nQ: What happened?")))))
 
@@ -975,6 +975,12 @@ like a timing attack."
             (partial wait-for-cookie wrapper)
             (partial hello-failed! wrapper))))
       (throw (ex-info "Building the hello failed" {:problem (agent-error wrapper)})))))
+
+(defn stop!
+  [wrapper]
+  (send wrapper
+        (fn [this]
+          (shared/release-packet-manager! (::shared/packet-management this)))))
 
 (s/fdef ctor
         :args (s/keys :req [::chan<-server

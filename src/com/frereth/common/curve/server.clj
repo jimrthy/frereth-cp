@@ -220,19 +220,22 @@
 
 (defn build-cookie-packet
   [packet client-extension server-extension working-nonce text]
-  (shared/compose K/cookie-frame {::K/header K/cookie-header
-                                  ::K/client-extension client-extension
-                                  ::K/server-extension server-extension
-                                  ::K/nonce (Unpooled/wrappedBuffer working-nonce
-                                                                    shared/server-nonce-prefix-length
-                                                                    K/server-nonce-suffix-length)
-                                  ;; This is also a great big FAIL:
-                                  ;; Have to drop the first 16 bytes
-                                  ;; Q: Have I fixed that yet?
-                                  ::K/cookie (Unpooled/wrappedBuffer text
-                                                                     K/box-zero-bytes
-                                                                     144)}
-                  packet))
+  (let [composed (shared/compose K/cookie-frame {::K/header K/cookie-header
+                                                 ::K/client-extension client-extension
+                                                 ::K/server-extension server-extension
+                                                 ::K/nonce (Unpooled/wrappedBuffer working-nonce
+                                                                                   shared/server-nonce-prefix-length
+                                                                           K/server-nonce-suffix-length)
+                                                 ;; This is also a great big FAIL:
+                                                 ;; Have to drop the first 16 bytes
+                                                 ;; Q: Have I fixed that yet?
+                                                 ::K/cookie (Unpooled/wrappedBuffer text
+                                                                                    K/box-zero-bytes
+                                                                                    144)}
+                                 packet)]
+    ;; FIXME: I really shouldn't need to do this
+    (.retain composed)
+    composed))
 
 (defn open-hello-crypto-box
   [{:keys [::client-short-pk
@@ -260,13 +263,11 @@
           ;; Better Q: Would that a good idea, if it worked?
           ;; (Pretty sure this is/was the main thrust behind a plumatic library)
           {:keys [::shared/text ::shared/working-nonce]} working-area]
-      (log/info (str "Incoming HELLO\n"
-                     "Client short-term PK:\n"
-                     (with-out-str (b-s/print-bytes client-short-pk))
-                     "\nMy long-term PK:\n"
-                     (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))
-                     "\nOur shared secret:\n"
-                     (with-out-str (b-s/print-bytes shared-secret))))
+      (log/debug (str "Incoming HELLO\n"
+                      "Client short-term PK:\n"
+                      (with-out-str (b-s/print-bytes client-short-pk))
+                      "\nMy long-term PK:\n"
+                      (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))))
       (b-t/byte-copy! working-nonce
                       shared/hello-nonce-prefix)
       (.readBytes nonce-suffix working-nonce K/client-nonce-prefix-length K/client-nonce-suffix-length)
@@ -280,10 +281,8 @@
                      "\nencrypted from\n"
                      (with-out-str (b-s/print-bytes client-short-pk))
                      "\nto\n"
-                     (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))
-                     "\nwhich generated shared secret\n"
-                     (with-out-str (b-s/print-bytes shared-secret)))]
-        (log/info msg))
+                     (with-out-str (b-s/print-bytes (.getPublicKey long-keys))))]
+        (log/debug msg))
       {::opened (crypto/open-after
                  text
                  0
@@ -346,8 +345,9 @@
               (.clear message)
               (let [response
                     (build-cookie-packet message clnt-xtn srvr-xtn working-nonce text)]
-                (log/info "Cookie packet built. Returning it.\n"
-                          (with-out-str (b-s/print-bytes response)))
+                (log/info "Cookie packet built. Returning it.\nByte content:\n"
+                          (with-out-str (b-s/print-bytes response))
+                          "Reference count: " (.refCnt response))
                 (try
                   (let [dst (get-in state [::client-write-chan :chan])
                         success (stream/try-put! dst
@@ -358,9 +358,11 @@
                     (log/info "Cookie packet scheduled to send")
                     (deferred/on-realized success
                       (fn [result]
-                        (log/info "Sending Cookie succeeded:" result))
+                        (log/info "Sending Cookie succeeded:" result)
+                        (comment (.release response)))
                       (fn [result]
-                        (log/error "Sending Cookie failed:" result)))
+                        (log/error "Sending Cookie failed:" result)
+                        (.release response)))
                     state)
                   (catch Exception ex
                     (log/error ex "Failed to send Cookie response")
@@ -652,36 +654,41 @@
         this (assoc-in this [::shared/my-keys ::shared/long-pair] long-pair)
         almost (assoc this ::cookie-cutter (randomized-cookie-cutter))]
     (log/info "Kicking off event loop. packet-management:" (::shared/packet-management almost))
-    (assoc almost ::event-loop-stopper (begin! almost))))
+    (assoc almost
+           ::event-loop-stopper (begin! almost)
+           ::shared/packet-management (shared/default-packet-manager))))
 
 (defn stop!
-  [{:keys [::event-loop-stopper]
+  [{:keys [::event-loop-stopper
+           ::shared/packet-management]
     :as this}]
   (log/warn "Stopping server state")
-  (when event-loop-stopper
-    (log/info "Sending stop signal to event loop")
-    ;; This is fairly pointless. The client channel Component on which this
-    ;; depends will close shortly after this returns. That will cause the
-    ;; event loop to exit directly.
-    ;; But, just in case that doesn't work, this will tell the event loop to
-    ;; exit the next time it times out.
-    (event-loop-stopper 1))
-  (log/warn "Clearing secrets")
-
-  (let [outcome
-        (assoc (try
-                 (hide-secrets! this)
-                 (catch RuntimeException ex
-                   (log/error "ERROR: " ex)
-                   this)
-                 (catch Exception ex
-                   (log/fatal "FATAL:" ex)
-                   ;; TODO: This really should be fatal.
-                   ;; Make the error-handling go away once hiding secrets actually works
-                   this))
-               ::event-loop-stopper nil)]
-    (log/warn "Secrets hidden")
-    outcome))
+  (try
+    (when event-loop-stopper
+      (log/info "Sending stop signal to event loop")
+      ;; This is fairly pointless. The client channel Component on which this
+      ;; depends will close shortly after this returns. That will cause the
+      ;; event loop to exit directly.
+      ;; But, just in case that doesn't work, this will tell the event loop to
+      ;; exit the next time it times out.
+      (event-loop-stopper 1))
+    (log/warn "Clearing secrets")
+    (let [outcome
+          (assoc (try
+                   (hide-secrets! this)
+                   (catch RuntimeException ex
+                     (log/error "ERROR: " ex)
+                     this)
+                   (catch Exception ex
+                     (log/fatal "FATAL:" ex)
+                     ;; TODO: This really should be fatal.
+                     ;; Make the error-handling go away once hiding secrets actually works
+                     this))
+                 ::event-loop-stopper nil)]
+      (log/warn "Secrets hidden")
+      outcome)
+    (finally
+      (shared/release-packet-manager! packet-management))))
 
 (defn ctor
   "Just like in the Component lifecycle, this is about setting up a value that's ready to start"
@@ -692,5 +699,4 @@
       (assoc ::active-clients (atom #{})  ; Q: set or map?
              ::current-client (alloc-client)  ; Q: What's the point?
              ::max-active-clients max-active-clients
-             ::shared/packet-management (shared/default-packet-manager)
              ::shared/working-area (shared/default-work-area))))

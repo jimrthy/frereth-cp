@@ -213,22 +213,33 @@ own ns"
    {}
    (keys tmplt)))
 
-(s/fdef default-packet-management
+(s/fdef default-packet-manager
         :args (s/cat)
         :ret ::packet-management)
 (defn default-packet-manager
   []
-  ;; Highly important:
-  ;; Absolutely must verify that using a directBuffer provides
-  ;; a definite speed increase over a heap buffer.
-  ;; Or, for that matter, just wrapping a Byte Array.
-  {::packet (io.netty.buffer.Unpooled/directBuffer 4096)
-   ;; Note that this is distinct from the working-area's nonce
-   ;; And it probably needs to be an atom
-   ;; Or maybe even a ref (although STM would be a disaster here...
-   ;; actually, trying to cope with this in multiple threads
-   ;; seems like a train wreck waiting to happen)
-   ::packet-nonce 0})
+  (let [packet (io.netty.buffer.Unpooled/directBuffer 4096)]
+    ;; TODO: Really need a corresponding .release when we're done
+    (.retain packet)
+    ;; Highly important:
+    ;; Absolutely must verify that using a directBuffer provides
+    ;; a definite speed increase over a heap buffer.
+    ;; Or, for that matter, just wrapping a Byte Array.
+    {::packet packet
+     ;; Note that this is distinct from the working-area's nonce
+     ;; And it probably needs to be an atom
+     ;; Or maybe even a ref (although STM would be a disaster here...
+     ;; actually, trying to cope with this in multiple threads
+     ;; seems like a train wreck waiting to happen)
+     ::packet-nonce 0}))
+
+(s/fdef release-packet-manager!
+        :args (s/cat :p-m ::packet-management))
+(defn release-packet-manager!
+  "Be sure to call this when you're done with something
+allocated using default-packet-manager"
+  [p-m]
+  (-> p-m ::packet .release))
 
 (s/fdef default-work-area
         :args (s/cat)
