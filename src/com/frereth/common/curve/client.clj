@@ -53,7 +53,13 @@
 
 (s/def ::server-extension ::shared/extension)
 (s/def ::server-long-term-pk ::shared/public-key)
-(s/def ::server-cookie any?)  ; TODO: Needs a real spec
+;; TODO: Needs a real spec
+;; Q: Is this the box that we decrypted with the server's
+;; short-term public key?
+;; Or is it the 96-byte black box that we send back as part of
+;; the Vouch?
+(s/def ::server-cookie any?)
+;;; Q: Is there any reason at all to store this?
 (s/def ::server-short-term-pk ::shared/public-key)
 (s/def ::server-security (s/keys :req [::server-long-term-pk
                                        ;; Q: Is there a valid reason for this to live here?
@@ -328,14 +334,16 @@ Note that this is really called for side-effects"
       ;; TODO: If/when an exception is thrown here, it would be nice
       ;; to notify callers immediately
       (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
-            extracted (shared/decompose K/cookie (Unpooled/wrappedBuffer decrypted))
+            extracted (shared/decompose K/cookie (Unpooled/wrappedBuffer (byte-array decrypted)))
             server-short-term-pk (byte-array K/key-length)
             server-cookie (byte-array K/server-cookie-length)
-            server-security (assoc (:server-security this)
-                                   ::server-short-term-pk server-short-term-pk
-                                   ::server-cookie server-cookie)]
-        (b-t/byte-copy! server-short-term-pk (::K/s' extracted))
-        (b-t/byte-copy! server-cookie (::K/black-box extracted))
+            server-security (assoc (::server-security this)
+                                   ::server-short-term-pk
+                                   server-short-term-pk,
+                                   ::server-cookie server-cookie)
+            {:keys [::K/s' ::K/black-box]} extracted]
+        (.readBytes s' server-short-term-pk)
+        (.readBytes black-box server-cookie)
         (assoc this ::server-security server-security)))))
 
 (defn decrypt-cookie-packet
@@ -394,34 +402,45 @@ Note that this is really called for side-effects"
   [{:keys [::shared/packet-management
            ::shared/my-keys
            ::shared-secrets
-           ::shared/text]
+           ::shared/work-area]
     :as this}]
-  (let [nonce (::shared/nonce packet-management)
+  (let [{:keys [::shared/working-nonce
+                ::shared/text]} work-area
         keydir (::shared/keydir my-keys)]
-    (b-t/byte-copy! nonce shared/vouch-nonce-prefix)
-    (shared/safe-nonce nonce keydir K/client-nonce-prefix-length)
+    (if working-nonce
+      (do
+        (log/info "Setting up working nonce " working-nonce)
+        (b-t/byte-copy! working-nonce shared/vouch-nonce-prefix)
+        ;; I think I probably missed something here.
+        ;; The reference version just sets up 16 random bytes
+        (shared/safe-nonce working-nonce keydir K/client-nonce-prefix-length)
 
-    ;; Q: What's the point to these 32 bytes?
-    ;; I thought the C API required a 16-byte zero header.
-    ;; And it really looks like TweetNaCl at least produces the
-    ;; same, so the buffer needs extra space for them (of course
-    ;; it does!)
-    ;; But 32 here just seem weird.
-    (b-t/byte-copy! text (shared/zero-bytes 32))
-    (b-t/byte-copy! text K/key-length K/key-length (.getPublicKey (::short-pair my-keys)))
-    (let [encrypted (.after (::client-long<->server-long shared-secrets) text 0 64 nonce)
-          vouch (byte-array 64)]
-      (b-t/byte-copy! vouch
-                      0
-                      K/server-nonce-suffix-length
-                      nonce
-                      shared/server-nonce-prefix-length)
-      (b-t/byte-copy! vouch
-                      K/server-nonce-suffix-length
-                      48
-                      encrypted
-                      K/server-nonce-suffix-length)
-      vouch)))
+        ;; Q: What's the point to these 32 bytes?
+        ;; I thought the C API required a 16-byte zero header.
+        ;; And it really looks like TweetNaCl at least produces the
+        ;; same, so the buffer needs extra space for them (of course
+        ;; it does!)
+        ;; But 32 here just seem weird.
+        (b-t/byte-copy! text (shared/zero-bytes 32))
+        (let [short-pair (::shared/short-pair my-keys)]
+          (b-t/byte-copy! text K/key-length K/key-length (.getPublicKey short-pair)))
+        (let [shared-secret (::client-long<->server-long shared-secrets)
+              encrypted (crypto/box-after shared-secret
+                                          text 0 64 working-nonce)
+              vouch (byte-array 64)]
+          (b-t/byte-copy! vouch
+                          0
+                          K/server-nonce-suffix-length
+                          working-nonce
+                          shared/server-nonce-prefix-length)
+          (b-t/byte-copy! vouch
+                          K/server-nonce-suffix-length
+                          48
+                          encrypted
+                          K/server-nonce-suffix-length)
+          vouch))
+      (assert false (str "Missing nonce in packet-management:\n"
+                         (keys packet-management))))))
 
 (defn extract-child-message
   "Pretty much blindly translated from the CurveCP reference
@@ -752,20 +771,31 @@ TODO: Need to ask around about that."
                          ::members (keys this)
                          ::this this
                          ::failure ex}))))
-    (if (decrypt-cookie-packet this)
+    (if-let [this (decrypt-cookie-packet this)]
       (let [{:keys [::shared/my-keys]} this
-            this (assoc-in this
-                           [::shared-secrets ::client-short<->server-short]
-                           (crypto/box-prepare
-                            (get-in this
-                                    [::server-security
-                                     ::server-short-term-pk])
-                            (.getSecretKey (::short-pair my-keys))))]
-        (log/info "Managed to decrypt the cookie!")
-        ;; Note that this supplies new state
-        ;; Though whether it should is debatable.
-        ;; After all...why would I put this into ::vouch?
-        (assoc this ::vouch (build-vouch this)))
+            ;; This is nil.
+            ;; Q: Do I have any use for it at all?
+            server-short (get-in this
+                                 [::server-security
+                                  ::server-short-term-pk])]
+        (log/debug "Managed to decrypt the cookie!")
+        (if server-short
+          (let [this (assoc-in this
+                               [::shared-secrets ::client-short<->server-short]
+                               (crypto/box-prepare
+                                server-short
+                                (.getSecretKey (::shared/short-pair my-keys))))]
+            (log/info "Managed to prepare shared short-term secret")
+            ;; Note that this supplies new state
+            ;; Though whether it should is debatable.
+            ;; After all...why would I put this into ::vouch?
+            (assoc this ::vouch (build-vouch this)))
+          (do
+            (log/error (str "Missing server-short-term-pk among\n"
+                            (keys (::server-security this))
+                            "\namong bigger-picture\n"
+                            (keys this)))
+            (assert server-short))))
       (throw (ex-info
               "Unable to decrypt server cookie"
               this)))
