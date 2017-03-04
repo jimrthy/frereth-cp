@@ -171,69 +171,90 @@
            ::plain-text
            ::text
            ::working-nonce]}]
+  "Called purely for side-effects.
+
+The most important is that it puts the crypto-text into the byte-array in text"
   (let [keys (crypto/random-key-pair)
         ;; This is just going to get thrown away, leading
         ;; to potential GC issues.
         ;; Probably need another static buffer for building
         ;; and encrypting things like this
         buffer (Unpooled/buffer K/server-cookie-length)]
-    (assert (.hasArray buffer))
-    ;; TODO: Rewrite this using compose
-    (.writeBytes buffer shared/all-zeros 0 K/decrypt-box-zero-bytes)
-    (.writeBytes buffer client-short-pk 0 K/key-length)
-    (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
+    (.retain buffer)
+    (try
+      (assert (.hasArray buffer))
+      ;; TODO: Rewrite this using compose
+      (.writeBytes buffer shared/all-zeros 0 K/decrypt-box-zero-bytes)
+      (.writeBytes buffer client-short-pk 0 K/key-length)
+      (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
 
-    (b-t/byte-copy! working-nonce shared/cookie-nonce-minute-prefix)
-    (shared/safe-nonce working-nonce nil shared/server-nonce-prefix-length)
+      (b-t/byte-copy! working-nonce shared/cookie-nonce-minute-prefix)
+      (shared/safe-nonce working-nonce nil shared/server-nonce-prefix-length)
 
-    ;; Reference implementation is really doing pointer math with the array
-    ;; to make this work.
-    ;; It's encrypting from (+ plain-text 64) over itself.
-    ;; There just isn't a good way to do the same thing in java.
-    ;; (The problem, really, is that I have to copy the plaintext
-    ;; so it winds up at the start of the array).
-    ;; Note that this is a departure from the reference implementation!
-    (let [actual (.array buffer)]
-      (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
-      (log/info (str "Encrypted cookie:\n"
-                     (with-out-str (b-s/print-bytes actual))))
-      ;; Copy that encrypted cookie into the text working area
-      (.getBytes buffer 0 text 32 K/server-cookie-length)
-      (log/info (str "After copying " K/server-cookie-length " bytes of that into text, it looks like\n"
-                     (with-out-str (b-s/print-bytes text))))
-      ;; Along with the nonce
-      ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
-      ;; Go with the assumption that those are the initial garbage 0 bytes that should
-      ;; be discarded anyway
-      (b-t/byte-copy! text 32 K/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
+      ;; Reference implementation is really doing pointer math with the array
+      ;; to make this work.
+      ;; It's encrypting from (+ plain-text 64) over itself.
+      ;; There just isn't a good way to do the same thing in java.
+      ;; (The problem, really, is that I have to copy the plaintext
+      ;; so it winds up at the start of the array).
+      ;; Note that this is a departure from the reference implementation!
+      (let [actual (.array buffer)]
+        (log/info (str "Before encrypting crypto-cookie, it looks like\n"
+                       (with-out-str (b-s/print-bytes actual))))
+        (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
+        (log/info (str "Encrypted cookie starting at offset "
+                       (.readerIndex buffer)
+                       ":\n"
+                       (with-out-str (b-s/print-bytes actual))
+                       "which really should match\n"
+                       (with-out-str (b-s/print-bytes buffer))))
+        ;; Copy that encrypted cookie into the text working area
+        (.getBytes buffer 0 text 32 K/server-cookie-length)
+        (log/info (str "After copying " K/server-cookie-length " bytes of that into text,\n"
+                       "starting at offset 32, "
+                       "it looks like\n"
+                       (with-out-str (b-s/print-bytes text))
+                       "and the reader index has moved to "
+                       (.readerIndex buffer)))
+        ;; Along with the nonce
+        ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
+        ;; Go with the assumption that those are the initial garbage 0 bytes that should
+        ;; be discarded anyway
+        (b-t/byte-copy! text 32 K/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
 
-      ;; And now we need to encrypt that.
-      ;; This really belongs in its own function
-      ;; And it's another place where I should probably call compose
-      (b-t/byte-copy! text 0 K/key-length (.getPublicKey keys))
-      ;; Reuse the other 16 byte suffix that came in from the client
-      (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length K/cookie-nonce-prefix)
-      (let [cookie (crypto/box-after client-short<->server-long text 128 working-nonce)]
-        (log/info (str "Cookie going to client:\n"
-                       (with-out-str (b-s/print-bytes cookie))))
-        cookie))))
+        ;; And now we need to encrypt that.
+        ;; This really belongs in its own function
+        ;; And it's another place where I should probably call compose
+        (b-t/byte-copy! text 0 K/key-length (.getPublicKey keys))
+        ;; Reuse the other 16 byte suffix that came in from the client
+        (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length K/cookie-nonce-prefix)
+        (let [cookie (crypto/box-after client-short<->server-long text 128 working-nonce)]
+          (log/info (str "Full cookie going to client that it should be able to decrypt:\n"
+                         (with-out-str (b-s/print-bytes cookie))
+                         "using shared secret:\n"
+                         (with-out-str (b-s/print-bytes client-short<->server-long))))
+          cookie))
+      (finally
+        (.release buffer)))))
 
 (defn build-cookie-packet
-  [packet client-extension server-extension working-nonce text]
+  [packet client-extension server-extension working-nonce crypto-cookie]
   (let [composed (shared/compose K/cookie-frame {::K/header K/cookie-header
                                                  ::K/client-extension client-extension
                                                  ::K/server-extension server-extension
                                                  ::K/nonce (Unpooled/wrappedBuffer working-nonce
                                                                                    shared/server-nonce-prefix-length
-                                                                           K/server-nonce-suffix-length)
-                                                 ;; This is also a great big FAIL:
-                                                 ;; Have to drop the first 16 bytes
-                                                 ;; Q: Have I fixed that yet?
-                                                 ::K/cookie (Unpooled/wrappedBuffer text
+                                                                                   K/server-nonce-suffix-length)
+                                                 ;; Note that this is setting up the crypto-box "real" cookie
+                                                 ;; with 144 bytes from text, starting at offset 16.
+                                                 ;; Which does seem like a mistake
+                                                 ::K/cookie #_(Unpooled/wrappedBuffer text
                                                                                     K/box-zero-bytes
-                                                                                    144)}
+                                                                                    144)
+                                                 crypto-cookie}
                                  packet)]
-    ;; FIXME: I really shouldn't need to do this
+    ;; I really shouldn't need to do this
+    ;; FIXME: Make sure it gets released
     (.retain composed)
     composed))
 
@@ -330,43 +351,44 @@
               ;; We don't actually care about the contents of the bytes we just decrypted.
               ;; They should be all zeroes for now, but that's really an area for possible future
               ;; expansion.
-              ;; For now, the point is that they unboxed correctly.
-              (prepare-cookie! {::client-short<->server-long shared-secret
-                                ::client-short-pk clnt-short-pk
-                                ::minute-key minute-key
-                                ::plain-text plain-text
-                                ::text text
-                                ::working-nonce working-nonce})
-              ;; Note that this overrides the incoming message in place
-              ;; Which seems dangerous, but it very deliberately is longer than
-              ;; our response.
-              ;; And it does save a malloc/GC.
-              ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
-              (.clear message)
-              (let [response
-                    (build-cookie-packet message clnt-xtn srvr-xtn working-nonce text)]
-                (log/info "Cookie packet built. Returning it.\nByte content:\n"
-                          (with-out-str (b-s/print-bytes response))
-                          "Reference count: " (.refCnt response))
-                (try
-                  (let [dst (get-in state [::client-write-chan :chan])
-                        success (stream/try-put! dst
-                                                 (assoc packet
-                                                        :message response)
-                                                 20
-                                                 ::timed-out)]
-                    (log/info "Cookie packet scheduled to send")
-                    (deferred/on-realized success
-                      (fn [result]
-                        (log/info "Sending Cookie succeeded:" result)
-                        (comment (.release response)))
-                      (fn [result]
-                        (log/error "Sending Cookie failed:" result)
-                        (.release response)))
-                    state)
-                  (catch Exception ex
-                    (log/error ex "Failed to send Cookie response")
-                    state))))
+              ;; For now, the point is that they unbox correctly.
+              (let [crypto-box
+                    (prepare-cookie! {::client-short<->server-long shared-secret
+                                      ::client-short-pk clnt-short-pk
+                                      ::minute-key minute-key
+                                      ::plain-text plain-text
+                                      ::text text
+                                      ::working-nonce working-nonce})]
+                ;; Note that this overrides the incoming message in place
+                ;; Which seems dangerous, but it very deliberately is longer than
+                ;; our response.
+                ;; And it does save a malloc/GC.
+                ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
+                (.clear message)
+                (let [response
+                      (build-cookie-packet message clnt-xtn srvr-xtn working-nonce crypto-box)]
+                  (log/info "Cookie packet built. Returning it.\nByte content:\n"
+                            (with-out-str (b-s/print-bytes response))
+                            "Reference count: " (.refCnt response))
+                  (try
+                    (let [dst (get-in state [::client-write-chan :chan])
+                          success (stream/try-put! dst
+                                                   (assoc packet
+                                                          :message response)
+                                                   20
+                                                   ::timed-out)]
+                      (log/info "Cookie packet scheduled to send")
+                      (deferred/on-realized success
+                        (fn [result]
+                          (log/info "Sending Cookie succeeded:" result)
+                          (comment (.release response)))
+                        (fn [result]
+                          (log/error "Sending Cookie failed:" result)
+                          (.release response)))
+                      state)
+                    (catch Exception ex
+                      (log/error ex "Failed to send Cookie response")
+                      state)))))
             (do
               (log/warn "Unable to open the HELLO crypto-box: dropping")
               state)))))

@@ -124,11 +124,16 @@ This is getting big enough that I really need to split it up"
         v (k fields)]
     (try
       (case cnvrtr
-        ::K/bytes (let [n (::K/length dscr)]
+        ::K/bytes (let [n (::K/length dscr)
+                        beg (.readableBytes dst)]
                     (try
                       (.writeBytes dst v 0 n)
+                      (let [end (.readableBytes dst)]
+                        (assert (= (- end beg) n)))
                       (catch IllegalArgumentException ex
-                        (throw (ex-info "Setting bytes failed"
+                        (log/error ex (str "Trying to write " n " bytes from\n"
+                                           v "\nto\n" dst))
+                      (throw (ex-info "Setting bytes failed"
                                         {::field k
                                          ::length n
                                          ::dst dst
@@ -159,6 +164,7 @@ This is getting big enough that I really need to split it up"
                          ::source-value v}))))))
 
 (defn compose
+  "This should probably be named compose! and return nil"
   [tmplt fields dst]
   ;; Q: How much do I gain by supplying dst?
   ;; It does let callers reuse the buffer, which
