@@ -58,3 +58,10 @@
 (def cookie
   (array-map ::s' {::type ::bytes ::length key-length}
              ::black-box {::type ::zeroes ::length server-cookie-length}))
+
+;;; Vouch/Initiate Packets
+
+(def vouch-nonce-prefix (.getBytes "CurveCPV"))
+(def vouch-length (+ server-nonce-suffix-length
+                     box-zero-bytes
+                     key-length))

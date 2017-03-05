@@ -31,8 +31,6 @@ This is getting big enough that I really need to split it up"
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def cookie-position-in-packet 80)
 
-(def vouch-nonce-prefix (.getBytes "CurveCPV"))
-
 (def initiate-header (.getBytes (str client-header-prefix "I")))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 
@@ -296,8 +294,7 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
   (if keydir
     ;; Read the last saved version from something in keydir
     (throw (RuntimeException. "Get real safe-nonce implementation translated"))
-    ;; This is where working with something like a ByteBuf seems like it
-    ;; would be much nicer
+    ;; TODO: Switch to using ByteBuf for this sort of thing
     (let [n (- (count dst) offset)
           tmp (byte-array n)]
       (crypto/random-bytes! tmp)

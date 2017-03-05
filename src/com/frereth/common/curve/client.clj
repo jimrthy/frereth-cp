@@ -320,17 +320,12 @@ Note that this is really called for side-effects"
     (log/debug "Copying encrypted cookie into " text "from" (keys this))
     (.readBytes cookie text 0 144)
     (let [shared (::client-short<->server-long shared-secrets)]
-      ;; This shows some interesting points
-      ;; 1. 1st 16 bytes of text are zeros
-      ;; That seems very wrong
-      ;; 2. The nonce seems like gibberish
-      ;; That seems plausible/likely
-      (log/info (str "Trying to decrypt\n"
-                     (with-out-str (b-s/print-bytes text))
-                     "using nonce\n"
-                     (with-out-str (b-s/print-bytes working-nonce))
-                     "and shared secret\n"
-                     (with-out-str (b-s/print-bytes shared))))
+      (log/debug (str "Trying to decrypt\n"
+                      (with-out-str (b-s/print-bytes text))
+                      "using nonce\n"
+                      (with-out-str (b-s/print-bytes working-nonce))
+                      "and shared secret\n"
+                      (with-out-str (b-s/print-bytes shared))))
       ;; TODO: If/when an exception is thrown here, it would be nice
       ;; to notify callers immediately
       (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
@@ -362,7 +357,7 @@ Note that this is really called for side-effects"
                  ;; Because the stack trace hides
                  ::where 'shared.curve.client/decrypt-cookie-packet}]
         (throw (ex-info "Incoming cookie packet illegal" err))))
-    (log/info (str "Incoming packet that looks like it might be a cookie:\n"
+    (log/debug (str "Incoming packet that looks like it might be a cookie:\n"
                    (with-out-str (b-s/print-bytes packet))))
     (let [rcvd (shared/decompose K/cookie-frame packet)
           hdr (byte-array K/header-length)
@@ -410,24 +405,33 @@ Note that this is really called for side-effects"
     (if working-nonce
       (do
         (log/info "Setting up working nonce " working-nonce)
-        (b-t/byte-copy! working-nonce shared/vouch-nonce-prefix)
-        ;; I think I probably missed something here.
-        ;; The reference version just sets up 16 random bytes
+        (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
+        ;; The reference version just sets up 16 random bytes,
+        ;; if keydir is nil.
+        ;; Which is what safe-nonce does with these parameters anyway.
+        ;; Doing the check here could avoid the overhead of a
+        ;; function call, but that seems like a dubious optimization.
+        ;; Or maybe I'm just missing something basic.
         (shared/safe-nonce working-nonce keydir K/client-nonce-prefix-length)
 
         ;; Q: What's the point to these 32 bytes?
-        ;; I thought the C API required a 16-byte zero header.
-        ;; And it really looks like TweetNaCl at least produces the
-        ;; same, so the buffer needs extra space for them (of course
-        ;; it does!)
-        ;; But 32 here just seem weird.
-        (b-t/byte-copy! text (shared/zero-bytes 32))
+        ;; A: The low-level implementation requires them.
+        ;; Adding them at this level probably is more efficient,
+        ;; especially when we start throwing lots of messages
+        ;; around.
+        ;; But, for now, box-after handles this so we don't need it.
+        (comment
+          ;; TODO: Remove obsolete code/comments.
+          ;; They're only here for historical context
+          (b-t/byte-copy! text (shared/zero-bytes 32)))
         (let [short-pair (::shared/short-pair my-keys)]
-          (b-t/byte-copy! text K/key-length K/key-length (.getPublicKey short-pair)))
+          (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
         (let [shared-secret (::client-long<->server-long shared-secrets)
+              ;; The reference implementation does this.
+              ;; It doesn't seem to match the spec
               encrypted (crypto/box-after shared-secret
-                                          text 0 64 working-nonce)
-              vouch (byte-array 64)]
+                                          text K/key-length working-nonce)
+              vouch (byte-array K/vouch-length)]
           (b-t/byte-copy! vouch
                           0
                           K/server-nonce-suffix-length
@@ -435,9 +439,9 @@ Note that this is really called for side-effects"
                           shared/server-nonce-prefix-length)
           (b-t/byte-copy! vouch
                           K/server-nonce-suffix-length
-                          48
+                          (+ K/box-zero-bytes K/key-length)
                           encrypted
-                          K/server-nonce-suffix-length)
+                          0)
           vouch))
       (assert false (str "Missing nonce in packet-management:\n"
                          (keys packet-management))))))
@@ -815,9 +819,10 @@ TODO: Need to ask around about that."
   [wrapper]
   (let [timeout (current-timeout wrapper)
         this @wrapper
-        ;; I've dropped a step here.
-        ;; Sending the packet is worse than pointless until
-        ;; it contains the Vouch. Which simply isn't there yet.
+        ;; I've dropped a really important step here.
+        ;; There's no point to trying to continue until
+        ;; the the child process sends us bytes to forward
+        ;; along.
         ;; The reference implementation has what amounts to
         ;; build-vouch-packet in an else block centered around
         ;; line 448 of curvecpclient.c
@@ -825,8 +830,28 @@ TODO: Need to ask around about that."
         ;; TODO: This also needs to come from a recyclable pool
         buffer (byte-array (.readableBytes raw-packet))
         chan->server (::chan->server this)]
-    ;; There is a question of "When?"
+    ;; Q: "When?"
+    ;; A: Have bytes available from child.
+    ;; That's really a key point/distinguishing factor.
+    ;; The obvious approach here is to just forget about those,
+    ;; since they're optional, and switch to byte-shuffling mode
+    ;; once the handshake is complete.
+    ;; But that passes up an opportunity to save at least one network
+    ;; trip.
+    ;; And, really, if the client doesn't have anything to send
+    ;; within a minute or two (like, say, a request for the login
+    ;; dialog), is it really viable to start with?
+    ;; Assuming we aren't talking about spawning a new clojure
+    ;; process.
     (throw (RuntimeException. "Still have to build the Vouch packet"))
+    ;; Here's the thing about that:
+    ;; CurveCP is a low-level protocol for streaming bytes across,
+    ;; the network, much like TCP.
+    ;; The fact that it's built on top of UDP datagram packets
+    ;; may be ironic, since my major use case is an exchange
+    ;; of small message packets.
+    ;; That's really just a detail, though.
+    ;; Desperately need to decide how to handle this part.
     (.readBytes raw-packet buffer)
     (let [d (stream/try-put!
              chan->server

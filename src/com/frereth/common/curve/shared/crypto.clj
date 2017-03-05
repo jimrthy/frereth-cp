@@ -62,7 +62,8 @@
        (when (= 0 (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key))
          ;; After it's encrypted, we can discard the first 16 bytes.
          ;; But not the other extra 16.
-         ;; This is an annoying API pitfall that leads to a lot of annoyance/confusion.
+         ;; This is an annoying API pitfall that leads to a lot of
+         ;; annoyance/confusion.
          (b-t/sub-byte-array cipher-text K/box-zero-bytes))))))
 
 (defn box-prepare
@@ -124,7 +125,7 @@ which I'm really not qualified to touch."
            (>= (count box) (+ box-offset box-length))
            (>= box-length K/box-zero-bytes))
     (do
-      (log/info "Box is large enough")
+      (log/debug "Box is large enough")
       (let [n (+ box-length K/box-zero-bytes)
             cipher-text (byte-array n)
             plain-text (byte-array n)]
