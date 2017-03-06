@@ -241,16 +241,25 @@
   [client-agent]
   (log/info "Top of client-child-spawner")
   ;; Q: What should this really do?
-  (let [result (strm/stream)
+  (let [reader (strm/stream)
         child (future
                 (println "Client child sending bytes to server via client")
-                (let [written (strm/try-put! result
+                (send client-agent (fn [client-state]
+                                     (let [buffer (get-in client-state [::shared/packet-management ::shared/packet])
+                                           ]
+                                       ())))
+                (let [written (strm/try-put! reader
                                              "Hello, out there!"
                                              2500
                                              ::timedout)]
                   (println "Client-child send result:" @written)))]
     {::clnt/child child
-     ::clnt/reader result
+     ::clnt/reader reader
+     ;; Q: Is this really what I intended?
+     ;; At the very least, it seems like it should be the stream rather than
+     ;; the stream creator.
+     ;; I strongly suspect this was just something I slapped together
+     ;; in rough-draft mode and didn't spend any time thinking through.
      ::clnt/writer strm/stream}))
 
 (deftest handshake

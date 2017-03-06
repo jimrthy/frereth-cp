@@ -22,10 +22,11 @@
             [com.frereth.common.curve.shared.crypto :as crypto]
             [com.frereth.common.curve.shared.constants :as K]
             [com.frereth.common.schema :as schema]
+            [com.frereth.common.util :as util]
             [com.stuartsierra.component :as cpt]
             [manifold.deferred :as deferred]
             ;; Mixing this and core.async seems dubious, at best
-            [manifold.stream :as stream])
+            [manifold.stream :as strm])
   (:import io.netty.buffer.Unpooled))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -99,6 +100,7 @@
                                :opt [::chan->child
                                      ::chan<-child
                                      ::child
+                                     ::initial-bytes-promise
                                      ;; Q: Why am I tempted to store this at all?
                                      ;; A: Well...I might need to resend it if it
                                      ;; gets dropped initially.
@@ -123,19 +125,10 @@
 ;; Q: More sensible to check for strm/source and sink protocols?
 (s/def ::reader ::chan<-child)
 (s/def ::writer ::chan->child)
-;; Accepts the agent that owns "this" and returns a channel we can
-;; use to send messages to the child.
-;; The child will send messages back to us using the standard agent
-;; (send...)
-;; Or maybe it should notify us about changes to a shared ring buffer.
-;; This is where the reference implementation seems to get murky.
-;; And, really, this approach is wrong.
-;; It seems much wiser to let the caller control the child creation
-;; and just supply us with the communication channel(s).
-;; Although it might be a lot more sensible for this to own
-;; ::chan->child and ::chan->server since it's the central
-;; location that will first get the indication that ::chan<-child
-;; or ::chan<-server has closed.
+;; Accepts the agent that owns "this" and returns
+;; 1) a writer channel we can use to send messages to the child.
+;; 2) a reader channel that the child will use to send byte
+;; arrays/bufs to us
 (s/def ::child-spawner (s/fspec :args (s/cat :this ::state-agent)
                                 :ret (s/keys :req [::child
                                                    ::reader
@@ -369,9 +362,12 @@ Note that this is really called for side-effects"
       ;; Q: Do we?
       ;; A: Not really. The original incoming message did have them,
       ;; under :host and :port, though.
-      ;; Actually, those are the details about our socket.
-      ;; So probably not very useful.
-      ;; That's a really important detail.
+      ;; TODO: Need to feed those down to here
+      ;; That info's pretty unreliable/meaningless, but the server
+      ;; address probably won't change very often.
+      ;; Unless we're communicating with a server on someone's cell
+      ;; phone.
+      ;; Which, if this is successful, will totally happen.
       (log/warn "TODO: Verify that this packet came from the appropriate server")
       ;; Q: How accurate/useful is this approach?
       ;; (i.e. mostly comparing byte array hashes)
@@ -600,14 +596,17 @@ implementation. This is code that I don't understand yet"
         long-pair (::shared/long-pair my-keys)
         short-pair (::shared/short-pair my-keys)]
     (into this
-          {::client-extension-load-time 0
+          {::child-packets []
+           ::client-extension-load-time 0
+           ::initial-bytes-promise (promise)
            ::recent (System/nanoTime)
            ;; This seems like something that we should be able to set here.
-           ;; djb's docs say that it's a security matter, like connecting from a
-           ;; random port.
-           ;; Hopefully, someday, operating systems will have some mechanism for
-           ;; rotating these automatically
-           ;; Q: Is nil really better than just picking something random here?
+           ;; djb's docs say that it's a security matter, like connecting
+           ;; from a random port.
+           ;; Hopefully, someday, operating systems will have some mechanism
+           ;; for rotating these automatically
+           ;; Q: Is nil really better than just picking something random
+           ;; here?
            ;; A: Who am I to argue with one of the experts?
            ::shared/extension nil
            ::shared-secrets {::client-long<->server-long (crypto/box-prepare
@@ -652,10 +651,10 @@ implementation. This is code that I don't understand yet"
   message exchange mode after the handshake is complete."
   [wrapper
    {:keys [::chan<-server
-                ::chan->server
-                ::chan<-child
-                ::chan->child]
-         :as this}
+           ::chan->server
+           ::chan<-child
+           ::chan->child]
+    :as this}
    initial-server-response]
   ;; Forward that initial "real" message
   (send wrapper server->child initial-server-response)
@@ -663,20 +662,29 @@ implementation. This is code that I don't understand yet"
     ;; Q: Do I want to block this thread for this?
   (comment) (await-for (current-timeout wrapper) wrapper)
 
-    ;; And then wire this up to pretty much just pass messages through
-    ;; Actually, this seems totally broken from any angle, since we need
-    ;; to handle decrypting, at a minimum
+  ;; And then wire this up to pretty much just pass messages through
+  ;; Actually, this seems totally broken from any angle, since we need
+  ;; to handle decrypting, at a minimum
 
-  (stream/connect-via chan<-child #(send wrapper chan->server %) chan->server)
+  ;; Q: Do I want this or a plain consume?
+  (strm/connect-via chan<-child #(send wrapper chan->server %) chan->server)
 
-    ;; I'd like to just do this in final-wait and take out an indirection
-    ;; level.
-    ;; But I don't want children to have to know the implementation detail
-    ;; that they have to wait for the initial response before the floodgates
-    ;; can open.
-    ;; So go with this approach until something better comes to mind
-
-  (stream/connect-via chan<-server #(send wrapper chan->child %) chan->child))
+  ;; I'd like to just do this in final-wait and take out an indirection
+  ;; level.
+  ;; But I don't want children to have to know the implementation detail
+  ;; that they have to wait for the initial response before the floodgates
+  ;; can open.
+  ;; So go with this approach until something better comes to mind
+  (strm/connect-via chan<-server #(send wrapper chan->child %) chan->child)
+  ;; Q: Is this approach better?
+  ;; A: Well, at least it isn't total nonsense
+  (comment (strm/consume (::chan<-child this)
+                         (fn [bs]
+                           (send-off wrapper (fn [state]
+                                               (let [a
+                                                     (update state ::child-packets
+                                                             conj bs)]
+                                                 (send-messages! a))))))))
 
 (defn final-wait
   "We've received the cookie and responded with a vouch.
@@ -687,9 +695,9 @@ implementation. This is code that I don't understand yet"
   (if (not= send ::sending-vouch-timed-out)
     (let [timeout (current-timeout wrapper)
           chan<-server (::chan<-server @wrapper)
-          taken (stream/try-take! chan<-server
-                                  ::drained timeout
-                                  ::initial-response-timed-out)]
+          taken (strm/try-take! chan<-server
+                                ::drained timeout
+                                ::initial-response-timed-out)]
       (deferred/on-realized taken
         ;; Using send-off here because it potentially has to block to wait
         ;; for the child's initial message.
@@ -701,9 +709,18 @@ implementation. This is code that I don't understand yet"
                                          (assoc % :problem ex)))))))
     (send wrapper #(throw (ex-info "Timed out trying to send vouch" %)))))
 
+(defn set-up-initial-read!
+  [this stream]
+  (let [first-bytes @(strm/try-take! stream ::drained util/minute ::timeout)
+        dst (::initial-bytes-promise this)]
+    (deliver dst (if (or (= first-bytes ::drained)
+                         (= first-bytes ::timeout))
+                   nil
+                   first-bytes))))
+
 (s/fdef fork
         :args (s/cat :wrapper ::state-agent
-                       :this ::state)
+                     :this ::state)
         :ret ::state)
 (defn fork
   "This has to 'fork' a child with access to the agent, and update the agent state
@@ -728,14 +745,9 @@ TODO: Need to ask around about that."
   (when-not child-spawner
     (assert child-spawner (str "No way to spawn child.\nAvailable keys:\n"
                                (keys this))))
-  ;;; This needs to return something that, at least in theory,
-  ;;; should use send/send-off to notify the agent about bytes
-  ;;; that are buffered and ready to transmit.
-  ;;; Or maybe that should happen over the stream that I'm
-  ;;; storing in reader.
-  ;;; This part definitely needs more work.
   (let [{:keys [::child ::reader ::writer]} (child-spawner wrapper)]
     (assoc this
+           (send-off set-up-initial-read! wrapper wrapper reader)
            ::chan->child reader
            ::chan<-child writer
            ::child child)))
@@ -750,7 +762,6 @@ TODO: Need to ask around about that."
   Handling an agent (send), which means `this` is already dereferenced"
   [this {:keys [host port message]
          :as cookie-packet}]
-  ;; This is failing because cookie-packet already has a 0 refCnt
   (log/warn (str "Getting ready to fail to convert cookie\n"
                  (with-out-str (b-s/print-bytes message))
                  "into a Vouch"))
@@ -814,9 +825,23 @@ TODO: Need to ask around about that."
                    cookie-packet
                    "\nQ: What happened?")))))
 
+(defn build-vouch-packet
+  []
+  ;; Important detail: we can use up to 640 bytes that we've
+  ;; received from the client/child.
+  ;; We may have to send this multiple times, because it could
+  ;; very well get dropped.
+  ;; Actually, if that happens, we probably need to start over
+  ;; from the initial HELLO.
+  ;; Depending on how much time we want to spend waiting for the
+  ;; initial server message. It would be very easy to just wait
+  ;; for its minute key to definitely time out, though that seems
+  ;;; like a naive approach with a terrible user experience.
+  (throw (RuntimeException. "Write this")))
+
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)"
-  [wrapper]
+  [this wrapper]
   (let [timeout (current-timeout wrapper)
         this @wrapper
         ;; I've dropped a really important step here.
@@ -829,35 +854,15 @@ TODO: Need to ask around about that."
         raw-packet (get-in this [::shared/packet-management ::shared/packet])
         ;; TODO: This also needs to come from a recyclable pool
         buffer (byte-array (.readableBytes raw-packet))
-        chan->server (::chan->server this)]
-    ;; Q: "When?"
-    ;; A: Have bytes available from child.
-    ;; That's really a key point/distinguishing factor.
-    ;; The obvious approach here is to just forget about those,
-    ;; since they're optional, and switch to byte-shuffling mode
-    ;; once the handshake is complete.
-    ;; But that passes up an opportunity to save at least one network
-    ;; trip.
-    ;; And, really, if the client doesn't have anything to send
-    ;; within a minute or two (like, say, a request for the login
-    ;; dialog), is it really viable to start with?
-    ;; Assuming we aren't talking about spawning a new clojure
-    ;; process.
-    (throw (RuntimeException. "Still have to build the Vouch packet"))
-    ;; Here's the thing about that:
-    ;; CurveCP is a low-level protocol for streaming bytes across,
-    ;; the network, much like TCP.
-    ;; The fact that it's built on top of UDP datagram packets
-    ;; may be ironic, since my major use case is an exchange
-    ;; of small message packets.
-    ;; That's really just a detail, though.
-    ;; Desperately need to decide how to handle this part.
-    (.readBytes raw-packet buffer)
-    (let [d (stream/try-put!
+        chan->server (::chan->server this)
+        ;; Have to wait until forked child sends this
+        initial-bytes @(::initial-bytes-promise @wrapper)]
+    (let [buffer (build-vouch-packet)
+          d (strm/try-put!
              chan->server
              buffer
              timeout
-             ::sending-vouchtimed-out)]
+             ::sending-vouch-timed-out)]
       (deferred/on-realized d
         (partial final-wait wrapper)
         (fn [failure]
@@ -923,7 +928,7 @@ terrible approach in an environment that's intended to multi-thread."
       (send wrapper cookie->vouch cookie-packet)
       (let [timeout (current-timeout wrapper)]
         (if (await-for timeout wrapper)
-          (send-vouch! wrapper)
+          (send-off send-vouch! wrapper wrapper)
           (do
             (log/error (str "Converting cookie to vouch took longer than "
                             timeout
@@ -943,7 +948,7 @@ terrible approach in an environment that's intended to multi-thread."
       (log/info "client/wait-for-cookie -- Sent to server:" sent)
       (let [chan<-server (::chan<-server @wrapper)
             timeout (current-timeout wrapper)
-            d (stream/try-take! chan<-server
+            d (strm/try-take! chan<-server
                                 ::drained
                                 timeout
                                 ::hello-response-timed-out)]
@@ -996,10 +1001,10 @@ like a timing attack."
 
   (let [{:keys [::chan->server]} @wrapper
         timeout (current-timeout wrapper)]
-    (stream/on-drained chan->server
-                       (fn []
-                         (log/warn "Channel->server closed")
-                         (send wrapper server-closed!)))
+    (strm/on-drained chan->server
+                     (fn []
+                       (log/warn "Channel->server closed")
+                       (send wrapper server-closed!)))
     ;; This feels inside-out and backwards.
     ;; But it probably should, since this is very
     ;; explicitly place-oriented programming working
@@ -1022,10 +1027,10 @@ like a timing attack."
         ;; the next, but a major selling point
         ;; is not waiting for TCP buffers
         ;; to expire.
-        (let [d (stream/try-put! chan->server
-                                 raw-packet
-                                 timeout
-                                 ::sending-hello-timed-out)]
+        (let [d (strm/try-put! chan->server
+                               raw-packet
+                               timeout
+                               ::sending-hello-timed-out)]
           (deferred/on-realized d
             (partial wait-for-cookie wrapper)
             (partial hello-failed! wrapper))))
