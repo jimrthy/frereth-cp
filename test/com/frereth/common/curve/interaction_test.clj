@@ -240,27 +240,37 @@
 (defn client-child-spawner
   [client-agent]
   (log/info "Top of client-child-spawner")
-  ;; Q: What should this really do?
-  (let [reader (strm/stream)
+  ;; TODO: Other variants
+  ;; 1. Start by writing 0 bytes
+  ;; 2. Write, say, 480 bytes, send notification, then 320 more
+  (let [read-notifier (strm/stream)
+        buffer (Unpooled/buffer 2048)
         child (future
-                (println "Client child sending bytes to server via client")
-                (send client-agent (fn [client-state]
-                                     (let [buffer (get-in client-state [::shared/packet-management ::shared/packet])
-                                           ]
-                                       ())))
-                (let [written (strm/try-put! reader
-                                             "Hello, out there!"
-                                             2500
-                                             ::timedout)]
-                  (println "Client-child send result:" @written)))]
+                (log/debug "Client child sending bytes to server via client")
+                (.writeBytes buffer (byte-array (range 1025)))
+                (let [wrote (strm/try-put! read-notifier
+                                           ::anything-but-nil
+                                           2500
+                                           ::timedout)]
+                  (log/debug "Client-child send result:" @wrote)))
+        write-notifier (strm/stream)
+        hidden (strm/try-take! write-notifier ::drained 2500 ::timed-out)]
+    (deferred/chain hidden (fn [success]
+                             (is (not (or (= success ::drained)
+                                          (= success ::timed-out))))
+                             ;; TODO: Make this more interesting.
+                             ;; Verify what we really got back
+                             ;; Send back a second block of data,
+                             ;; and wait for *that* response.
+                             (strm/close! write-notifier)
+                             (strm/close! read-notifier)))
     {::clnt/child child
-     ::clnt/reader reader
-     ;; Q: Is this really what I intended?
-     ;; At the very least, it seems like it should be the stream rather than
-     ;; the stream creator.
-     ;; I strongly suspect this was just something I slapped together
-     ;; in rough-draft mode and didn't spend any time thinking through.
-     ::clnt/writer strm/stream}))
+     ::clnt/reader {::clnt/chan<-child read-notifier
+                    ::clnt/buffer buffer}
+     ::clnt/writer {::clnt/chan->child write-notifier
+                    ::clnt/buffer (Unpooled/buffer 4096)}
+     ;; Q: Does it make any difference if I keep this around?
+     ::hidden-child hidden}))
 
 (deftest handshake
   (log/info "**********************************\nNew Hand-Shake test")

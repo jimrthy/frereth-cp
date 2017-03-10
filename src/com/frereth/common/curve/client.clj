@@ -27,7 +27,7 @@
             [manifold.deferred :as deferred]
             ;; Mixing this and core.async seems dubious, at best
             [manifold.stream :as strm])
-  (:import io.netty.buffer.Unpooled))
+  (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -38,6 +38,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+;; Q: More sensible to check for strm/source and sink protocols?
 (s/def ::chan->child ::schema/manifold-stream)
 (s/def ::chan<-child ::schema/manifold-stream)
 (s/def ::chan->server ::schema/manifold-stream)
@@ -111,6 +112,8 @@
                                        ;; spawning a child process here?
                                        ::chan->server
                                        ::chan<-server
+                                       ;; The circular declaration of this is very
+                                       ;; suspicious.
                                        ::child-spawner
                                        ::server-extension
                                        ::timeout]))
@@ -121,10 +124,14 @@
                             #(s/valid? ::state (deref %))))
 
 ;; Because, for now, I need somewhere to hang onto the future
+;; Q: So...what is this? a Future?
 (s/def ::child any?)
-;; Q: More sensible to check for strm/source and sink protocols?
-(s/def ::reader ::chan<-child)
-(s/def ::writer ::chan->child)
+
+(s/def ::buffer #(instance? ByteBuf %))
+(s/def ::reader (s/keys :req [::chan<-child
+                              ::buffer]))
+(s/def ::writer (s/keys :req [::chan->child
+                              ::buffer]))
 ;; Accepts the agent that owns "this" and returns
 ;; 1) a writer channel we can use to send messages to the child.
 ;; 2) a reader channel that the child will use to send byte
@@ -803,7 +810,8 @@ TODO: Need to ask around about that."
             (log/info "Managed to prepare shared short-term secret")
             ;; Note that this supplies new state
             ;; Though whether it should is debatable.
-            ;; After all...why would I put this into ::vouch?
+            ;; Q: why would I put this into ::vouch?
+            ;; A: In case we need to resend it
             (assoc this ::vouch (build-vouch this)))
           (do
             (log/error (str "Missing server-short-term-pk among\n"
@@ -825,8 +833,29 @@ TODO: Need to ask around about that."
                    cookie-packet
                    "\nQ: What happened?")))))
 
+(defn build-vouch-with-message
+  [buffer]
+  (let [clear-text (byte-array (min 640 (.readableBytes buffer)))]
+    (.readBytes buffer clear-text)
+    ;; TODO: Compare performance vs. discardReadBytes
+    (.discardSomeReadBytes buffer)
+    (throw (RuntimeException. "Now life gets interesting again"))))
+
+(defn wait-for-initial-child-bytes
+  [{:keys [::reader] :as this}]
+  (let [{:keys [::chan<-child ::buffer]} reader]
+    (let [ready-now (.readableBytes buffer)]
+      (if (< 0 ready-now)
+        buffer
+        (deferred/let-flow [available (strm/try-take! chan<-child ::drained 500 ::timed-out)]
+          (if-not (= available ::drained)
+            buffer
+            ;; TODO: Need a test for this case
+            (throw (RuntimeException. "Child closed"))))))))
+
 (defn build-vouch-packet
-  []
+  "TODO: Rename. This is really 'wait for '"
+  [this]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   ;; We may have to send this multiple times, because it could
@@ -837,7 +866,8 @@ TODO: Need to ask around about that."
   ;; initial server message. It would be very easy to just wait
   ;; for its minute key to definitely time out, though that seems
   ;;; like a naive approach with a terrible user experience.
-  (throw (RuntimeException. "Write this")))
+  (let [msg-bytes (wait-for-initial-child-bytes this)]
+    (throw (RuntimeException. "Get this written"))))
 
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)"
@@ -857,6 +887,12 @@ TODO: Need to ask around about that."
         chan->server (::chan->server this)
         ;; Have to wait until forked child sends this
         initial-bytes @(::initial-bytes-promise @wrapper)]
+    ;; This call really needs to move into cookie->vouch.
+    ;; Or maybe an intermediate step between there and
+    ;; here.
+    ;; But putting it here is just wrong.
+    ;; This function should really just do the send.
+    ;; TODO: Move this part somewhere more fitting.
     (let [buffer (build-vouch-packet)
           d (strm/try-put!
              chan->server
