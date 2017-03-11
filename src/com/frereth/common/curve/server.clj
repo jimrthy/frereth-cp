@@ -380,7 +380,10 @@ The most important is that it puts the crypto-text into the byte-array in text"
                       (log/info "Cookie packet scheduled to send")
                       (deferred/on-realized success
                         (fn [result]
-                          (log/info "Sending Cookie succeeded:" result)
+                          (if-not result
+                            (log/info "Sending Cookie succeeded")
+                            (log/error "Sending Cookie failed:" result))
+                          ;; TODO: Make sure this does get released!
                           (comment (.release response)))
                         (fn [result]
                           (log/error "Sending Cookie failed:" result)

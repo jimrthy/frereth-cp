@@ -166,11 +166,12 @@
 (defn wrote-hello
   [client-chan success]
   (is success "Failed to write hello to server")
-  ;; I'm pretty sure I need to split
-  ;; this into 2 channels so I don't pull back
-  ;; the hello that I just put on there
-  ;; Although it would be really sweet if ztellman
-  ;; handled this for me.
+  ;; This is timing out both here and in the server side.
+  ;; So either I'm taking from the wrong channel here (which
+  ;; seems more likely) or I've botched up the server basics.
+  ;; Actually, even though it's seemed to work before, I
+  ;; almost definitely need 2 channels for the server like
+  ;; I set up for the client.
   (strm/try-take! (:chan client-chan) ::drained 500 ::timeout))
 
 (defn forward-cookie
@@ -249,12 +250,15 @@
                 (log/debug "Client child sending bytes to server via client")
                 (.writeBytes buffer (byte-array (range 1025)))
                 (let [wrote (strm/try-put! read-notifier
-                                           ::anything-but-nil
+                                           buffer
                                            2500
                                            ::timedout)]
-                  (log/debug "Client-child send result:" @wrote)))
+                  (log/debug "Client-child send result:" @wrote)
+                  (is (not= @wrote ::timedout))))
         write-notifier (strm/stream)
-        hidden (strm/try-take! write-notifier ::drained 2500 ::timed-out)]
+        release-notifier (strm/stream)
+        hidden [(strm/try-take! write-notifier ::drained 2500 ::timed-out)
+                (strm/try-take! release-notifier ::drained 2500 ::timed-out)]]
     (deferred/chain hidden (fn [success]
                              (is (not (or (= success ::drained)
                                           (= success ::timed-out))))
@@ -263,12 +267,12 @@
                              ;; Send back a second block of data,
                              ;; and wait for *that* response.
                              (strm/close! write-notifier)
+                             (strm/close! release-notifier)
                              (strm/close! read-notifier)))
     {::clnt/child child
-     ::clnt/reader {::clnt/chan<-child read-notifier
-                    ::clnt/buffer buffer}
-     ::clnt/writer {::clnt/chan->child write-notifier
-                    ::clnt/buffer (Unpooled/buffer 4096)}
+     ::clnt/reader {::clnt/chan<-child read-notifier}
+     ::clnt/release {::clnt/chan->child release-notifier}
+     ::clnt/writer {::clnt/chan->child write-notifier}
      ;; Q: Does it make any difference if I keep this around?
      ::hidden-child hidden}))
 

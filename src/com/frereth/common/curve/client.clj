@@ -98,9 +98,7 @@
                                      ::server-security
                                      ::shared-secrets
                                      ::shared/work-area]
-                               :opt [::chan->child
-                                     ::chan<-child
-                                     ::child
+                               :opt [::child
                                      ::initial-bytes-promise
                                      ;; Q: Why am I tempted to store this at all?
                                      ;; A: Well...I might need to resend it if it
@@ -132,6 +130,12 @@
                               ::buffer]))
 (s/def ::writer (s/keys :req [::chan->child
                               ::buffer]))
+;; This stream is for sending ByteBufs back to the child when we're done
+;; Tracking them in a thread-safe pool seems like a better approach.
+;; Especially when we're talking about the server.
+;; But I have to get a first draft written before I can worry about details
+;; like that.
+(s/def ::release ::writer)
 ;; Accepts the agent that owns "this" and returns
 ;; 1) a writer channel we can use to send messages to the child.
 ;; 2) a reader channel that the child will use to send byte
@@ -139,6 +143,7 @@
 (s/def ::child-spawner (s/fspec :args (s/cat :this ::state-agent)
                                 :ret (s/keys :req [::child
                                                    ::reader
+                                                   ::release
                                                    ::writer])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -836,6 +841,8 @@ TODO: Need to ask around about that."
 (defn build-vouch-with-message
   [buffer]
   (let [clear-text (byte-array (min 640 (.readableBytes buffer)))]
+    ;; This is a much bigger deal on the server.
+    (throw (RuntimeException. "Basic idea fails completely: this is not thread-safe."))
     (.readBytes buffer clear-text)
     ;; TODO: Compare performance vs. discardReadBytes
     (.discardSomeReadBytes buffer)
@@ -846,16 +853,14 @@ TODO: Need to ask around about that."
   (let [{:keys [::chan<-child ::buffer]} reader]
     (let [ready-now (.readableBytes buffer)]
       (if (< 0 ready-now)
-        buffer
+        buffer  ; Go with whatever's available so far
         (deferred/let-flow [available (strm/try-take! chan<-child ::drained 500 ::timed-out)]
-          (if-not (= available ::drained)
+          (if-not (= @available ::drained)
             buffer
-            ;; TODO: Need a test for this case
             (throw (RuntimeException. "Child closed"))))))))
 
 (defn build-vouch-packet
-  "TODO: Rename. This is really 'wait for '"
-  [this]
+  [this msg-byte-buf]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   ;; We may have to send this multiple times, because it could
@@ -865,50 +870,39 @@ TODO: Need to ask around about that."
   ;; Depending on how much time we want to spend waiting for the
   ;; initial server message. It would be very easy to just wait
   ;; for its minute key to definitely time out, though that seems
-  ;;; like a naive approach with a terrible user experience.
-  (let [msg-bytes (wait-for-initial-child-bytes this)]
-    (throw (RuntimeException. "Get this written"))))
+  ;; like a naive approach with a terrible user experience.
+
+  ;; TODO: Be sure to send msg-byte-buf back over the child's
+  ;; release stream when we're done with it.
+  ;; Or release it back into the shared ByteBuf pool.
+  ;; I'll get there.
+  (throw (RuntimeException. "Get this written")))
 
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)"
-  [this wrapper]
-  (let [timeout (current-timeout wrapper)
-        this @wrapper
-        ;; I've dropped a really important step here.
-        ;; There's no point to trying to continue until
-        ;; the the child process sends us bytes to forward
-        ;; along.
-        ;; The reference implementation has what amounts to
-        ;; build-vouch-packet in an else block centered around
-        ;; line 448 of curvecpclient.c
-        raw-packet (get-in this [::shared/packet-management ::shared/packet])
-        ;; TODO: This also needs to come from a recyclable pool
-        buffer (byte-array (.readableBytes raw-packet))
-        chan->server (::chan->server this)
-        ;; Have to wait until forked child sends this
-        initial-bytes @(::initial-bytes-promise @wrapper)]
-    ;; This call really needs to move into cookie->vouch.
-    ;; Or maybe an intermediate step between there and
-    ;; here.
-    ;; But putting it here is just wrong.
-    ;; This function should really just do the send.
-    ;; TODO: Move this part somewhere more fitting.
-    (let [buffer (build-vouch-packet)
-          d (strm/try-put!
-             chan->server
-             buffer
-             timeout
-             ::sending-vouch-timed-out)]
-      (deferred/on-realized d
-        (partial final-wait wrapper)
-        (fn [failure]
-          ;; Extremely unlikely, but
-          ;; just for the sake of paranoia
-          (send wrapper
-                (fn [this]
-                  (throw (ex-info "Timed out sending cookie->vouch response"
-                                  (assoc this
-                                         :problem failure))))))))))
+  [this wrapper packet]
+  (let [chan->server (::chan->server this)
+        d (strm/try-put!
+           chan->server
+           packet
+           (current-timeout wrapper)
+           ::sending-vouch-timed-out)]
+    ;; Note that this returns a deferred.
+    ;; We're inside an agent's send.
+    ;; Mixing these two paradigms was probably a bad idea.
+    (deferred/on-realized d
+      (fn [success]
+        (log/info (str "Initiate packet sent:" success ". Waiting for 1st message"))
+        (send-off wrapper final-wait success))
+      (fn [failure]
+        ;; Extremely unlikely, but
+        ;; just for the sake of paranoia
+        (log/error (str "Sending Initiate packet failed!\n" failure))
+        (throw (ex-info "Timed out sending cookie->vouch response"
+                        (assoc this
+                               :problem failure)))))
+    ;; Q: Do I need to hang
+    this))
 
 (defn build-and-send-vouch
 "param wrapper: the agent that's managing the state
@@ -958,19 +952,28 @@ terrible approach in an environment that's intended to multi-thread."
       ;; Partial Answer: original version is geared toward converting
       ;; existing apps that pipe data over STDIN/OUT so they don't
       ;; have to be changed at all.
-      (send wrapper (partial fork wrapper))
-      ;; Once that that's ready to start doing its own thing,
-      ;; cope with the cookie we just received
-      (send wrapper cookie->vouch cookie-packet)
-      (let [timeout (current-timeout wrapper)]
-        (if (await-for timeout wrapper)
-          (send-off send-vouch! wrapper wrapper)
-          (do
-            (log/error (str "Converting cookie to vouch took longer than "
-                            timeout
-                            " milliseconds.\nSwitching agent into an error state"))
-            (send wrapper
-                  #(throw (ex-info "cookie->vouch timed out" %)))))))
+      (let [child (fork wrapper)]
+        (send wrapper assoc ::child child)
+        ;; Once that that's ready to start doing its own thing,
+        ;; cope with the cookie we just received.
+        ;; Doing this statefully seems like a terrible
+        ;; idea, but I don't want to go back and rewrite it
+        ;; until I have a working prototype
+        (send wrapper cookie->vouch cookie-packet)
+        (let [timeout (current-timeout wrapper)]
+          ;; Give the other thread a chance to catch up and get
+          ;; the incoming cookie converted into a Vouch
+          (if (await-for timeout wrapper)
+            (let [this @wrapper
+                  initial-bytes (wait-for-initial-child-bytes this)
+                  vouch (build-vouch-packet this initial-bytes)]
+              (send-off wrapper send-vouch! wrapper vouch))
+            (do
+              (log/error (str "Converting cookie to vouch took longer than "
+                              timeout
+                              " milliseconds.\nSwitching agent into an error state"))
+              (send wrapper
+                    #(throw (ex-info "cookie->vouch timed out" %))))))))
     (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
                                    (assoc %
                                           :problem (if (= cookie-packet ::drained)
