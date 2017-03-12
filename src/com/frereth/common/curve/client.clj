@@ -537,7 +537,7 @@ implementation. This is code that I don't understand yet"
                           (b-t/byte-copy! text 64 64 vouch)
                           (b-t/byte-copy! text
                                           128
-                                          shared/server-name-length
+                                          K/server-name-length
                                           (::server-name server-security))
                           ;; First byte is a magical length marker
                           ;; TODO: Double-check the original.
@@ -867,6 +867,11 @@ TODO: Need to ask around about that."
     :as this}]
   (when-not reader
     (throw (ex-info "Missing chan<-child" {::keys (keys this)})))
+  ;; The timeout here is a vital detail here, in terms of
+  ;; UX responsiveness.
+  ;; Half a second seems far too long for the child to
+  ;; build its initial message bytes.
+  ;; Reference implementation just waits forever.
   (deferred/let-flow [available (strm/try-take! reader
                                                 ::drained
                                                 500
@@ -877,27 +882,66 @@ TODO: Need to ask around about that."
         nil)
       (throw (RuntimeException. "Child closed")))))
 
-(defn build-vouch-packet
+;; TODO: Surely I have a ByteBuf spec somewhere.
+;; This gets interesting, because the length of the return
+;; buffer depends on the length of the input buffer
+(s/fdef build-vouch-packet!
+        :args (s/cat :this ::state
+                     :msg-byte-buf #(instance? ByteBuf %))
+        :ret #(instance? ByteBuf %))
+(defn build-initiate-packet!
+  "This is destructive in the sense that it reads from msg-byte-buf"
   [this msg-byte-buf]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
-  ;; We may have to send this multiple times, because it could
-  ;; very well get dropped.
-  ;; Actually, if that happens, we probably need to start over
-  ;; from the initial HELLO.
-  ;; Depending on how much time we want to spend waiting for the
-  ;; initial server message. It would be very easy to just wait
-  ;; for its minute key to definitely time out, though that seems
-  ;; like a naive approach with a terrible user experience.
-
-  ;; TODO: Be sure to send msg-byte-buf back over the child's
-  ;; release stream when we're done with it.
-  ;; Or release it back into the shared ByteBuf pool.
-  ;; I'll get there.
-  (throw (RuntimeException. "Get this written")))
+  (let [msg (when msg-byte-buf
+              (let [bytes-available (min (.readableBytes msg-byte-buf)
+                                         K/+max-vouch-message-length+)]
+                (when (< 0 bytes-available)
+                  ;; Q: How well does a byte-array work here?
+                  (let [buffer (byte-array bytes-available)]
+                    (.readBytes msg-byte-buf buffer)
+                    ;; TODO: Compare performance against .discardReadBytes
+                    ;; A lot of the difference probably depends on hardware
+                    ;; choices.
+                    ;; Though, realistically, this probably isn't running
+                    ;; on minimalist embedded controllers.
+                    (.discardSomeReadBytes msg-byte-buf)
+                    buffer))))
+        tmplt (assoc-in K/+vouch-wrapper+ [::K/child-message ::K/length] (count msg))
+        plain-text (shared/compose tmplt
+                                   {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
+                                    ::K/inner-vouch (::vouch this)
+                                    ::server-name (get-in this [::shared/my-keys ::shared/server-name])
+                                    ::child-message msg}
+                                   (get-in this [::shared/work-area ::shared/text]))]
+    ;; TODO: Be sure to send msg-byte-buf back over the child's
+    ;; release stream when we're done with it.
+    ;; Or release it back into the shared ByteBuf pool.
+    ;; Well, maybe.
+    ;; I actually have a gaping question about performance here:
+    ;; will I be able to out-perform java's garbage collector by
+    ;; recycling used ByteBufs?
+    (throw (RuntimeException. "Keep going. Start by encrypting that"))))
 
 (defn send-vouch!
-  "Send the Vouch/Initiate packet (along with an initial Message sub-packet)"
+  "Send the Vouch/Initiate packet (along with an initial Message sub-packet)
+
+We may have to send this multiple times, because it could
+very well get dropped.
+
+Actually, if that happens, we probably need to start over
+from the initial HELLO.
+
+Depending on how much time we want to spend waiting for the
+initial server message (this is one of the big reasons the
+reference implementation starts out trying to contact
+multiple servers).
+
+It would be very easy to just wait
+for its minute key to definitely time out, though that seems
+like a naive approach with a terrible user experience.
+"
   [this wrapper packet]
   (let [chan->server (::chan->server this)
         d (strm/try-put!
@@ -985,7 +1029,7 @@ terrible approach in an environment that's intended to multi-thread."
         (if (await-for timeout wrapper)
           (let [this @wrapper
                 initial-bytes (wait-for-initial-child-bytes this)
-                vouch (build-vouch-packet this initial-bytes)]
+                vouch (build-initiate-packet! this initial-bytes)]
             (log/info "send-off send-vouch!")
             (send-off wrapper send-vouch! wrapper vouch))
           (do

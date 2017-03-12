@@ -21,7 +21,6 @@ This is getting big enough that I really need to split it up"
 ;;; TODO: Pretty much all of these should move into constants
 
 (def server-nonce-prefix-length 8)
-(def server-name-length 256)
 
 (def client-header-prefix "QvnQ5Xl")
 (def hello-header (.getBytes (str client-header-prefix "H")))
@@ -59,7 +58,7 @@ This is getting big enough that I really need to split it up"
 ;; 1. Its encoder starts with an array of zeros
 ;; 2. Each name segment is prefixed with the number of bytes
 ;; 3. No name segment is longer than 63 bytes
-(s/def ::server-name (s/and bytes #(= (count %) 256)))
+(s/def ::server-name (s/and bytes #(= (count %) K/server-name-length)))
 (s/def ::short-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
 (s/def ::client-keys (s/keys :req-un [::long-pair ::short-pair]
                              :opt-un [::keydir]))
@@ -162,11 +161,14 @@ This is getting big enough that I really need to split it up"
                          ::source-value v}))))))
 
 (defn compose
-  "This should probably be named compose! and return nil"
+  "Convert the map in fields into a ByteBuf in dst, according to the rules described it tmplt
+
+This should probably be named compose! and return nil"
   [tmplt fields dst]
   ;; Q: How much do I gain by supplying dst?
   ;; It does let callers reuse the buffer, which
   ;; will definitely help with GC pressure.
+
   (run!
    (partial composition-reduction tmplt fields dst)
    (keys tmplt))

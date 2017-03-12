@@ -13,6 +13,7 @@
 (def max-random-nonce (long (Math/pow 2 48)))
 (def nonce-length 24)
 (def server-nonce-suffix-length 16)
+(def server-name-length 256)
 (def shared-key-length key-length)
 
 ;;; Hello packets
@@ -62,6 +63,16 @@
 ;;; Vouch/Initiate Packets
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
+;; 64 bytes
 (def vouch-length (+ server-nonce-suffix-length
                      box-zero-bytes
                      key-length))
+(def +max-vouch-message-length+ 640)
+(def +vouch-wrapper+
+  "Template for composing the informational part of an Initiate Packet's Vouch"
+  {::client-long-term-key {::type ::bytes
+                           ::length key-length}
+   ::inner-vouch {::type ::bytes ::length vouch-length}
+   ::server-name {::type ::bytes ::length server-name-length}
+   ;; Q: Do I want to allow compose to accept parameters for things like this?
+   ::child-message {::type ::bytes ::length '?child-message-length}})
