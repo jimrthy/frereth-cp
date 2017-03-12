@@ -135,6 +135,14 @@
 ;; Especially when we're talking about the server.
 ;; But I have to get a first draft written before I can worry about details
 ;; like that.
+;; Actually, I pretty much have to have access to that pool now, so messages
+;; can go the other way.
+;; I could try to get clever and try to reuse buffers when we have a basic
+;; request/response scenario. But that idea totally falls apart if the
+;; communication is mostly one-sided.
+;; It's available as a potential optimization, but it probably only
+;; makes sense from the "child" perspective, where we have more knowledge
+;; about the expected traffic patterns.
 (s/def ::release ::writer)
 ;; Accepts the agent that owns "this" and returns
 ;; 1) a writer channel we can use to send messages to the child.
@@ -160,10 +168,11 @@
   [this]
   (-> this
       ;; TODO: Write a mirror image version of dns-encode to just show this
-      (assoc-in [::server-security :server-name] "name")
+      (assoc-in [::server-security ::shared/server-name] "name")
       (assoc-in [::shared/packet-management ::shared/packet] "...packet bytes...")
       (assoc-in [::shared/work-area ::shared/working-nonce] "...FIXME: Decode nonce bytes")
-      (assoc-in [::shared/work-area ::shared/text] "...plain/cipher text")))
+      (assoc-in [::shared/work-area ::shared/text] "...plain/cipher text")
+      #_(assoc ::child )))
 
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
@@ -179,8 +188,7 @@ nor subject to timing attacks because it just won't be called very often."
                      "(currently:"
                      extension
                      ") in"
-                     #_(with-out-str (pprint (hide-long-arrays this)))
-                     (keys (hide-long-arrays this)))
+                     (keys this))
         client-extension-load-time (if reload
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
@@ -610,7 +618,7 @@ implementation. This is code that I don't understand yet"
     (into this
           {::child-packets []
            ::client-extension-load-time 0
-           ::initial-bytes-promise (promise)
+           ::initial-bytes-promise (deferred/->deferred (promise))
            ::recent (System/nanoTime)
            ;; This seems like something that we should be able to set here.
            ;; djb's docs say that it's a security matter, like connecting
@@ -723,16 +731,17 @@ implementation. This is code that I don't understand yet"
 
 (defn set-up-initial-read!
   [this stream]
-  (let [first-bytes @(strm/try-take! stream ::drained util/minute ::timeout)
+  (let [first-bytes @(strm/try-take! (::chan<-child stream) ::drained util/minute ::timeout)
         dst (::initial-bytes-promise this)]
+    ;; This smells a little funny. I think I'm actually just pulling bytes from there
+    ;; as I can.
     (deliver dst (if (or (= first-bytes ::drained)
                          (= first-bytes ::timeout))
                    nil
                    first-bytes))))
 
 (s/fdef fork
-        :args (s/cat :wrapper ::state-agent
-                     :this ::state)
+        :args (s/cat :wrapper ::state-agent)
         :ret ::state)
 (defn fork
   "This has to 'fork' a child with access to the agent, and update the agent state
@@ -750,16 +759,21 @@ mechanism.
 Although send-off might seem more appropriate, it probably isn't.
 
 TODO: Need to ask around about that."
-  [wrapper
-   {:keys [::child-spawner]
-    :as this}]
+  [{:keys [::child-spawner]
+    :as this}
+   wrapper]
   (log/info "Spawning child!!")
   (when-not child-spawner
     (assert child-spawner (str "No way to spawn child.\nAvailable keys:\n"
                                (keys this))))
   (let [{:keys [::child ::reader ::writer]} (child-spawner wrapper)]
+    (log/info (str "Setting up initial read against the agent wrapping "
+                   #_this
+                   "\n...this...\naround\n"
+                   child))
+    ;; This background reader approach just added needless complexity
+    (comment (send-off wrapper set-up-initial-read! reader))
     (assoc this
-           (send-off set-up-initial-read! wrapper wrapper reader)
            ::chan->child reader
            ::chan<-child writer
            ::child child)))
@@ -774,7 +788,7 @@ TODO: Need to ask around about that."
   Handling an agent (send), which means `this` is already dereferenced"
   [this {:keys [host port message]
          :as cookie-packet}]
-  (log/warn (str "Getting ready to fail to convert cookie\n"
+  (log/info (str "Getting ready to convert cookie\n"
                  (with-out-str (b-s/print-bytes message))
                  "into a Vouch"))
   (try
@@ -849,15 +863,19 @@ TODO: Need to ask around about that."
     (throw (RuntimeException. "Now life gets interesting again"))))
 
 (defn wait-for-initial-child-bytes
-  [{:keys [::reader] :as this}]
-  (let [{:keys [::chan<-child ::buffer]} reader]
-    (let [ready-now (.readableBytes buffer)]
-      (if (< 0 ready-now)
-        buffer  ; Go with whatever's available so far
-        (deferred/let-flow [available (strm/try-take! chan<-child ::drained 500 ::timed-out)]
-          (if-not (= @available ::drained)
-            buffer
-            (throw (RuntimeException. "Child closed"))))))))
+  [{reader ::chan<-child
+    :as this}]
+  (when-not reader
+    (throw (ex-info "Missing chan<-child" {::keys (keys this)})))
+  (deferred/let-flow [available (strm/try-take! reader
+                                                ::drained
+                                                500
+                                                ::timed-out)]
+    (if-not (= available ::drained)
+      (if (not= available ::timed-out)
+        available
+        nil)
+      (throw (RuntimeException. "Child closed")))))
 
 (defn build-vouch-packet
   [this msg-byte-buf]
@@ -941,7 +959,7 @@ terrible approach in an environment that's intended to multi-thread."
            (not= cookie-packet ::drained))
     (do
       (assert cookie-packet)
-      (log/info "Received cookie. Forking child")
+      (log/info "Received cookie in " wrapper ". Forking child")
       ;; Got a Cookie response packet from server.
       ;; Theory in the reference implementation is that this is
       ;; a good signal that it's time to spawn the child to do
@@ -952,28 +970,30 @@ terrible approach in an environment that's intended to multi-thread."
       ;; Partial Answer: original version is geared toward converting
       ;; existing apps that pipe data over STDIN/OUT so they don't
       ;; have to be changed at all.
-      (let [child (fork wrapper)]
-        (send wrapper assoc ::child child)
-        ;; Once that that's ready to start doing its own thing,
-        ;; cope with the cookie we just received.
-        ;; Doing this statefully seems like a terrible
-        ;; idea, but I don't want to go back and rewrite it
-        ;; until I have a working prototype
-        (send wrapper cookie->vouch cookie-packet)
-        (let [timeout (current-timeout wrapper)]
-          ;; Give the other thread a chance to catch up and get
-          ;; the incoming cookie converted into a Vouch
-          (if (await-for timeout wrapper)
-            (let [this @wrapper
-                  initial-bytes (wait-for-initial-child-bytes this)
-                  vouch (build-vouch-packet this initial-bytes)]
-              (send-off wrapper send-vouch! wrapper vouch))
-            (do
-              (log/error (str "Converting cookie to vouch took longer than "
-                              timeout
-                              " milliseconds.\nSwitching agent into an error state"))
-              (send wrapper
-                    #(throw (ex-info "cookie->vouch timed out" %))))))))
+      (send wrapper fork wrapper)
+
+      ;; Once that that's ready to start doing its own thing,
+      ;; cope with the cookie we just received.
+      ;; Doing this statefully seems like a terrible
+      ;; idea, but I don't want to go back and rewrite it
+      ;; until I have a working prototype
+      (log/info "send cookie->vouch")
+      (send wrapper cookie->vouch cookie-packet)
+      (let [timeout (current-timeout wrapper)]
+        ;; Give the other thread(s) a chance to catch up and get
+        ;; the incoming cookie converted into a Vouch
+        (if (await-for timeout wrapper)
+          (let [this @wrapper
+                initial-bytes (wait-for-initial-child-bytes this)
+                vouch (build-vouch-packet this initial-bytes)]
+            (log/info "send-off send-vouch!")
+            (send-off wrapper send-vouch! wrapper vouch))
+          (do
+            (log/error (str "Converting cookie to vouch took longer than "
+                            timeout
+                            " milliseconds.\nSwitching agent into an error state"))
+            (send wrapper
+                  #(throw (ex-info "cookie->vouch timed out" %)))))))
     (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
                                    (assoc %
                                           :problem (if (= cookie-packet ::drained)
@@ -1077,9 +1097,11 @@ like a timing attack."
 
 (defn stop!
   [wrapper]
-  (send wrapper
-        (fn [this]
-          (shared/release-packet-manager! (::shared/packet-management this)))))
+  (if-let [err (agent-error wrapper)]
+    (log/error (str err "\nTODO: Is there any way to recover well enough to release the Packet Manager?"))
+    (send wrapper
+          (fn [this]
+            (shared/release-packet-manager! (::shared/packet-management this))))))
 
 (s/fdef ctor
         :args (s/keys :req [::chan<-server

@@ -14,6 +14,7 @@
             [manifold.stream :as stream])
   (:import io.netty.buffer.Unpooled))
 
+(def +cookie-send-timeout+ 50)
 (def default-max-clients 100)
 (def message-len 1104)
 (def minimum-initiate-packet-length 560)
@@ -367,26 +368,31 @@ The most important is that it puts the crypto-text into the byte-array in text"
                 (.clear message)
                 (let [response
                       (build-cookie-packet message clnt-xtn srvr-xtn working-nonce crypto-box)]
-                  (log/info "Cookie packet built. Returning it.\nByte content:\n"
-                            (with-out-str (b-s/print-bytes response))
-                            "Reference count: " (.refCnt response))
+                  (log/info (str "Cookie packet built. Returning it.\nByte content:\n"
+                                 (with-out-str (b-s/print-bytes response))
+                                 "Reference count: " (.refCnt response)))
                   (try
                     (let [dst (get-in state [::client-write-chan :chan])
-                          success (stream/try-put! dst
-                                                   (assoc packet
-                                                          :message response)
-                                                   20
-                                                   ::timed-out)]
+                          put-future (stream/try-put! dst
+                                                      (assoc packet
+                                                             :message response)
+                                                      ;; TODO: This really needs to be part of
+                                                      ;; state so it can be tuned while running
+                                                      +cookie-send-timeout+
+                                                      ::timed-out)]
                       (log/info "Cookie packet scheduled to send")
-                      (deferred/on-realized success
-                        (fn [result]
-                          (if-not result
+                      (deferred/on-realized put-future
+                        (fn [success]
+                          (if success
                             (log/info "Sending Cookie succeeded")
-                            (log/error "Sending Cookie failed:" result))
+                            (log/error "Sending Cookie failed"))
                           ;; TODO: Make sure this does get released!
+                          ;; The caller has to handle that, though.
+                          ;; It can't be released until after it's been put
+                          ;; on the socket.
                           (comment (.release response)))
-                        (fn [result]
-                          (log/error "Sending Cookie failed:" result)
+                        (fn [err]
+                          (log/error "Sending Cookie failed:" err)
                           (.release response)))
                       state)
                     (catch Exception ex

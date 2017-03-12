@@ -157,22 +157,29 @@
   (let [n (.readableBytes hello)]
     (println "Have" n "bytes to write to " client-chan)
     (if (= 224 n)
-      (strm/put! (:chan client-chan)
-                 {:message (Unpooled/wrappedBuffer hello)
-                  :host "test-client"
-                  :port 65536})
+      (strm/try-put! (:chan client-chan)
+                     {:message (Unpooled/wrappedBuffer hello)
+                      :host "test-client"
+                      :port 65536}
+                     500
+                     ::timed-out)
       (throw (RuntimeException. "Bad Hello")))))
 
 (defn wrote-hello
   [client-chan success]
   (is success "Failed to write hello to server")
+  (is (not= success ::timed-out "Timed out waiting for server to read HELLO"))
   ;; This is timing out both here and in the server side.
   ;; So either I'm taking from the wrong channel here (which
   ;; seems more likely) or I've botched up the server basics.
   ;; Actually, even though it's seemed to work before, I
   ;; almost definitely need 2 channels for the server like
   ;; I set up for the client.
-  (strm/try-take! (:chan client-chan) ::drained 500 ::timeout))
+  (when (and success
+             (not= success ::timed-out))
+    ;; Note that the real thing has to be more robust.
+    (log/debug "Waiting for server to send back HELLO response")
+    (strm/try-take! (:chan client-chan) ::drained 500 ::timeout)))
 
 (defn forward-cookie
   [client<-server cookie]
@@ -259,6 +266,11 @@
         release-notifier (strm/stream)
         hidden [(strm/try-take! write-notifier ::drained 2500 ::timed-out)
                 (strm/try-take! release-notifier ::drained 2500 ::timed-out)]]
+    ;; It belongs under shared: it's even more vital on the server side.
+    ;; The flip side to this is that it basically leads to writing my own
+    ;; heap management, with things like performance analysis and tuning.
+    ;; And I don't think I want to go down that rabbit hole.
+    (comment (throw (RuntimeException. "Really have to use a shared ByteBuf pool instead")))
     (deferred/chain hidden (fn [success]
                              (is (not (or (= success ::drained)
                                           (= success ::timed-out))))
@@ -270,9 +282,9 @@
                              (strm/close! release-notifier)
                              (strm/close! read-notifier)))
     {::clnt/child child
-     ::clnt/reader {::clnt/chan<-child read-notifier}
-     ::clnt/release {::clnt/chan->child release-notifier}
-     ::clnt/writer {::clnt/chan->child write-notifier}
+     ::clnt/reader  read-notifier
+     ::clnt/release release-notifier
+     ::clnt/writer write-notifier
      ;; Q: Does it make any difference if I keep this around?
      ::hidden-child hidden}))
 
@@ -377,9 +389,9 @@
                     (is (not= (deref eventually-started 500 ::timeout)
                               ::timeout))))
                 (catch Exception ex
-                  (println "Unhandled exception escaped!")
-                  (.printStackTrace ex)
-                  (println "Client state:" (with-out-str (pprint (clnt/hide-long-arrays @client))))
+                  (log/error (str "Unhandled exception escaped!\n"
+                                  (with-out-str (.printStackTrace ex))))
+                  (log/error "Client state:" (with-out-str (pprint (clnt/hide-long-arrays @client))))
                   (if-let [err (agent-error client)]
                     (println "Client failure:\n" err)
                     (println "(client agent thinks everything is fine)"))
