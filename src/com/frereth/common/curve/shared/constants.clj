@@ -63,6 +63,9 @@
 ;;; Vouch/Initiate Packets
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
+(def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
+(def initiate-packet-prefix (.getBytes "QvnQ5XII"))
+
 ;; 64 bytes
 (def vouch-length (+ server-nonce-suffix-length
                      box-zero-bytes
@@ -76,3 +79,21 @@
    ::server-name {::type ::bytes ::length server-name-length}
    ;; Q: Do I want to allow compose to accept parameters for things like this?
    ::child-message {::type ::bytes ::length '?child-message-length}})
+
+
+(def +initiate-packet-dscr+
+  "TODO: Refactor the common pieces into something like packet-prefix"
+  (array-map ::prefix {::type ::bytes
+                       ::length header-length}
+             ::srvr-xtn {::type ::bytes
+                         ::length extension-length}
+             ::clnt-xtn {::type ::bytes
+                         ::length extension-length}
+             ::clnt-short-pk {::type ::bytes
+                              ::length key-length}
+             ::cookie {::type ::bytes
+                       ::length server-cookie-length}
+             ::nonce {::type ::bytes
+                      ::length client-nonce-suffix-length}
+             ::message {::type ::bytes
+                        ::length 'unspecified}))

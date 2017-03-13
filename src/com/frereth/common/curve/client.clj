@@ -126,10 +126,8 @@
 (s/def ::child any?)
 
 (s/def ::buffer #(instance? ByteBuf %))
-(s/def ::reader (s/keys :req [::chan<-child
-                              ::buffer]))
-(s/def ::writer (s/keys :req [::chan->child
-                              ::buffer]))
+(s/def ::reader (s/keys :req [::chan<-child]))
+(s/def ::writer (s/keys :req [::chan->child]))
 ;; This stream is for sending ByteBufs back to the child when we're done
 ;; Tracking them in a thread-safe pool seems like a better approach.
 ;; Especially when we're talking about the server.
@@ -422,24 +420,8 @@ Note that this is really called for side-effects"
       (do
         (log/info "Setting up working nonce " working-nonce)
         (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
-        ;; The reference version just sets up 16 random bytes,
-        ;; if keydir is nil.
-        ;; Which is what safe-nonce does with these parameters anyway.
-        ;; Doing the check here could avoid the overhead of a
-        ;; function call, but that seems like a dubious optimization.
-        ;; Or maybe I'm just missing something basic.
         (shared/safe-nonce working-nonce keydir K/client-nonce-prefix-length)
 
-        ;; Q: What's the point to these 32 bytes?
-        ;; A: The low-level implementation requires them.
-        ;; Adding them at this level probably is more efficient,
-        ;; especially when we start throwing lots of messages
-        ;; around.
-        ;; But, for now, box-after handles this so we don't need it.
-        (comment
-          ;; TODO: Remove obsolete code/comments.
-          ;; They're only here for historical context
-          (b-t/byte-copy! text (shared/zero-bytes 32)))
         (let [short-pair (::shared/short-pair my-keys)]
           (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
         (let [shared-secret (::client-long<->server-long shared-secrets)
@@ -766,7 +748,7 @@ TODO: Need to ask around about that."
   (when-not child-spawner
     (assert child-spawner (str "No way to spawn child.\nAvailable keys:\n"
                                (keys this))))
-  (let [{:keys [::child ::reader ::writer]} (child-spawner wrapper)]
+  (let [{:keys [::child ::reader ::release ::writer]} (child-spawner wrapper)]
     (log/info (str "Setting up initial read against the agent wrapping "
                    #_this
                    "\n...this...\naround\n"
@@ -775,6 +757,7 @@ TODO: Need to ask around about that."
     (comment (send-off wrapper set-up-initial-read! reader))
     (assoc this
            ::chan->child reader
+           ::release->child release
            ::chan<-child writer
            ::child child)))
 
@@ -872,15 +855,16 @@ TODO: Need to ask around about that."
   ;; Half a second seems far too long for the child to
   ;; build its initial message bytes.
   ;; Reference implementation just waits forever.
-  (deferred/let-flow [available (strm/try-take! reader
-                                                ::drained
-                                                500
-                                                ::timed-out)]
-    (if-not (= available ::drained)
-      (if (not= available ::timed-out)
-        available
-        nil)
-      (throw (RuntimeException. "Child closed")))))
+  @(deferred/let-flow [available (strm/try-take! reader
+                                                 ::drained
+                                                 500
+                                                 ::timed-out)]
+     (log/info "waiting for initial-child-bytes returned" available)
+     (if-not (= available ::drained)
+       (if (not= available ::timed-out)
+         available
+         nil)
+       (throw (RuntimeException. "Child closed")))))
 
 ;; TODO: Surely I have a ByteBuf spec somewhere.
 ;; This gets interesting, because the length of the return
@@ -895,6 +879,7 @@ TODO: Need to ask around about that."
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   (let [msg (when msg-byte-buf
+              (log/info "Incoming ByteBuf:" msg-byte-buf)
               (let [bytes-available (min (.readableBytes msg-byte-buf)
                                          K/+max-vouch-message-length+)]
                 (when (< 0 bytes-available)
@@ -907,22 +892,50 @@ TODO: Need to ask around about that."
                     ;; Though, realistically, this probably isn't running
                     ;; on minimalist embedded controllers.
                     (.discardSomeReadBytes msg-byte-buf)
+                    ;; TODO: Be sure to send msg-byte-buf back over the child's
+                    ;; release stream when we're done with it.
+                    ;; Or release it back into the shared ByteBuf pool.
+                    ;; Well, maybe.
+                    ;; I actually have a gaping question about performance here:
+                    ;; will I be able to out-perform java's garbage collector by
+                    ;; recycling used ByteBufs?
+                    (if (< 0 (.readableBytes msg-byte-buf))
+                      ;; Reference implementation just fails on this scenario.
+                      ;; That seems like a precedent that I'm OK breaking
+                      (throw (RuntimeException. "Have to queue remaining message bytes for later"))
+                      ;; TODO: Still have to decide how I want to cope with this
+                      (strm/put! (::release->child this) msg-byte-buf))
                     buffer))))
         tmplt (assoc-in K/+vouch-wrapper+ [::K/child-message ::K/length] (count msg))
-        plain-text (shared/compose tmplt
-                                   {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
-                                    ::K/inner-vouch (::vouch this)
-                                    ::server-name (get-in this [::shared/my-keys ::shared/server-name])
-                                    ::child-message msg}
-                                   (get-in this [::shared/work-area ::shared/text]))]
-    ;; TODO: Be sure to send msg-byte-buf back over the child's
-    ;; release stream when we're done with it.
-    ;; Or release it back into the shared ByteBuf pool.
-    ;; Well, maybe.
-    ;; I actually have a gaping question about performance here:
-    ;; will I be able to out-perform java's garbage collector by
-    ;; recycling used ByteBufs?
-    (throw (RuntimeException. "Keep going. Start by encrypting that"))))
+        ;; This is nil.
+        ;; Hmm.
+        ;; Q: When was I supposed to set it?
+        server-name (get-in this [::shared/my-keys ::shared/server-name])
+        _ (assert server-name)
+        src {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
+             ::K/inner-vouch (::vouch this)
+             ::server-name server-name
+             ::child-message msg}
+        work-area (::shared/work-area this)
+        ;; Just reuse a subset of whatever the server sent us.
+        ;; Legal because a) it uses a different prefix and b) it's a different number anyway
+        nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area) K/client-nonce-prefix-length)
+        crypto-text (shared/build-crypto-box tmplt
+                                             src
+                                             (::shared/text work-area)
+                                             (get-in this [::shared-secrets ::client-short<->server-short])
+                                             K/initiate-nonce-prefix
+                                             nonce-suffix)]
+
+    (shared/compose K/+initiate-packet-dscr+
+                    {::prefix K/initiate-packet-prefix
+                     ::srvr-xtn (::server-extension this)
+                     ::clnt-xtn (::shared/extension this)
+                     ::clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
+                     ::cookie (get-in this [::server-security ::server-cookie])
+                     ::nonce nonce-suffix
+                     ::message crypto-text}
+                    (get-in this [::packet-management ::packet]))))
 
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)

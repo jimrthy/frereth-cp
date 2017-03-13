@@ -14,6 +14,7 @@ This is getting big enough that I really need to split it up"
             [com.frereth.common.curve.shared.crypto :as crypto])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
+           io.netty.buffer.Unpooled
            java.security.SecureRandom))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -124,6 +125,12 @@ This is getting big enough that I really need to split it up"
         ::K/bytes (let [n (::K/length dscr)
                         beg (.readableBytes dst)]
                     (try
+                      (log/info (str "Getting ready to write "
+                                     n
+                                     " bytes to\n"
+                                     dst
+                                     "\nfor field "
+                                     k))
                       (.writeBytes dst v 0 n)
                       (let [end (.readableBytes dst)]
                         (assert (= (- end beg) n)))
@@ -163,7 +170,7 @@ This is getting big enough that I really need to split it up"
 (defn compose
   "Convert the map in fields into a ByteBuf in dst, according to the rules described it tmplt
 
-This should probably be named compose! and return nil"
+  This should probably be named compose! and return nil"
   [tmplt fields dst]
   ;; Q: How much do I gain by supplying dst?
   ;; It does let callers reuse the buffer, which
@@ -173,6 +180,25 @@ This should probably be named compose! and return nil"
    (partial composition-reduction tmplt fields dst)
    (keys tmplt))
   dst)
+
+(defn build-crypto-box
+  "Compose a map into bytes and encrypt it
+
+Really belongs in crypto.
+
+But it depends on compose, which would set up circular dependencies"
+  [tmplt src dst key-pair nonce-prefix nonce-suffix]
+  (let [buffer (Unpooled/wrappedBuffer dst)]
+    (.writerIndex buffer 0)
+    (compose tmplt src buffer)
+    (let [n (.readableBytes buffer)
+          nonce (byte-array K/nonce-length)]
+      (bit-twiddling/byte-copy! nonce nonce-prefix)
+      (bit-twiddling/byte-copy! nonce
+                                (count nonce-prefix)
+                                (count nonce-suffix)
+                                nonce-suffix)
+      (crypto/box-after key-pair dst n nonce))))
 
 (defn decompose
   "Note that this very strongly assumes that I have a ByteBuf here.

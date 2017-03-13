@@ -271,16 +271,17 @@
     ;; heap management, with things like performance analysis and tuning.
     ;; And I don't think I want to go down that rabbit hole.
     (comment (throw (RuntimeException. "Really have to use a shared ByteBuf pool instead")))
-    (deferred/chain hidden (fn [success]
-                             (is (not (or (= success ::drained)
-                                          (= success ::timed-out))))
-                             ;; TODO: Make this more interesting.
-                             ;; Verify what we really got back
-                             ;; Send back a second block of data,
-                             ;; and wait for *that* response.
-                             (strm/close! write-notifier)
-                             (strm/close! release-notifier)
-                             (strm/close! read-notifier)))
+    (deferred/chain (hidden 1)
+      (fn [success]
+        (is (not (or (= success ::drained)
+                     (= success ::timed-out))))
+        ;; TODO: Make this more interesting.
+        ;; Verify what we really got back
+        ;; Send back a second block of data,
+        ;; and wait for *that* response.
+        (strm/close! write-notifier)
+        (strm/close! release-notifier)
+        (strm/close! read-notifier)))
     {::clnt/child child
      ::clnt/reader  read-notifier
      ::clnt/release release-notifier
