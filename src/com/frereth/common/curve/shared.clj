@@ -23,15 +23,13 @@ This is getting big enough that I really need to split it up"
 
 (def server-nonce-prefix-length 8)
 
-(def client-header-prefix "QvnQ5Xl")
-(def hello-header (.getBytes (str client-header-prefix "H")))
+(def hello-header (.getBytes (str K/client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
 
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def cookie-position-in-packet 80)
 
-(def initiate-header (.getBytes (str client-header-prefix "I")))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 
 (def max-unsigned-long -1)

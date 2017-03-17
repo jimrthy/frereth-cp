@@ -220,7 +220,7 @@
   [client-chan vouch]
   (if-not (or (= vouch ::drained)
               (= vouch ::timeout))
-    (strm/try-put! client-chan
+    (strm/try-put! (:chan client-chan)
                    {:message vouch
                     :host "tester"
                     :port 65536}
@@ -232,7 +232,7 @@
 (defn wrote-vouch
   [client-chan success]
   (if success
-    (strm/try-take! client-chan ::drained 500 ::timeout)
+    (strm/try-take! (:chan client-chan) ::drained 500 ::timeout)
     (throw (RuntimeException. "Failed writing Vouch to client"))))
 
 (defn finalize

@@ -19,6 +19,8 @@
 (def server-name-length 256)
 (def shared-key-length key-length)
 
+(def client-header-prefix "QvnQ5Xl")
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -81,7 +83,7 @@
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
-(def initiate-packet-prefix (.getBytes "QvnQ5XII"))
+(def initiate-header (.getBytes (str client-header-prefix "I")))
 
 ;; 64 bytes
 (def vouch-length (+ server-nonce-suffix-length

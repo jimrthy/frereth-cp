@@ -153,14 +153,14 @@
                        ;; And does that reason go away when you factor in the hoops I
                        ;; have to jump through to jump between bitwise and logical
                        ;; operations?
-                       (bit-and (if (b-t/bytes= (.getBytes shared/client-header-prefix)
+                       (bit-and (if (b-t/bytes= (.getBytes K/client-header-prefix)
                                                    rcvd-prfx)
                                   -1 0)
                                 (if (b-t/bytes= extension
                                                    rcvd-xtn)
                                   -1 0)))]
     (when-not verified
-      (log/warn "Dropping packet intended for someone else. Expected" (String. shared/client-header-prefix)
+      (log/warn "Dropping packet intended for someone else. Expected" (String. K/client-header-prefix)
                 "and" (vec extension)
                 "\nGot" (String. rcvd-prfx) "and" (vec rcvd-xtn)))
     verified))

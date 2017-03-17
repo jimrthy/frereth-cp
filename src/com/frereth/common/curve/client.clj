@@ -538,7 +538,7 @@ implementation. This is code that I don't understand yet"
                             (b-t/byte-copy! packet
                                             0
                                             shared/server-nonce-prefix-length
-                                            shared/initiate-header)
+                                            K/initiate-header)
                             (let [offset shared/server-nonce-prefix-length]
                               (b-t/byte-copy! packet offset
                                               K/extension-length server-extension)
@@ -661,8 +661,9 @@ implementation. This is code that I don't understand yet"
   ;; Forward that initial "real" message
   (send wrapper server->child initial-server-response)
 
-    ;; Q: Do I want to block this thread for this?
-  (comment) (await-for (current-timeout wrapper) wrapper)
+  ;; Q: Do I want to block this thread for this?
+  ;; A: As written, we can't. We're already inside an Agent$Action
+  (comment (await-for (current-timeout wrapper) wrapper))
 
   ;; And then wire this up to pretty much just pass messages through
   ;; Actually, this seems totally broken from any angle, since we need
@@ -693,10 +694,10 @@ implementation. This is code that I don't understand yet"
   Now waiting for the server's first real message
   packet so we can switch into the message exchange
   loop"
-  [wrapper sent]
-  (if (not= send ::sending-vouch-timed-out)
+  [this wrapper sent]
+  (if (not= sent ::sending-vouch-timed-out)
     (let [timeout (current-timeout wrapper)
-          chan<-server (::chan<-server @wrapper)
+          chan<-server (::chan<-server this)
           taken (strm/try-take! chan<-server
                                 ::drained timeout
                                 ::initial-response-timed-out)]
@@ -976,7 +977,7 @@ like a naive approach with a terrible user experience.
     (deferred/on-realized d
       (fn [success]
         (log/info (str "Initiate packet sent:" success ". Waiting for 1st message"))
-        (send-off wrapper final-wait success))
+        (send-off wrapper final-wait wrapper success))
       (fn [failure]
         ;; Extremely unlikely, but
         ;; just for the sake of paranoia
@@ -1163,7 +1164,8 @@ like a timing attack."
 (defn stop!
   [wrapper]
   (if-let [err (agent-error wrapper)]
-    (log/error (str err "\nTODO: Is there any way to recover well enough to release the Packet Manager?"))
+    (log/error (str err "\nTODO: Is there any way to recover well enough to release the Packet Manager?\n"
+                    (with-out-str (.printStackTrace err))))
     (send wrapper
           (fn [this]
             (shared/release-packet-manager! (::shared/packet-management this))))))
