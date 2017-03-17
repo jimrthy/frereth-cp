@@ -520,7 +520,7 @@ implementation. This is code that I don't understand yet"
                           (b-t/byte-copy! text
                                           128
                                           K/server-name-length
-                                          (::server-name server-security))
+                                          (::K/server-name server-security))
                           ;; First byte is a magical length marker
                           ;; TODO: Double-check the original.
                           ;; This doesn't look right at all.
@@ -881,7 +881,7 @@ TODO: Need to ask around about that."
   (let [msg (when msg-byte-buf
               (log/info "Incoming ByteBuf:" msg-byte-buf)
               (let [bytes-available (min (.readableBytes msg-byte-buf)
-                                         K/+max-vouch-message-length+)]
+                                         K/max-vouch-message-length)]
                 (when (< 0 bytes-available)
                   ;; Q: How well does a byte-array work here?
                   (let [buffer (byte-array bytes-available)]
@@ -906,16 +906,18 @@ TODO: Need to ask around about that."
                       ;; TODO: Still have to decide how I want to cope with this
                       (strm/put! (::release->child this) msg-byte-buf))
                     buffer))))
-        tmplt (assoc-in K/+vouch-wrapper+ [::K/child-message ::K/length] (count msg))
-        ;; This is nil.
-        ;; Hmm.
-        ;; Q: When was I supposed to set it?
-        server-name (get-in this [::shared/my-keys ::shared/server-name])
+        msg-length (count msg)
+        tmplt (if (< 0 msg-length)
+                (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)
+                (dissoc K/vouch-wrapper ::K/child-message))
+        server-name (get-in this [::shared/my-keys ::K/server-name])
         _ (assert server-name)
-        src {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
-             ::K/inner-vouch (::vouch this)
-             ::server-name server-name
-             ::child-message msg}
+        src' {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
+              ::K/inner-vouch (::vouch this)
+              ::K/server-name server-name}
+        src (if (< 0 msg-length)
+              (assoc src' ::K/child-message msg)
+              src')
         work-area (::shared/work-area this)
         ;; Just reuse a subset of whatever the server sent us.
         ;; Legal because a) it uses a different prefix and b) it's a different number anyway
@@ -926,16 +928,22 @@ TODO: Need to ask around about that."
                                              (get-in this [::shared-secrets ::client-short<->server-short])
                                              K/initiate-nonce-prefix
                                              nonce-suffix)]
-
-    (shared/compose K/+initiate-packet-dscr+
-                    {::prefix K/initiate-packet-prefix
-                     ::srvr-xtn (::server-extension this)
-                     ::clnt-xtn (::shared/extension this)
-                     ::clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
-                     ::cookie (get-in this [::server-security ::server-cookie])
-                     ::nonce nonce-suffix
-                     ::message crypto-text}
-                    (get-in this [::packet-management ::packet]))))
+    (log/debug (str "Stuffing " crypto-text " into the initiate packet"))
+    (let [dscr (if (< 0 msg-length)
+                 K/initiate-packet-dscr
+                 (dissoc K/initiate-packet-dscr ::K/message))
+          fields' #::K{:prefix K/initiate-packet-prefix
+                       :srvr-xtn (::server-extension this)
+                       :clnt-xtn (::shared/extension this)
+                       :clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
+                       :cookie (get-in this [::server-security ::server-cookie])
+                       :nonce nonce-suffix}
+          fields (if (< 0 msg-length)
+                   (assoc fields' ::K/message crypto-text)
+                   fields')]
+      (shared/compose dscr
+                      fields
+                      (get-in this [::shared/packet-management ::shared/packet])))))
 
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)

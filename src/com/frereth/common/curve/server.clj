@@ -92,7 +92,7 @@
                              ::shared/keydir
                              ::shared/my-keys
                              ::shared/packet-management
-                             ::shared/server-name
+                             ::K/server-name
                              ::shared/working-area]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -650,7 +650,7 @@ The most important is that it puts the crypto-text into the byte-array in text"
   (-> state
       (assoc-in [::current-client ::message] "...")
       (assoc-in [::shared/packet-management ::shared/packet] "...")
-      (assoc-in [::shared/my-keys ::shared/server-name] "...decode this...")
+      (assoc-in [::shared/my-keys ::K/server-name] "...decode this...")
       (assoc #_[::message "..."]
              ::shared/working-area "...")))
 
@@ -664,7 +664,7 @@ The most important is that it puts the crypto-text into the byte-array in text"
          (:chan client-read-chan)
          client-write-chan
          (:chan client-write-chan)
-         (::shared/server-name my-keys)
+         (::K/server-name my-keys)
          (::shared/keydir my-keys)
          extension
          ;; Actually, the rule is that it must be

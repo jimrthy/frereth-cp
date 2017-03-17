@@ -2,6 +2,9 @@
   "Magical names, numbers, and data structures"
   (:require [clojure.spec :as s]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Magic Constants
+
 (def client-nonce-prefix-length 16)
 (def client-nonce-suffix-length 8)
 (def extension-length 16)
@@ -16,7 +19,18 @@
 (def server-name-length 256)
 (def shared-key-length key-length)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
+;; This is a name suitable for submitting a DNS query.
+;; 1. Its encoder starts with an array of zeros
+;; 2. Each name segment is prefixed with the number of bytes
+;; 3. No name segment is longer than 63 bytes
+(s/def ::server-name (s/and bytes #(= (count %) server-name-length)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Hello packets
+
 (def hello-crypto-box-length 80)
 (def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length header-length}
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
@@ -35,7 +49,9 @@
                                   ::crypto-box {::type ::bytes
                                                 ::length hello-crypto-box-length}))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Cookie packets
+
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
 (def server-cookie-length 96)
@@ -60,6 +76,7 @@
   (array-map ::s' {::type ::bytes ::length key-length}
              ::black-box {::type ::zeroes ::length server-cookie-length}))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
@@ -70,8 +87,8 @@
 (def vouch-length (+ server-nonce-suffix-length
                      box-zero-bytes
                      key-length))
-(def +max-vouch-message-length+ 640)
-(def +vouch-wrapper+
+(def max-vouch-message-length 640)
+(def vouch-wrapper
   "Template for composing the informational part of an Initiate Packet's Vouch"
   {::client-long-term-key {::type ::bytes
                            ::length key-length}
@@ -81,7 +98,7 @@
    ::child-message {::type ::bytes ::length '?child-message-length}})
 
 
-(def +initiate-packet-dscr+
+(def initiate-packet-dscr
   "TODO: Refactor the common pieces into something like packet-prefix"
   (array-map ::prefix {::type ::bytes
                        ::length header-length}

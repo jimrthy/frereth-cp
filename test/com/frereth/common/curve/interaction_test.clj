@@ -301,13 +301,14 @@
                                     89 -74 -21 -33 20 21 110 95])
         server-name (shared/encode-server-name "test.frereth.com")
         options {::server #::shared{:extension server-extension
-                                    :my-keys #::shared{:server-name server-name
+                                    :my-keys #::shared{::K/server-name server-name
                                                        :keydir "curve-test"}}
                  ::client {::shared/extension (byte-array [0x10 0x0f 0x0e 0x0d
                                                            0x0c 0x0b 0x0a 0x09
                                                            0x08 0x07 0x06 0x05
                                                            0x04 0x03 0x02 0x01])
                            ::clnt/child-spawner client-child-spawner
+                           ::shared/my-keys {::K/server-name server-name}
                            ::clnt/server-extension server-extension
                            ;; Q: Where do I get the server's public key?
                            ;; A: Right now, I just have the secret key's 32 bytes encoded as

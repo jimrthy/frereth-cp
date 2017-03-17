@@ -55,11 +55,6 @@ This is getting big enough that I really need to split it up"
 ;; Q: Worth adding a check to verify that it's a folder that exists on the classpath?
 (s/def ::keydir string?)
 (s/def ::long-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
-;; This is a name suitable for submitting a DNS query.
-;; 1. Its encoder starts with an array of zeros
-;; 2. Each name segment is prefixed with the number of bytes
-;; 3. No name segment is longer than 63 bytes
-(s/def ::server-name (s/and bytes #(= (count %) K/server-name-length)))
 (s/def ::short-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
 (s/def ::client-keys (s/keys :req-un [::long-pair ::short-pair]
                              :opt-un [::keydir]))
@@ -68,7 +63,7 @@ This is getting big enough that I really need to split it up"
 
 (s/def ::my-keys (s/keys :req [::keydir
                                ::long-pair
-                               ::server-name
+                               ::K/server-name
                                ::short-pair]))
 ;; "Recent" timestamp, in nanoseconds
 (s/def ::recent integer?)
@@ -107,7 +102,7 @@ This is getting big enough that I really need to split it up"
 ;;; use in cljeromq. This seems like a reasonable
 ;;; starting point.
 ;;; Q: Is port really part of it?
-(s/def ::url (s/keys :req [::server-name
+(s/def ::url (s/keys :req [::K/server-name
                            ::extension
                            ::port]))
 
@@ -172,6 +167,8 @@ This is getting big enough that I really need to split it up"
 
   This should probably be named compose! and return nil"
   [tmplt fields dst]
+  (log/info (str "Putting\n" (with-out-str (pprint fields)) "\ninto\n" dst
+                 "\nbased upon\n" (with-out-str (pprint tmplt))))
   ;; Q: How much do I gain by supplying dst?
   ;; It does let callers reuse the buffer, which
   ;; will definitely help with GC pressure.
@@ -188,6 +185,7 @@ Really belongs in crypto.
 
 But it depends on compose, which would set up circular dependencies"
   [tmplt src dst key-pair nonce-prefix nonce-suffix]
+  {:pre [dst]}
   (let [buffer (Unpooled/wrappedBuffer dst)]
     (.writerIndex buffer 0)
     (compose tmplt src buffer)
@@ -296,7 +294,7 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
 
 (s/fdef encode-server-name
         :args (s/cat :name ::dns-string)
-        :ret ::server-name)
+        :ret ::K/server-name)
 (defn encode-server-name
   [name]
   (let [result (byte-array 256 (repeat 0))
