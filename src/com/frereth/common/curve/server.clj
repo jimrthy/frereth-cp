@@ -147,18 +147,24 @@
                       vec
                       (subvec 0 (dec K/header-length))
                       byte-array)
-        verified (not= 0
+        original (not= 0
                        ;; Q: Why did DJB use a bitwise and here?
                        ;; (most likely current guess: it doesn't shortcut)
                        ;; And does that reason go away when you factor in the hoops I
                        ;; have to jump through to jump between bitwise and logical
                        ;; operations?
                        (bit-and (if (b-t/bytes= (.getBytes K/client-header-prefix)
-                                                   rcvd-prfx)
+                                                rcvd-prfx)
                                   -1 0)
                                 (if (b-t/bytes= extension
-                                                   rcvd-xtn)
-                                  -1 0)))]
+                                                rcvd-xtn)
+                                  -1 0)))
+        ;; TODO: Revisit the original and decide whether it's worth the trouble.
+        ;; ALT: Compare the prefix as a vector. See how much of a performance hit we take
+        verified (and (b-t/bytes= (.getBytes K/client-header-prefix)
+                                  rcvd-prfx)
+                      (b-t/bytes= extension
+                                  rcvd-xtn))]
     (when-not verified
       (log/warn "Dropping packet intended for someone else. Expected" (String. K/client-header-prefix)
                 "and" (vec extension)

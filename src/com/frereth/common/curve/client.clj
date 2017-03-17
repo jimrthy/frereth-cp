@@ -649,18 +649,17 @@ implementation. This is code that I don't understand yet"
   (throw (RuntimeException. "Not translated")))
 
 (defn ->message-exchange-mode
-  "The idea is that the client agent should convert into
-  message exchange mode after the handshake is complete."
-  [wrapper
-   {:keys [::chan<-server
+  "Just received first real response Message packet from the handshake.
+  Now we can start doing something interesting."
+  [{:keys [::chan<-server
            ::chan->server
            ::chan<-child
            ::chan->child]
     :as this}
+   wrapper
    initial-server-response]
-  ;; Forward that initial "real" message
-  (send wrapper server->child initial-server-response)
-
+  ;; I'm getting an ::interaction-test/timeout here
+  (log/info "Initial Response from server:\n" initial-server-response)
   ;; Q: Do I want to block this thread for this?
   ;; A: As written, we can't. We're already inside an Agent$Action
   (comment (await-for (current-timeout wrapper) wrapper))
@@ -701,6 +700,11 @@ implementation. This is code that I don't understand yet"
           taken (strm/try-take! chan<-server
                                 ::drained timeout
                                 ::initial-response-timed-out)]
+      ;; I have some comment rot here.
+      ;; Big Q: Is the comment about waiting for the client's response
+      ;; below correct? (The code doesn't look like it, but the behavior I'm
+      ;; seeing implies a bug)
+      ;; Or is the docstring above?
       (deferred/on-realized taken
         ;; Using send-off here because it potentially has to block to wait
         ;; for the child's initial message.
@@ -711,17 +715,6 @@ implementation. This is code that I don't understand yet"
           (send wrapper #(throw (ex-info "Server vouch response failed"
                                          (assoc % :problem ex)))))))
     (send wrapper #(throw (ex-info "Timed out trying to send vouch" %)))))
-
-(defn set-up-initial-read!
-  [this stream]
-  (let [first-bytes @(strm/try-take! (::chan<-child stream) ::drained util/minute ::timeout)
-        dst (::initial-bytes-promise this)]
-    ;; This smells a little funny. I think I'm actually just pulling bytes from there
-    ;; as I can.
-    (deliver dst (if (or (= first-bytes ::drained)
-                         (= first-bytes ::timeout))
-                   nil
-                   first-bytes))))
 
 (s/fdef fork
         :args (s/cat :wrapper ::state-agent)
@@ -754,8 +747,6 @@ TODO: Need to ask around about that."
                    #_this
                    "\n...this...\naround\n"
                    child))
-    ;; This background reader approach just added needless complexity
-    (comment (send-off wrapper set-up-initial-read! reader))
     (assoc this
            ::chan->child reader
            ::release->child release
@@ -933,7 +924,7 @@ TODO: Need to ask around about that."
     (let [dscr (if (< 0 msg-length)
                  K/initiate-packet-dscr
                  (dissoc K/initiate-packet-dscr ::K/message))
-          fields' #::K{:prefix K/initiate-packet-prefix
+          fields' #::K{:prefix K/initiate-header
                        :srvr-xtn (::server-extension this)
                        :clnt-xtn (::shared/extension this)
                        :clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
