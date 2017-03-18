@@ -125,7 +125,6 @@
 ;; Q: So...what is this? a Future?
 (s/def ::child any?)
 
-(s/def ::buffer #(instance? ByteBuf %))
 (s/def ::reader (s/keys :req [::chan<-child]))
 (s/def ::writer (s/keys :req [::chan->child]))
 ;; This stream is for sending ByteBufs back to the child when we're done
@@ -653,40 +652,49 @@ implementation. This is code that I don't understand yet"
   Now we can start doing something interesting."
   [{:keys [::chan<-server
            ::chan->server
-           ::chan<-child
-           ::chan->child]
+           ::chan->child
+           ::release->child
+           ::chan<-child]
     :as this}
    wrapper
    initial-server-response]
   ;; I'm getting an ::interaction-test/timeout here
   (log/info "Initial Response from server:\n" initial-server-response)
-  ;; Q: Do I want to block this thread for this?
-  ;; A: As written, we can't. We're already inside an Agent$Action
-  (comment (await-for (current-timeout wrapper) wrapper))
+  (if (not (keyword? (:message initial-server-response)))
+    (if (and chan<-child chan->server)
+      (do
+        ;; Q: Do I want to block this thread for this?
+        ;; A: As written, we can't. We're already inside an Agent$Action
+        (comment (await-for (current-timeout wrapper) wrapper))
 
-  ;; And then wire this up to pretty much just pass messages through
-  ;; Actually, this seems totally broken from any angle, since we need
-  ;; to handle decrypting, at a minimum
+        ;; And then wire this up to pretty much just pass messages through
+        ;; Actually, this seems totally broken from any angle, since we need
+        ;; to handle decrypting, at a minimum
 
-  ;; Q: Do I want this or a plain consume?
-  (strm/connect-via chan<-child #(send wrapper chan->server %) chan->server)
+        ;; Q: Do I want this or a plain consume?
+        (strm/connect-via chan<-child #(send wrapper chan->server %) chan->server)
 
-  ;; I'd like to just do this in final-wait and take out an indirection
-  ;; level.
-  ;; But I don't want children to have to know the implementation detail
-  ;; that they have to wait for the initial response before the floodgates
-  ;; can open.
-  ;; So go with this approach until something better comes to mind
-  (strm/connect-via chan<-server #(send wrapper chan->child %) chan->child)
-  ;; Q: Is this approach better?
-  ;; A: Well, at least it isn't total nonsense
-  (comment (strm/consume (::chan<-child this)
-                         (fn [bs]
-                           (send-off wrapper (fn [state]
-                                               (let [a
-                                                     (update state ::child-packets
-                                                             conj bs)]
-                                                 (send-messages! a))))))))
+        ;; I'd like to just do this in final-wait and take out an indirection
+        ;; level.
+        ;; But I don't want children to have to know the implementation detail
+        ;; that they have to wait for the initial response before the floodgates
+        ;; can open.
+        ;; So go with this approach until something better comes to mind
+
+        (strm/connect-via chan<-server #(send wrapper chan->child %) chan->child)
+        ;; Q: Is this approach better?
+        ;; A: Well, at least it isn't total nonsense
+
+        (comment (strm/consume (::chan<-child this)
+                               (fn [bs]
+                                 (send-off wrapper (fn [state]
+                                                     (let [a
+                                                           (update state ::child-packets
+                                                                   conj bs)]
+                                                       (send-messages! a))))))))
+      (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" (keys this))
+                      this)))
+    (log/warn "That response to Initiate was a failure")))
 
 (defn final-wait
   "We've received the cookie and responded with a vouch.
@@ -801,7 +809,7 @@ TODO: Need to ask around about that."
                                (crypto/box-prepare
                                 server-short
                                 (.getSecretKey (::shared/short-pair my-keys))))]
-            (log/info "Managed to prepare shared short-term secret")
+            (log/debug "Managed to prepare shared short-term secret")
             ;; Note that this supplies new state
             ;; Though whether it should is debatable.
             ;; Q: why would I put this into ::vouch?
@@ -817,19 +825,27 @@ TODO: Need to ask around about that."
               "Unable to decrypt server cookie"
               this)))
     (finally
-      ;; Can't do this until I really done with its contents.
-      ;; It acts as though readBytes into a ByteBuf just creates another
-      ;; reference without increasing the reference count.
-      ;; This seems incredibly brittle.
       (if message
+        ;; Can't do this until I really done with its contents.
+        ;; It acts as though readBytes into a ByteBuf just creates another
+        ;; reference without increasing the reference count.
+        ;; This seems incredibly brittle.
         (comment (.release message))
         (log/error "False-y message in\n"
                    cookie-packet
                    "\nQ: What happened?")))))
 
-(defn build-vouch-with-message
+(defn obsolete-build-vouch-with-message
   [buffer]
-  (let [clear-text (byte-array (min 640 (.readableBytes buffer)))]
+  (let [clear-text (byte-array (min 640
+                                    ;; Note that, according to spec, we must have
+                                    ;; at least 16 bytes worth of message for this.
+                                    ;; And that it must be an even multiple of 16
+                                    ;; bytes long.
+                                    ;; So my initial implementation sending 0
+                                    ;; bytes here is, by definition, broken.
+                                    ;; Then again, this obviously is not getting used.
+                                    (.readableBytes buffer)))]
     ;; This is a much bigger deal on the server.
     (throw (RuntimeException. "Basic idea fails completely: this is not thread-safe."))
     (.readBytes buffer clear-text)
@@ -842,6 +858,7 @@ TODO: Need to ask around about that."
     :as this}]
   (when-not reader
     (throw (ex-info "Missing chan<-child" {::keys (keys this)})))
+
   ;; The timeout here is a vital detail here, in terms of
   ;; UX responsiveness.
   ;; Half a second seems far too long for the child to
@@ -849,56 +866,54 @@ TODO: Need to ask around about that."
   ;; Reference implementation just waits forever.
   @(deferred/let-flow [available (strm/try-take! reader
                                                  ::drained
-                                                 500
+                                                 (util/minute)
                                                  ::timed-out)]
+     ;; The send is timing out, so we're getting a ::drained here.
+     ;; FIXME: Start here.
      (log/info "waiting for initial-child-bytes returned" available)
-     (if-not (= available ::drained)
-       (if (not= available ::timed-out)
-         available
-         nil)
-       (throw (RuntimeException. "Child closed")))))
+     (if-not (keyword? available)
+       available
+       (if-not (= available ::drained)
+         (if (= available ::timed-out)
+           (throw (RuntimeException. "Timed out waiting for child"))
+           (throw (RuntimeException. (str "Unknown failure: " available))))
+         (throw (RuntimeException. "Stream from child closed"))))))
 
-;; TODO: Surely I have a ByteBuf spec somewhere.
-;; This gets interesting, because the length of the return
-;; buffer depends on the length of the input buffer
-(s/fdef build-vouch-packet!
-        :args (s/cat :this ::state
-                     :msg-byte-buf #(instance? ByteBuf %))
-        :ret #(instance? ByteBuf %))
-(defn build-initiate-packet!
-  "This is destructive in the sense that it reads from msg-byte-buf"
+(defn pull-initial-message-bytes
   [this msg-byte-buf]
+  (when msg-byte-buf
+    (log/info "Incoming ByteBuf:" msg-byte-buf)
+    (let [bytes-available (min (.readableBytes msg-byte-buf)
+                               K/max-vouch-message-length)]
+      (when (< 0 bytes-available)
+        (let [buffer (byte-array bytes-available)]
+          (.readBytes msg-byte-buf buffer)
+          ;; TODO: Compare performance against .discardReadBytes
+          ;; A lot of the difference probably depends on hardware
+          ;; choices.
+          ;; Though, realistically, this probably isn't running
+          ;; on minimalist embedded controllers.
+          (.discardSomeReadBytes msg-byte-buf)
+          ;; TODO: Be sure to send msg-byte-buf back over the child's
+          ;; release stream when we're done with it.
+          ;; Or release it back into the shared ByteBuf pool.
+          ;; Well, maybe.
+          ;; I actually have a gaping question about performance here:
+          ;; will I be able to out-perform java's garbage collector by
+          ;; recycling used ByteBufs?
+          (if (< 0 (.readableBytes msg-byte-buf))
+            ;; Reference implementation just fails on this scenario.
+            ;; That seems like a precedent that I'm OK breaking
+            (throw (RuntimeException. "Have to queue remaining message bytes for later"))
+            ;; TODO: Still have to decide how I want to cope with this
+            (strm/put! (::release->child this) msg-byte-buf))
+          buffer)))))
+
+(defn build-initiate-interior
+  [this msg nonce-suffix]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
-  (let [msg (when msg-byte-buf
-              (log/info "Incoming ByteBuf:" msg-byte-buf)
-              (let [bytes-available (min (.readableBytes msg-byte-buf)
-                                         K/max-vouch-message-length)]
-                (when (< 0 bytes-available)
-                  ;; Q: How well does a byte-array work here?
-                  (let [buffer (byte-array bytes-available)]
-                    (.readBytes msg-byte-buf buffer)
-                    ;; TODO: Compare performance against .discardReadBytes
-                    ;; A lot of the difference probably depends on hardware
-                    ;; choices.
-                    ;; Though, realistically, this probably isn't running
-                    ;; on minimalist embedded controllers.
-                    (.discardSomeReadBytes msg-byte-buf)
-                    ;; TODO: Be sure to send msg-byte-buf back over the child's
-                    ;; release stream when we're done with it.
-                    ;; Or release it back into the shared ByteBuf pool.
-                    ;; Well, maybe.
-                    ;; I actually have a gaping question about performance here:
-                    ;; will I be able to out-perform java's garbage collector by
-                    ;; recycling used ByteBufs?
-                    (if (< 0 (.readableBytes msg-byte-buf))
-                      ;; Reference implementation just fails on this scenario.
-                      ;; That seems like a precedent that I'm OK breaking
-                      (throw (RuntimeException. "Have to queue remaining message bytes for later"))
-                      ;; TODO: Still have to decide how I want to cope with this
-                      (strm/put! (::release->child this) msg-byte-buf))
-                    buffer))))
-        msg-length (count msg)
+  (let [msg-length (count msg)
         tmplt (if (< 0 msg-length)
                 (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)
                 (dissoc K/vouch-wrapper ::K/child-message))
@@ -910,29 +925,41 @@ TODO: Need to ask around about that."
         src (if (< 0 msg-length)
               (assoc src' ::K/child-message msg)
               src')
+        work-area (::shared/work-area this)]
+    (shared/build-crypto-box tmplt
+                             src
+                             (::shared/text work-area)
+                             (get-in this [::shared-secrets ::client-short<->server-short])
+                             K/initiate-nonce-prefix
+                             nonce-suffix)))
+
+;; TODO: Surely I have a ByteBuf spec somewhere.
+;; This gets interesting, because the length of the return
+;; buffer depends on the length of the input buffer
+(s/fdef build-initiate-packet!
+        :args (s/cat :this ::state
+                     :msg-byte-buf #(instance? ByteBuf %))
+        :ret #(instance? ByteBuf %))
+(defn build-initiate-packet!
+  "This is destructive in the sense that it reads from msg-byte-buf"
+  [this msg-byte-buf]
+  (let [msg (pull-initial-message-bytes this msg-byte-buf)
         work-area (::shared/work-area this)
         ;; Just reuse a subset of whatever the server sent us.
         ;; Legal because a) it uses a different prefix and b) it's a different number anyway
         nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area) K/client-nonce-prefix-length)
-        crypto-text (shared/build-crypto-box tmplt
-                                             src
-                                             (::shared/text work-area)
-                                             (get-in this [::shared-secrets ::client-short<->server-short])
-                                             K/initiate-nonce-prefix
-                                             nonce-suffix)]
-    (log/debug (str "Stuffing " crypto-text " into the initiate packet"))
-    (let [dscr (if (< 0 msg-length)
+        crypto-box (build-initiate-interior this msg nonce-suffix)]
+    (log/debug (str "Stuffing " crypto-box " into the initiate packet"))
+    (let [dscr (if (< 0 (count msg))
                  K/initiate-packet-dscr
                  (dissoc K/initiate-packet-dscr ::K/message))
-          fields' #::K{:prefix K/initiate-header
-                       :srvr-xtn (::server-extension this)
-                       :clnt-xtn (::shared/extension this)
-                       :clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
-                       :cookie (get-in this [::server-security ::server-cookie])
-                       :nonce nonce-suffix}
-          fields (if (< 0 msg-length)
-                   (assoc fields' ::K/message crypto-text)
-                   fields')]
+          fields #::K{:prefix K/initiate-header
+                      :srvr-xtn (::server-extension this)
+                      :clnt-xtn (::shared/extension this)
+                      :clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
+                      :cookie (get-in this [::server-security ::server-cookie])
+                      :nonce nonce-suffix
+                      :vouch crypto-box}]
       (shared/compose dscr
                       fields
                       (get-in this [::shared/packet-management ::shared/packet])))))

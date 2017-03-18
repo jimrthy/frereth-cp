@@ -86,10 +86,17 @@
 (def initiate-header (.getBytes (str client-header-prefix "I")))
 
 ;; 64 bytes
+;; Q: What is this for?
+;; A: It's that ::inner-vouch portion of the vouch-wrapper.
+;; Really, neither of those is a great name choice.
 (def vouch-length (+ server-nonce-suffix-length
                      box-zero-bytes
                      key-length))
 (def max-vouch-message-length 640)
+(def minimum-vouch-length (+ box-zero-bytes
+                             key-length
+                             vouch-length
+                             server-name-length))
 (def vouch-wrapper
   "Template for composing the informational part of an Initiate Packet's Vouch"
   {::client-long-term-key {::type ::bytes
@@ -114,5 +121,5 @@
                        ::length server-cookie-length}
              ::nonce {::type ::bytes
                       ::length client-nonce-suffix-length}
-             ::message {::type ::bytes
-                        ::length 'unspecified}))
+             ::vouch {::type ::bytes
+                      ::length minimum-vouch-length}))

@@ -414,9 +414,11 @@ The most important is that it puts the crypto-text into the byte-array in text"
 
 (defn handle-initiate!
   [state packet]
-  (when (>= (count packet) minimum-initiate-packet-length)
-    (throw (ex-info "Don't stop here!"
-                    {:what "Cope with vouch/initiate"}))))
+  (let [n (count packet)]
+    (if (>= n minimum-initiate-packet-length)
+      (throw (ex-info "Don't stop here!"
+                      {:what "Cope with vouch/initiate"}))
+      (log/warn (str "Truncated initiate packet. Only received " n " bytes")))))
 
 (defn handle-message!
   [state packet]
@@ -451,13 +453,8 @@ The most important is that it puts the crypto-text into the byte-array in text"
       (if (verify-my-packet state header extension)
         (do
           (log/debug "This packet really is for me")
-          ;; Wait, what? Why is this copy happening?
-          ;; Didn't we just verify that this is already true?
-          ;; TODO: I strongly suspect something like a copy/paste
-          ;; failure on my part
-          (b-t/byte-copy! (get-in state [::current-client ::shared/extension])
-                             extension)
           (let [packet-type-id (char (aget header (dec K/header-length)))]
+            (log/info "Incoming packet-type-id: " packet-type-id)
             (try
               (case packet-type-id
                 \H (handle-hello! state packet)
@@ -466,7 +463,7 @@ The most important is that it puts the crypto-text into the byte-array in text"
               (catch Exception ex
                 (log/error ex (str "Failed handling packet type: " packet-type-id))
                 state)))
-          (do (log/debug "Ignoring packet intended for someone else")
+          (do (log/info "Ignoring packet intended for someone else")
               state))
         (do
           (log/debug "Ignoring packet of illegal length")

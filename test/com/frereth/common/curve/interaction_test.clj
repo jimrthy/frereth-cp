@@ -260,7 +260,9 @@
                                            buffer
                                            2500
                                            ::timedout)]
-                  (log/debug "Client-child send result:" @wrote)
+                  ;; This is timing out.
+                  ;; So the client is reading/waiting for the wrong thing.
+                  (log/info "Client-child send result:" @wrote)
                   (is (not= @wrote ::timedout))))
         write-notifier (strm/stream)
         release-notifier (strm/stream)
@@ -273,6 +275,9 @@
     (comment (throw (RuntimeException. "Really have to use a shared ByteBuf pool instead")))
     (deferred/chain (hidden 1)
       (fn [success]
+        ;; The release-notifier times out now.
+        ;; I don't think the client's getting
+        (log/info (str "Client is releasing child buffer: " success))
         (is (not (or (= success ::drained)
                      (= success ::timed-out))))
         ;; TODO: Make this more interesting.
