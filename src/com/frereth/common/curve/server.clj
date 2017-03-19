@@ -413,8 +413,10 @@ The most important is that it puts the crypto-text into the byte-array in text"
               (.readableBytes message))))
 
 (defn handle-initiate!
-  [state packet]
-  (let [n (count packet)]
+  [state
+   {:keys [host message port]
+    :as packet}]
+  (let [n (.readableBytes message)]
     (if (>= n minimum-initiate-packet-length)
       (throw (ex-info "Don't stop here!"
                       {:what "Cope with vouch/initiate"}))

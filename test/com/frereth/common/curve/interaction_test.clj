@@ -278,8 +278,8 @@
         ;; The release-notifier times out now.
         ;; I don't think the client's getting
         (log/info (str "Client is releasing child buffer: " success))
-        (is (not (or (= success ::drained)
-                     (= success ::timed-out))))
+        (is (not (= success ::timed-out)))
+        (is (not (= success ::drained)))
         ;; TODO: Make this more interesting.
         ;; Verify what we really got back
         ;; Send back a second block of data,

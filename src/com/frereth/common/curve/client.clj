@@ -872,7 +872,7 @@ TODO: Need to ask around about that."
          (throw (RuntimeException. "Stream from child closed"))))))
 
 (defn pull-initial-message-bytes
-  [this msg-byte-buf]
+  [wrapper msg-byte-buf]
   (when msg-byte-buf
     (log/info "Incoming ByteBuf:" msg-byte-buf)
     (let [bytes-available (K/initiate-message-length-filter (.readableBytes msg-byte-buf))]
@@ -882,19 +882,31 @@ TODO: Need to ask around about that."
           ;; TODO: Compare performance against .discardReadBytes
           ;; A lot of the difference probably depends on hardware
           ;; choices.
-          ;; Though, realistically, this probably isn't running
-          ;; on minimalist embedded controllers.
+          ;; Though, realistically, this probably won't be running
+          ;; on minimalist embedded controllers for a while.
           (.discardSomeReadBytes msg-byte-buf)
+
+            (if (< 0 (.readableBytes msg-byte-buf))
+              ;; Reference implementation just fails on this scenario.
+              ;; That seems like a precedent that I'm OK breaking.
+              ;; The key for it is that there's another buffer program sitting between
+              ;; this client and the "real" child that can guarantee that this works
+              ;; correctly.
+              (send wrapper update ::read-queue conj msg-byte-buf)
+              ;; I actually have a gaping question about performance here:
+              ;; will I be able to out-perform java's garbage collector by
+              ;; recycling used ByteBufs?
+              (strm/put! (::release->child @wrapper) msg-byte-buf))
           buffer)))))
 
 (defn build-initiate-interior
+  "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
   [this msg nonce-suffix]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   (let [msg-length (count msg)
-        tmplt (if (< 0 msg-length)
-                (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)
-                (dissoc K/vouch-wrapper ::K/child-message))
+        _ (assert (< 0 msg-length))
+        tmplt (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)
         server-name (get-in this [::shared/my-keys ::K/server-name])
         _ (assert server-name)
         src {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
@@ -902,6 +914,10 @@ TODO: Need to ask around about that."
              ::K/server-name server-name
              ::K/child-message msg}
         work-area (::shared/work-area this)]
+    ;; This seems to be dropping the child-message part.
+    ;; Or maybe it's happening later on.
+    ;; Wherever it's breaking between here and there, we're only putting together 368 bytes here
+    ;; to send to the server.
     (shared/build-crypto-box tmplt
                              src
                              (::shared/text work-area)
@@ -917,17 +933,16 @@ TODO: Need to ask around about that."
         :ret #(instance? ByteBuf %))
 (defn build-initiate-packet!
   "This is destructive in the sense that it reads from msg-byte-buf"
-  [this msg-byte-buf]
-  (let [msg (pull-initial-message-bytes this msg-byte-buf)
+  [wrapper msg-byte-buf]
+  (let [this @wrapper
+        msg (pull-initial-message-bytes wrapper msg-byte-buf)
         work-area (::shared/work-area this)
         ;; Just reuse a subset of whatever the server sent us.
         ;; Legal because a) it uses a different prefix and b) it's a different number anyway
         nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area) K/client-nonce-prefix-length)
         crypto-box (build-initiate-interior this msg nonce-suffix)]
     (log/debug (str "Stuffing " crypto-box " into the initiate packet"))
-    (let [dscr (if (< 0 (count msg))
-                 K/initiate-packet-dscr
-                 (dissoc K/initiate-packet-dscr ::K/message))
+    (let [dscr (update-in K/initiate-packet-dscr [::K/vouch ::K/length] + (count msg))
           fields #::K{:prefix K/initiate-header
                       :srvr-xtn (::server-extension this)
                       :clnt-xtn (::shared/extension this)
@@ -1044,18 +1059,7 @@ terrible approach in an environment that's intended to multi-thread."
         (if (await-for timeout wrapper)
           (let [this @wrapper
                 initial-bytes (wait-for-initial-child-bytes this)
-                vouch (build-initiate-packet! this initial-bytes)]
-            (if (< 0 (.writableBytes initial-bytes))
-              ;; Reference implementation just fails on this scenario.
-              ;; That seems like a precedent that I'm OK breaking.
-              ;; The key for it is that there's another buffer program sitting between
-              ;; this client and the "real" child that can guarantee that this works
-              ;; correctly.
-              (send wrapper update ::read-queue conj initial-bytes)
-              ;; I actually have a gaping question about performance here:
-              ;; will I be able to out-perform java's garbage collector by
-              ;; recycling used ByteBufs?
-              (strm/put! (::release->child this) initial-bytes))
+                vouch (build-initiate-packet! wrapper initial-bytes)]
           (log/info "send-off send-vouch!")
             (send-off wrapper send-vouch! wrapper vouch))
           (do
