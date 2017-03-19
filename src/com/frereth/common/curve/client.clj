@@ -99,7 +99,6 @@
                                      ::shared-secrets
                                      ::shared/work-area]
                                :opt [::child
-                                     ::initial-bytes-promise
                                      ;; Q: Why am I tempted to store this at all?
                                      ;; A: Well...I might need to resend it if it
                                      ;; gets dropped initially.
@@ -599,7 +598,6 @@ implementation. This is code that I don't understand yet"
     (into this
           {::child-packets []
            ::client-extension-load-time 0
-           ::initial-bytes-promise (deferred/->deferred (promise))
            ::recent (System/nanoTime)
            ;; This seems like something that we should be able to set here.
            ;; djb's docs say that it's a security matter, like connecting
@@ -669,7 +667,12 @@ implementation. This is code that I don't understand yet"
 
         ;; And then wire this up to pretty much just pass messages through
         ;; Actually, this seems totally broken from any angle, since we need
-        ;; to handle decrypting, at a minimum
+        ;; to handle decrypting, at a minimum.
+
+        ;; And the send calls are totally wrong: I'm sure I can't just treat
+        ;; the streams as functions
+        ;; Important note about that "something better": it absolutely must take
+        ;; the ::child ::read-queue into account.
 
         ;; Q: Do I want this or a plain consume?
         (strm/connect-via chan<-child #(send wrapper chan->server %) chan->server)
@@ -680,11 +683,10 @@ implementation. This is code that I don't understand yet"
         ;; that they have to wait for the initial response before the floodgates
         ;; can open.
         ;; So go with this approach until something better comes to mind
-
         (strm/connect-via chan<-server #(send wrapper chan->child %) chan->child)
-        ;; Q: Is this approach better?
-        ;; A: Well, at least it isn't total nonsense
 
+        ;; Q: Is this approach better?
+        ;; A: Well, at least it isn't total nonsense like what I wrote originally
         (comment (strm/consume (::chan<-child this)
                                (fn [bs]
                                  (send-off wrapper (fn [state]
@@ -755,11 +757,18 @@ TODO: Need to ask around about that."
                    #_this
                    "\n...this...\naround\n"
                    child))
+    ;; Q: Do these all *really* belong at the top level?
+    ;; I'm torn between the basic fact that flat data structures
+    ;; are easier (simpler?) and the fact that namespacing this
+    ;; sort of thing makes collisions much less likely.
+    ;; Not to mention the whole "What did I mean for this thing
+    ;; to be?" question.
     (assoc this
            ::chan<-child writer
            ::release->child release
            ::chan->child reader
-           ::child child)))
+           ::child child
+           ::read-queue clojure.lang.PersistentQueue/EMPTY)))
 
 (defn cookie->vouch
   "Got a cookie from the server.
@@ -866,8 +875,7 @@ TODO: Need to ask around about that."
   [this msg-byte-buf]
   (when msg-byte-buf
     (log/info "Incoming ByteBuf:" msg-byte-buf)
-    (let [bytes-available (min (.readableBytes msg-byte-buf)
-                               K/max-vouch-message-length)]
+    (let [bytes-available (K/initiate-message-length-filter (.readableBytes msg-byte-buf))]
       (when (< 0 bytes-available)
         (let [buffer (byte-array bytes-available)]
           (.readBytes msg-byte-buf buffer)
@@ -877,19 +885,6 @@ TODO: Need to ask around about that."
           ;; Though, realistically, this probably isn't running
           ;; on minimalist embedded controllers.
           (.discardSomeReadBytes msg-byte-buf)
-          ;; TODO: Be sure to send msg-byte-buf back over the child's
-          ;; release stream when we're done with it.
-          ;; Or release it back into the shared ByteBuf pool.
-          ;; Well, maybe.
-          ;; I actually have a gaping question about performance here:
-          ;; will I be able to out-perform java's garbage collector by
-          ;; recycling used ByteBufs?
-          (if (< 0 (.readableBytes msg-byte-buf))
-            ;; Reference implementation just fails on this scenario.
-            ;; That seems like a precedent that I'm OK breaking
-            (throw (RuntimeException. "Have to queue remaining message bytes for later"))
-            ;; TODO: Still have to decide how I want to cope with this
-            (strm/put! (::release->child this) msg-byte-buf))
           buffer)))))
 
 (defn build-initiate-interior
@@ -902,12 +897,10 @@ TODO: Need to ask around about that."
                 (dissoc K/vouch-wrapper ::K/child-message))
         server-name (get-in this [::shared/my-keys ::K/server-name])
         _ (assert server-name)
-        src' {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
-              ::K/inner-vouch (::vouch this)
-              ::K/server-name server-name}
-        src (if (< 0 msg-length)
-              (assoc src' ::K/child-message msg)
-              src')
+        src {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
+             ::K/inner-vouch (::vouch this)
+             ::K/server-name server-name
+             ::K/child-message msg}
         work-area (::shared/work-area this)]
     (shared/build-crypto-box tmplt
                              src
@@ -917,11 +910,10 @@ TODO: Need to ask around about that."
                              nonce-suffix)))
 
 ;; TODO: Surely I have a ByteBuf spec somewhere.
-;; This gets interesting, because the length of the return
-;; buffer depends on the length of the input buffer
 (s/fdef build-initiate-packet!
         :args (s/cat :this ::state
                      :msg-byte-buf #(instance? ByteBuf %))
+        :fn #(= (count (:ret %)) (+ 544 (count (-> % :args :msg-byte-buf K/initiate-message-length-filter))))
         :ret #(instance? ByteBuf %))
 (defn build-initiate-packet!
   "This is destructive in the sense that it reads from msg-byte-buf"
@@ -1053,7 +1045,18 @@ terrible approach in an environment that's intended to multi-thread."
           (let [this @wrapper
                 initial-bytes (wait-for-initial-child-bytes this)
                 vouch (build-initiate-packet! this initial-bytes)]
-            (log/info "send-off send-vouch!")
+            (if (< 0 (.writableBytes initial-bytes))
+              ;; Reference implementation just fails on this scenario.
+              ;; That seems like a precedent that I'm OK breaking.
+              ;; The key for it is that there's another buffer program sitting between
+              ;; this client and the "real" child that can guarantee that this works
+              ;; correctly.
+              (send wrapper update ::read-queue conj initial-bytes)
+              ;; I actually have a gaping question about performance here:
+              ;; will I be able to out-perform java's garbage collector by
+              ;; recycling used ByteBufs?
+              (strm/put! (::release->child this) initial-bytes))
+          (log/info "send-off send-vouch!")
             (send-off wrapper send-vouch! wrapper vouch))
           (do
             (log/error (str "Converting cookie to vouch took longer than "
