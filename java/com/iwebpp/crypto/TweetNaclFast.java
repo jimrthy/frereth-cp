@@ -30,7 +30,7 @@ public final class TweetNaclFast {
 
 		private byte [] theirPublicKey;
 		private byte [] mySecretKey;
-		public byte [] sharedKey;
+		private byte [] sharedKey;
 
 		public Box(byte [] theirPublicKey, byte [] mySecretKey) {
 			this(theirPublicKey, mySecretKey, 68);
@@ -273,7 +273,6 @@ public final class TweetNaclFast {
 		public byte [] open_after(byte [] box, final int boxoff, final int boxlen, byte [] theNonce) {
 			// check message
 			if (!(box!=null && box.length>=(boxoff+boxlen) && boxlen>=boxzerobytesLength)) {
-                System.out.println("Box too small to open");
 				return null;
             }
 
@@ -287,7 +286,6 @@ public final class TweetNaclFast {
 				c[i+boxzerobytesLength] = box[i+boxoff];
 
 			if (crypto_box_open_afternm(m, c, c.length, theNonce, sharedKey) != 0) {
-                System.out.println ("Opening box failed");
 				return null;
             }
 
