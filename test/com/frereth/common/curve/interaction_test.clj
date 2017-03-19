@@ -251,22 +251,22 @@
   ;; TODO: Other variants
   ;; 1. Start by writing 0 bytes
   ;; 2. Write, say, 480 bytes, send notification, then 320 more
-  (let [read-notifier (strm/stream)
+  (let [write-notifier (strm/stream)
         buffer (Unpooled/buffer 2048)
         child (future
                 (log/debug "Client child sending bytes to server via client")
                 (.writeBytes buffer (byte-array (range 1025)))
-                (let [wrote (strm/try-put! read-notifier
+                (let [wrote (strm/try-put! write-notifier
                                            buffer
                                            2500
                                            ::timedout)]
                   ;; This is timing out.
                   ;; So the client is reading/waiting for the wrong thing.
-                  (log/info "Client-child send result:" @wrote)
+                  (log/info (str "Client-child send result to " write-notifier " => "  @wrote))
                   (is (not= @wrote ::timedout))))
-        write-notifier (strm/stream)
+        read-notifier (strm/stream)
         release-notifier (strm/stream)
-        hidden [(strm/try-take! write-notifier ::drained 2500 ::timed-out)
+        hidden [(strm/try-take! read-notifier ::drained 2500 ::timed-out)
                 (strm/try-take! release-notifier ::drained 2500 ::timed-out)]]
     ;; It belongs under shared: it's even more vital on the server side.
     ;; The flip side to this is that it basically leads to writing my own

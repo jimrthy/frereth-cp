@@ -756,9 +756,9 @@ TODO: Need to ask around about that."
                    "\n...this...\naround\n"
                    child))
     (assoc this
-           ::chan->child reader
-           ::release->child release
            ::chan<-child writer
+           ::release->child release
+           ::chan->child reader
            ::child child)))
 
 (defn cookie->vouch
@@ -784,8 +784,9 @@ TODO: Need to ask around about that."
         ;; Don't even try to pretend that this approach is thread-safe
         (.clear packet)
         (.readBytes message packet 0 K/cookie-packet-length)
-        ;; That isn't modifying the ByteBuf to let it know it has bytes available
-        ;; So brute-force it.
+        ;; That doesn't modify the ByteBuf to let it know it has bytes
+        ;; available
+        ;; So force it.
         (.writerIndex packet K/cookie-packet-length))
       (catch NullPointerException ex
         (throw (ex-info "Error trying to copy cookie packet"
@@ -835,27 +836,11 @@ TODO: Need to ask around about that."
                    cookie-packet
                    "\nQ: What happened?")))))
 
-(defn obsolete-build-vouch-with-message
-  [buffer]
-  (let [clear-text (byte-array (min 640
-                                    ;; Note that, according to spec, we must have
-                                    ;; at least 16 bytes worth of message for this.
-                                    ;; And that it must be an even multiple of 16
-                                    ;; bytes long.
-                                    ;; So my initial implementation sending 0
-                                    ;; bytes here is, by definition, broken.
-                                    ;; Then again, this obviously is not getting used.
-                                    (.readableBytes buffer)))]
-    ;; This is a much bigger deal on the server.
-    (throw (RuntimeException. "Basic idea fails completely: this is not thread-safe."))
-    (.readBytes buffer clear-text)
-    ;; TODO: Compare performance vs. discardReadBytes
-    (.discardSomeReadBytes buffer)
-    (throw (RuntimeException. "Now life gets interesting again"))))
-
 (defn wait-for-initial-child-bytes
   [{reader ::chan<-child
     :as this}]
+  (log/info (str "wait-for-initial-child-bytes: " reader))
+  (log/info "a.k.a." reader)
   (when-not reader
     (throw (ex-info "Missing chan<-child" {::keys (keys this)})))
 
@@ -868,8 +853,6 @@ TODO: Need to ask around about that."
                                                  ::drained
                                                  (util/minute)
                                                  ::timed-out)]
-     ;; The send is timing out, so we're getting a ::drained here.
-     ;; FIXME: Start here.
      (log/info "waiting for initial-child-bytes returned" available)
      (if-not (keyword? available)
        available
