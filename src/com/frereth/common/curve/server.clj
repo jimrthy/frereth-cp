@@ -81,6 +81,10 @@
                                     ::shared-secrets]))
 (s/def ::current-client ::client-state)
 
+;; Q: Does this really need to be an atom?
+(s/def ::active-clients (s/and #(instance? clojure.lang.Atom %)
+                               #(map? @%)))
+
 (s/def ::state (s/keys :req [::active-clients
                              ::client-read-chan
                              ::client-write-chan
@@ -412,15 +416,69 @@ The most important is that it puts the crypto-text into the byte-array in text"
               "got"
               (.readableBytes message))))
 
+(s/fdef possibly-add-new-client-connection
+        :args (s/cat :state ::state
+                     :initiate-packet ::K/initiate-packet-spec)
+        :ret boolean?)
+(defn possibly-re-initiate-existing-client-connection!
+  [state initiate]
+  ;; In the reference implementation, this basically corresponds to
+  ;; lines 341-358.
+  ;; Find the matching client (if any).
+  ;; If there is one, extract the message portion and send that to
+  ;; its child (since the client can send as many Initiate packets
+  ;; as it likes).
+  (throw (RuntimeException. "Get this translated")))
+
+(s/fdef extract-cookie
+        :args (s/cat :cookie-cutter ::cookie-cutter
+                     :initiate-packet ::K/initiate-packet-spec)
+        :ret ::K/cookie-spec)
+(defn extract-cookie
+  [{:keys [::minute-key
+           ::last-minute-key]
+    :as cookie-cutter}
+   initiate]
+  ;; This corresponds to lines 359-368. Just verify that
+  ;; we can open our secret cryptobox cookie using either
+  ;; the current or previous minute-key
+  (throw (RuntimeException. "Get this translated")))
+
+(s/fdef configure-shared-secrets
+        :args (s/cat :client ::client-state
+                     :server-short-key ::shared/secret-key
+                     :client-short-key ::shared/public-key)
+        :ret ::client-state)
+(defn configure-shared-secrets
+  ;; This should correspond to lines 369-371
+  [client
+   server-short-key
+   client-short-key]
+  (throw (RuntimeException. "Get this translated")))
+
 (defn handle-initiate!
   [state
    {:keys [host message port]
     :as packet}]
-  (let [n (.readableBytes message)]
-    (if (>= n minimum-initiate-packet-length)
-      (throw (ex-info "Don't stop here!"
-                      {:what "Cope with vouch/initiate"}))
-      (log/warn (str "Truncated initiate packet. Only received " n " bytes")))))
+  (or
+   (let [n (.readableBytes message)]
+     (if (>= n minimum-initiate-packet-length)
+       (let [tmplt (update-in K/initiate-packet-dscr [::vouch ::length] + (- n minimum-initiate-packet-length))
+             initiate (shared/decompose tmplt message)
+             client-short-key (::K/clnt-short-pk initiate)]
+         (if-not (possibly-re-initiate-existing-client-connection! state initiate)
+           (let [active-client (-> state ::active-clients deref client-short-key)]
+             (when-let [cookie (extract-cookie (::cookie-cutter state)
+                                               initiate)]
+               (let [active-client (configure-shared-secrets active-client
+                                                             (::K/s' cookie)
+                                                             client-short-key)]
+                 (throw (ex-info "Don't stop here!"
+                                 {:what "Cope with vouch/initiate"})))))
+           (log/info "Received additional Initiate packet from" client-short-key)))
+       (log/warn (str "Truncated initiate packet. Only received " n " bytes"))))
+   ;; If nothing's changing, just maintain status quo
+   state))
 
 (defn handle-message!
   [state packet]

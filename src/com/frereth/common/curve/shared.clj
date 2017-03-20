@@ -108,7 +108,11 @@ This is getting big enough that I really need to split it up"
 ;;; Public
 
 (defn composition-reduction
-  "Reduction function associated for run!ing from compose."
+  "Reduction function associated for run!ing from compose.
+
+TODO: Think about a way to do this using specs instead.
+
+Needing to declare these things twice is annoying."
   [tmplt fields dst k]
   (let [dscr (k tmplt)
         cnvrtr (::K/type dscr)

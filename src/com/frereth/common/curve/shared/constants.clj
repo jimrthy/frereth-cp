@@ -51,7 +51,11 @@
                                   ::crypto-box {::type ::bytes
                                                 ::length hello-crypto-box-length}))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Packet Descriptions
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Cookie packets
 
 (def cookie-header (.getBytes "RL3aNMXK"))
@@ -77,6 +81,8 @@
 (def cookie
   (array-map ::s' {::type ::bytes ::length key-length}
              ::black-box {::type ::zeroes ::length server-cookie-length}))
+;; TODO: Need matching specs for these keys.
+(s/def ::cookie-spec (s/keys :req [::s' ::black-box]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets
@@ -85,6 +91,8 @@
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 (def initiate-header (.getBytes (str client-header-prefix "I")))
 
+(def max-vouch-message-length 640)
+
 ;; 64 bytes
 ;; Q: What is this for?
 ;; A: It's that ::inner-vouch portion of the vouch-wrapper.
@@ -92,7 +100,6 @@
 (def vouch-length (+ server-nonce-suffix-length
                      box-zero-bytes
                      key-length))
-(def max-vouch-message-length 640)
 (def minimum-vouch-length (+ box-zero-bytes
                              key-length
                              vouch-length
@@ -114,13 +121,15 @@
    ;; Q: Do I want to allow compose to accept parameters for things like this?
    ::child-message {::type ::bytes ::length '?child-message-length}})
 
-
 (def initiate-packet-dscr
-  "TODO: Refactor the common pieces into something like packet-prefix"
   (array-map ::prefix {::type ::bytes
                        ::length header-length}
+             ;; Note that this is really receiver-extension
              ::srvr-xtn {::type ::bytes
                          ::length extension-length}
+             ;; And this is sender-extension
+             ;; TODO: Get the names refactored
+             ;; So I can use this for everything
              ::clnt-xtn {::type ::bytes
                          ::length extension-length}
              ::clnt-short-pk {::type ::bytes
@@ -129,5 +138,30 @@
                        ::length server-cookie-length}
              ::nonce {::type ::bytes
                       ::length client-nonce-suffix-length}
+             ;; It seems like it would be nice to enable nested
+             ;; definitions.
+             ;; This isn't "just" vouch-wrapper.
+             ;; It's the cryptographic box that contains vouch-wrapper.
              ::vouch {::type ::bytes
                       ::length minimum-vouch-length}))
+
+(s/def ::cookie (s/and bytes?
+                       #(= (count %) server-cookie-length)))
+;; TODO: This name doesn't work due to collisions.
+;; Really need to make it more fine-grained to indicate whether
+;; it comes from the client or server.
+(s/def ::nonce (s/and bytes?
+                      #(= (count %) client-nonce-suffix-length)))
+(s/def ::vouch (s/and bytes?
+                      #(< minimum-vouch-length (count %))
+                      ;; Evenly divisible by 16
+                      #(= 0 (bit-and (count %) 0xf))
+                      #(>= 640 (count %))))
+
+(s/def ::initiate-packet-spec (s/keys :req [::prefix
+                                            ::srvr-txn
+                                            ::clnt-xtn
+                                            ::clnt-short-pk
+                                            ::cookie
+                                            ::nonce
+                                            ::vouch]))
