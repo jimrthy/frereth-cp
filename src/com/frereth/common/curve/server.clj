@@ -83,7 +83,7 @@
 
 ;; Q: Does this really need to be an atom?
 (s/def ::active-clients (s/and #(instance? clojure.lang.Atom %)
-                               #(map? @%)))
+                               #(map? %)))
 
 (s/def ::state (s/keys :req [::active-clients
                              ::client-read-chan
@@ -123,6 +123,13 @@
    (* 60 shared/nanos-in-second))
   ([now]
    (+ (one-minute) now)))
+
+(s/fdef find-client
+        :args (s/cat :state ::state
+                     ::client-short-key ::shared/public-key))
+(defn find-client
+  [state client-short-key]
+  (-> state ::active-clients deref client-short-key))
 
 (s/fdef check-packet-length
         :args (s/cat :packet bytes?)
@@ -421,14 +428,38 @@ The most important is that it puts the crypto-text into the byte-array in text"
                      :initiate-packet ::K/initiate-packet-spec)
         :ret boolean?)
 (defn possibly-re-initiate-existing-client-connection!
+  "Client can send as many Initiate packets as it likes.
+
+If this matches a connection we've already seen, append the Message
+portion to the child-handler's queue.
+
+returns:
+  true:  Handled here
+  false: Not handled. Propagate the event
+
+This seems like it ought to be part of a bigger, more comprehensive
+event handling system.
+
+To be fair, this layer *is* pretty special."
   [state initiate]
   ;; In the reference implementation, this basically corresponds to
   ;; lines 341-358.
   ;; Find the matching client (if any).
   ;; If there is one, extract the message portion and send that to
-  ;; its child (since the client can send as many Initiate packets
-  ;; as it likes).
-  (throw (RuntimeException. "Get this translated")))
+  ;; its child (since the ).
+  (when-let [client (find-client state (::clnt-short-pk initiate))]
+    (let [packet-nonce-bytes (::nonce initiate)
+          packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
+          last-packet-nonce (::received-nonce client)]
+      (if (< last-packet-nonce packet-nonce)
+        ;; There's an interesting mix going on, in my version of curvecpserver.c,
+        ;; starting here at line 344.
+        ;; The pattern of opening the crypto box is more than annoying by now.
+        ;; That takes us down to line 352. And...what's going on there?
+        (throw (RuntimeException. "start back here"))
+        (do
+          (log/debug "Discarding obsolete nonce:" packet-nonce "/" last-packet-nonce)
+          true)))))
 
 (s/fdef extract-cookie
         :args (s/cat :cookie-cutter ::cookie-cutter
@@ -467,7 +498,7 @@ The most important is that it puts the crypto-text into the byte-array in text"
              initiate (shared/decompose tmplt message)
              client-short-key (::K/clnt-short-pk initiate)]
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)
-           (let [active-client (-> state ::active-clients deref client-short-key)]
+           (let [active-client (find-client state client-short-key)]
              (when-let [cookie (extract-cookie (::cookie-cutter state)
                                                initiate)]
                (let [active-client (configure-shared-secrets active-client

@@ -63,29 +63,48 @@ Box.generateNonce.
 
 If that's really all this is used for, should definitely use
 that implementation instead"
-  [^bytes dst n ^Long x]
-  (log/info "Trying to pack" x "a" (class x) "into offset" n "of"
+  ([^bytes dst n ^Long x]
+   (log/info "Trying to pack" x "a" (class x) "into offset" n "of"
              (count dst) "bytes at" dst)
-  (let [x' (bit-and 0xff x)]
-    (aset-byte dst n x')
-    (let [x (unsigned-bit-shift-right x 8)
-          x' (bit-and 0xff x)]
-      (aset-byte dst (inc n) x')
-      (let [x (unsigned-bit-shift-right x 8)
-            x' (bit-and 0xff x)]
-        (aset-byte dst (+ n 2) x')
-        (let [x (unsigned-bit-shift-right x 8)
-              x' (bit-and 0xff x)]
-          (aset-byte dst (+ n 3) x')
-          (let [x (unsigned-bit-shift-right x 8)
-                x' (bit-and 0xff x)]
-            (aset-byte dst (+ n 4) x')
-            (let [x (unsigned-bit-shift-right x 8)
-                  x' (bit-and 0xff x)]
-              (aset-byte dst (+ n 5) x')
-              (let [x (unsigned-bit-shift-right x 8)
-                    x' (bit-and 0xff x)]
-                (aset-byte dst (+ n 6) x')
-                (let [x (unsigned-bit-shift-right x 8)
-                      x' (bit-and 0xff x)]
-                  (aset-byte dst (+ n 7) x'))))))))))
+   (let [x' (bit-and 0xff x)]
+     (aset-byte dst n x')
+     (let [x (unsigned-bit-shift-right x 8)
+           x' (bit-and 0xff x)]
+       (aset-byte dst (inc n) x')
+       (let [x (unsigned-bit-shift-right x 8)
+             x' (bit-and 0xff x)]
+         (aset-byte dst (+ n 2) x')
+         (let [x (unsigned-bit-shift-right x 8)
+               x' (bit-and 0xff x)]
+           (aset-byte dst (+ n 3) x')
+           (let [x (unsigned-bit-shift-right x 8)
+                 x' (bit-and 0xff x)]
+             (aset-byte dst (+ n 4) x')
+             (let [x (unsigned-bit-shift-right x 8)
+                   x' (bit-and 0xff x)]
+               (aset-byte dst (+ n 5) x')
+               (let [x (unsigned-bit-shift-right x 8)
+                     x' (bit-and 0xff x)]
+                 (aset-byte dst (+ n 6) x')
+                 (let [x (unsigned-bit-shift-right x 8)
+                       x' (bit-and 0xff x)]
+                   (aset-byte dst (+ n 7) x'))))))))))
+  ([x]
+   (let [dst (byte-array 8)]
+     (uint64-pack! dst x))))
+
+(s/fdef uint64-unpack
+        :args (s/cat :src (and bytes?
+                               #(= (count %) 8)))
+        ;; TODO: Validate range?
+        :ret (s/and int?))
+(defn uint64-unpack
+  [src]
+  (let [result (aget src 7)
+        result (bit-or (bit-shift-left result 8) (aget src 6))
+        result (bit-or (bit-shift-left result 8) (aget src 5))
+        result (bit-or (bit-shift-left result 8) (aget src 4))
+        result (bit-or (bit-shift-left result 8) (aget src 3))
+        result (bit-or (bit-shift-left result 8) (aget src 2))
+        result (bit-or (bit-shift-left result 8) (aget src 1))]
+    (bit-or (bit-shift-left result 8) (aget src 0))))
