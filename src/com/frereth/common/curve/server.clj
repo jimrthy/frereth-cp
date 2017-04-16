@@ -475,27 +475,39 @@ To be fair, this layer *is* pretty special."
   ;; Find the matching client (if any).
   ;; If there is one, extract the message portion and send that to
   ;; its child (since the ).
-  (when-let [client (find-client state (::clnt-short-pk initiate))]
-    (let [packet-nonce-bytes (::nonce initiate)
-          packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
-          last-packet-nonce (::received-nonce client)]
-      (if (< last-packet-nonce packet-nonce)
-        (let [vouch (:K/vouch initiate)
-              shared-key (::client-short<->server-short client)]
-          (if-let [plain-text (decrypt-initiate-vouch shared-key
-                                                      packet-nonce-bytes
-                                                      vouch)]
-            ;; There's an interesting mix going on, in my version of curvecpserver.c,
-            ;; starting here at line 344.
-            ;; The pattern of opening the crypto box is more than annoying by now.
-            ;; That takes us down to line 352. And...what's going on there?
-            (throw (RuntimeException. "start back here"))
-            (do
-              (log/warn "Unable to decrypt incoming vouch")
-              true)))
-        (do
-          (log/debug "Discarding obsolete nonce:" packet-nonce "/" last-packet-nonce)
-          true)))))
+  (let [client-short-key (::clnt-short-pk initiate)]
+    (when-let [client (find-client state client-short-key)]
+      (let [packet-nonce-bytes (::nonce initiate)
+            packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
+            last-packet-nonce (::received-nonce client)]
+        (if (< last-packet-nonce packet-nonce)
+          (let [vouch (:K/vouch initiate)
+                shared-key (::client-short<->server-short client)]
+            (if-let [plain-text (decrypt-initiate-vouch shared-key
+                                                        packet-nonce-bytes
+                                                        vouch)]
+              (do
+                (swap! (::active-clients state)
+                       update-in [client-short-key ::received-nonce]
+                       packet-nonce)
+                ;; That takes us down to line 352.
+                ;; Q: What's going on there?
+                ;; text[383] = (r - 544) >> 4;
+                ;; Translation:
+                ;; The message associated with the Initiate packet starts
+                ;; at byte 384.
+                ;; The reference implementation inserts a prefix byte
+                ;; (length/16)
+                ;; before sending the array to the associated child
+                ;; process in the next line:
+                ;; writeall(activeclients[i].tochild, text+383, r-543)
+                (throw (RuntimeException. "start back here")))
+              (do
+                (log/warn "Unable to decrypt incoming vouch")
+                true)))
+          (do
+            (log/debug "Discarding obsolete nonce:" packet-nonce "/" last-packet-nonce)
+            true))))))
 
 (s/fdef extract-cookie
         :args (s/cat :cookie-cutter ::cookie-cutter
