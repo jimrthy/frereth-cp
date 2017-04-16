@@ -13,11 +13,13 @@ Although you probably don't want to actually use it.
 
 ## Notes
 
-The previous checkin wasn't as bad as I expected
+To measure up to its name, this really should be cross-platform.
+
+I'm not sure how realistic that would be for most of it.
 
 ## License
 
-Copyright © 2014 James Gatannah
+Copyright © 2014-2017 James Gatannah
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
