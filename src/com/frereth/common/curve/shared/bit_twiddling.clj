@@ -55,6 +55,11 @@
        (subvec beg end)
        byte-array)))
 
+(defn extract-rightmost-byte
+  "Since bytes are signed in java"
+  [n]
+  (- (bit-and n 0xff) 128))
+
 (defn uint64-pack!
   "Sets 8 bytes in dst (starting at offset n) to x
 
@@ -66,32 +71,33 @@ that implementation instead"
   ([^bytes dst n ^Long x]
    (log/info "Trying to pack" x "a" (class x) "into offset" n "of"
              (count dst) "bytes at" dst)
-   (let [x' (bit-and 0xff x)]
+   (let [x' (extract-rightmost-byte x)]
      (aset-byte dst n x')
      (let [x (unsigned-bit-shift-right x 8)
-           x' (bit-and 0xff x)]
+           x' (extract-rightmost-byte x)]
        (aset-byte dst (inc n) x')
        (let [x (unsigned-bit-shift-right x 8)
-             x' (bit-and 0xff x)]
+             x' (extract-rightmost-byte x)]
          (aset-byte dst (+ n 2) x')
          (let [x (unsigned-bit-shift-right x 8)
-               x' (bit-and 0xff x)]
+               x' (extract-rightmost-byte x)]
            (aset-byte dst (+ n 3) x')
            (let [x (unsigned-bit-shift-right x 8)
-                 x' (bit-and 0xff x)]
+                 x' (extract-rightmost-byte x)]
              (aset-byte dst (+ n 4) x')
              (let [x (unsigned-bit-shift-right x 8)
-                   x' (bit-and 0xff x)]
+                   x' (extract-rightmost-byte x)]
                (aset-byte dst (+ n 5) x')
                (let [x (unsigned-bit-shift-right x 8)
-                     x' (bit-and 0xff x)]
+                     x' (extract-rightmost-byte x)]
                  (aset-byte dst (+ n 6) x')
                  (let [x (unsigned-bit-shift-right x 8)
-                       x' (bit-and 0xff x)]
-                   (aset-byte dst (+ n 7) x'))))))))))
+                       x' (extract-rightmost-byte x)]
+                   (aset-byte dst (+ n 7) x'))))))))
+     dst))
   ([x]
    (let [dst (byte-array 8)]
-     (uint64-pack! dst x))))
+     (uint64-pack! dst 0 x))))
 
 (s/fdef uint64-unpack
         :args (s/cat :src (and bytes?
@@ -100,7 +106,7 @@ that implementation instead"
         :ret (s/and int?))
 (defn uint64-unpack
   [src]
-  (let [result (aget src 7)
+  (let [result (long (aget src 7))
         result (bit-or (bit-shift-left result 8) (aget src 6))
         result (bit-or (bit-shift-left result 8) (aget src 5))
         result (bit-or (bit-shift-left result 8) (aget src 4))
@@ -108,3 +114,17 @@ that implementation instead"
         result (bit-or (bit-shift-left result 8) (aget src 2))
         result (bit-or (bit-shift-left result 8) (aget src 1))]
     (bit-or (bit-shift-left result 8) (aget src 0))))
+
+(comment
+  ;; This is producing -128.
+  ;; WAT?
+  (let [packed (uint64-pack! -84455550510807040)]
+    (println (vec packed))
+    (uint64-unpack packed))
+
+  ;; Specific problem example:
+  (bit-or (bit-shift-left -128 8) -56)
+  ;; i.e.
+  (bit-or (long -32768) (long -56))
+  ;; I think I'm going to have to break down and look at the actual bits to try to make sense of this
+  )

@@ -2,23 +2,37 @@
   (:require [clojure.test :refer (deftest is testing)]
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]))
 
-(deftest uint64-pack-unpack
+(defn rand64
+  "This seems like it might be worth making more generally available.
+
+Since it really isn't secure, that might be a terrible idea"
+  []
+  (let [max-signed-long (bit-shift-left 1 62)
+      max+1 (* 4 (bigint max-signed-long))]
+    (-> max+1
+        rand
+        (- (/ max+1 2))
+        long)))
+
+(deftest known-uint64-pack-unpack
+  (testing "This number has specifically caused problems"
+    (let [n -84455550510807040
+          packed (b-t/uint64-pack! n)]
+      (is packed)
+      (testing "\n\t\tunpacking"
+        (is (= (b-t/uint64-unpack packed)
+               n))))))
+
+(deftest random-uint64-pack-unpack
+  ;; Generative testing clearly seems appropriate/required here
+  ;; TODO: as soon as I figure out why the basic implementation's
+  ;; broken
   (testing "Get random 64-bit int"
-    (loop [tries 5]
-      (if (< 0 tries)
-        ;; Q: How do I actually do this?
-        ;; I think I probably really need BigIntegers.
-        ;; But they don't support bitwise operations.
-        ;; There *is* a clojure.test.check.generator
-        ;; for this, which seems like it may be the way to go.
-        (let [n (- (rand-int (bit-shift-left 1 64))
-                   (bit-shift-left 1 63))]
-          (if (not= n 0)
-            (testing "packing"
-              (let [packed (b-t/uint64-pack! n)]
-                (is packed)
-                (testing "unpacking"
-                  (is (= (b-t/uint64-unpack packed)
-                         n)))))
-            (recur (dec n))))
-        (is false "Giving up")))))
+    (let [n (rand64)]
+      (if (not= n 0)
+        (testing "\n\tpacking"
+          (let [packed (b-t/uint64-pack! n)]
+            (is packed)
+            (testing "\n\t\tunpacking"
+              (is (= (b-t/uint64-unpack packed)
+                     n)))))))))
