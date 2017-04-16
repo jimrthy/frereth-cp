@@ -140,7 +140,11 @@ which I'm really not qualified to touch."
                                                      n nonce
                                                      shared-key)]
           (when (not= 0 success)
-            (throw (RuntimeException. "Opening box failed")))
+            (throw (ex-info "Opening box failed" {::box box
+                                                  ::offset box-offset
+                                                  ::length box-length
+                                                  ::nonce nonce
+                                                  ::shared-key shared-key})))
           ;; The * 2 on the zero bytes is important.
           ;; The encryption starts with 0's and prepends them.
           ;; The decryption requires another bunch (of zeros?) in front of that.
@@ -152,7 +156,11 @@ which I'm really not qualified to touch."
           (-> plain-text
               vec
               (subvec K/decrypt-box-zero-bytes)))))
-    (throw (RuntimeException. "Box too small"))))
+    (throw (ex-info "Box too small" {::box box
+                                     ::offset box-offset
+                                     ::length box-length
+                                     ::nonce nonce
+                                     ::shared-key shared-key}))))
 
 (defn random-array
   "Returns an array of n random bytes"

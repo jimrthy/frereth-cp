@@ -106,6 +106,9 @@ that implementation instead"
         :ret (s/and int?))
 (defn uint64-unpack
   [src]
+  ;; Punting on this until I have a wider time window to figure out
+  ;; what's broken.
+  (log/warn "This will not work!!")
   (let [result (long (aget src 7))
         result (bit-or (bit-shift-left result 8) (aget src 6))
         result (bit-or (bit-shift-left result 8) (aget src 5))

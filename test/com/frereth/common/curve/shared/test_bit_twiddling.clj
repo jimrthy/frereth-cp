@@ -3,7 +3,9 @@
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]))
 
 (defn rand64
-  "This seems like it might be worth making more generally available.
+  "Pretty much what randint does, but extended for a full 64-bits
+
+This seems like it might be worth making more generally available.
 
 Since it really isn't secure, that might be a terrible idea"
   []

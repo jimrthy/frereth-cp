@@ -15,6 +15,7 @@
 (def key-length 32)
 (def max-random-nonce (long (Math/pow 2 48)))
 (def nonce-length 24)
+(def server-nonce-prefix-length 8)
 (def server-nonce-suffix-length 16)
 (def server-name-length 256)
 (def shared-key-length key-length)
@@ -50,10 +51,6 @@
                                            ::length client-nonce-suffix-length}
                                   ::crypto-box {::type ::bytes
                                                 ::length hello-crypto-box-length}))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Packet Descriptions
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Cookie packets
@@ -97,12 +94,28 @@
 ;; Q: What is this for?
 ;; A: It's that ::inner-vouch portion of the vouch-wrapper.
 ;; Really, neither of those is a great name choice.
-(def vouch-length (+ server-nonce-suffix-length
+(def vouch-length (+ server-nonce-suffix-length  ; 16
+                     ;; 16
                      box-zero-bytes
+                     ;; 32
                      key-length))
-(def minimum-vouch-length (+ box-zero-bytes
+;; The way this is wrapped up seems odd.
+;; We have a box containing the short-term key encrypted
+;; by the long-term public key.
+;; The long-term key is part of this outer box, which
+;; is encrypted with that short-term key.
+;; Which, in turn, is included in the message's plain
+;; text.
+;; This does let us verify that the client has access
+;; to the long-term secret key it's claiming without
+;; needing to maintain any state on our part up to this
+;; point.
+(def minimum-vouch-length (+ box-zero-bytes  ; 16
+                             ;; 32
                              key-length
+                             ;; 64
                              vouch-length
+                             ;; 256
                              server-name-length))
 (defn initiate-message-length-filter
   "The maximum length for the message associated with an Initiate packet is 640 bytes.

@@ -423,8 +423,11 @@ Note that this is really called for side-effects"
         (let [short-pair (::shared/short-pair my-keys)]
           (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
         (let [shared-secret (::client-long<->server-long shared-secrets)
-              ;; The reference implementation does this.
-              ;; It doesn't seem to match the spec
+              ;; This is the inner-most secret that the inner vouch hides.
+              ;; I think the main point is to allow the server to verify
+              ;; that whoever sent this packet truly has access to the
+              ;; secret keys associated with both the long-term and short-
+              ;; term key's we're claiming for this session.
               encrypted (crypto/box-after shared-secret
                                           text K/key-length working-nonce)
               vouch (byte-array K/vouch-length)]
@@ -505,7 +508,7 @@ implementation. This is code that I don't understand yet"
                                     (> r 640))
                             (throw (ex-info "done" {})))
                           (b-t/byte-copy! working-nonce 0 K/client-nonce-prefix-length
-                                          shared/initiate-nonce-prefix)
+                                          K/initiate-nonce-prefix)
                           ;; Reference version starts by zeroing first 32 bytes.
                           ;; I thought we just needed 16 for the encryption buffer
                           ;; And that doesn't really seem to apply here
@@ -807,23 +810,26 @@ TODO: Need to ask around about that."
                          ::failure ex}))))
     (if-let [this (decrypt-cookie-packet this)]
       (let [{:keys [::shared/my-keys]} this
-            ;; This is nil.
-            ;; Q: Do I have any use for it at all?
             server-short (get-in this
                                  [::server-security
                                   ::server-short-term-pk])]
-        (log/debug "Managed to decrypt the cookie!")
+        (log/debug "Managed to decrypt the cookie")
         (if server-short
           (let [this (assoc-in this
                                [::shared-secrets ::client-short<->server-short]
                                (crypto/box-prepare
                                 server-short
                                 (.getSecretKey (::shared/short-pair my-keys))))]
-            (log/debug "Managed to prepare shared short-term secret")
+            (log/debug "Prepared shared short-term secret")
             ;; Note that this supplies new state
             ;; Though whether it should is debatable.
             ;; Q: why would I put this into ::vouch?
-            ;; A: In case we need to resend it
+            ;; A: In case we need to resend it.
+            ;; It's perfectly legal to send as many Initiate
+            ;; packets as the client chooses.
+            ;; This is especially important before the Server
+            ;; has responded with its first Message so the client
+            ;; can switch to sending those.
             (assoc this ::vouch (build-vouch this)))
           (do
             (log/error (str "Missing server-short-term-pk among\n"

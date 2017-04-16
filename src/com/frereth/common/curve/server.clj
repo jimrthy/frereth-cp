@@ -12,13 +12,20 @@
             [com.frereth.common.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream])
-  (:import io.netty.buffer.Unpooled))
+  (:import clojure.lang.ExceptionInfo
+           io.netty.buffer.Unpooled))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Magic Constants
 
 (def +cookie-send-timeout+ 50)
 (def default-max-clients 100)
 (def message-len 1104)
 (def minimum-initiate-packet-length 560)
 (def minimum-message-packet-length 112)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
 
 ;; For maintaining a secret symmetric pair of encryption
 ;; keys for the cookies.
@@ -37,9 +44,9 @@
 (s/def ::client-security (s/keys :req [::long-pk
                                        ::short-pk]))
 
-(s/def client-short<->server-long ::shared/shared-secret)
-(s/def client-short<->server-short ::shared/shared-secret)
-(s/def client-long<->server-long ::shared/shared-secret)
+(s/def ::client-short<->server-long ::shared/shared-secret)
+(s/def ::client-short<->server-short ::shared/shared-secret)
+(s/def ::client-long<->server-long ::shared/shared-secret)
 (s/def ::shared-secrets (s/keys :req [::client-short<->server-long
                                       ::client-short<->server-short
                                       ::client-long<->server-long]))
@@ -207,7 +214,7 @@ The most important is that it puts the crypto-text into the byte-array in text"
       (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
 
       (b-t/byte-copy! working-nonce shared/cookie-nonce-minute-prefix)
-      (shared/safe-nonce working-nonce nil shared/server-nonce-prefix-length)
+      (shared/safe-nonce working-nonce nil K/server-nonce-prefix-length)
 
       ;; Reference implementation is really doing pointer math with the array
       ;; to make this work.
@@ -238,14 +245,15 @@ The most important is that it puts the crypto-text into the byte-array in text"
         ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
         ;; Go with the assumption that those are the initial garbage 0 bytes that should
         ;; be discarded anyway
-        (b-t/byte-copy! text 32 K/server-nonce-suffix-length working-nonce shared/server-nonce-prefix-length)
+        (b-t/byte-copy! text 32 K/server-nonce-suffix-length working-nonce
+                        K/server-nonce-prefix-length)
 
         ;; And now we need to encrypt that.
         ;; This really belongs in its own function
         ;; And it's another place where I should probably call compose
         (b-t/byte-copy! text 0 K/key-length (.getPublicKey keys))
         ;; Reuse the other 16 byte suffix that came in from the client
-        (b-t/byte-copy! working-nonce 0 shared/server-nonce-prefix-length K/cookie-nonce-prefix)
+        (b-t/byte-copy! working-nonce 0 K/server-nonce-prefix-length K/cookie-nonce-prefix)
         (let [cookie (crypto/box-after client-short<->server-long text 128 working-nonce)]
           (log/info (str "Full cookie going to client that it should be able to decrypt:\n"
                          (with-out-str (b-s/print-bytes cookie))
@@ -261,7 +269,7 @@ The most important is that it puts the crypto-text into the byte-array in text"
                                                  ::K/client-extension client-extension
                                                  ::K/server-extension server-extension
                                                  ::K/nonce (Unpooled/wrappedBuffer working-nonce
-                                                                                   shared/server-nonce-prefix-length
+                                                                                   K/server-nonce-prefix-length
                                                                                    K/server-nonce-suffix-length)
                                                  ;; Note that this is setting up the crypto-box "real" cookie
                                                  ;; with 144 bytes from text, starting at offset 16.
@@ -423,6 +431,26 @@ The most important is that it puts the crypto-text into the byte-array in text"
               "got"
               (.readableBytes message))))
 
+(s/fdef decrypt-initiate-vouch
+        :args (s/cat :nonce :shared/client-nonce
+                     :box (s/and bytes?
+                                 #(< (count %) K/minimum-vouch-length)))
+        :ret (s/nilable bytes?))
+;; TODO: Write server-test/vouch-extraction to gain confidence that
+;; this works
+(defn decrypt-initiate-vouch
+  [shared-key nonce-suffix box nonce]
+  (b-t/byte-copy! nonce K/initiate-nonce-prefix)
+  (b-t/byte-copy! nonce
+                  K/client-nonce-prefix-length
+                  K/client-nonce-suffix-length
+                  nonce-suffix)
+  (try
+    (let [plain-vector (crypto/open-after box 0 (count box) nonce shared-key)]
+      (byte-array plain-vector))
+    (catch ExceptionInfo ex
+      (log/error ex (util/pretty (.getData ex))))))
+
 (s/fdef possibly-add-new-client-connection
         :args (s/cat :state ::state
                      :initiate-packet ::K/initiate-packet-spec)
@@ -452,11 +480,19 @@ To be fair, this layer *is* pretty special."
           packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
           last-packet-nonce (::received-nonce client)]
       (if (< last-packet-nonce packet-nonce)
-        ;; There's an interesting mix going on, in my version of curvecpserver.c,
-        ;; starting here at line 344.
-        ;; The pattern of opening the crypto box is more than annoying by now.
-        ;; That takes us down to line 352. And...what's going on there?
-        (throw (RuntimeException. "start back here"))
+        (let [vouch (:K/vouch initiate)
+              shared-key (::client-short<->server-short client)]
+          (if-let [plain-text (decrypt-initiate-vouch shared-key
+                                                      packet-nonce-bytes
+                                                      vouch)]
+            ;; There's an interesting mix going on, in my version of curvecpserver.c,
+            ;; starting here at line 344.
+            ;; The pattern of opening the crypto box is more than annoying by now.
+            ;; That takes us down to line 352. And...what's going on there?
+            (throw (RuntimeException. "start back here"))
+            (do
+              (log/warn "Unable to decrypt incoming vouch")
+              true)))
         (do
           (log/debug "Discarding obsolete nonce:" packet-nonce "/" last-packet-nonce)
           true)))))

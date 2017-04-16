@@ -106,3 +106,10 @@
         (is composed))
       (catch clojure.lang.ExceptionInfo ex
         (is (not (.getData ex)))))))
+
+(deftest vouch-extraction
+  ;; TODO:
+  ;; Use client/build-vouch to generate a vouch wrapper.
+  ;; Then call server/decrypt-initiate-vouch to verify that
+  ;; it extracted correctly.
+  (throw RuntimeException. "Not Implemented"))

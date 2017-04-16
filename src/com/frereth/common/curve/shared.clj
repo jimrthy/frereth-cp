@@ -21,16 +21,12 @@ This is getting big enough that I really need to split it up"
 ;;; Magic constants
 ;;; TODO: Pretty much all of these should move into constants
 
-(def server-nonce-prefix-length 8)
-
 (def hello-header (.getBytes (str K/client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
 
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def cookie-position-in-packet 80)
-
-(def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 
 (def max-unsigned-long -1)
 (def millis-in-second 1000)
@@ -78,6 +74,7 @@ This is getting big enough that I really need to split it up"
 (s/def ::work-area (s/keys :req [::text ::working-nonce]))
 
 (comment
+  ;; Q: Why aren't I using this?
   (s/def ::packet-length (s/and integer?
                                 pos?
                                 ;; evenly divisible by 16
@@ -103,6 +100,11 @@ This is getting big enough that I really need to split it up"
 (s/def ::url (s/keys :req [::K/server-name
                            ::extension
                            ::port]))
+
+(s/def ::client-nonce (s/and bytes?
+                             #(= (count %) K/client-nonce-suffix-length)))
+(s/def ::server-nonce (s/and bytes?
+                             #(= (count %) K/server-nonce-suffix-length)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
