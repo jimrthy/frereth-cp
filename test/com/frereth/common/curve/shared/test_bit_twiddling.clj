@@ -21,9 +21,20 @@ Since it really isn't secure, that might be a terrible idea"
     (let [n -84455550510807040
           packed (b-t/uint64-pack! n)]
       (is packed)
+      ;; Just because I'm having lots of fun with this, it packs into:
+      ;; [-128 -56 -2 80 -97 116 83 126]
+      ;; [-128 -56 -2 80 -97 116 83 126] ; Original "hard-coded"
+      (println (vec packed))
       (testing "\n\t\tunpacking"
-        (is (= (b-t/uint64-unpack packed)
-               n))))))
+        ;; When I do this manually, I get
+        ;; -9166797419286604930
+        ;; The unit test is failing because it returns
+        ;; (9102747499453401216)
+        ;; Original, expected value:
+        ;; -84455550510807040
+        (let [unpacked (b-t/uint64-unpack packed)]
+          (is (= (class n) (class unpacked)))
+          (is (= n unpacked)))))))
 
 (deftest random-uint64-pack-unpack
   ;; Generative testing clearly seems appropriate/required here

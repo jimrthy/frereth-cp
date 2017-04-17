@@ -58,46 +58,34 @@
 (defn extract-rightmost-byte
   "Since bytes are signed in java"
   [n]
-  (- (bit-and n 0xff) 128))
+  (byte (- (bit-and n 0xff) 128)))
 
 (defn uint64-pack!
   "Sets 8 bytes in dst (starting at offset n) to x
 
 Note that this looks/smells very similar to TweetNaclFast's
-Box.generateNonce.
+Box.generateNonce. It's tempting to try to reuse that
+implementation.
+
+But I don't see an obvious way to reverse it, which is where I'm running
+into trouble with the unpack counterpart.
+
+At least, I *think* that's the problem.
 
 If that's really all this is used for, should definitely use
 that implementation instead"
-  ([^bytes dst n ^Long x]
+  ([^bytes dst ^Long n ^Long x]
+   ;; Note that returning a value doesn't make any sense for
+   ;; this arity.
+   ;; Well, until I can return a sub-array cleanly.
    (log/info "Trying to pack" x "a" (class x) "into offset" n "of"
              (count dst) "bytes at" dst)
-   (let [x' (extract-rightmost-byte x)]
-     (aset-byte dst n x')
-     (let [x (unsigned-bit-shift-right x 8)
-           x' (extract-rightmost-byte x)]
-       (aset-byte dst (inc n) x')
-       (let [x (unsigned-bit-shift-right x 8)
-             x' (extract-rightmost-byte x)]
-         (aset-byte dst (+ n 2) x')
-         (let [x (unsigned-bit-shift-right x 8)
-               x' (extract-rightmost-byte x)]
-           (aset-byte dst (+ n 3) x')
-           (let [x (unsigned-bit-shift-right x 8)
-                 x' (extract-rightmost-byte x)]
-             (aset-byte dst (+ n 4) x')
-             (let [x (unsigned-bit-shift-right x 8)
-                   x' (extract-rightmost-byte x)]
-               (aset-byte dst (+ n 5) x')
-               (let [x (unsigned-bit-shift-right x 8)
-                     x' (extract-rightmost-byte x)]
-                 (aset-byte dst (+ n 6) x')
-                 (let [x (unsigned-bit-shift-right x 8)
-                       x' (extract-rightmost-byte x)]
-                   (aset-byte dst (+ n 7) x'))))))))
-     dst))
+   (doseq [i (range n (+ n Long/BYTES))]
+     (aset-byte dst i (byte (- (bit-and (unsigned-bit-shift-right x (* i Byte/SIZE)) 0xff) 128)))))
   ([x]
    (let [dst (byte-array 8)]
-     (uint64-pack! dst 0 x))))
+     (uint64-pack! dst 0 x)
+     dst)))
 
 (s/fdef uint64-unpack
         :args (s/cat :src (and bytes?
@@ -110,13 +98,13 @@ that implementation instead"
   ;; what's broken.
   (log/warn "This will not work!!")
   (let [result (long (aget src 7))
-        result (bit-or (bit-shift-left result 8) (aget src 6))
-        result (bit-or (bit-shift-left result 8) (aget src 5))
-        result (bit-or (bit-shift-left result 8) (aget src 4))
-        result (bit-or (bit-shift-left result 8) (aget src 3))
-        result (bit-or (bit-shift-left result 8) (aget src 2))
-        result (bit-or (bit-shift-left result 8) (aget src 1))]
-    (bit-or (bit-shift-left result 8) (aget src 0))))
+        result (bit-or (bit-shift-left result 8) (bit-and (aget src 6) 0xff))
+        result (bit-or (bit-shift-left result 8) (bit-and (aget src 5) 0xff))
+        result (bit-or (bit-shift-left result 8) (bit-and (aget src 4) 0xff))
+        result (bit-or (bit-shift-left result 8) (bit-and (aget src 3) 0xff))
+        result (bit-or (bit-shift-left result 8) (bit-and (aget src 2) 0xff))
+        result (bit-or (bit-shift-left result 8) (bit-and (aget src 1) 0xff))]
+    (bit-or (bit-shift-left result 8) (bit-and (aget src 0) 0xff))))
 
 (comment
   ;; This is producing -128.
