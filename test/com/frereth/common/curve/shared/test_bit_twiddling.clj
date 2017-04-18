@@ -18,6 +18,16 @@ Since it really isn't secure, that might be a terrible idea"
 
 (deftest known-uint64-pack-unpack
   (testing "This number has specifically caused problems"
+    ;; According to python, n & 0xff == 0.
+    ;; I'm getting -128.
+    ;; Neither seems to make sense, since
+    ;; 40 == 0x28.
+    ;; Even if I'm getting confused by little/big
+    ;; -endian issues...actually, that's probably
+    ;; it.
+    ;; -32678 | -56 *is* -56.
+    ;; Q: Would it make sense to pack the abs(),
+    ;; then set the signed bit on the final number?
     (let [n -84455550510807040
           packed (b-t/uint64-pack! n)]
       (is packed)

@@ -68,12 +68,7 @@ Box.generateNonce. It's tempting to try to reuse that
 implementation.
 
 But I don't see an obvious way to reverse it, which is where I'm running
-into trouble with the unpack counterpart.
-
-At least, I *think* that's the problem.
-
-If that's really all this is used for, should definitely use
-that implementation instead"
+into trouble with the unpack counterpart."
   ([^bytes dst ^Long n ^Long x]
    ;; Note that returning a value doesn't make any sense for
    ;; this arity.
