@@ -75,8 +75,24 @@ into trouble with the unpack counterpart."
    ;; Well, until I can return a sub-array cleanly.
    (log/info "Trying to pack" x "a" (class x) "into offset" n "of"
              (count dst) "bytes at" dst)
-   (doseq [i (range n (+ n Long/BYTES))]
-     (aset-byte dst i (byte (- (bit-and (unsigned-bit-shift-right x (* i Byte/SIZE)) 0xff) 128)))))
+   ;; Go ahead and clear the first byte manually, in case it includes
+   ;; an initial signed bit
+   ;; Actually, this approach can't possibly work.
+   ;; Well, it's workable as long as the other side has
+   ;; the same offset adjustment hack.
+   ;; But it's totally incompatible with the original
+   (aset dst n (-> x
+                   (bit-and 0xff)
+                   (- 128)
+                   byte))
+   (let [n (unsigned-bit-shift-right n Byte/SIZE)]
+     (doseq [i (range (inc n) (+ n Long/BYTES))]
+       (let [bits-to-shift (* (- i n) Byte/SIZE)]
+         (aset-byte dst i (-> x
+                              (unsigned-bit-shift-right bits-to-shift)
+                              (bit-and 0xff)
+                              (- 128)
+                              byte))))))
   ([x]
    (let [dst (byte-array 8)]
      (uint64-pack! dst 0 x)
@@ -89,10 +105,9 @@ into trouble with the unpack counterpart."
         :ret (s/and int?))
 (defn uint64-unpack
   [src]
-  ;; Punting on this until I have a wider time window to figure out
-  ;; what's broken.
   (log/warn "This will not work!!")
-  (let [result (long (aget src 7))
+  (throw (RuntimeException. "Remember to adjust by adding 128 each time!"))
+  (let [result (+ (long (aget src 7)) 128)  ; Nope.
         result (bit-or (bit-shift-left result 8) (bit-and (aget src 6) 0xff))
         result (bit-or (bit-shift-left result 8) (bit-and (aget src 5) 0xff))
         result (bit-or (bit-shift-left result 8) (bit-and (aget src 4) 0xff))
