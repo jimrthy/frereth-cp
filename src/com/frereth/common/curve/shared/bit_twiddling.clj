@@ -60,6 +60,46 @@
   [n]
   (byte (- (bit-and n 0xff) 128)))
 
+(defn possibly-2s-complement
+  "It seems ridiculous to need to do this
+Q: Is this valid? It seems overly simplistic.
+
+According to wikipedia, I really need to do
+  (let [mask (pow 2 (dec Byte/SIZE))]
+    (+ (- (bit-and input mask))
+       (bit-and input (bit-not mask))))
+
+Alternatively, it suggests just doing
+(-> n bit-not inc)
+
+TODO: Double check the math to verify that I
+really *am* doing one or the other.
+
+And, realistically, this is a place where
+performance probably matters.
+
+OTOH, I'm only using it for coping with the nonce.
+  "
+  [n]
+  (try
+    (byte (if (< n 128)
+            n
+            ;; Note that we do not want the negative
+            ;; equivalent, which is what this would do:
+            #_(-> n bit-not inc)
+            ;; That could problems when it converted 208
+            ;; to -208, which is still out of range.
+            (- n 256)))
+    (catch IllegalArgumentException ex
+      (println "Failed to convert " n)
+      (throw ex))))
+
+(defn possibly-2s-uncomplement
+  [n]
+  (if (<= 0 n)
+    n
+    (+ n 256)))
+
 (defn uint64-pack!
   "Sets 8 bytes in dst (starting at offset n) to x
 
@@ -73,26 +113,12 @@ into trouble with the unpack counterpart."
    ;; Note that returning a value doesn't make any sense for
    ;; this arity.
    ;; Well, until I can return a sub-array cleanly.
-   (log/info "Trying to pack" x "a" (class x) "into offset" n "of"
-             (count dst) "bytes at" dst)
-   ;; Go ahead and clear the first byte manually, in case it includes
-   ;; an initial signed bit
-   ;; Actually, this approach can't possibly work.
-   ;; Well, it's workable as long as the other side has
-   ;; the same offset adjustment hack.
-   ;; But it's totally incompatible with the original
-   (aset dst n (-> x
-                   (bit-and 0xff)
-                   (- 128)
-                   byte))
-   (let [n (unsigned-bit-shift-right n Byte/SIZE)]
-     (doseq [i (range (inc n) (+ n Long/BYTES))]
-       (let [bits-to-shift (* (- i n) Byte/SIZE)]
-         (aset-byte dst i (-> x
-                              (unsigned-bit-shift-right bits-to-shift)
-                              (bit-and 0xff)
-                              (- 128)
-                              byte))))))
+   (doseq [i (range n (+ n Long/BYTES))]
+     (let [bits-to-shift (* (- i n) Byte/SIZE)]
+       (aset-byte dst i (-> x
+                            (unsigned-bit-shift-right bits-to-shift)
+                            (bit-and 0xff)
+                            possibly-2s-complement)))))
   ([x]
    (let [dst (byte-array 8)]
      (uint64-pack! dst 0 x)
@@ -105,16 +131,18 @@ into trouble with the unpack counterpart."
         :ret (s/and int?))
 (defn uint64-unpack
   [src]
-  (log/warn "This will not work!!")
-  (throw (RuntimeException. "Remember to adjust by adding 128 each time!"))
-  (let [result (+ (long (aget src 7)) 128)  ; Nope.
-        result (bit-or (bit-shift-left result 8) (bit-and (aget src 6) 0xff))
-        result (bit-or (bit-shift-left result 8) (bit-and (aget src 5) 0xff))
-        result (bit-or (bit-shift-left result 8) (bit-and (aget src 4) 0xff))
-        result (bit-or (bit-shift-left result 8) (bit-and (aget src 3) 0xff))
-        result (bit-or (bit-shift-left result 8) (bit-and (aget src 2) 0xff))
-        result (bit-or (bit-shift-left result 8) (bit-and (aget src 1) 0xff))]
-    (bit-or (bit-shift-left result 8) (bit-and (aget src 0) 0xff))))
+  ;; This seems to be in the right ballpark, but it's still wrong
+  (comment) (throw (RuntimeException. "This is also wrong"))
+  (reduce (fn [acc n]
+            (-> acc
+                (bit-shift-left Byte/SIZE)
+                (bit-or (->> n
+                             (aget src)
+                             (bit-and 0xff)
+                             possibly-2s-uncomplement)
+                        (bit-and (aget src n) 0xff))))
+          0
+          (range 7 0 -1)))
 
 (comment
   ;; This is producing -128.
