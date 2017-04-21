@@ -104,11 +104,13 @@ OTOH, I'm only using it for coping with the nonce.
   "Sets 8 bytes in dst (starting at offset n) to x
 
 Note that this looks/smells very similar to TweetNaclFast's
-Box.generateNonce. It's tempting to try to reuse that
-implementation.
+Box.generateNonce.
 
-But I don't see an obvious way to reverse it, which is where I'm running
-into trouble with the unpack counterpart."
+But I don't see an obvious way to reverse that, and it's
+buried inside a class.
+
+So stick with this translation.
+"
   ([^bytes dst ^Long n ^Long x]
    ;; Note that returning a value doesn't make any sense for
    ;; this arity.
@@ -130,30 +132,15 @@ into trouble with the unpack counterpart."
         ;; TODO: Validate range?
         :ret (s/and int?))
 (defn uint64-unpack
+  "Unpack an array of 8 bytes into a 64-bit long"
   [src]
-  ;; This seems to be in the right ballpark, but it's still wrong
-  (comment) (throw (RuntimeException. "This is also wrong"))
   (reduce (fn [acc n]
             (-> acc
                 (bit-shift-left Byte/SIZE)
                 (bit-or (->> n
                              (aget src)
-                             (bit-and 0xff)
-                             possibly-2s-uncomplement)
-                        (bit-and (aget src n) 0xff))))
+                             possibly-2s-uncomplement
+                             ;; This next line should be redundant
+                             (bit-and 0xff)))))
           0
-          (range 7 0 -1)))
-
-(comment
-  ;; This is producing -128.
-  ;; WAT?
-  (let [packed (uint64-pack! -84455550510807040)]
-    (println (vec packed))
-    (uint64-unpack packed))
-
-  ;; Specific problem example:
-  (bit-or (bit-shift-left -128 8) -56)
-  ;; i.e.
-  (bit-or (long -32768) (long -56))
-  ;; I think I'm going to have to break down and look at the actual bits to try to make sense of this
-  )
+          (range 7 -1 -1)))

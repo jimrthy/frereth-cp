@@ -33,26 +33,30 @@
     ;; Q: Would it make sense to pack the abs(),
     ;; then set the signed bit on the final number?
     (let [n -84455550510807040
-          ;; 84455550510807040 == 0x1280e02f81b800
-          ;; => 12 80 e0 2f 81 b8 00   (split it into bytes)
-          ;; => 00 b8 81 2f e0 80 12   ("reversed")
-          ;; => 00 b8 81 2f e0 80 92   (set the initial - bit)
+          ;; 0 72 126 -48 31 -12 -45 -2
+          ;; Actual value (from C):
+          ;; => 00 48 7e d0 1f f4 d3 fe
+          ;; (hex -> base10 says I have that part correct now)
           packed (b-t/uint64-pack! n)]
       (is packed)
-      ;; Just because I'm having lots of fun with this, it packs into:
-      ;; [-128 -56 -2 80 -97 116 83 126]
-      ;; [-128 -56 -2 80 -97 116 83 126] ; Original "hard-coded"
       (println (vec packed))
       (testing "\n\t\tunpacking"
         ;; When I do this manually, I get
         ;; -9166797419286604930
         ;; The unit test is failing because it returns
-        ;; (9102747499453401216)
+        ;; 71727689543745096
+        ;; which, in turn, unpacks to
+        ;; [72 126 -48 31 -12 -45 -2 0]
         ;; Original, expected value:
         ;; -84455550510807040
         (let [unpacked (b-t/uint64-unpack packed)]
           (is (= (class n) (class unpacked)))
-          (is (= n unpacked)))))))
+          (is (= n unpacked))
+          (testing "actual"
+            (let [actual (byte-array [0x00 0x48 0x7e 0xd0 0x1f 0xf4 0xd3 0xfe])
+                  real-unpacked (b-t/uint64-unpack actual)]
+              (is (= n real-unpacked))
+              (is (= real-unpacked unpacked)))))))))
 
 (defn rand64
   "Pretty much what randint does, but extended for a full 64-bits
