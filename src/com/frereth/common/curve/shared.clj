@@ -171,7 +171,7 @@ Needing to declare these things twice is annoying."
 
   This should probably be named compose! and return nil"
   [tmplt fields dst]
-  (log/info (str "Putting\n" (with-out-str (pprint fields)) "\ninto\n" dst
+  (log/info (str "Putting\n" #_(with-out-str (pprint fields)) fields "\ninto\n" dst
                  "\nbased upon\n" (with-out-str (pprint tmplt))))
   ;; Q: How much do I gain by supplying dst?
   ;; It does let callers reuse the buffer, which

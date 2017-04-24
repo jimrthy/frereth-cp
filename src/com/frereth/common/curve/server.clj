@@ -168,7 +168,7 @@
         original (not= 0
                        ;; Q: Why did DJB use a bitwise and here?
                        ;; (most likely current guess: it doesn't shortcut)
-                       ;; And does that reason go away when you factor in the hoops I
+                       ;; Q: Does that reason go away when you factor in the hoops I
                        ;; have to jump through to jump between bitwise and logical
                        ;; operations?
                        (bit-and (if (b-t/bytes= (.getBytes K/client-header-prefix)
@@ -601,12 +601,12 @@ To be fair, this layer *is* pretty special."
                 \M (handle-message! state packet))
               (catch Exception ex
                 (log/error ex (str "Failed handling packet type: " packet-type-id))
-                state)))
-          (do (log/info "Ignoring packet intended for someone else")
-              state))
-        (do
-          (log/debug "Ignoring packet of illegal length")
-          state)))))
+                state))))
+        (do (log/info "Ignoring packet intended for someone else")
+            state)))
+    (do
+      (log/debug "Ignoring packet of illegal length")
+      state)))
 
 ;;; This next seems generally useful enough that I'm making it public.
 ;;; At least for now.

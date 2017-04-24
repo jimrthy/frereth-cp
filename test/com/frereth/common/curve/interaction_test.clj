@@ -245,6 +245,40 @@
                  500
                  ::timeout))
 
+(defn client-child
+  [buffer write-notifier]
+  (log/debug "Client child sending bytes to server via client")
+  (.writeBytes buffer (byte-array (range 1025)))
+  (let [wrote (strm/try-put! write-notifier
+                             buffer
+                             2500
+                             ::timedout)]
+    ;; This is timing out.
+    ;; So the client is reading/waiting for the wrong thing.
+    (log/info (str "Client-child send result to " write-notifier " => "  @wrote))
+    (is (not= @wrote ::timedout))))
+
+(defn notified-about-release
+  [write-notifier release-notifier read-notifier success]
+  ;; The release-notifier times out now.
+  ;; I don't think the client's getting a response here
+  (log/info (str "Client is releasing child buffer: " success))
+  ;; I definitely see this failure, but it isn't showing up as
+  ;; a test failure.
+  ;; Q: Is this a background-thread hidden sort of thing?
+  ;; Maybe CIDER just isn't clever enough to spot it?
+
+  (is (not (= success ::timed-out)))
+  (is (not (= success ::drained)))
+  ;; TODO: Make this more interesting.
+  ;; Verify what we really got back
+  ;; Send back a second block of data,
+  ;; and wait for *that* response.
+
+  (strm/close! write-notifier)
+  (strm/close! release-notifier)
+  (strm/close! read-notifier))
+
 (defn client-child-spawner
   [client-agent]
   (log/info "Top of client-child-spawner")
@@ -253,17 +287,7 @@
   ;; 2. Write, say, 480 bytes, send notification, then 320 more
   (let [write-notifier (strm/stream)
         buffer (Unpooled/buffer 2048)
-        child (future
-                (log/debug "Client child sending bytes to server via client")
-                (.writeBytes buffer (byte-array (range 1025)))
-                (let [wrote (strm/try-put! write-notifier
-                                           buffer
-                                           2500
-                                           ::timedout)]
-                  ;; This is timing out.
-                  ;; So the client is reading/waiting for the wrong thing.
-                  (log/info (str "Client-child send result to " write-notifier " => "  @wrote))
-                  (is (not= @wrote ::timedout))))
+        child (future (client-child) buffer write-notifier)
         read-notifier (strm/stream)
         release-notifier (strm/stream)
         hidden [(strm/try-take! read-notifier ::drained 2500 ::timed-out)
@@ -272,21 +296,9 @@
     ;; The flip side to this is that it basically leads to writing my own
     ;; heap management, with things like performance analysis and tuning.
     ;; And I don't think I want to go down that rabbit hole.
+    ;; Especially since netty has built this in since version 4.
     (comment (throw (RuntimeException. "Really have to use a shared ByteBuf pool instead")))
-    (deferred/chain (hidden 1)
-      (fn [success]
-        ;; The release-notifier times out now.
-        ;; I don't think the client's getting
-        (log/info (str "Client is releasing child buffer: " success))
-        (is (not (= success ::timed-out)))
-        (is (not (= success ::drained)))
-        ;; TODO: Make this more interesting.
-        ;; Verify what we really got back
-        ;; Send back a second block of data,
-        ;; and wait for *that* response.
-        (strm/close! write-notifier)
-        (strm/close! release-notifier)
-        (strm/close! read-notifier)))
+    (deferred/chain release-notifier (partial notified-about-release write-notifier release-notifier read-notifier))
     {::clnt/child child
      ::clnt/reader  read-notifier
      ::clnt/release release-notifier

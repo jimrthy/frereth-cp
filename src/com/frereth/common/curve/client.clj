@@ -324,7 +324,7 @@ Note that this is really called for side-effects"
                     "\ninto\n"
                     working-nonce))
     (b-t/byte-copy! working-nonce K/cookie-nonce-prefix)
-    (.readBytes nonce working-nonce shared/server-nonce-prefix-length K/server-nonce-suffix-length)
+    (.readBytes nonce working-nonce K/server-nonce-prefix-length K/server-nonce-suffix-length)
 
     (log/debug "Copying encrypted cookie into " text "from" (keys this))
     (.readBytes cookie text 0 144)
@@ -435,7 +435,7 @@ Note that this is really called for side-effects"
                           0
                           K/server-nonce-suffix-length
                           working-nonce
-                          shared/server-nonce-prefix-length)
+                          K/server-nonce-prefix-length)
           (b-t/byte-copy! vouch
                           K/server-nonce-suffix-length
                           (+ K/box-zero-bytes K/key-length)
@@ -534,33 +534,33 @@ implementation. This is code that I don't understand yet"
                                                        text
                                                        0
                                                        (+ r 384)
-                                                       working-nonce)]
+                                                       working-nonce)
+                                offset K/server-nonce-prefix-length]
                             ;; TODO: Switch to compose for this
                             (b-t/byte-copy! packet
                                             0
-                                            shared/server-nonce-prefix-length
+                                            offset
                                             K/initiate-header)
-                            (let [offset shared/server-nonce-prefix-length]
+                            (b-t/byte-copy! packet offset
+                                            K/extension-length server-extension)
+                            (let [offset (+ offset K/extension-length)]
                               (b-t/byte-copy! packet offset
-                                              K/extension-length server-extension)
+                                              K/extension-length extension)
                               (let [offset (+ offset K/extension-length)]
-                                (b-t/byte-copy! packet offset
-                                                K/extension-length extension)
-                                (let [offset (+ offset K/extension-length)]
-                                  (b-t/byte-copy! packet offset K/key-length
-                                                  (.getPublicKey (::short-pair my-keys)))
-                                  (let [offset (+ offset K/key-length)]
-                                    (b-t/byte-copy! packet
-                                                    offset
-                                                    K/server-cookie-length
-                                                    (::server-cookie server-security))
-                                    (let [offset (+ offset K/server-cookie-length)]
-                                      (b-t/byte-copy! packet offset
-                                                      shared/server-nonce-prefix-length
-                                                      working-nonce
-                                                      K/server-nonce-suffix-length))))))
-                            ;; Actually, the original version sends off the packet, updates
-                            ;; msg-len to 0, and goes back to pulling date from child/server.
+                                (b-t/byte-copy! packet offset K/key-length
+                                                (.getPublicKey (::short-pair my-keys)))
+                                (let [offset (+ offset K/key-length)]
+                                  (b-t/byte-copy! packet
+                                                  offset
+                                                  K/server-cookie-length
+                                                  (::server-cookie server-security))
+                                  (let [offset (+ offset K/server-cookie-length)]
+                                    (b-t/byte-copy! packet offset
+                                                    K/server-nonce-prefix-length
+                                                    working-nonce
+                                                    K/server-nonce-suffix-length)))))
+                            ;; Original version sends off the packet, updates
+                            ;; msg-len to 0, and goes back to pulling data from child/server.
                             (throw (ex-info "How should this really work?"
                                             {:problem "Need to break out of loop here"})))))
                       (assoc acc :msg-len msg-len))))
@@ -870,7 +870,7 @@ TODO: Need to ask around about that."
                                                  ::timed-out)]
      (log/info "waiting for initial-child-bytes returned" available)
      (if-not (keyword? available)
-       available
+       available   ; i.e. success
        (if-not (= available ::drained)
          (if (= available ::timed-out)
            (throw (RuntimeException. "Timed out waiting for child"))
@@ -902,6 +902,8 @@ TODO: Need to ask around about that."
               ;; I actually have a gaping question about performance here:
               ;; will I be able to out-perform java's garbage collector by
               ;; recycling used ByteBufs?
+              ;; A: Absolutely not!
+              ;; It was ridiculous to ever even contemplate.
               (strm/put! (::release->child @wrapper) msg-byte-buf))
           buffer)))))
 
@@ -1066,7 +1068,7 @@ terrible approach in an environment that's intended to multi-thread."
           (let [this @wrapper
                 initial-bytes (wait-for-initial-child-bytes this)
                 vouch (build-initiate-packet! wrapper initial-bytes)]
-          (log/info "send-off send-vouch!")
+            (log/info "send-off send-vouch!")
             (send-off wrapper send-vouch! wrapper vouch))
           (do
             (log/error (str "Converting cookie to vouch took longer than "
@@ -1104,6 +1106,32 @@ terrible approach in an environment that's intended to multi-thread."
           (partial hello-response-timed-out! wrapper))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
 
+(defn cope-with-successful-hello-creation
+  [wrapper chan->server timeout]
+  (let [raw-packet (get-in @wrapper
+                           [::shared/packet-management
+                            ::shared/packet])]
+    (log/debug "client/start! Putting" raw-packet "onto" chan->server)
+    ;; There's still an important break
+    ;; with the reference implementation
+    ;; here: this should be sending the
+    ;; HELLO packet to multiple server
+    ;; end-points to deal with them
+    ;; going down.
+    ;; I think it's supposed to happen
+    ;; in a delayed interval, to give
+    ;; each a short time to answer before
+    ;; the next, but a major selling point
+    ;; is not waiting for TCP buffers
+    ;; to expire.
+    (let [d (strm/try-put! chan->server
+                           raw-packet
+                           timeout
+                           ::sending-hello-timed-out)]
+      (deferred/on-realized d
+        (partial wait-for-cookie wrapper)
+        (partial hello-failed! wrapper)))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -1117,9 +1145,12 @@ terrible approach in an environment that's intended to multi-thread."
 (defn start!
   "This almost seems like it belongs in ctor.
 
-But not quite, since it's really a side-effect that sets up another.
+But not quite, since it's really the first in a chain of side-effects.
 
 Q: Is there something equivalent I can set up using core.async?
+
+Actually, this seems to be screaming to be rewritten on top of manifold
+Deferreds.
 
 For that matter, it seems like setting up a watch on an atom that's
 specifically for something like this might make a lot more sense.
@@ -1150,30 +1181,10 @@ like a timing attack."
     ;; with mutable state.
     (send wrapper do-build-hello)
     (if (await-for timeout wrapper)
-      (let [raw-packet (get-in @wrapper
-                               [::shared/packet-management
-                                ::shared/packet])]
-        (log/debug "client/start! Putting" raw-packet "onto" chan->server)
-        ;; There's still an important break
-        ;; with the reference implementation
-        ;; here: this should be sending the
-        ;; HELLO packet to multiple server
-        ;; end-points to deal with them
-        ;; going down.
-        ;; I think it's supposed to happen
-        ;; in a delayed interval, to give
-        ;; each a short time to answer before
-        ;; the next, but a major selling point
-        ;; is not waiting for TCP buffers
-        ;; to expire.
-        (let [d (strm/try-put! chan->server
-                               raw-packet
-                               timeout
-                               ::sending-hello-timed-out)]
-          (deferred/on-realized d
-            (partial wait-for-cookie wrapper)
-            (partial hello-failed! wrapper))))
-      (throw (ex-info "Building the hello failed" {:problem (agent-error wrapper)})))))
+      (cope-with-successful-hello-creation wrapper chan->server timeout)
+      (throw (ex-info (str "Timed out after " timeout
+                           " milliseconds waiting to build HELLO packet")
+                      {:problem (agent-error wrapper)})))))
 
 (defn stop!
   [wrapper]
