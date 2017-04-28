@@ -66,20 +66,8 @@
           nonce (byte-array K/nonce-length)]
       (b-t/byte-copy! offset-text offset block-length plain-text)
 
-      ;; TODO: Roll back my debugging changes to the java code
-      ;; to get back to the canonical version.
-      ;; Then work with copies and never change that one again.
-      ;; Getting public access to the shared key like this was one
-      ;; of the more drastic changes
-      (testing "That keys match"
-        (let [official (.-sharedKey client-standard-shared)]
-          (is (b-t/bytes= client-shared-bytes official))
-          (is (= 0 (bs/compare-bytes client-shared-bytes official))))
-        (let [official (.-sharedKey server-shared)]
-          (is (b-t/bytes= server-shared-nm official))
-          (is (= 0 (bs/compare-bytes server-shared-nm official))))
-        (testing "symmetric"
-          (is (= 0 (bs/compare-bytes server-shared-nm client-shared-bytes)))))
+      (testing "symmetric"
+        (is (= 0 (bs/compare-bytes server-shared-nm client-shared-bytes))))
 
       ;; This is fairly arbitrary...24 random-bytes seems better
       (aset-byte nonce 7 1)
@@ -287,7 +275,7 @@
   ;; 2. Write, say, 480 bytes, send notification, then 320 more
   (let [write-notifier (strm/stream)
         buffer (Unpooled/buffer 2048)
-        child (future (client-child) buffer write-notifier)
+        child (future (client-child buffer write-notifier))
         read-notifier (strm/stream)
         release-notifier (strm/stream)
         hidden [(strm/try-take! read-notifier ::drained 2500 ::timed-out)

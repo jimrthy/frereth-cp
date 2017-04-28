@@ -18,5 +18,3 @@
 (defn reset
   []
   (println "Yep. You mean (dev)"))
-
-(println "Welcome to the REPL. Start with (dev)")
