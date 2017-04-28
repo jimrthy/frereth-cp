@@ -206,6 +206,10 @@
 
 (defn vouch->server
   [client-chan vouch]
+  ;; I don't have any real failure indication available
+  ;; if something goes wrong with/on the server trying
+  ;; to cope with this incoming vouch.
+  ;; I almost need an error stream for dealing with exceptions.
   (if-not (or (= vouch ::drained)
               (= vouch ::timeout))
     (strm/try-put! (:chan client-chan)
@@ -293,6 +297,32 @@
      ::clnt/writer write-notifier
      ;; Q: Does it make any difference if I keep this around?
      ::hidden-child hidden}))
+
+(deftest viable-server
+  (testing "Does handshake start with a usable server?"
+    (let [server-extension (byte-array [0x01 0x02 0x03 0x04
+                                      0x05 0x06 0x07 0x08
+                                      0x09 0x0a 0x0b 0x0c
+                                        0x0d 0x0e 0x0f 0x10])
+          server-name (shared/encode-server-name "test.frereth.com")
+          options #::shared{:extension server-extension
+                            :my-keys #::shared{::K/server-name server-name
+                                               :keydir "curve-test"}}
+          unstarted-server (srvr/ctor options)
+          server<-client {:chan (strm/stream)}
+          server->client {:chan (strm/stream)}]
+      (try
+        (let [server (srvr/start! (assoc unstarted-server
+                                         ::srvr/client-read-chan server<-client
+                                         ::srvr/client-write-chan server->client))]
+          (try
+            (is (-> server ::srvr/active-clients deref))
+            (is (= 0 (-> server ::srvr/active-clients deref count)))
+            (is (not (srvr/find-client server (.getBytes "won't find this"))))
+            (finally (srvr/stop! server))))
+        (finally
+          (strm/close! (:chan server->client))
+          (strm/close! (:chan server<-client)))))))
 
 (deftest handshake
   (log/info "**********************************\nNew Hand-Shake test")

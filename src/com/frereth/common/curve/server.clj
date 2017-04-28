@@ -136,7 +136,7 @@
                      ::client-short-key ::shared/public-key))
 (defn find-client
   [state client-short-key]
-  (-> state ::active-clients deref client-short-key))
+  (-> state ::active-clients deref (get client-short-key)))
 
 (s/fdef check-packet-length
         :args (s/cat :packet bytes?)
@@ -521,6 +521,15 @@ To be fair, this layer *is* pretty special."
   ;; This corresponds to lines 359-368. Just verify that
   ;; we can open our secret cryptobox cookie using either
   ;; the current or previous minute-key
+
+  ;; This error gets logged, but there's no good way for the
+  ;; caller to know that there was a problem.
+  ;; Well, the "client" that put the message onto the stream.
+  ;; This is annoying for unit tests, but realistic for
+  ;; the real world.
+  ;; Outside the unit test scenario, the "client" is whatever
+  ;; pulled data from the UDP socket.
+  ;; And that shouldn't be coping with problems at this level.
   (throw (RuntimeException. "Get this translated")))
 
 (s/fdef configure-shared-secrets
@@ -542,7 +551,7 @@ To be fair, this layer *is* pretty special."
   (or
    (let [n (.readableBytes message)]
      (if (>= n minimum-initiate-packet-length)
-       (let [tmplt (update-in K/initiate-packet-dscr [::vouch ::length] + (- n minimum-initiate-packet-length))
+       (let [tmplt (update-in K/initiate-packet-dscr [::K/vouch ::K/length] + (- n minimum-initiate-packet-length))
              initiate (shared/decompose tmplt message)
              client-short-key (::K/clnt-short-pk initiate)]
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)
@@ -626,6 +635,15 @@ To be fair, this layer *is* pretty special."
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
   (let [p-m (::shared/packet-management this)]
+    ;; The atom below this causes an NPE.
+    ;; Trying to sort out why.
+    (do
+      (log/warn "FIXME: Debug only")
+      (if-not p-m
+        (log/error (str "Missing ::shared/packet-management in\n" this))
+        (if-let [packet (::shared/packet p-m)]
+          (log/warn (str "Getting ready to have a problem calling .clear on\n" packet))
+          (log/error "Missing ::shared/packet inside\n" p-m))))
     (crypto/randomize-buffer! (::shared/packet p-m)))
   (crypto/random-bytes! (-> this ::current-client ::client-security ::short-pk))
   ;; These are all private, so I really can't touch them
