@@ -1,4 +1,4 @@
-(ns test-bit-twiddling
+(ns com.frereth.common.curve.shared.bit-twiddling-test
   (:require [clojure.test :refer (deftest is testing)]
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]))
 
