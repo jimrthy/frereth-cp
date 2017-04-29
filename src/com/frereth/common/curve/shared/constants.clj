@@ -76,7 +76,7 @@
              ::cookie {::type ::bytes
                        ::length 144}))
 
-(def black-box-dscr (array-map ::padding {::type ::zeroes ::length box-zero-bytes}
+(def black-box-dscr (array-map ::padding {::type ::zeroes ::length decrypt-box-zero-bytes}
                                ::clnt-short-pk {::type ::bytes ::length key-length}
                                ::srvr-short-sk {::type ::bytes ::length key-length}))
 (def cookie

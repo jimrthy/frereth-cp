@@ -1,7 +1,5 @@
 (ns com.frereth.common.curve.shared
-  "For pieces shared among client, server, and messaging.
-
-This is getting big enough that I really need to split it up"
+  "For pieces shared among client, server, and messaging"
   (:require [byte-streams :as b-s]
             [clojure.java.io :as io]
             [clojure.pprint :refer (pprint)]

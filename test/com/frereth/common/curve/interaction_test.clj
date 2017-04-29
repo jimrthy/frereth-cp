@@ -240,6 +240,17 @@
 (defn client-child
   [buffer write-notifier]
   (log/info "Client child sending bytes to server via client")
+  ;; Build in a delay to give the parent a chance to do its stuff
+  ;; before we try to write to a channel that doesn't have a listener
+  ;; yet.
+  ;; It seems like this should fail with a timeout if the listener
+  ;; doesn't connect quickly enough, but it's just failing without
+  ;; explanation, sometimes.
+  ;; This is just my current theory.
+  ;; If this is correct, it seems like a strong argument to switch
+  ;; to something like core.async or even pulsar.
+  ;; Note this this failed immediately when I tried sleeping 1/4 second
+  (comment (Thread/sleep 500))
   (.writeBytes buffer (byte-array (range 1025)))
   (let [wrote (strm/try-put! write-notifier
                              buffer

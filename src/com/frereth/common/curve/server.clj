@@ -673,13 +673,18 @@ To be fair, this layer *is* pretty special."
              (if-let [cookie (extract-cookie (::cookie-cutter state)
                                              initiate)]
                (do
-                 (log/info (str "Succssfully extracted cookie:\n")
-                           (util/pretty cookie))
+                 (log/info (str "Succssfully extracted cookie"))
                  (let [server-short-sk-buffer (::K/srvr-short-sk cookie)
                        server-short-sk (byte-array K/key-length)
                        client-short-pk (byte-array K/key-length)]
                    (.getBytes server-short-sk-buffer 0 server-short-sk)
                    (.getBytes client-short-key 0 client-short-pk)
+                   (log/info "Keys from cookie/initiate:\nServer secret:\n"
+                             (shared/bytes->string server-short-sk)
+                             "\nClient hidden public:\n"
+                             (shared/bytes->string (::K/clnt-short-pk cookie))
+                             "\nClient-supplied public:\n"
+                             (shared/bytes->string client-short-key))
                    (let [active-client (configure-shared-secrets active-client
                                                                  server-short-sk
                                                                  client-short-pk)]
