@@ -564,13 +564,13 @@ To be fair, this layer *is* pretty special."
                         K/hello-crypto-box-length
                         initial-cookie
                         K/server-nonce-suffix-length)
-        (log/info "Trying to extract cookie based on current minute-key")
+        (log/debug "Trying to extract cookie based on current minute-key")
         (when-let [success
                    (try
                      (crypto/secret-unbox result result box-size nonce (::minute-key cookie-cutter))
                      (catch ExceptionInfo _
                        ;; Try again with the previous minute-key
-                       (log/info "That failed. Try again with the previous minute-key")
+                       (log/debug "That failed. Try again with the previous minute-key")
                        (b-t/byte-copy! result 0 K/box-zero-bytes shared/zero-bytes)
                        (b-t/byte-copy! result
                                        K/box-zero-bytes
@@ -585,7 +585,10 @@ To be fair, this layer *is* pretty special."
                                               nonce
                                               (::last-minute-key cookie-cutter))
                          (catch ExceptionInfo _
-                           ;; For now, just silently discard this failure
+                           ;; Reference implementation just silently discards the
+                           ;; failure.
+                           ;; That's more efficient at this level, but seems to
+                           ;; discard the possibilities of attack mitigation.
                            (log/warn "Extracting the original crypto-box failed")))))]
           (let [extracted (byte-array (subvec (vec result)
                                               K/decrypt-box-zero-bytes
@@ -593,7 +596,7 @@ To be fair, this layer *is* pretty special."
                 expected-buffer (::K/clnt-short-pk initiate)
                 expected (byte-array K/key-length)]
             (.getBytes expected-buffer 0 expected)
-            (log/info "Cookie extraction succeeded. Q: Do the contents match?"
+            (log/debug "Cookie extraction succeeded. Q: Do the contents match?"
                       "\nExpected:\n"
                       (with-out-str (b-s/print-bytes expected))
                       "\nActual:\n"
