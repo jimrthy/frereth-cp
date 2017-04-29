@@ -14,6 +14,7 @@
 (def decrypt-box-zero-bytes 32)
 (def key-length 32)
 (def max-random-nonce (long (Math/pow 2 48)))
+(def message-len 1104)
 (def nonce-length 24)
 (def server-nonce-prefix-length 8)
 (def server-nonce-suffix-length 16)

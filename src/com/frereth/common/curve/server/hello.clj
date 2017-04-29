@@ -1,0 +1,164 @@
+(ns com.frereth.common.curve.server.hello
+  "For coping with incoming HELLO packets"
+  (:require [byte-streams :as b-s]
+            [clojure.tools.logging :as log]
+            [com.frereth.common.curve.server.cookie :as cookie]
+            [com.frereth.common.curve.shared :as shared]
+            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
+            [com.frereth.common.curve.shared.constants :as K]
+            [com.frereth.common.curve.shared.crypto :as crypto]
+            [manifold.deferred :as deferred]
+            [manifold.stream :as stream]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Internal
+
+(defn open-hello-crypto-box
+  [{:keys [::client-short-pk
+           ::cookie-cutter
+           ::nonce-suffix
+           ::shared/my-keys
+           ::shared/working-area]
+    :as state}
+   message
+   crypto-box]
+  (let [long-keys (::shared/long-pair my-keys)]
+    (when-not long-keys
+      ;; Log whichever was missing and throw
+      (if my-keys
+        (log/error "Missing ::shared/long-pair among" (keys my-keys))
+        (log/error "Missing ::shared/my-keys among" (keys state)))
+      (throw (ex-info "Missing long-term keypair" state)))
+    (let [my-sk (.getSecretKey long-keys)
+          shared-secret (crypto/box-prepare client-short-pk my-sk)
+          ;; Q: How do I combine these to handle this all at once?
+          ;; I think I should be able to do something like:
+          ;; {:keys [{:keys [::text ::working-nonce] :as ::work-area}]}
+          ;; state
+          ;; (that fails spec validation)
+          ;; Better Q: Would that a good idea, if it worked?
+          ;; (Pretty sure this is/was the main thrust behind a plumatic library)
+          {:keys [::shared/text ::shared/working-nonce]} working-area]
+      (log/debug (str "Incoming HELLO\n"
+                      "Client short-term PK:\n"
+                      (with-out-str (b-s/print-bytes client-short-pk))
+                      "\nMy long-term PK:\n"
+                      (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))))
+      (b-t/byte-copy! working-nonce
+                      shared/hello-nonce-prefix)
+      (.readBytes nonce-suffix working-nonce K/client-nonce-prefix-length K/client-nonce-suffix-length)
+      (.readBytes crypto-box text #_K/decrypt-box-zero-bytes 0 K/hello-crypto-box-length)
+      (let [msg (str "Trying to open "
+                     K/hello-crypto-box-length
+                     " bytes of\n"
+                     (with-out-str (b-s/print-bytes (b-t/sub-byte-array text 0 (+ 32 K/hello-crypto-box-length))))
+                     "\nusing nonce\n"
+                     (with-out-str (b-s/print-bytes working-nonce))
+                     "\nencrypted from\n"
+                     (with-out-str (b-s/print-bytes client-short-pk))
+                     "\nto\n"
+                     (with-out-str (b-s/print-bytes (.getPublicKey long-keys))))]
+        (log/debug msg))
+      {::opened (crypto/open-after
+                 text
+                 0
+                 K/hello-crypto-box-length
+                 working-nonce
+                 shared-secret)
+       ::shared-secret shared-secret})))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public
+
+(defn handle!
+  [{:keys [::shared/working-area]
+    :as state}
+   {:keys [host message port]
+    :as packet}]
+  (log/debug "Have what looks like a HELLO packet")
+  (if (= (.readableBytes message) shared/hello-packet-length)
+    (do
+      (log/info "This is the correct size")
+      (let [;; Q: Is the convenience here worth the performance hit?
+            {:keys [::K/clnt-xtn
+                    ::K/clnt-short-pk
+                    ::K/crypto-box
+                    ::K/nonce
+                    ::K/srvr-xtn]
+             :as decomposed} (shared/decompose K/hello-packet-dscr message)
+            client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
+        (assert client-short-pk)
+        (assert clnt-short-pk)
+        ;; Q: Is there any real point to this?
+        (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
+        (.getBytes clnt-short-pk 0 client-short-pk)
+        (let [unboxed (open-hello-crypto-box (assoc state
+                                                    ::client-short-pk client-short-pk
+                                                    ::nonce-suffix nonce)
+                                             message
+                                             crypto-box)
+              plain-text (::opened unboxed)]
+          (if plain-text
+            (let [shared-secret (::shared-secret unboxed)
+                  minute-key (get-in state [::cookie-cutter ::minute-key])
+                  {:keys [::shared/text
+                          ::shared/working-nonce]} working-area]
+              (log/debug "asserting minute-key" minute-key "among" (keys state))
+              (assert minute-key)
+              (log/debug "Preparing cookie")
+              ;; We don't actually care about the contents of the bytes we just decrypted.
+              ;; They should be all zeroes for now, but that's really an area for possible future
+              ;; expansion.
+              ;; For now, the point is that they unbox correctly on the other side
+              (let [crypto-box
+                    (cookie/prepare-cookie! {::client-short<->server-long shared-secret
+                                             ::client-short-pk clnt-short-pk
+                                             ::minute-key minute-key
+                                             ::plain-text plain-text
+                                             ::text text
+                                             ::working-nonce working-nonce})]
+                ;; Note that this overrides the incoming message in place
+                ;; Which seems dangerous, but it very deliberately is longer than
+                ;; our response.
+                ;; And it does save a malloc/GC.
+                ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
+                (.clear message)
+                (let [response
+                      (cookie/build-cookie-packet message clnt-xtn srvr-xtn working-nonce crypto-box)]
+                  (log/info (str "Cookie packet built. Returning it.\nByte content:\n"
+                                 (with-out-str (b-s/print-bytes response))
+                                 "Reference count: " (.refCnt response)))
+                  (try
+                    (let [dst (get-in state [::client-write-chan :chan])
+                          put-future (stream/try-put! dst
+                                                      (assoc packet
+                                                             :message response)
+                                                      ;; TODO: This really needs to be part of
+                                                      ;; state so it can be tuned while running
+                                                      cookie/send-timeout
+                                                      ::timed-out)]
+                      (log/info "Cookie packet scheduled to send")
+                      (deferred/on-realized put-future
+                        (fn [success]
+                          (if success
+                            (log/info "Sending Cookie succeeded")
+                            (log/error "Sending Cookie failed"))
+                          ;; TODO: Make sure this does get released!
+                          ;; The caller has to handle that, though.
+                          ;; It can't be released until after it's been put
+                          ;; on the socket.
+                          (comment (.release response)))
+                        (fn [err]
+                          (log/error "Sending Cookie failed:" err)
+                          (.release response)))
+                      state)
+                    (catch Exception ex
+                      (log/error ex "Failed to send Cookie response")
+                      state)))))
+            (do
+              (log/warn "Unable to open the HELLO crypto-box: dropping")
+              state)))))
+    (log/warn "Wrong size for a HELLO packet. Need"
+              shared/hello-packet-length
+              "got"
+              (.readableBytes message))))

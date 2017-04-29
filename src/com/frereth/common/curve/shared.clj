@@ -57,6 +57,12 @@
                                ::long-pair
                                ::K/server-name
                                ::short-pair]))
+
+(s/def ::crypto-key (s/and bytes?
+                        #(= (count %) K/key-length)))
+(s/def ::long-pk ::crypto-key)
+(s/def ::short-pk ::crypto-key)
+
 ;; "Recent" timestamp, in nanoseconds
 (s/def ::recent integer?)
 
