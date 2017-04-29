@@ -227,23 +227,9 @@ and puts the crypto-text into the byte-array in text"
       ;; so it winds up at the start of the array).
       ;; Note that this is a departure from the reference implementation!
       (let [actual (.array buffer)]
-        (log/info (str "Before encrypting crypto-cookie, it looks like\n"
-                       (with-out-str (b-s/print-bytes actual))))
         (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
-        (log/info (str "Encrypted cookie starting at offset "
-                       (.readerIndex buffer)
-                       ":\n"
-                       (with-out-str (b-s/print-bytes actual))
-                       "which really should match\n"
-                       (with-out-str (b-s/print-bytes buffer))))
         ;; Copy that encrypted cookie into the text working area
         (.getBytes buffer 0 text 32 K/server-cookie-length)
-        (log/info (str "After copying " K/server-cookie-length " bytes of that into text,\n"
-                       "starting at offset 32, "
-                       "it looks like\n"
-                       (with-out-str (b-s/print-bytes text))
-                       "and the reader index has moved to "
-                       (.readerIndex buffer)))
         ;; Along with the nonce
         ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
         ;; Go with the assumption that those are the initial garbage 0 bytes that should
@@ -679,12 +665,6 @@ To be fair, this layer *is* pretty special."
                        client-short-pk (byte-array K/key-length)]
                    (.getBytes server-short-sk-buffer 0 server-short-sk)
                    (.getBytes client-short-key 0 client-short-pk)
-                   (log/info "Keys from cookie/initiate:\nServer secret:\n"
-                             (shared/bytes->string server-short-sk)
-                             "\nClient hidden public:\n"
-                             (shared/bytes->string (::K/clnt-short-pk cookie))
-                             "\nClient-supplied public:\n"
-                             (shared/bytes->string client-short-key))
                    (let [active-client (configure-shared-secrets active-client
                                                                  server-short-sk
                                                                  client-short-pk)]
