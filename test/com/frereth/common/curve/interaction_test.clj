@@ -239,16 +239,20 @@
 
 (defn client-child
   [buffer write-notifier]
-  (log/debug "Client child sending bytes to server via client")
+  (log/info "Client child sending bytes to server via client")
   (.writeBytes buffer (byte-array (range 1025)))
   (let [wrote (strm/try-put! write-notifier
                              buffer
                              2500
                              ::timedout)]
-    ;; This is timing out.
+    ;; This is timing out or failing.
     ;; So the client is reading/waiting for the wrong thing.
-    (log/info (str "Client-child send result to " write-notifier " => "  @wrote))
-    (is (not= @wrote ::timedout))))
+    ;; Sometimes.
+    ;; Q: What's up with that?
+    (let [succeeded @wrote]
+      (log/info (str "Client-child send result to " write-notifier " => "  succeeded))
+      (is succeeded)
+      (is (not= succeeded ::timedout)))))
 
 (defn notified-about-release
   [write-notifier release-notifier read-notifier success]
@@ -433,7 +437,7 @@
                                 (if-let [err (agent-error client)]
                                   (str "\nClient failure:\n" err)
                                   (str "\n(client agent thinks everything is fine)"))))
-                  (is (not ex)))`
+                  (is (not ex)))
                 (finally
                   (println "Test done. Stopping server.")
                   (srvr/stop! server))))
