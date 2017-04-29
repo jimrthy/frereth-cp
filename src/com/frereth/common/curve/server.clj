@@ -36,13 +36,15 @@
                                      ::minute-key
                                      ::last-minute-key]))
 
-;; Q: Move these public key specs into shared?
-(s/def ::long-pk (s/and bytes?
+;; TODO: Move these public key specs into shared
+(s/def ::crypto-key (s/and bytes?
                         #(= (count %) K/key-length)))
-(s/def ::short-pk (s/and bytes?
-                         #(= (count %) K/key-length)))
-(s/def ::client-security (s/keys :req [::long-pk
-                                       ::short-pk]))
+(s/def ::long-pk ::crypto-key)
+(s/def ::short-pk ::crypto-key)
+(s/def ::server-short-sk ::crypto-key)
+(s/def ::client-security (s/keys :opt [::long-pk  ; Q: store this?
+                                       ::short-pk
+                                       ::server-short-sk]))
 
 (s/def ::client-short<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-short ::shared/shared-secret)
@@ -517,6 +519,83 @@ To be fair, this layer *is* pretty special."
             (log/debug "Discarding obsolete nonce:" packet-nonce "/" last-packet-nonce)
             true))))))
 
+(s/fdef decrypt-inner-vouch!
+        :args (s/cat :cookie-cutter ::cookie-cutter
+                     :dst any?
+                     :hello-cookie any?)
+        :ret boolean?)
+(defn decrypt-inner-vouch!
+  [cookie-cutter dst hello-cookie]
+  (log/debug "Trying to extract cookie based on current minute-key")
+  ;; Set it up to extract from the current minute key
+  (b-t/byte-copy! dst 0 K/box-zero-bytes shared/all-zeros)
+  (b-t/byte-copy! dst
+                  K/box-zero-bytes
+                  K/hello-crypto-box-length
+                  hello-cookie
+                  K/server-nonce-suffix-length)
+  (let [box-size (+ K/box-zero-bytes K/hello-crypto-box-length)
+        ;; Q: How much faster/more efficient is it to have a
+        ;; io.netty.buffer.PooledByteBufAllocator around that
+        ;; I could use for either .heapBuffer or .directBuffer?
+        ;; (as opposed to creating my own local in the let above)
+        nonce (byte-array K/nonce-length)]
+    (try
+      (b-t/byte-copy! nonce K/cookie-nonce-minute-prefix)
+      (b-t/byte-copy! nonce
+                      K/server-nonce-prefix-length
+                      K/server-nonce-suffix-length
+                      hello-cookie)
+      (crypto/secret-unbox dst dst box-size nonce (::minute-key cookie-cutter))
+      true
+      (catch ExceptionInfo _
+        ;; Try again with the previous minute-key
+        (log/debug "That failed. Try again with the previous minute-key")
+        (b-t/byte-copy! dst 0 K/box-zero-bytes shared/zero-bytes)
+        (b-t/byte-copy! dst
+                        K/box-zero-bytes
+                        K/hello-crypto-box-length
+                        hello-cookie
+                        K/server-nonce-suffix-length)
+
+        (try
+          (crypto/secret-unbox dst
+                               dst
+                               box-size
+                               nonce
+                               (::last-minute-key cookie-cutter))
+          true
+          (catch ExceptionInfo _
+            ;; Reference implementation just silently discards the
+            ;; failure.
+            ;; That's more efficient at this level, but seems to
+            ;; discard the possibilities of attack mitigation.
+            (log/warn "Extracting the original crypto-box failed")
+            ;; Be explicit about returning failure
+            false))))))
+
+(s/fdef verify-client-pk-in-vouch
+        :args (s/cat :destructured-initiate-packet ::K/initiate-packet-spec
+                       :inner-vouch-decrypted-box (s/and bytes?
+                                                         #(= (+ K/hello-crypto-box-length
+                                                                K/decrypt-box-zero-bytes)
+                                                             (count %))))
+        :ret boolean?)
+(defn verify-client-pk-in-vouch
+  [initiate inner-vouch-decrypted-box]
+  (let [extracted (byte-array (subvec (vec inner-vouch-decrypted-box)
+                                      K/decrypt-box-zero-bytes
+                                      (+ K/decrypt-box-zero-bytes K/key-length)))
+        expected-buffer (::K/clnt-short-pk initiate)
+        expected (byte-array K/key-length)]
+    (.getBytes expected-buffer 0 expected)
+    (log/debug "Cookie extraction succeeded. Q: Do the contents match?"
+               "\nExpected:\n"
+               (with-out-str (b-s/print-bytes expected))
+               "\nActual:\n"
+               (with-out-str (b-s/print-bytes extracted)))
+    (b-t/bytes= extracted expected)))
+
 (s/fdef extract-cookie
         :args (s/cat :cookie-cutter ::cookie-cutter
                      :initiate-packet ::K/initiate-packet-spec)
@@ -530,7 +609,7 @@ To be fair, this layer *is* pretty special."
   ;; we can open our secret cryptobox cookie using either
   ;; the current or previous minute-key
 
-  ;; This error gets logged, but there's no good way for the
+  ;; Errors here get logged, but there's no good way for the
   ;; caller to know that there was a problem.
   ;; Well, the "client" that put the message onto the stream.
   ;; This is annoying for unit tests, but realistic for
@@ -542,66 +621,14 @@ To be fair, this layer *is* pretty special."
   ;; just silently discards the packet.
   ;; Although that approach is undeniably faster than throwing
   ;; an exception and logging the problem
-  (let [nonce (byte-array K/nonce-length)]
-    ;; Q: How much faster/more efficient is it to have a
-    ;; io.netty.buffer.PooledByteBufAllocator around that
-    ;; I could use for either .heapBuffer or .directBuffer?
-    ;; (as opposed to creating my own local in the let above)
-    (b-t/byte-copy! nonce K/cookie-nonce-minute-prefix)
-    (let [initial-cookie-buffer (::K/cookie initiate)
-          initial-cookie (byte-array K/server-cookie-length)]
-      (.getBytes initial-cookie-buffer 0 initial-cookie)
-      (b-t/byte-copy! nonce
-                      K/server-nonce-prefix-length
-                      K/server-nonce-suffix-length
-                      initial-cookie)
-      (let [box-size (+ K/box-zero-bytes K/hello-crypto-box-length)
-            result (byte-array box-size)]
-        ;; Set it up to extract from the current minute key
-        (b-t/byte-copy! result 0 K/box-zero-bytes shared/all-zeros)
-        (b-t/byte-copy! result
-                        K/box-zero-bytes
-                        K/hello-crypto-box-length
-                        initial-cookie
-                        K/server-nonce-suffix-length)
-        (log/debug "Trying to extract cookie based on current minute-key")
-        (when-let [success
-                   (try
-                     (crypto/secret-unbox result result box-size nonce (::minute-key cookie-cutter))
-                     (catch ExceptionInfo _
-                       ;; Try again with the previous minute-key
-                       (log/debug "That failed. Try again with the previous minute-key")
-                       (b-t/byte-copy! result 0 K/box-zero-bytes shared/zero-bytes)
-                       (b-t/byte-copy! result
-                                       K/box-zero-bytes
-                                       K/hello-crypto-box-length
-                                       initial-cookie
-                                       K/server-nonce-suffix-length)
-
-                       (try
-                         (crypto/secret-unbox result
-                                              result
-                                              box-size
-                                              nonce
-                                              (::last-minute-key cookie-cutter))
-                         (catch ExceptionInfo _
-                           ;; Reference implementation just silently discards the
-                           ;; failure.
-                           ;; That's more efficient at this level, but seems to
-                           ;; discard the possibilities of attack mitigation.
-                           (log/warn "Extracting the original crypto-box failed")))))]
-          (let [extracted (byte-array (subvec (vec result)
-                                              K/decrypt-box-zero-bytes
-                                              (+ K/decrypt-box-zero-bytes K/key-length)))
-                expected-buffer (::K/clnt-short-pk initiate)
-                expected (byte-array K/key-length)]
-            (.getBytes expected-buffer 0 expected)
-            (log/debug "Cookie extraction succeeded. Q: Do the contents match?"
-                      "\nExpected:\n"
-                      (with-out-str (b-s/print-bytes expected))
-                      "\nActual:\n"
-                      (with-out-str (b-s/print-bytes extracted)))
-            (b-t/bytes= extracted expected)))))))
+  (let [hello-cookie-buffer (::K/cookie initiate)
+        hello-cookie (byte-array K/server-cookie-length)]
+    (.getBytes hello-cookie-buffer 0 hello-cookie)
+    (let [box-size (+ K/box-zero-bytes K/hello-crypto-box-length)
+          raw-inner-vouch (byte-array box-size)]
+      (when (decrypt-inner-vouch! cookie-cutter raw-inner-vouch hello-cookie)
+        (when (verify-client-pk-in-vouch initiate raw-inner-vouch)
+          (throw (RuntimeException. "Still need to destructure the cookie")))))))
 
 (s/fdef configure-shared-secrets
         :args (s/cat :client ::client-state
@@ -609,11 +636,15 @@ To be fair, this layer *is* pretty special."
                      :client-short-key ::shared/public-key)
         :ret ::client-state)
 (defn configure-shared-secrets
-  ;; This should correspond to lines 369-371
+  "Return altered client state that reflects new shared key
+  This should correspond to lines 369-371 in reference implementation"
   [client
    server-short-key
    client-short-key]
-  (throw (RuntimeException. "Get this translated")))
+  (-> client
+      (assoc-in [::shared-secrets ::client-short<->server-short] (crypto/box-prepare client-short-key server-short-key))
+      (assoc-in [::client-security ::short-pk client-short-key])
+      (assoc-in [::client-security ::server-short-sk server-short-key])))
 
 (defn handle-initiate!
   [state
@@ -631,11 +662,14 @@ To be fair, this layer *is* pretty special."
                                              initiate)]
                (do
                  (log/info (str "Succssfully extracted cookie"))
-                 (let [active-client (configure-shared-secrets active-client
-                                                               (::K/s' cookie)
-                                                               client-short-key)]
-                   (throw (ex-info "Don't stop here!"
-                                   {:what "Cope with vouch/initiate"}))))
+                 (let [client-short-pk-buffer (::K/s' cookie)
+                       client-short-pk (byte-array K/key-length)]
+                   (.getBytes client-short-pk-buffer client-short-pk)
+                   (let [active-client (configure-shared-secrets active-client
+                                                                 client-short-pk
+                                                                 client-short-key)]
+                     (throw (ex-info "Don't stop here!"
+                                     {:what "Cope with vouch/initiate"})))))
                (log/error "FIXME: Debug only: cookie extraction failed")))
            (log/info "Received additional Initiate packet from" client-short-key)))
        (log/warn (str "Truncated initiate packet. Only received " n " bytes"))))

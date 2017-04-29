@@ -433,7 +433,7 @@
                                 (if-let [err (agent-error client)]
                                   (str "\nClient failure:\n" err)
                                   (str "\n(client agent thinks everything is fine)"))))
-                  (is (not ex)))
+                  (is (not ex)))`
                 (finally
                   (println "Test done. Stopping server.")
                   (srvr/stop! server))))
