@@ -27,7 +27,8 @@
             [manifold.deferred :as deferred]
             ;; Mixing this and core.async seems dubious, at best
             [manifold.stream :as strm])
-  (:import [io.netty.buffer ByteBuf Unpooled]))
+  (:import clojure.lang.ExceptionInfo
+           [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -319,17 +320,17 @@ Note that this is really called for side-effects"
                       "\nin\n"
                       (keys this)))
       (assert working-nonce))
-    (log/debug (str "Copying nonce prefix from\n"
+    (log/info (str "Copying nonce prefix from\n"
                     K/cookie-nonce-prefix
                     "\ninto\n"
                     working-nonce))
     (b-t/byte-copy! working-nonce K/cookie-nonce-prefix)
     (.readBytes nonce working-nonce K/server-nonce-prefix-length K/server-nonce-suffix-length)
 
-    (log/debug "Copying encrypted cookie into " text "from" (keys this))
+    (log/info "Copying encrypted cookie into " text "from" (keys this))
     (.readBytes cookie text 0 144)
     (let [shared (::client-short<->server-long shared-secrets)]
-      (log/debug (str "Trying to decrypt\n"
+      (log/info (str "Trying to decrypt\n"
                       (with-out-str (b-s/print-bytes text))
                       "using nonce\n"
                       (with-out-str (b-s/print-bytes working-nonce))
@@ -337,18 +338,22 @@ Note that this is really called for side-effects"
                       (with-out-str (b-s/print-bytes shared))))
       ;; TODO: If/when an exception is thrown here, it would be nice
       ;; to notify callers immediately
-      (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
-            extracted (shared/decompose K/cookie (Unpooled/wrappedBuffer (byte-array decrypted)))
-            server-short-term-pk (byte-array K/key-length)
-            server-cookie (byte-array K/server-cookie-length)
-            server-security (assoc (::server-security this)
-                                   ::server-short-term-pk
-                                   server-short-term-pk,
-                                   ::server-cookie server-cookie)
-            {:keys [::K/s' ::K/black-box]} extracted]
-        (.readBytes s' server-short-term-pk)
-        (.readBytes black-box server-cookie)
-        (assoc this ::server-security server-security)))))
+      (try
+        (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
+              extracted (shared/decompose K/cookie (Unpooled/wrappedBuffer (byte-array decrypted)))
+              server-short-term-pk (byte-array K/key-length)
+              server-cookie (byte-array K/server-cookie-length)
+              server-security (assoc (::server-security this)
+                                     ::server-short-term-pk
+                                     server-short-term-pk,
+                                     ::server-cookie server-cookie)
+              {:keys [::K/s' ::K/black-box]} extracted]
+          (.readBytes s' server-short-term-pk)
+          (.readBytes black-box server-cookie)
+          (assoc this ::server-security server-security))
+        (catch ExceptionInfo ex
+          (log/error ex (str "Decryption failed:\n"
+                             (util/pretty (.getData ex)))))))))
 
 (defn decrypt-cookie-packet
   [{:keys [::shared/extension
@@ -367,7 +372,7 @@ Note that this is really called for side-effects"
                  ::where 'shared.curve.client/decrypt-cookie-packet}]
         (throw (ex-info "Incoming cookie packet illegal" err))))
     (log/debug (str "Incoming packet that looks like it might be a cookie:\n"
-                   (with-out-str (b-s/print-bytes packet))))
+                   (with-out-str (shared/bytes->string packet))))
     (let [rcvd (shared/decompose K/cookie-frame packet)
           hdr (byte-array K/header-length)
           xtnsn (byte-array K/extension-length)

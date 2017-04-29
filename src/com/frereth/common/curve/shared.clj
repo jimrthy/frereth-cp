@@ -2,7 +2,8 @@
   "For pieces shared among client, server, and messaging.
 
 This is getting big enough that I really need to split it up"
-  (:require [clojure.java.io :as io]
+  (:require [byte-streams :as b-s]
+            [clojure.java.io :as io]
             [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [clojure.string]
@@ -164,6 +165,10 @@ Needing to declare these things twice is annoying."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(defn bytes->string
+ [bs]
+ (with-out-str (b-s/print-bytes bs)))
 
 (defn compose
   "Convert the map in fields into a ByteBuf in dst, according to the rules described it tmplt

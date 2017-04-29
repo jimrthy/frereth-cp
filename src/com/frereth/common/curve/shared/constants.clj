@@ -76,9 +76,12 @@
              ::cookie {::type ::bytes
                        ::length 144}))
 
+(def black-box-dscr (array-map ::padding {::type ::zeroes ::length box-zero-bytes}
+                               ::clnt-short-pk {::type ::bytes ::length key-length}
+                               ::srvr-short-sk {::type ::bytes ::length key-length}))
 (def cookie
   (array-map ::s' {::type ::bytes ::length key-length}
-             ::black-box {::type ::zeroes ::length server-cookie-length}))
+             ::black-box {::type ::bytes ::length server-cookie-length}))
 ;; TODO: Need matching specs for these keys.
 (s/def ::cookie-spec (s/keys :req [::s' ::black-box]))
 

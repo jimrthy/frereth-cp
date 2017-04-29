@@ -262,7 +262,7 @@ and puts the crypto-text into the byte-array in text"
                         K/cookie-nonce-prefix)
         (let [cookie (crypto/box-after client-short<->server-long
                                        text
-                                       ;; TODO: named const for this?
+                                       ;; TODO: named const for this.
                                        128
                                        working-nonce)]
           (log/info (str "Full cookie going to client that it should be able to decrypt:\n"
@@ -281,13 +281,7 @@ and puts the crypto-text into the byte-array in text"
                                                  ::K/nonce (Unpooled/wrappedBuffer working-nonce
                                                                                    K/server-nonce-prefix-length
                                                                                    K/server-nonce-suffix-length)
-                                                 ;; Note that this is setting up the crypto-box "real" cookie
-                                                 ;; with 144 bytes from text, starting at offset 16.
-                                                 ;; Which does seem like a mistake
-                                                 ::K/cookie #_(Unpooled/wrappedBuffer text
-                                                                                    K/box-zero-bytes
-                                                                                    144)
-                                                 crypto-cookie}
+                                                 ::K/cookie crypto-cookie}
                                  packet)]
     ;; I really shouldn't need to do this
     ;; FIXME: Make sure it gets released
@@ -387,7 +381,7 @@ and puts the crypto-text into the byte-array in text"
               ;; We don't actually care about the contents of the bytes we just decrypted.
               ;; They should be all zeroes for now, but that's really an area for possible future
               ;; expansion.
-              ;; For now, the point is that they unbox correctly.
+              ;; For now, the point is that they unbox correctly on the other side
               (let [crypto-box
                     (prepare-cookie! {::client-short<->server-long shared-secret
                                       ::client-short-pk clnt-short-pk
@@ -527,15 +521,26 @@ To be fair, this layer *is* pretty special."
 (defn decrypt-inner-vouch!
   [cookie-cutter dst hello-cookie]
   (log/debug "Trying to extract cookie based on current minute-key")
-  ;; Set it up to extract from the current minute key
+  ;;; Set it up to extract from the current minute key
+
+  ;; Start with the initial 0-padding
   (b-t/byte-copy! dst 0 K/box-zero-bytes shared/all-zeros)
+  ;; Copy over the 80 bytes of crypto text from the initial cookie.
+  ;; Note that this part is tricky:
+  ;; The "real" initial cookie is 96 bytes long:
+  ;; * 32 bytes of padding
+  ;; * 32 bytes of client short-term key
+  ;; * 32 bytes of server short-term key
+  ;; That's 80 bytes crypto text.
+  ;; But then the "crypto black box" that just round-tripped
+  ;; through the client includes 16 bytes of a nonce, taking
+  ;; it back up to 96 bytes.
   (b-t/byte-copy! dst
                   K/box-zero-bytes
                   K/hello-crypto-box-length
                   hello-cookie
                   K/server-nonce-suffix-length)
-  (let [box-size (+ K/box-zero-bytes K/hello-crypto-box-length)
-        ;; Q: How much faster/more efficient is it to have a
+  (let [;; Q: How much faster/more efficient is it to have a
         ;; io.netty.buffer.PooledByteBufAllocator around that
         ;; I could use for either .heapBuffer or .directBuffer?
         ;; (as opposed to creating my own local in the let above)
@@ -546,7 +551,7 @@ To be fair, this layer *is* pretty special."
                       K/server-nonce-prefix-length
                       K/server-nonce-suffix-length
                       hello-cookie)
-      (crypto/secret-unbox dst dst box-size nonce (::minute-key cookie-cutter))
+      (crypto/secret-unbox dst dst K/server-cookie-length nonce (::minute-key cookie-cutter))
       true
       (catch ExceptionInfo _
         ;; Try again with the previous minute-key
@@ -561,7 +566,7 @@ To be fair, this layer *is* pretty special."
         (try
           (crypto/secret-unbox dst
                                dst
-                               box-size
+                               K/server-cookie-length
                                nonce
                                (::last-minute-key cookie-cutter))
           true
@@ -576,25 +581,21 @@ To be fair, this layer *is* pretty special."
 
 (s/fdef verify-client-pk-in-vouch
         :args (s/cat :destructured-initiate-packet ::K/initiate-packet-spec
-                       :inner-vouch-decrypted-box (s/and bytes?
-                                                         #(= (+ K/hello-crypto-box-length
-                                                                K/decrypt-box-zero-bytes)
-                                                             (count %))))
+                     :inner-vouch-decrypted-box (s/and bytes?
+                                                       #(= K/key-length
+                                                           (count %))))
         :ret boolean?)
 (defn verify-client-pk-in-vouch
-  [initiate inner-vouch-decrypted-box]
-  (let [extracted (byte-array (subvec (vec inner-vouch-decrypted-box)
-                                      K/decrypt-box-zero-bytes
-                                      (+ K/decrypt-box-zero-bytes K/key-length)))
-        expected-buffer (::K/clnt-short-pk initiate)
+  [initiate hidden-pk]
+  (let [expected-buffer (::K/clnt-short-pk initiate)
         expected (byte-array K/key-length)]
     (.getBytes expected-buffer 0 expected)
     (log/debug "Cookie extraction succeeded. Q: Do the contents match?"
                "\nExpected:\n"
-               (with-out-str (b-s/print-bytes expected))
+               (shared/bytes->string expected)
                "\nActual:\n"
-               (with-out-str (b-s/print-bytes extracted)))
-    (b-t/bytes= extracted expected)))
+               (shared/bytes->string hidden-pk))
+    (b-t/bytes= hidden-pk expected)))
 
 (s/fdef extract-cookie
         :args (s/cat :cookie-cutter ::cookie-cutter
@@ -624,27 +625,38 @@ To be fair, this layer *is* pretty special."
   (let [hello-cookie-buffer (::K/cookie initiate)
         hello-cookie (byte-array K/server-cookie-length)]
     (.getBytes hello-cookie-buffer 0 hello-cookie)
-    (let [box-size (+ K/box-zero-bytes K/hello-crypto-box-length)
-          raw-inner-vouch (byte-array box-size)]
-      (when (decrypt-inner-vouch! cookie-cutter raw-inner-vouch hello-cookie)
-        (when (verify-client-pk-in-vouch initiate raw-inner-vouch)
-          (throw (RuntimeException. "Still need to destructure the cookie")))))))
+    (let [inner-vouch-bytes (byte-array K/server-cookie-length)]
+      (when (decrypt-inner-vouch! cookie-cutter inner-vouch-bytes hello-cookie)
+        ;; Reference code:
+        ;; Verifies that the "first" 32 bytes (after the 32 bytes of
+        ;; decrypted 0 padding) of the 80 bytes it decrypted
+        ;; out of the inner vouch match the client short-term
+        ;; key in the outer initiate packet.
+        (let [full-decrypted-vouch (vec inner-vouch-bytes)
+              ;; Round-tripping through a vector seems pretty ridiculous.
+              ;; I really just want to verify that the first 32 bytes match
+              ;; the supplied key.
+              ;; Except that it's really bytes 16-47, isn't it?
+              key-array (byte-array (subvec full-decrypted-vouch 0 K/key-length))]
+          (when (verify-client-pk-in-vouch initiate key-array)
+            (let [vouch-buf (Unpooled/wrappedBuffer inner-vouch-bytes)]
+              (shared/decompose K/black-box-dscr vouch-buf))))))))
 
 (s/fdef configure-shared-secrets
         :args (s/cat :client ::client-state
-                     :server-short-key ::shared/secret-key
-                     :client-short-key ::shared/public-key)
+                     :server-short-sk ::shared/secret-key
+                     :client-short-pk ::shared/public-key)
         :ret ::client-state)
 (defn configure-shared-secrets
   "Return altered client state that reflects new shared key
   This should correspond to lines 369-371 in reference implementation"
   [client
-   server-short-key
-   client-short-key]
+   server-short-sk
+   client-short-pk]
   (-> client
-      (assoc-in [::shared-secrets ::client-short<->server-short] (crypto/box-prepare client-short-key server-short-key))
-      (assoc-in [::client-security ::short-pk client-short-key])
-      (assoc-in [::client-security ::server-short-sk server-short-key])))
+      (assoc-in [::shared-secrets ::client-short<->server-short] (crypto/box-prepare client-short-pk server-short-sk))
+      (assoc-in [::client-security ::short-pk] client-short-pk)
+      (assoc-in [::client-security ::server-short-sk] server-short-sk)))
 
 (defn handle-initiate!
   [state
@@ -661,13 +673,16 @@ To be fair, this layer *is* pretty special."
              (if-let [cookie (extract-cookie (::cookie-cutter state)
                                              initiate)]
                (do
-                 (log/info (str "Succssfully extracted cookie"))
-                 (let [client-short-pk-buffer (::K/s' cookie)
+                 (log/info (str "Succssfully extracted cookie:\n")
+                           (util/pretty cookie))
+                 (let [server-short-sk-buffer (::K/srvr-short-sk cookie)
+                       server-short-sk (byte-array K/key-length)
                        client-short-pk (byte-array K/key-length)]
-                   (.getBytes client-short-pk-buffer client-short-pk)
+                   (.getBytes server-short-sk-buffer 0 server-short-sk)
+                   (.getBytes client-short-key 0 client-short-pk)
                    (let [active-client (configure-shared-secrets active-client
-                                                                 client-short-pk
-                                                                 client-short-key)]
+                                                                 server-short-sk
+                                                                 client-short-pk)]
                      (throw (ex-info "Don't stop here!"
                                      {:what "Cope with vouch/initiate"})))))
                (log/error "FIXME: Debug only: cookie extraction failed")))
