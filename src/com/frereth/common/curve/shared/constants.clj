@@ -57,6 +57,7 @@
 
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
+(def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def server-cookie-length 96)
 (def cookie-packet-length 200)
 

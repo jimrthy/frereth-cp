@@ -25,7 +25,6 @@ This is getting big enough that I really need to split it up"
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
 
-(def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def cookie-position-in-packet 80)
 
 (def max-unsigned-long -1)
@@ -106,9 +105,6 @@ This is getting big enough that I really need to split it up"
 (s/def ::server-nonce (s/and bytes?
                              #(= (count %) K/server-nonce-suffix-length)))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
-
 (defn composition-reduction
   "Reduction function associated for run!ing from compose.
 
@@ -165,6 +161,9 @@ Needing to declare these things twice is annoying."
                          ::field k
                          ::description dscr
                          ::source-value v}))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public
 
 (defn compose
   "Convert the map in fields into a ByteBuf in dst, according to the rules described it tmplt
@@ -355,5 +354,6 @@ Or there's probably something similar in guava"
   (byte-array n (repeat 0)))
 
 (def all-zeros
-  "To avoid creating this over and over"
+  "To avoid creating this over and over.
+TODO: Refactor this to a function"
   (zero-bytes 128))

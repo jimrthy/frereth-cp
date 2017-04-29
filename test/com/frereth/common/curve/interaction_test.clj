@@ -426,12 +426,13 @@
                     (is (not= (deref eventually-started 500 ::timeout)
                               ::timeout))))
                 (catch Exception ex
-                  (log/error (str "Unhandled exception escaped!\n"
-                                  (with-out-str (.printStackTrace ex))))
-                  (log/error "Client state:" (with-out-str (pprint (clnt/hide-long-arrays @client))))
-                  (if-let [err (agent-error client)]
-                    (println "Client failure:\n" err)
-                    (println "(client agent thinks everything is fine)"))
+                  (println (str "Unhandled exception escaped!\n"
+                                (with-out-str (.printStackTrace ex))
+                                "Client state:"
+                                (with-out-str (pprint (clnt/hide-long-arrays @client)))
+                                (if-let [err (agent-error client)]
+                                  (str "\nClient failure:\n" err)
+                                  (str "\n(client agent thinks everything is fine)"))))
                   (is (not ex)))
                 (finally
                   (println "Test done. Stopping server.")

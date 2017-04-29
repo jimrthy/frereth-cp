@@ -248,9 +248,17 @@ just a wrapper around this"
 
 (defn secret-unbox
   "Symmetric-key decryption"
-  [dst ciphertext length nonce key]
-  (TweetNaclFast/crypto_secretbox_open dst
-                                       ciphertext
-                                       length
-                                       nonce
-                                       key))
+  [dst cipher-text length nonce key]
+  (when (not= 0
+              (TweetNaclFast/crypto_secretbox_open dst
+                                                   cipher-text
+                                                   length
+                                                   nonce
+                                                   key))
+    (throw (ex-info "Symmetric unboxing failed"
+                    {::destination dst
+                     ::cipher-text cipher-text
+                     ::length length
+                     ::nonce nonce
+                     ::key key})))
+  dst)

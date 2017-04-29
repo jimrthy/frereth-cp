@@ -875,6 +875,11 @@ TODO: Need to ask around about that."
          (if (= available ::timed-out)
            (throw (RuntimeException. "Timed out waiting for child"))
            (throw (RuntimeException. (str "Unknown failure: " available))))
+         ;; I have a lot of interaction-test/handshake runs failing because
+         ;; of this.
+         ;; Q: What's going on?
+         ;; (I can usually re-run the test and have it work the next
+         ;; time through...it almost seems like a 50/50 thing)
          (throw (RuntimeException. "Stream from child closed"))))))
 
 (defn pull-initial-message-bytes
