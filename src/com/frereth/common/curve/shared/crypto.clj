@@ -4,8 +4,17 @@
             [clojure.tools.logging :as log]
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]
             [com.frereth.common.curve.shared.constants :as K])
-  (:import [com.iwebpp.crypto TweetNaclFast
-            TweetNaclFast$Box]))
+  (:import clojure.lang.ExceptionInfo
+           [com.iwebpp.crypto TweetNaclFast
+            TweetNaclFast$Box]
+           io.netty.buffer.ByteBuf))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
+(s/def ::crypto-key (s/and bytes?
+                           #(= (count %) K/key-length)))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -161,6 +170,31 @@ which I'm really not qualified to touch."
                                      ::length box-length
                                      ::nonce nonce
                                      ::shared-key shared-key}))))
+
+(s/fdef open-crypto-box
+        :args (s/cat :prefix-bytes (s/and bytes?
+                                          #(= K/client-nonce-prefix-length
+                                              (count %)))
+                     :suffix-buffer #(instance? ByteBuf %)
+                     :crypto-buffer #(instance? ByteBuf %)
+                     :shared-key ::crypto-key)
+        :ret (s/nilable (s/coll-of (s/and
+                                    int?
+                                    #(< -129 % 128)))))
+(defn open-crypto-box
+  [prefix-bytes suffix-buffer crypto-buffer shared-key]
+  (let [nonce (byte-array K/nonce-length)
+        crypto-length (.readableBytes crypto-buffer)
+        crypto-text (byte-array crypto-length)]
+    (b-t/byte-copy! nonce prefix-bytes)
+    (.getBytes suffix-buffer
+               (- K/nonce-length (count prefix-bytes))
+               nonce)
+    (.getBytes crypto-buffer 0 crypto-text)
+    (try
+      (open-after crypto-text 0 crypto-length nonce shared-key)
+      (catch ExceptionInfo ex
+        (log/error ex "Failed to open box")))))
 
 (defn random-array
   "Returns an array of n random bytes"

@@ -6,7 +6,7 @@
             [clojure.spec :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.shared.bit-twiddling :as bit-twiddling]
+            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
             [com.frereth.common.curve.shared.constants :as K]
             ;; Honestly, this has no place here.
             ;; But it's useful for refactoring
@@ -58,10 +58,8 @@
                                ::K/server-name
                                ::short-pair]))
 
-(s/def ::crypto-key (s/and bytes?
-                        #(= (count %) K/key-length)))
-(s/def ::long-pk ::crypto-key)
-(s/def ::short-pk ::crypto-key)
+(s/def ::long-pk ::crypto/crypto-key)
+(s/def ::short-pk ::crypto/crypto-key)
 
 ;; "Recent" timestamp, in nanoseconds
 (s/def ::recent integer?)
@@ -203,11 +201,11 @@ But it depends on compose, which would set up circular dependencies"
     (compose tmplt src buffer)
     (let [n (.readableBytes buffer)
           nonce (byte-array K/nonce-length)]
-      (bit-twiddling/byte-copy! nonce nonce-prefix)
-      (bit-twiddling/byte-copy! nonce
-                                (count nonce-prefix)
-                                (count nonce-suffix)
-                                nonce-suffix)
+      (b-t/byte-copy! nonce nonce-prefix)
+      (b-t/byte-copy! nonce
+                      (count nonce-prefix)
+                      (count nonce-suffix)
+                      nonce-suffix)
       (crypto/box-after key-pair dst n nonce))))
 
 (defn decompose
@@ -336,7 +334,7 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
     (let [n (- (count dst) offset)
           tmp (byte-array n)]
       (crypto/random-bytes! tmp)
-      (bit-twiddling/byte-copy! dst offset n tmp))))
+      (b-t/byte-copy! dst offset n tmp))))
 
 (defn slurp-bytes
   "Slurp the bytes from a slurpable thing

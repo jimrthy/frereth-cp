@@ -20,7 +20,7 @@
                                      ::minute-key
                                      ::last-minute-key]))
 
-(s/def ::server-short-sk ::shared/crypto-key)
+(s/def ::server-short-sk ::crypto/crypto-key)
 
 ;; Q: Do I really want to store the client's long-term PK?
 ;; A: Reference implementation has was looks like TODO items
@@ -96,6 +96,18 @@
      ::received-nonce 0
      ::sent-nonce (crypto/random-nonce)}))
 
+(s/fdef alter-client-state!
+        :args (s/cat :state ::state
+                     :altered-client ::client-state)
+        :ret nil?)
+(defn alter-client-state!
+  [state altered-client]
+  (swap! (::active-clients state)
+         update
+         (get-in altered-client [::client-security ::shared/short-pk])
+         ;; Q: Worth surgically applying a delta?
+         (constantly altered-client)))
+
 (s/fdef configure-shared-secrets
         :args (s/cat :client ::client-state
                      :server-short-sk ::shared/secret-key
@@ -103,7 +115,8 @@
         :ret ::client-state)
 (defn configure-shared-secrets
   "Return altered client state that reflects new shared key
-  This should correspond to lines 369-371 in reference implementation"
+  This almost corresponds to lines 369-371 in reference implementation,
+  but does *not* have side-effects!  <----"
   [client
    server-short-sk
    client-short-pk]

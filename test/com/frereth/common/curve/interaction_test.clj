@@ -7,6 +7,7 @@
             [clojure.tools.logging :as log]
             [com.frereth.common.curve.client :as clnt]
             [com.frereth.common.curve.server :as srvr]
+            [com.frereth.common.curve.server.state :as state]
             [com.frereth.common.curve.server-test :as server-test]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.curve.shared.constants :as K]
@@ -333,7 +334,7 @@
           (try
             (is (-> server ::srvr/active-clients deref))
             (is (= 0 (-> server ::srvr/active-clients deref count)))
-            (is (not (srvr/find-client server (.getBytes "won't find this"))))
+            (is (not (state/find-client server (.getBytes "won't find this"))))
             (finally (srvr/stop! server))))
         (finally
           (strm/close! (:chan server->client))

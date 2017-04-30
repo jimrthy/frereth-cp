@@ -1,6 +1,6 @@
 (ns com.frereth.common.curve.server.initiate
   "For coping with Initiate packets"
-  (:require [com.frereth.common.curver.server.state :as state]
+  (:require [com.frereth.common.curve.server.state :as state]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]
             [com.frereth.common.curve.shared.constants :as K]
@@ -230,6 +230,17 @@ To be fair, this layer *is* pretty special."
             (let [vouch-buf (Unpooled/wrappedBuffer inner-vouch-bytes)]
               (shared/decompose K/black-box-dscr vouch-buf))))))))
 
+(defn open-client-crypto-box
+  [{:keys [::K/nonce
+           ::K/vouch]
+    :as initiate}]
+  (let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix nonce vouch )]
+    (throw (RuntimeException. "Get this translated"))))
+
+(defn validate-server-name
+  [state inner-client-box]
+  (throw (RuntimeException. "Get this translated")))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 (defn handle!
@@ -256,10 +267,27 @@ To be fair, this layer *is* pretty special."
                    (let [active-client (state/configure-shared-secrets active-client
                                                                        server-short-sk
                                                                        client-short-pk)]
-                     (throw (ex-info "Don't stop here!"
-                                     {:what "Cope with vouch/initiate"})))))
+                     (state/alter-client-state! state active-client)
+                     ;; Now we've verified that the Initiate packet came from a
+                     ;; client that has the secret key associated with both the short-term
+                     ;; public key.
+                     ;; It included a secret cookie that we generated sometime within the
+                     ;; past couple of minutes.
+                     ;; Now we're ready to tackle handling the main message body cryptobox.
+                     ;; This corresponds to line 373 in the reference implementation.
+                     (try
+                       (let [inner-client-box (open-client-crypto-box initiate)]
+                         (try
+                           (when (validate-server-name state inner-client-box)
+                             ;; This takes us down to line 381
+                             (throw (ex-info "Don't stop here!"
+                                             {:what "Cope with vouch/initiate"})))
+                           (catch ExceptionInfo ex
+                             (log/error ex "Failure after decrypting inner client cryptobox"))))
+                          (catch ExceptionInfo ex
+                            (log/error ex "Initiate packet looked good enough to establish client session, but failed later"))))))
                (log/error "FIXME: Debug only: cookie extraction failed")))
-           (log/info "Received additional Initiate packet from" client-short-key)))
+           (log/warn "TODO: Handle additional Initiate packet from " client-short-key)))
        (log/warn (str "Truncated initiate packet. Only received " n " bytes"))))
    ;; If nothing's changing, just maintain status quo
    state))

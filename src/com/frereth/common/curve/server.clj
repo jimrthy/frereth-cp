@@ -6,6 +6,7 @@
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
             [com.frereth.common.curve.server.hello :as hello]
+            [com.frereth.common.curve.server.helpers :as helpers]
             [com.frereth.common.curve.server.initiate :as initiate]
             [com.frereth.common.curve.server.state :as state]
             [com.frereth.common.curve.shared :as shared]
@@ -163,7 +164,7 @@
   (let [stopper (deferred/deferred)
         stopped (promise)]
     (deferred/loop [this (assoc this
-                                ::timeout (one-minute))]
+                                ::timeout (helpers/one-minute))]
       (log/info "Top of Server event loop. Timeout: " (::timeout this) "in"
                #_(util/pretty (hide-long-arrays this))
                "...[this]...")
@@ -213,7 +214,7 @@
                   (log/debug "Possibly Rotating"
                            #_(util/pretty (hide-long-arrays this))
                            "...this...")
-                  (deferred/recur (handle-key-rotation this)))
+                  (deferred/recur (state/handle-key-rotation this)))
                 (do
                   (log/warn "Received stop signal")
                   (deliver stopped ::exited)))
