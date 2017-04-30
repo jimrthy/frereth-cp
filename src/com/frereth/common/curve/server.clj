@@ -151,12 +151,6 @@
       (log/debug "Ignoring packet of illegal length")
       state)))
 
-;;; This is generally useful enough that I'm doing the actual
-;;; definition down below in the public section.
-;;; But (begin!) uses it pretty heavily.
-;;; For now.
-(declare hide-long-arrays)
-
 (defn begin!
   "Start the event loop"
   [{:keys [::state/client-read-chan]
@@ -166,7 +160,7 @@
     (deferred/loop [this (assoc this
                                 ::timeout (helpers/one-minute))]
       (log/info "Top of Server event loop. Timeout: " (::timeout this) "in"
-               #_(util/pretty (hide-long-arrays this))
+               #_(util/pretty (helpers/hide-long-arrays this))
                "...[this]...")
       (deferred/chain
         ;; The timeout is in milliseconds, but state's timeout uses
@@ -186,7 +180,7 @@
               ;; Q: Do I want unhandled exceptions to be fatal errors?
               (let [modified-state (handle-incoming! this msg)]
                 (log/info "Updated state based on incoming msg:"
-                         (hide-long-arrays modified-state))
+                          (helpers/hide-long-arrays modified-state))
                 modified-state)
               (catch clojure.lang.ExceptionInfo ex
                 (log/error "handle-incoming! failed" ex (.getStackTrace ex))
@@ -212,7 +206,7 @@
                   ;; The promise that tells us to stop hasn't
                   ;; been fulfilled
                   (log/debug "Possibly Rotating"
-                           #_(util/pretty (hide-long-arrays this))
+                           #_(util/pretty (helpers/hide-long-arrays this))
                            "...this...")
                   (deferred/recur (state/handle-key-rotation this)))
                 (do

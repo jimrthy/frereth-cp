@@ -134,7 +134,6 @@
 
 (defn hide-secrets!
   [this]
-  (throw (RuntimeException. "Refactor this into state"))
   (log/info "Hiding secrets")
   ;; This is almost the top of the server's for(;;)
   ;; Missing step: reset timeout
@@ -159,11 +158,11 @@
           (log/error "Missing ::shared/packet inside\n" p-m))))
     (crypto/randomize-buffer! (::shared/packet p-m)))
   (crypto/random-bytes! (-> this ::current-client ::client-security ::shared/short-pk))
-  ;; These are all private, so I really can't touch them
+  ;; The shared secrets are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
-  ;; For now, just explicitly set to nil once we get past these side-effects
+  ;; For now, just explicitly set my versions to nil once we get past these side-effects
   ;; (i.e. at the bottom)
-  #_(crypto/random-bytes (-> this :current-client ::shared-secrets :what?))
+  #_(crypto/random-bytes (-> this ::current-client ::shared-secrets :what?))
   (let [work-area (::shared/working-area this)]
     ;; These next two may make more sense once I have a better idea about
     ;; the actual messaging implementation.

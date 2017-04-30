@@ -86,9 +86,9 @@ and puts the crypto-text into the byte-array in text"
   (let [composed (shared/compose K/cookie-frame {::K/header K/cookie-header
                                                  ::K/client-extension client-extension
                                                  ::K/server-extension server-extension
-                                                 ::K/nonce (Unpooled/wrappedBuffer working-nonce
-                                                                                   K/server-nonce-prefix-length
-                                                                                   K/server-nonce-suffix-length)
+                                                 ::K/client-nonce-suffix (Unpooled/wrappedBuffer working-nonce
+                                                                                                 K/server-nonce-prefix-length
+                                                                                                 K/server-nonce-suffix-length)
                                                  ::K/cookie crypto-cookie}
                                  packet)]
     ;; I really shouldn't need to do this

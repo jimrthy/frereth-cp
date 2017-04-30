@@ -26,6 +26,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+(s/def ::client-nonce-suffix (s/and bytes?
+                                    #(= (count %) client-nonce-suffix-length)))
+
 ;; This is a name suitable for submitting a DNS query.
 ;; 1. Its encoder starts with an array of zeros
 ;; 2. Each name segment is prefixed with the number of bytes
@@ -40,16 +43,15 @@
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-short-pk {::type ::bytes ::length key-length}
-                                  ;; TODO: Need a named constant for this
-                                  ::zeros {::type ::zeroes ::length 64}
+                                  ::zeros {::type ::zeroes ::length (- hello-crypto-box-length box-zero-bytes)}
                                   ;; This gets weird/confusing.
                                   ;; It's a 64-bit number, so 8 octets
                                   ;; But, really, that's just integer?
                                   ;; It would probably be more tempting to
-                                  ;; just spec this like that if clojure had
-                                  ;; a better numeric tower
-                                  ::nonce {::type ::bytes
-                                           ::length client-nonce-suffix-length}
+                                  ;; just spec this like that if the jvm had
+                                  ;; unsigned ints
+                                  ::client-nonce-suffix {::type ::bytes
+                                                         ::length client-nonce-suffix-length}
                                   ::crypto-box {::type ::bytes
                                                 ::length hello-crypto-box-length}))
 
@@ -160,21 +162,18 @@
              ;; definitions.
              ;; This isn't "just" vouch-wrapper.
              ;; It's the cryptographic box that contains vouch-wrapper.
-             ::vouch {::type ::bytes
+             ::vouch-wrapper {::type ::bytes
                       ::length minimum-vouch-length}))
 
 (s/def ::cookie (s/and bytes?
                        #(= (count %) server-cookie-length)))
-;; TODO: This name doesn't work due to collisions.
-;; Really need to make it more fine-grained to indicate whether
-;; it comes from the client or server.
-(s/def ::nonce (s/and bytes?
-                      #(= (count %) client-nonce-suffix-length)))
-(s/def ::vouch (s/and bytes?
-                      #(< minimum-vouch-length (count %))
-                      ;; Evenly divisible by 16
-                      #(= 0 (bit-and (count %) 0xf))
-                      #(>= 640 (count %))))
+
+;; Note that this is really the wrapper for the vouch received from the client
+(s/def ::vouch-wrapper (s/and bytes?
+                              #(< minimum-vouch-length (count %))
+                              ;; Evenly divisible by 16
+                              #(= 0 (bit-and (count %) 0xf))
+                              #(>= 640 (count %))))
 
 (s/def ::initiate-packet-spec (s/keys :req [::prefix
                                             ::srvr-txn
@@ -182,4 +181,16 @@
                                             ::clnt-short-pk
                                             ::cookie
                                             ::nonce
-                                            ::vouch]))
+                                            ::vouch-wrapper]))
+
+(def initiate-client-vouch-wrapper
+  (array-map ::long-term-public-key {::type ::bytes
+                                     ::length key-length}
+             ::nonce {::type ::bytes
+                      ::length client-nonce-suffix-length}
+             ::hidden-client-short-pk {::type ::bytes
+                                       ::length (+ key-length box-zero-bytes)}
+             ::server-name {::type ::bytes
+                            ::length server-name-length}
+             ::message {::type ::bytes
+                        ::length '*}))

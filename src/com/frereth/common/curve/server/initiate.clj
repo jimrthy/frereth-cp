@@ -233,13 +233,20 @@ To be fair, this layer *is* pretty special."
 (defn open-client-crypto-box
   [{:keys [::K/nonce
            ::K/vouch]
-    :as initiate}]
-  (let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix nonce vouch )]
-    (throw (RuntimeException. "Get this translated"))))
+    :as initiate}
+   current-client]
+  (let [message-length (- (.readableBytes vouch) K/minimum-vouch-length)
+        clear-text (crypto/open-crypto-box K/initiate-nonce-prefix nonce vouch (get-in current-client [::state/shared-secrets
+                                                                                                       ::state/client-short<->server-short]))]
+    (shared/decompose (assoc-in K/initiate-client-vouch-wrapper
+                                [::K/message ::K/length]
+                                message-length)
+                      clear-text)))
 
 (defn validate-server-name
   [state inner-client-box]
-  (throw (RuntimeException. "Get this translated")))
+  (let [rcvd-name-buffer (::K/server-name inner-client-box)]
+    (throw (RuntimeException. "Get this translated"))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

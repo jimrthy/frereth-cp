@@ -250,7 +250,7 @@ nor subject to timing attacks because it just won't be called very often."
      ::K/clnt-xtn extension
      ::K/clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
      ::K/zeros nil
-     ::K/nonce (b-t/sub-byte-array working-nonce K/client-nonce-prefix-length)
+     ::K/client-nonce-suffix (b-t/sub-byte-array working-nonce K/client-nonce-prefix-length)
      ::K/crypto-box boxed}))
 
 (s/fdef build-actual-hello-packet

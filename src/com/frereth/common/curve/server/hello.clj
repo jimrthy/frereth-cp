@@ -3,10 +3,13 @@
   (:require [byte-streams :as b-s]
             [clojure.tools.logging :as log]
             [com.frereth.common.curve.server.cookie :as cookie]
+            [com.frereth.common.curve.server.helpers :as helpers]
+            [com.frereth.common.curve.server.state :as state]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]
             [com.frereth.common.curve.shared.constants :as K]
             [com.frereth.common.curve.shared.crypto :as crypto]
+            [com.frereth.common.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream]))
 
@@ -15,13 +18,14 @@
 
 (defn open-hello-crypto-box
   [{:keys [::client-short-pk
-           ::cookie-cutter
+           ::state/cookie-cutter
            ::nonce-suffix
            ::shared/my-keys
            ::shared/working-area]
     :as state}
    message
    crypto-box]
+  (log/warn "Depcecated. Use crypto/open-crypto-box instead")
   (let [long-keys (::shared/long-pair my-keys)]
     (when-not long-keys
       ;; Log whichever was missing and throw
@@ -79,38 +83,61 @@
   (if (= (.readableBytes message) shared/hello-packet-length)
     (do
       (log/info "This is the correct size")
-      (let [;; Q: Is the convenience here worth the performance hit?
+      (let [;; Q: Is the convenience here worth the performance hit of using decompose?
             {:keys [::K/clnt-xtn
                     ::K/clnt-short-pk
                     ::K/crypto-box
-                    ::K/nonce
+                    ::K/client-nonce-suffix
                     ::K/srvr-xtn]
              :as decomposed} (shared/decompose K/hello-packet-dscr message)
-            client-short-pk (get-in state [::current-client ::client-security ::short-pk])]
-        (assert client-short-pk)
-        (assert clnt-short-pk)
+            ;; We're keeping a ByteArray around for storing the key received by the current client.
+            ;; The reference implementation just stores it in a global
+            ;; This undeniably has some impact on GC.
+            ;; Q: Is it enough to justify doing something this unusual?
+            ;; (it probably makes a lot more sense in C where you don't have a lot of great alternatives)
+            client-short-pk (get-in state [::state/current-client ::state/client-security ::shared/short-pk])]
+        (when (not client-short-pk)
+              (if-let [current-client (::state/current-client state)]
+                (if-let [sec (::state/client-security current-client)]
+                  (if-let [short-pk (::shared/short-pk sec)]
+                    (log/error (str "Don't understand why we're about to have a problem. It's right here:\n"
+                                    (util/pretty (helpers/hide-long-arrays state))))
+                    (log/error (str "Missing short-term public-key array among\n"
+                                    (util/pretty sec))))
+                  (log/error (str "Missing :client-security among\n"
+                                  (util/pretty current-client))))
+                (log/error (str "Missing :current-client among\n"
+                                (util/pretty state))))
+              (throw (ex-info "Missing spot for client short-term public key" state)))
+        (when (not clnt-short-pk)
+              (throw (ex-info "HELLO packet missed client short-term pk" decomposed)))
         ;; Q: Is there any real point to this?
         (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
         (.getBytes clnt-short-pk 0 client-short-pk)
+        ;; FIXME: This can't be/isn't right
+        ;; (except for the basic fact that it works)
+        ;; TODO: switch to crypto/open-crypto-box
         (let [unboxed (open-hello-crypto-box (assoc state
                                                     ::client-short-pk client-short-pk
-                                                    ::nonce-suffix nonce)
+                                                    ::nonce-suffix client-nonce-suffix)
                                              message
                                              crypto-box)
               plain-text (::opened unboxed)]
+          (log/info "box opened successfully")
           (if plain-text
             (let [shared-secret (::shared-secret unboxed)
-                  minute-key (get-in state [::cookie-cutter ::minute-key])
+                  minute-key (get-in state [::state/cookie-cutter ::state/minute-key])
                   {:keys [::shared/text
                           ::shared/working-nonce]} working-area]
               (log/debug "asserting minute-key" minute-key "among" (keys state))
               (assert minute-key)
-              (log/debug "Preparing cookie")
+              (log/info "Preparing cookie")
               ;; We don't actually care about the contents of the bytes we just decrypted.
               ;; They should be all zeroes for now, but that's really an area for possible future
               ;; expansion.
               ;; For now, the point is that they unbox correctly on the other side
               (let [crypto-box
+                    ;; FIXME: I think I may have broken the namespaces in these keywords
                     (cookie/prepare-cookie! {::client-short<->server-long shared-secret
                                              ::client-short-pk clnt-short-pk
                                              ::minute-key minute-key

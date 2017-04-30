@@ -123,12 +123,12 @@ Needing to declare these things twice is annoying."
         ::K/bytes (let [n (::K/length dscr)
                         beg (.readableBytes dst)]
                     (try
-                      (log/info (str "Getting ready to write "
-                                     n
-                                     " bytes to\n"
-                                     dst
-                                     "\nfor field "
-                                     k))
+                      (log/debug (str "Getting ready to write "
+                                      n
+                                      " bytes to\n"
+                                      dst
+                                      "\nfor field "
+                                      k))
                       (.writeBytes dst v 0 n)
                       (let [end (.readableBytes dst)]
                         (assert (= (- end beg) n)))
@@ -146,7 +146,7 @@ Needing to declare these things twice is annoying."
                                          ::error ex})))))
         ::K/int-64 (.writeLong dst v)
         ::K/zeroes (let [n (::K/length dscr)]
-                     (log/info "Getting ready to write " n " zeros to " dst " based on "
+                     (log/debug "Getting ready to write " n " zeros to " dst " based on "
                                (with-out-str (pprint dscr)))
                      (.writeZero dst n))
         (throw (ex-info "No matching clause" dscr)))
@@ -224,25 +224,13 @@ own ns"
      (let [dscr (k tmplt)
            cnvrtr (or (::type dscr)
                       (::K/type dscr))]
-       ;; This can no longer decompose cookie packets.
-       ;; That packet description has moved over to constants.
-       ;; Honestly, it does belong there.
-       ;; Can't just convert this to use keywords namespaced only
-       ;; there, which is the obvious approach.
-       ;; That would break whatever templates I've written and haven't
-       ;; moved.
-       ;; Can't realistically just translate that template to use this
-       ;; namespace for its keywords, since that would mean circular
-       ;; imports.
        ;; The correct approach would be to move this (and compose)
        ;; into its own tiny ns that everything else can use.
-       ;; That's also more work than I have time for at the moment.
+       ;; helpers seems like a good choice.
+       ;; That's more work than I have time for at the moment.
        (assoc acc k (case cnvrtr
-                      ::bytes (.readBytes src (::length dscr))
                       ::K/bytes (.readBytes src (::K/length dscr))
-                      ::int-64 (.readLong src)
                       ::K/int-64 (.readLong src)
-                      ::zeroes (.readSlice src (::length dscr))
                       ::K/zeroes (.readSlice src (::K/length dscr))
                       (throw (ex-info "Missing case clause"
                                       {::failure cnvrtr

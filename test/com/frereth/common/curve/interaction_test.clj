@@ -387,8 +387,8 @@
                      "...stuff...")
           (try
             (let [server (srvr/start! (assoc unstarted-server
-                                             ::srvr/client-read-chan server<-client
-                                             ::srvr/client-write-chan server->client))]
+                                             ::state/client-read-chan server<-client
+                                             ::state/client-write-chan server->client))]
               (try
                 ;; Currently just called for side-effects.
                 ;; TODO: Seems like I really should hide that little detail
