@@ -2,6 +2,7 @@
   "For dealing with cookie packets on the server side"
   (:require [byte-streams :as b-s]
             [clojure.tools.logging :as log]
+            [com.frereth.common.curve.server.state :as state]
             [com.frereth.common.curve.shared :as shared]
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]
             [com.frereth.common.curve.shared.constants :as K]
@@ -14,16 +15,19 @@
 (def send-timeout 50)
 
 (defn prepare-cookie!
-  [{:keys [::client-short<->server-long
-           ::client-short-pk
-           ::minute-key
-           ::plain-text
-           ::text
-           ::working-nonce]}]
+  [{:keys [::state/client-short<->server-long
+           ::state/client-short-pk
+           ::state/minute-key
+           ;; Q: What is/was this for?
+           ::clear-text
+           ::shared/text
+           ::shared/working-nonce]}]
   "Called purely for side-effects.
 
-The most important is that it encrypts plain-text
-and puts the crypto-text into the byte-array in text"
+The most important is that it encrypts clear-text
+and puts the crypto-text into the byte-array in text.
+
+Except that it doesn't seem to do that at all."
   (let [keys (crypto/random-key-pair)
         ;; This is just going to get thrown away, leading
         ;; to potential GC issues.
@@ -43,7 +47,7 @@ and puts the crypto-text into the byte-array in text"
 
       ;; Reference implementation is really doing pointer math with the array
       ;; to make this work.
-      ;; It's encrypting from (+ plain-text 64) over itself.
+      ;; It's encrypting from (+ clear-text 64) over itself.
       ;; There just isn't a good way to do the same thing in java.
       ;; (The problem, really, is that I have to copy the plaintext
       ;; so it winds up at the start of the array).
@@ -86,6 +90,7 @@ and puts the crypto-text into the byte-array in text"
   (let [composed (shared/compose K/cookie-frame {::K/header K/cookie-header
                                                  ::K/client-extension client-extension
                                                  ::K/server-extension server-extension
+                                                 ;; Q: Could this possibly be worth using Pooled?
                                                  ::K/client-nonce-suffix (Unpooled/wrappedBuffer working-nonce
                                                                                                  K/server-nonce-prefix-length
                                                                                                  K/server-nonce-suffix-length)

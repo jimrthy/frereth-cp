@@ -10,7 +10,8 @@
             [com.frereth.common.curve.shared.constants :as K]
             ;; Honestly, this has no place here.
             ;; But it's useful for refactoring
-            [com.frereth.common.curve.shared.crypto :as crypto])
+            [com.frereth.common.curve.shared.crypto :as crypto]
+            [com.frereth.common.util :as util])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            io.netty.buffer.Unpooled
@@ -177,8 +178,9 @@ Needing to declare these things twice is annoying."
 
   This should probably be named compose! and return nil"
   [tmplt fields dst]
-  (log/info (str "Putting\n" #_(with-out-str (pprint fields)) fields "\ninto\n" dst
-                 "\nbased upon\n" (with-out-str (pprint tmplt))))
+  (log/info (str "Putting\n" (util/pretty fields)
+                 fields "\ninto\n" dst
+                 "\nbased upon\n" (util/pretty tmplt)))
   ;; Q: How much do I gain by supplying dst?
   ;; It does let callers reuse the buffer, which
   ;; will definitely help with GC pressure.

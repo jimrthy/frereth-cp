@@ -90,11 +90,14 @@
                     ::K/client-nonce-suffix
                     ::K/srvr-xtn]
              :as decomposed} (shared/decompose K/hello-packet-dscr message)
-            ;; We're keeping a ByteArray around for storing the key received by the current client.
-            ;; The reference implementation just stores it in a global
+            ;; We're keeping a ByteArray around for storing the key received by the current message.
+            ;; The reference implementation just stores it in a global.
             ;; This undeniably has some impact on GC.
             ;; Q: Is it enough to justify doing something this unusual?
             ;; (it probably makes a lot more sense in C where you don't have a lot of great alternatives)
+            ;; TODO: Get benchmarks both ways.
+            ;; I'm very skeptical that this is worth the wonkiness, but I'm also
+            ;; very skeptical about messing around with the reference implementation.
             client-short-pk (get-in state [::state/current-client ::state/client-security ::shared/short-pk])]
         (when (not client-short-pk)
               (if-let [current-client (::state/current-client state)]
@@ -122,9 +125,9 @@
                                                     ::nonce-suffix client-nonce-suffix)
                                              message
                                              crypto-box)
-              plain-text (::opened unboxed)]
+              clear-text (::opened unboxed)]
           (log/info "box opened successfully")
-          (if plain-text
+          (if clear-text
             (let [shared-secret (::shared-secret unboxed)
                   minute-key (get-in state [::state/cookie-cutter ::state/minute-key])
                   {:keys [::shared/text
@@ -137,13 +140,12 @@
               ;; expansion.
               ;; For now, the point is that they unbox correctly on the other side
               (let [crypto-box
-                    ;; FIXME: I think I may have broken the namespaces in these keywords
-                    (cookie/prepare-cookie! {::client-short<->server-long shared-secret
-                                             ::client-short-pk clnt-short-pk
-                                             ::minute-key minute-key
-                                             ::plain-text plain-text
-                                             ::text text
-                                             ::working-nonce working-nonce})]
+                    (cookie/prepare-cookie! {::state/client-short<->server-long shared-secret
+                                             ::state/client-short-pk clnt-short-pk
+                                             ::state/minute-key minute-key
+                                             ::cookie/clear-text clear-text
+                                             ::shared/text text
+                                             ::shared/working-nonce working-nonce})]
                 ;; Note that this overrides the incoming message in place
                 ;; Which seems dangerous, but it very deliberately is longer than
                 ;; our response.
@@ -156,29 +158,38 @@
                                  (with-out-str (b-s/print-bytes response))
                                  "Reference count: " (.refCnt response)))
                   (try
-                    (let [dst (get-in state [::client-write-chan :chan])
-                          put-future (stream/try-put! dst
-                                                      (assoc packet
-                                                             :message response)
-                                                      ;; TODO: This really needs to be part of
-                                                      ;; state so it can be tuned while running
-                                                      cookie/send-timeout
-                                                      ::timed-out)]
-                      (log/info "Cookie packet scheduled to send")
-                      (deferred/on-realized put-future
-                        (fn [success]
-                          (if success
-                            (log/info "Sending Cookie succeeded")
-                            (log/error "Sending Cookie failed"))
-                          ;; TODO: Make sure this does get released!
-                          ;; The caller has to handle that, though.
-                          ;; It can't be released until after it's been put
-                          ;; on the socket.
-                          (comment (.release response)))
-                        (fn [err]
-                          (log/error "Sending Cookie failed:" err)
-                          (.release response)))
-                      state)
+                    (let [dst (get-in state [::state/client-write-chan :chan])]
+                      (when-not dst
+                        (log/warn "Missing destination")
+                        (if-let [write-chan (::state/client-write-chan state)]
+                          (if-let [chan (:chan write-chan)]
+                            (log/error "Ummm...what's the problem?")
+                            (log/error (str "Missing the :chan in\n"
+                                            (util/pretty write-chan))))
+                          (log/error (str "Missing ::state/client-write-chan in\n"
+                                          (util/pretty (helpers/hide-long-arrays state))))))
+                      (let [put-future (stream/try-put! dst
+                                                        (assoc packet
+                                                               :message response)
+                                                        ;; TODO: This really needs to be part of
+                                                        ;; state so it can be tuned while running
+                                                        cookie/send-timeout
+                                                        ::timed-out)]
+                        (log/info "Cookie packet scheduled to send")
+                        (deferred/on-realized put-future
+                          (fn [success]
+                            (if success
+                              (log/info "Sending Cookie succeeded")
+                              (log/error "Sending Cookie failed"))
+                            ;; TODO: Make sure this does get released!
+                            ;; The caller has to handle that, though.
+                            ;; It can't be released until after it's been put
+                            ;; on the socket.
+                            (comment (.release response)))
+                          (fn [err]
+                            (log/error "Sending Cookie failed:" err)
+                            (.release response)))
+                        state))
                     (catch Exception ex
                       (log/error ex "Failed to send Cookie response")
                       state)))))

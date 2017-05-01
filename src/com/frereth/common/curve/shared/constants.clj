@@ -74,8 +74,8 @@
              ::server-extension {::type ::bytes
                                  ::length extension-length}
              ;; Implicitly prefixed with "CurveCPK"
-             ::nonce {::type ::bytes
-                      ::length server-nonce-suffix-length}
+             ::client-nonce-suffix {::type ::bytes
+                                    ::length server-nonce-suffix-length}
              ::cookie {::type ::bytes
                        ::length 144}))
 

@@ -308,7 +308,7 @@ Note that this is really called for side-effects"
    {:keys [::K/header
            ::K/client-extension
            ::K/server-extension
-           ::K/nonce
+           ::K/client-nonce-suffix
            ::K/cookie]
     :as rcvd}]
   (log/info "Getting ready to try to extract cookie from" cookie)
@@ -325,7 +325,10 @@ Note that this is really called for side-effects"
                     "\ninto\n"
                     working-nonce))
     (b-t/byte-copy! working-nonce K/cookie-nonce-prefix)
-    (.readBytes nonce working-nonce K/server-nonce-prefix-length K/server-nonce-suffix-length)
+    (.readBytes client-nonce-suffix
+                working-nonce
+                K/server-nonce-prefix-length
+                K/server-nonce-suffix-length)
 
     (log/info "Copying encrypted cookie into " text "from" (keys this))
     (.readBytes cookie text 0 144)
