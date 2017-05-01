@@ -261,7 +261,7 @@
     ;; So the client is reading/waiting for the wrong thing.
     ;; Sometimes.
     ;; Q: What's up with that?
-    (let [succeeded @wrote]
+    (let [succeeded (deref wrote 3000 ::check-timeout)]
       (log/info (str "Client-child send result to " write-notifier " => "  succeeded))
       (is succeeded)
       (is (not= succeeded ::timedout)))))
@@ -305,7 +305,7 @@
     ;; heap management, with things like performance analysis and tuning.
     ;; And I don't think I want to go down that rabbit hole.
     ;; Especially since netty has built this in since version 4.
-    (comment (throw (RuntimeException. "Really have to use a shared ByteBuf pool instead")))
+    ;; N.B. for real implementations: use a PooledByteBufAllocator
     (deferred/chain release-notifier (partial notified-about-release write-notifier release-notifier read-notifier))
     {::clnt/child child
      ::clnt/reader  read-notifier

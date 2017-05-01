@@ -180,6 +180,7 @@
                                             ::clnt-xtn
                                             ::clnt-short-pk
                                             ::cookie
+                                            ;; Q: Is this a client or server nonce?
                                             ::nonce
                                             ::vouch-wrapper]))
 

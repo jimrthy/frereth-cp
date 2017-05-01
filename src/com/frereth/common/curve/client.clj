@@ -963,14 +963,14 @@ TODO: Need to ask around about that."
         nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area) K/client-nonce-prefix-length)
         crypto-box (build-initiate-interior this msg nonce-suffix)]
     (log/debug (str "Stuffing " crypto-box " into the initiate packet"))
-    (let [dscr (update-in K/initiate-packet-dscr [::K/vouch ::K/length] + (count msg))
+    (let [dscr (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (count msg))
           fields #::K{:prefix K/initiate-header
                       :srvr-xtn (::server-extension this)
                       :clnt-xtn (::shared/extension this)
                       :clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
                       :cookie (get-in this [::server-security ::server-cookie])
                       :nonce nonce-suffix
-                      :vouch crypto-box}]
+                      :vouch-wrapper crypto-box}]
       (shared/compose dscr
                       fields
                       (get-in this [::shared/packet-management ::shared/packet])))))
