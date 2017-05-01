@@ -715,6 +715,7 @@ implementation. This is code that I don't understand yet"
   packet so we can switch into the message exchange
   loop"
   [this wrapper sent]
+  (log/info "Entering [penultimate] final-wait")
   (if (not= sent ::sending-vouch-timed-out)
     (let [timeout (current-timeout wrapper)
           chan<-server (::chan<-server this)
@@ -893,7 +894,7 @@ TODO: Need to ask around about that."
 (defn pull-initial-message-bytes
   [wrapper msg-byte-buf]
   (when msg-byte-buf
-    (log/info "Incoming ByteBuf:" msg-byte-buf)
+    (log/info "pull-initial-message-bytes ByteBuf:" msg-byte-buf)
     (let [bytes-available (K/initiate-message-length-filter (.readableBytes msg-byte-buf))]
       (when (< 0 bytes-available)
         (let [buffer (byte-array bytes-available)]
@@ -905,19 +906,24 @@ TODO: Need to ask around about that."
           ;; on minimalist embedded controllers for a while.
           (.discardSomeReadBytes msg-byte-buf)
 
-            (if (< 0 (.readableBytes msg-byte-buf))
-              ;; Reference implementation just fails on this scenario.
-              ;; That seems like a precedent that I'm OK breaking.
-              ;; The key for it is that there's another buffer program sitting between
-              ;; this client and the "real" child that can guarantee that this works
-              ;; correctly.
-              (send wrapper update ::read-queue conj msg-byte-buf)
-              ;; I actually have a gaping question about performance here:
-              ;; will I be able to out-perform java's garbage collector by
-              ;; recycling used ByteBufs?
-              ;; A: Absolutely not!
-              ;; It was ridiculous to ever even contemplate.
-              (strm/put! (::release->child @wrapper) msg-byte-buf))
+          (throw (ex-info "Start back here"
+                          {:what "Think I've isolated [latest] main issue"
+                           :issue "What does the release buffer really mean?"
+                           :problem "Reinventing Netty's Pooled buffers"}))
+          (if (< 0 (.readableBytes msg-byte-buf))
+            ;; Reference implementation just fails on this scenario.
+            ;; That seems like a precedent that I'm OK breaking.
+            ;; The key for it is that (in the reference) there's another
+            ;; buffer program sitting between
+            ;; this client and the "real" child that can guarantee that this works
+            ;; correctly.
+            (send wrapper update ::read-queue conj msg-byte-buf)
+            ;; I actually have a gaping question about performance here:
+            ;; will I be able to out-perform java's garbage collector by
+            ;; recycling used ByteBufs?
+            ;; A: Absolutely not!
+            ;; It was ridiculous to ever even contemplate.
+            (strm/put! (::release->child @wrapper) msg-byte-buf))
           buffer)))))
 
 (defn build-initiate-interior
@@ -1005,7 +1011,7 @@ like a naive approach with a terrible user experience.
     ;; Mixing these two paradigms was probably a bad idea.
     (deferred/on-realized d
       (fn [success]
-        (log/info (str "Initiate packet sent:" success ". Waiting for 1st message"))
+        (log/info (str "Initiate packet sent: " success ".\nWaiting for 1st message"))
         (send-off wrapper final-wait wrapper success))
       (fn [failure]
         ;; Extremely unlikely, but
@@ -1014,7 +1020,7 @@ like a naive approach with a terrible user experience.
         (throw (ex-info "Timed out sending cookie->vouch response"
                         (assoc this
                                :problem failure)))))
-    ;; Q: Do I need to hang
+    ;; Q: Do I need to hang onto that?
     this))
 
 (defn build-and-send-vouch

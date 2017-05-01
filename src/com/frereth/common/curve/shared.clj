@@ -178,9 +178,9 @@ Needing to declare these things twice is annoying."
 
   This should probably be named compose! and return nil"
   [tmplt fields dst]
-  (log/info (str "Putting\n" (util/pretty fields)
-                 fields "\ninto\n" dst
-                 "\nbased upon\n" (util/pretty tmplt)))
+  (comment (log/info (str "Putting\n" (util/pretty fields)
+                          fields "\ninto\n" dst
+                          "\nbased upon\n" (util/pretty tmplt))))
   ;; Q: How much do I gain by supplying dst?
   ;; It does let callers reuse the buffer, which
   ;; will definitely help with GC pressure.

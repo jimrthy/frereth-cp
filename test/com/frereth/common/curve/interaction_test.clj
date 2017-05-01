@@ -240,18 +240,8 @@
 
 (defn client-child
   [buffer write-notifier]
-  (log/info "Client child sending bytes to server via client")
-  ;; Build in a delay to give the parent a chance to do its stuff
-  ;; before we try to write to a channel that doesn't have a listener
-  ;; yet.
-  ;; It seems like this should fail with a timeout if the listener
-  ;; doesn't connect quickly enough, but it's just failing without
-  ;; explanation, sometimes.
-  ;; This is just my current theory.
-  ;; If this is correct, it seems like a strong argument to switch
-  ;; to something like core.async or even pulsar.
-  ;; Note this this failed immediately when I tried sleeping 1/4 second
-  (comment (Thread/sleep 500))
+  (log/info "Client child sending bytes to server via client at "
+            (System/nanoTime))
   (.writeBytes buffer (byte-array (range 1025)))
   (let [wrote (strm/try-put! write-notifier
                              buffer
@@ -262,7 +252,7 @@
     ;; Sometimes.
     ;; Q: What's up with that?
     (let [succeeded (deref wrote 3000 ::check-timeout)]
-      (log/info (str "Client-child send result to " write-notifier " => "  succeeded))
+      (log/info (str "Client-child send result to " write-notifier " => "  succeeded " @ " (System/nanoTime)))
       (is succeeded)
       (is (not= succeeded ::timedout)))))
 
@@ -270,7 +260,11 @@
   [write-notifier release-notifier read-notifier success]
   ;; The release-notifier times out now.
   ;; I don't think the client's getting a response here
-  (log/info (str "Client is releasing child buffer: " success))
+  (log/info (str "Client is releasing child buffer: " success
+                 "\nwrite-notifier:\n\t" write-notifier
+                 "\nrelease-notifier:\n\t" release-notifier
+                 "\nread-notifier:\n\t" read-notifier
+                 "\nat: " (System/nanoTime)))
   ;; I definitely see this failure, but it isn't showing up as
   ;; a test failure.
   ;; Q: Is this a background-thread hidden sort of thing?
