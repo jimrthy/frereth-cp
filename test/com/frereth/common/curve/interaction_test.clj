@@ -195,27 +195,40 @@
                      cookie
                      500
                      ::timeout))
-    (throw (ex-info "Bad cookie"
+    (throw (ex-info "Bad Cookie packet from Server"
                     {:problem cookie}))))
 
 (defn wrote-cookie
   [clnt->srvr success]
-  (println "Cookie sent to server. Waiting for vouch")
+  (println "Server Cookie sent to client. Waiting for Initiate packet")
   (is success)
   (is (not= success ::timeout))
-  (strm/try-take! clnt->srvr ::drained 500 ::timeout))
+  (strm/try-take! (:chan clnt->srvr) ::drained 500 ::timeout))
 
 (defn vouch->server
-  [client-chan vouch]
+  [server-chan vouch]
   ;; I don't have any real failure indication available
   ;; if something goes wrong with/on the server trying
   ;; to cope with this incoming vouch.
   ;; I almost need an error stream for dealing with exceptions.
+  (println "Got Initiate packet from client: "
+           vouch
+           " for forwarding along to "
+           server-chan)
+  ;; There's something inside out going on.
+  ;; We just forwarded the from the server to the
+  ;; client (in wrote-cookie).
+  ;; Now we pulled the Initiate packet in response.
+  ;; The main point here is to forward that packet
+  ;; back to the Server.
+  ;; Which shouldn't have anything at all to do with
+  ;; client channels.
+  ;; Q: Was this ever making those round trips?
   (if-not (or (= vouch ::drained)
               (= vouch ::timeout))
-    (strm/try-put! (:chan client-chan)
+    (strm/try-put! (:chan server-chan)
                    {:message vouch
-                    :host "tester"
+                    :host "tester-client"
                     :port 65536}
                    500
                    ::timeout)
@@ -226,7 +239,7 @@
   [client-chan success]
   (if success
     (strm/try-take! (:chan client-chan) ::drained 500 ::timeout)
-    (throw (RuntimeException. "Failed writing Vouch to client"))))
+    (throw (RuntimeException. "Failed writing Vouch to server"))))
 
 (defn finalize
   [client<-server response]
@@ -252,8 +265,11 @@
   ;; Q: Is this a background-thread hidden sort of thing?
   ;; Maybe CIDER just isn't clever enough to spot it?
 
-  (is (not (= success ::timed-out)))
-  (is (not (= success ::drained)))
+  (is (not (= released-buffer ::timed-out)))
+  (is (not (= released-buffer ::drained)))
+  ;; This is just the tip of the iceberg showing
+  ;; why this approach was a terrible idea.
+  (is (= released-buffer released-buffer))
   ;; TODO: Make this more interesting.
   ;; Verify what we really got back
   ;; Send back a second block of data,
@@ -278,8 +294,6 @@
     ;; Q: What's up with that?
     (let [succeeded (deref wrote 3000 ::check-timeout)]
       (log/info (str "Client-child send result to " write-notifier " => "  succeeded " @ " (System/nanoTime)))
-      ;; N.B. for real implementations: use a PooledByteBufAllocator
-      ;; Instead of mucking around with this release-notifier nonsense
       ;; That should work around my current bug, though it's ignoring a
       ;; fundamental design flaw.
       (deferred/chain release-notifier (partial notified-about-release write-notifier release-notifier read-notifier))
@@ -293,6 +307,14 @@
   ;; 1. Start by writing 0 bytes
   ;; 2. Write, say, 480 bytes, send notification, then 320 more
   (let [write-notifier (strm/stream)
+        ;; Real implementations really must use a
+        ;; PooledByteBufAllocator.
+        ;; Of course, that needs to get set up at the
+        ;; outer pipeline level.
+        ;; Client shouldn't care: when it's done
+        ;; reading a buffer, it should call .release
+        ;; and be done with it.
+        ;; TODO: Make that happen (just not tonight)
         buffer (Unpooled/buffer 2048)
         release-notifier (strm/stream)
         read-notifier (strm/stream)
@@ -335,8 +357,8 @@
           (strm/close! (:chan server->client))
           (strm/close! (:chan server<-client)))))))
 
-(deftest handshake
-  (log/info "**********************************\nNew Hand-Shake test")
+(defn build-hand-shake-options
+  []
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
                                       0x09 0x0a 0x0b 0x0c
@@ -345,27 +367,31 @@
                                     51 -105 -107 -125 -120 -41 83 -46
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
-        server-name (shared/encode-server-name "test.frereth.com")
-        options {::server #::shared{:extension server-extension
-                                    :my-keys #::shared{::K/server-name server-name
-                                                       :keydir "curve-test"}}
-                 ::client {::shared/extension (byte-array [0x10 0x0f 0x0e 0x0d
-                                                           0x0c 0x0b 0x0a 0x09
-                                                           0x08 0x07 0x06 0x05
-                                                           0x04 0x03 0x02 0x01])
-                           ::clnt/child-spawner client-child-spawner
-                           ::shared/my-keys {::K/server-name server-name}
-                           ::clnt/server-extension server-extension
-                           ;; Q: Where do I get the server's public key?
-                           ;; A: Right now, I just have the secret key's 32 bytes encoded as
-                           ;; the alphabet.
-                           ;; TODO: Really need to mirror what the code does to load the
-                           ;; secret key from a file.
-                           ;; Then I can just generate a random key pair for the server.
-                           ;; Use the key-put functionality to store the secret, then
-                           ;; hard-code the public key here.
-                           ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
-                                                   ::shared/server-name server-name}}}
+        server-name (shared/encode-server-name "test.frereth.com")]
+    {::server #::shared{:extension server-extension
+                        :my-keys #::shared{::K/server-name server-name
+                                           :keydir "curve-test"}}
+     ::client {::shared/extension (byte-array [0x10 0x0f 0x0e 0x0d
+                                               0x0c 0x0b 0x0a 0x09
+                                               0x08 0x07 0x06 0x05
+                                               0x04 0x03 0x02 0x01])
+               ::clnt/child-spawner client-child-spawner
+               ::shared/my-keys {::K/server-name server-name}
+               ::clnt/server-extension server-extension
+               ;; Q: Where do I get the server's public key?
+               ;; A: Right now, I just have the secret key's 32 bytes encoded as
+               ;; the alphabet.
+               ;; TODO: Really need to mirror what the code does to load the
+               ;; secret key from a file.
+               ;; Then I can just generate a random key pair for the server.
+               ;; Use the key-put functionality to store the secret, then
+               ;; hard-code the public key here.
+               ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
+                                       ::shared/server-name server-name}}}))
+
+(deftest handshake
+  (log/info "**********************************\nNew Hand-Shake test")
+  (let [options (build-hand-shake-options)
         chan->server (strm/stream)
         chan<-server (strm/stream)
         ;; TODO: This seems like it would be a great place to try switching to integrant
@@ -374,16 +400,16 @@
                                  ::clnt/chan->server chan->server))]
     (try
       (let [unstarted-server (srvr/ctor (::server options))
-            server<-client {:chan (strm/stream)}
-            server->client {:chan (strm/stream)}]
+            chan<-client {:chan (strm/stream)}
+            chan->client {:chan (strm/stream)}]
         (try
           (log/debug "Starting server based on\n"
                      #_(with-out-str (pprint (srvr/hide-long-arrays unstarted-server)))
                      "...stuff...")
           (try
             (let [server (srvr/start! (assoc unstarted-server
-                                             ::state/client-read-chan server<-client
-                                             ::state/client-write-chan server->client))]
+                                             ::state/client-read-chan chan<-client
+                                             ::state/client-write-chan chan->client))]
               (try
                 ;; Currently just called for side-effects.
                 ;; TODO: Seems like I really should hide that little detail
@@ -398,12 +424,12 @@
                                "Expected:" chan->server
                                "\nHave:" clnt->srvr))
                   (assert clnt->srvr)
-                  (let [write-hello (partial retrieve-hello server<-client)
-                        build-cookie (partial wrote-hello server->client)
+                  (let [write-hello (partial retrieve-hello chan<-client)
+                        build-cookie (partial wrote-hello chan->client)
                         write-cookie (partial forward-cookie chan<-server)
-                        get-cookie (partial wrote-cookie chan->server)
-                        write-vouch (partial vouch->server server<-client)
-                        get-server-response (partial wrote-vouch server->client)
+                        get-cookie (partial wrote-cookie chan<-client)
+                        write-vouch (partial vouch->server chan->server)
+                        get-server-response (partial wrote-vouch chan->client)
                         write-server-response (partial finalize chan<-server)
                         _ (println "interaction-test: Starting the stream "
                                    clnt->srvr)
@@ -453,8 +479,8 @@
                   (srvr/stop! server))))
             (catch clojure.lang.ExceptionInfo ex
               (is (not (.getData ex)))))
-          (finally (strm/close! (:chan server->client))
-                   (strm/close! (:chan server<-client)))))
+          (finally (strm/close! (:chan chan->client))
+                   (strm/close! (:chan chan<-client)))))
       (finally
         (clnt/stop! client)))))
 
