@@ -200,7 +200,7 @@
 
 (defn wrote-cookie
   [clnt->srvr success]
-  (println "Server cookie sent. Waiting for vouch")
+  (println "Cookie sent to server. Waiting for vouch")
   (is success)
   (is (not= success ::timeout))
   (strm/try-take! clnt->srvr ::drained 500 ::timeout))
@@ -238,29 +238,11 @@
                  500
                  ::timeout))
 
-(defn client-child
-  [buffer write-notifier]
-  (log/info "Client child sending bytes to server via client at "
-            (System/nanoTime))
-  (.writeBytes buffer (byte-array (range 1025)))
-  (let [wrote (strm/try-put! write-notifier
-                             buffer
-                             2500
-                             ::timedout)]
-    ;; This is timing out or failing.
-    ;; So the client is reading/waiting for the wrong thing.
-    ;; Sometimes.
-    ;; Q: What's up with that?
-    (let [succeeded (deref wrote 3000 ::check-timeout)]
-      (log/info (str "Client-child send result to " write-notifier " => "  succeeded " @ " (System/nanoTime)))
-      (is succeeded)
-      (is (not= succeeded ::timedout)))))
-
 (defn notified-about-release
-  [write-notifier release-notifier read-notifier success]
+  [write-notifier release-notifier read-notifier released-buffer]
   ;; The release-notifier times out now.
   ;; I don't think the client's getting a response here
-  (log/info (str "Client is releasing child buffer: " success
+  (log/info (str "Client is releasing child buffer: " released-buffer
                  "\nwrite-notifier:\n\t" write-notifier
                  "\nrelease-notifier:\n\t" release-notifier
                  "\nread-notifier:\n\t" read-notifier
@@ -281,6 +263,29 @@
   (strm/close! release-notifier)
   (strm/close! read-notifier))
 
+(defn client-child
+  [buffer write-notifier release-notifier read-notifier]
+  (log/info "Client child sending bytes to server via client at "
+            (System/nanoTime))
+  (.writeBytes buffer (byte-array (range 1025)))
+  (let [wrote (strm/try-put! write-notifier
+                             buffer
+                             2500
+                             ::timedout)]
+    ;; This is timing out or failing.
+    ;; So the client is reading/waiting for the wrong thing.
+    ;; Sometimes.
+    ;; Q: What's up with that?
+    (let [succeeded (deref wrote 3000 ::check-timeout)]
+      (log/info (str "Client-child send result to " write-notifier " => "  succeeded " @ " (System/nanoTime)))
+      ;; N.B. for real implementations: use a PooledByteBufAllocator
+      ;; Instead of mucking around with this release-notifier nonsense
+      ;; That should work around my current bug, though it's ignoring a
+      ;; fundamental design flaw.
+      (deferred/chain release-notifier (partial notified-about-release write-notifier release-notifier read-notifier))
+      (is succeeded)
+      (is (not= succeeded ::timedout)))))
+
 (defn client-child-spawner
   [client-agent]
   (log/info "Top of client-child-spawner")
@@ -289,18 +294,14 @@
   ;; 2. Write, say, 480 bytes, send notification, then 320 more
   (let [write-notifier (strm/stream)
         buffer (Unpooled/buffer 2048)
-        child (future (client-child buffer write-notifier))
-        read-notifier (strm/stream)
         release-notifier (strm/stream)
+        read-notifier (strm/stream)
+        child (future (client-child buffer
+                                    write-notifier
+                                    release-notifier
+                                    read-notifier))
         hidden [(strm/try-take! read-notifier ::drained 2500 ::timed-out)
                 (strm/try-take! release-notifier ::drained 2500 ::timed-out)]]
-    ;; It belongs under shared: it's even more vital on the server side.
-    ;; The flip side to this is that it basically leads to writing my own
-    ;; heap management, with things like performance analysis and tuning.
-    ;; And I don't think I want to go down that rabbit hole.
-    ;; Especially since netty has built this in since version 4.
-    ;; N.B. for real implementations: use a PooledByteBufAllocator
-    (deferred/chain release-notifier (partial notified-about-release write-notifier release-notifier read-notifier))
     {::clnt/child child
      ::clnt/reader  read-notifier
      ::clnt/release release-notifier
@@ -436,9 +437,12 @@
                     (is (not= (deref eventually-started 500 ::timeout)
                               ::timeout))))
                 (catch Exception ex
-                  (println (str "Unhandled exception escaped!\n"
+                  (println (str "Unhandled exception ("
+                                ex
+                                ") escaped!\n"
+                                "Stack Trace:\n"
                                 (with-out-str (.printStackTrace ex))
-                                "Client state:"
+                                "\nClient state:\n"
                                 (with-out-str (pprint (clnt/hide-long-arrays @client)))
                                 (if-let [err (agent-error client)]
                                   (str "\nClient failure:\n" err)

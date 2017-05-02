@@ -906,10 +906,6 @@ TODO: Need to ask around about that."
           ;; on minimalist embedded controllers for a while.
           (.discardSomeReadBytes msg-byte-buf)
 
-          (throw (ex-info "Start back here"
-                          {:what "Think I've isolated [latest] main issue"
-                           :issue "What does the release buffer really mean?"
-                           :problem "Reinventing Netty's Pooled buffers"}))
           (if (< 0 (.readableBytes msg-byte-buf))
             ;; Reference implementation just fails on this scenario.
             ;; That seems like a precedent that I'm OK breaking.

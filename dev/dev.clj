@@ -13,6 +13,7 @@
             [clojure.spec.gen :as gen]
             [clojure.string :as string]
             [clojure.test :as test]
+            [clojure.tools.logging :as log]
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [com.stuartsierra.component :as component]
             [com.frereth.common.aleph :as aleph]
