@@ -174,7 +174,7 @@ Needing to declare these things twice is annoying."
  (with-out-str (b-s/print-bytes bs)))
 
 (defn compose
-  "Convert the map in fields into a ByteBuf in dst, according to the rules described it tmplt
+  "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt
 
   This should probably be named compose! and return nil"
   [tmplt fields dst]

@@ -140,6 +140,8 @@
 ;; It's available as a potential optimization, but it probably only
 ;; makes sense from the "child" perspective, where we have more knowledge
 ;; about the expected traffic patterns.
+;; TODO: Switch to PooledByteBufAllocator
+;; Instead of mucking around with this release-notifier nonsense
 (s/def ::release ::writer)
 ;; Accepts the agent that owns "this" and returns
 ;; 1) a writer channel we can use to send messages to the child.
@@ -649,10 +651,12 @@ implementation. This is code that I don't understand yet"
   (throw (ex-info "Server Closed" this)))
 
 (defn child->server
+  "Child sent us (as an agent) a signal to add bytes to the stream to the server"
   [this msg]
   (throw (RuntimeException. "Not translated")))
 
 (defn server->child
+  "Received bytes from the server that need to be streamed back to child"
   [this msg]
   (throw (RuntimeException. "Not translated")))
 
@@ -790,8 +794,9 @@ TODO: Need to ask around about that."
   as the response.
 
   Handling an agent (send), which means `this` is already dereferenced"
-  [this {:keys [host port message]
-         :as cookie-packet}]
+  [this
+   {:keys [host port message]
+    :as cookie-packet}]
   (log/info (str "Getting ready to convert cookie\n"
                  (with-out-str (b-s/print-bytes message))
                  "into a Vouch"))
@@ -864,6 +869,8 @@ TODO: Need to ask around about that."
   [{reader ::chan<-child
     :as this}]
   (log/info (str "wait-for-initial-child-bytes: " reader))
+  ;; The redundant log message seems weird, but sometimes these
+  ;; things look different
   (log/info "a.k.a." reader)
   (when-not reader
     (throw (ex-info "Missing chan<-child" {::keys (keys this)})))
