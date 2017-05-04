@@ -199,11 +199,13 @@
                     {:problem cookie}))))
 
 (defn wrote-cookie
-  [srvr-> success]
-  (println "Server Cookie sent to client. Waiting for Initiate packet")
-  (is success)
-  (is (not= success ::timeout))
-  (strm/try-take! srvr-> ::drained 500 ::timeout))
+  [clnt-> success]
+  (is (and success
+           (not (keyword? success))))
+  (if (not= success ::timeout)
+    (do
+      (println "Server Cookie sent to client. Waiting for Initiate packet in response")
+      (strm/try-take! clnt-> ::drained 500 ::timeout))))
 
 (defn vouch->server
   [->server vouch]
@@ -215,16 +217,13 @@
            vouch
            " for forwarding along to "
            ->server)
+  (is (not (keyword? vouch)))
   ;; There's something inside out going on.
   ;; We just forwarded the from the server to the
   ;; client (in wrote-cookie).
   ;; Now we pulled the Initiate packet in response.
   ;; The main point here is to forward that packet
   ;; back to the Server.
-  ;; Which shouldn't have anything at all to do with
-  ;; client channels.
-  ;; Q: Was this ever making those round trips?
-  ;; A: Absolutely!
   (if-not (or (= vouch ::drained)
               (= vouch ::timeout))
     (strm/try-put! (:chan ->server)
@@ -237,20 +236,25 @@
                     {:failure vouch}))))
 
 (defn wrote-vouch
+  "Vouch went to server. Now pull its response"
   [server-> success]
+  (is (not (keyword? success)))
   (if success
     (strm/try-take! (:chan server->) ::drained 500 ::timeout)
     (throw (RuntimeException. "Failed writing Vouch to server"))))
 
 (defn finalize
   [->client response]
-  (is response "Handshake should be complete")
-  (strm/try-put! ->client
-                 {:message response
-                  :host "interaction-test-server"
-                  :port -1}
-                 500
-                 ::timeout))
+  (if (and response
+             (not (keyword? response)))
+    (strm/try-put! ->client
+                   {:message response
+                    :host "interaction-test-server"
+                    :port -1}
+                   500
+                   ::timeout)
+    (throw (ex-info "Waiting for a server ACK failed"
+                    {::received response}))))
 
 (defn notified-about-release
   [write-notifier release-notifier read-notifier released-buffer]
@@ -428,10 +432,11 @@
                           (str "Client channels don't match.\n"
                                "Expected:" chan->server
                                "\nHave:" clnt->srvr))
-                  (assert clnt->srvr)
+                  (assert chan->server)
                   (let [write-hello (partial retrieve-hello chan<-client)
                         build-cookie (partial wrote-hello chan->client)
                         write-cookie (partial forward-cookie chan<-server)
+                        ;; This pulls the Initiate packet from the client
                         get-cookie (partial wrote-cookie chan->server)
                         write-vouch (partial vouch->server chan<-client)
                         get-server-response (partial wrote-vouch chan->client)
@@ -483,7 +488,13 @@
                   (println "Test done. Stopping server.")
                   (srvr/stop! server))))
             (catch clojure.lang.ExceptionInfo ex
-              (is (not (.getData ex)))))
+              (let [msg (str "Unhandled ex-info:\n"
+                             ex
+                             "\nAssociated Data:\n"
+                             (.getData ex)
+                             "\nStack Trace:\n"
+                             (with-out-str (.printStackTrace ex)))]
+                (is false msg))))
           (finally (strm/close! (:chan chan->client))
                    (strm/close! (:chan chan<-client)))))
       (finally

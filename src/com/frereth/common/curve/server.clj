@@ -143,7 +143,10 @@
                 \I (initiate/handle! state packet)
                 \M (handle-message! state packet))
               (catch Exception ex
-                (log/error ex (str "Failed handling packet type: " packet-type-id))
+                (log/error ex (str "Failed handling packet type: "
+                                   packet-type-id
+                                   "\n"
+                                   (with-out-str (.printStackTrace ex))))
                 state))))
         (do (log/info "Ignoring packet intended for someone else")
             state)))
@@ -205,7 +208,7 @@
                 (do
                   ;; The promise that tells us to stop hasn't
                   ;; been fulfilled
-                  (log/debug "Possibly Rotating"
+                  (log/info "Possibly Rotating"
                            #_(util/pretty (helpers/hide-long-arrays this))
                            "...this...")
                   (deferred/recur (state/handle-key-rotation this)))

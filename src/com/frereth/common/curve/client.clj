@@ -165,13 +165,26 @@
 (defn hide-long-arrays
   "Make pretty printing a little less verbose"
   [this]
-  (-> this
-      ;; TODO: Write a mirror image version of dns-encode to just show this
-      (assoc-in [::server-security ::shared/server-name] "name")
-      (assoc-in [::shared/packet-management ::shared/packet] "...packet bytes...")
-      (assoc-in [::shared/work-area ::shared/working-nonce] "...FIXME: Decode nonce bytes")
-      (assoc-in [::shared/work-area ::shared/text] "...plain/cipher text")
-      #_(assoc ::child )))
+  ;; In some scenarios, we're winding up with the client as a
+  ;; deferred.
+  ;; This is specifically happening when my interaction test
+  ;; throws an unhandled exception.
+  ;; I probably shouldn't do this to try to work around that problem,
+  ;; but I really want/need as much debug info as I can get in
+  ;; that sort of scenario
+  (let [this (if (associative? this)
+               this
+               (try
+                 (assoc @this ::-hide-long-array-notice "This was a deferred")
+                 (catch java.lang.ClassCastException ex
+                   (throw (ex-info (str @this ": deferred that breaks everything")
+                                   {:cause (str ex)})))))]
+    (-> this
+        ;; TODO: Write a mirror image version of dns-encode to just show this
+        (assoc-in [::server-security ::shared/server-name] "name")
+        (assoc-in [::shared/packet-management ::shared/packet] "...packet bytes...")
+        (assoc-in [::shared/work-area ::shared/working-nonce] "...FIXME: Decode nonce bytes")
+        (assoc-in [::shared/work-area ::shared/text] "...plain/cipher text"))))
 
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
@@ -709,7 +722,7 @@ implementation. This is code that I don't understand yet"
                                                            (update state ::child-packets
                                                                    conj bs)]
                                                        (send-messages! a))))))))
-      (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" (keys this))
+      (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" (keys @this))
                       this)))
     (log/warn "That response to Initiate was a failure")))
 

@@ -252,7 +252,7 @@ To be fair, this layer *is* pretty special."
 ;;; Public
 (defn handle!
   [state
-   {:keys [host message port]
+   {:keys [:host :message :port]
     :as packet}]
   (or
    (let [n (.readableBytes message)]

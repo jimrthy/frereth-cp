@@ -188,7 +188,6 @@
   seems at first."
   [{:keys [::cookie-cutter]
     :as state}]
-  (throw (RuntimeException. "Move this into state"))
   (try
     (log/info "Checking whether it's time to rotate keys or not")
     (let [now (System/nanoTime)
