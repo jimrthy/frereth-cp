@@ -199,14 +199,14 @@
                     {:problem cookie}))))
 
 (defn wrote-cookie
-  [clnt->srvr success]
+  [srvr-> success]
   (println "Server Cookie sent to client. Waiting for Initiate packet")
   (is success)
   (is (not= success ::timeout))
-  (strm/try-take! (:chan clnt->srvr) ::drained 500 ::timeout))
+  (strm/try-take! srvr-> ::drained 500 ::timeout))
 
 (defn vouch->server
-  [server-chan vouch]
+  [->server vouch]
   ;; I don't have any real failure indication available
   ;; if something goes wrong with/on the server trying
   ;; to cope with this incoming vouch.
@@ -214,7 +214,7 @@
   (println "Got Initiate packet from client: "
            vouch
            " for forwarding along to "
-           server-chan)
+           ->server)
   ;; There's something inside out going on.
   ;; We just forwarded the from the server to the
   ;; client (in wrote-cookie).
@@ -224,9 +224,10 @@
   ;; Which shouldn't have anything at all to do with
   ;; client channels.
   ;; Q: Was this ever making those round trips?
+  ;; A: Absolutely!
   (if-not (or (= vouch ::drained)
               (= vouch ::timeout))
-    (strm/try-put! (:chan server-chan)
+    (strm/try-put! (:chan ->server)
                    {:message vouch
                     :host "tester-client"
                     :port 65536}
@@ -236,15 +237,15 @@
                     {:failure vouch}))))
 
 (defn wrote-vouch
-  [client-chan success]
+  [server-> success]
   (if success
-    (strm/try-take! (:chan client-chan) ::drained 500 ::timeout)
+    (strm/try-take! (:chan server->) ::drained 500 ::timeout)
     (throw (RuntimeException. "Failed writing Vouch to server"))))
 
 (defn finalize
-  [client<-server response]
+  [->client response]
   (is response "Handshake should be complete")
-  (strm/try-put! client<-server
+  (strm/try-put! ->client
                  {:message response
                   :host "interaction-test-server"
                   :port -1}
@@ -392,6 +393,10 @@
 (deftest handshake
   (log/info "**********************************\nNew Hand-Shake test")
   (let [options (build-hand-shake-options)
+        ;; Note that the channel names in here seem backward.
+        ;; Remember that they're really a mirror image:
+        ;; So this is really the stream that the client uses
+        ;; to send data to us
         chan->server (strm/stream)
         chan<-server (strm/stream)
         ;; TODO: This seems like it would be a great place to try switching to integrant
@@ -427,8 +432,8 @@
                   (let [write-hello (partial retrieve-hello chan<-client)
                         build-cookie (partial wrote-hello chan->client)
                         write-cookie (partial forward-cookie chan<-server)
-                        get-cookie (partial wrote-cookie chan<-client)
-                        write-vouch (partial vouch->server chan->server)
+                        get-cookie (partial wrote-cookie chan->server)
+                        write-vouch (partial vouch->server chan<-client)
                         get-server-response (partial wrote-vouch chan->client)
                         write-server-response (partial finalize chan<-server)
                         _ (println "interaction-test: Starting the stream "

@@ -147,15 +147,6 @@
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
   (let [p-m (::shared/packet-management this)]
-    ;; The atom below this causes an NPE.
-    ;; Trying to sort out why.
-    (do
-      (log/warn "FIXME: Debug only")
-      (if-not p-m
-        (log/error (str "Missing ::shared/packet-management in\n" this))
-        (if-let [packet (::shared/packet p-m)]
-          (log/warn (str "Getting ready to have a problem calling .clear on\n" packet))
-          (log/error "Missing ::shared/packet inside\n" p-m))))
     (crypto/randomize-buffer! (::shared/packet p-m)))
   (crypto/random-bytes! (-> this ::current-client ::client-security ::shared/short-pk))
   ;; The shared secrets are all private, so I really can't touch them
