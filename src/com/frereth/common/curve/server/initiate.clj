@@ -254,10 +254,11 @@ To be fair, this layer *is* pretty special."
   [state
    {:keys [:host :message :port]
     :as packet}]
+  (log/info "Handling incoming initiate packet: " packet)
   (or
    (let [n (.readableBytes message)]
      (if (>= n minimum-initiate-packet-length)
-       (let [tmplt (update-in K/initiate-packet-dscr [::K/vouch ::K/length] + (- n minimum-initiate-packet-length))
+       (let [tmplt (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (- n minimum-initiate-packet-length))
              initiate (shared/decompose tmplt message)
              client-short-key (::K/clnt-short-pk initiate)]
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)

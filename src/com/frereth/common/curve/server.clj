@@ -143,10 +143,18 @@
                 \I (initiate/handle! state packet)
                 \M (handle-message! state packet))
               (catch Exception ex
-                (log/error ex (str "Failed handling packet type: "
-                                   packet-type-id
-                                   "\n"
-                                   (with-out-str (.printStackTrace ex))))
+                (let [trace (.getStackTrace ex)]
+                  (log/error ex (str "Failed handling packet type: "
+                                     packet-type-id
+                                     "\nThere are " (count trace) " entries in the stack trace"
+                                     (reduce
+                                      (fn [acc frame]
+                                        (str acc
+                                             "\n" (.getClassName frame)
+                                             "::" (.getMethodName frame)
+                                             " at " (.getFileName frame)
+                                             " line " (.getLineNumber frame)))
+                                      "\n* " trace))))
                 state))))
         (do (log/info "Ignoring packet intended for someone else")
             state)))
@@ -302,7 +310,7 @@
     :or {max-active-clients default-max-clients}
     :as cfg}]
   (-> cfg
-      (assoc ::state/active-clients (atom #{})  ; Q: set or map?
+      (assoc ::state/active-clients (atom {})
              ::state/current-client (state/alloc-client)  ; Q: What's the point?
              ::max-active-clients max-active-clients
              ::shared/working-area (shared/default-work-area))))

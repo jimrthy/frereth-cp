@@ -194,17 +194,17 @@ Totally fails on multi-home systems. But it's worthwhile as a starting point"
 
 ;; TODO: Spec this
 (defn pretty
-  [& os]
+  [& xs]
   (try
-    (with-out-str (apply pprint/pprint os))
+    (with-out-str (apply pprint/pprint xs))
     (catch RuntimeException ex
       (log/error ex "Pretty printing failed (there should be a stack trace about this failure).
 Falling back to standard")
-      (str os))
+      (str xs))
     (catch AbstractMethodError ex
       ;; Q: Why isn't this a RuntimeException?
       (log/error ex "Something seriously wrong w/ pretty printing? Falling back to standard:\n")
-      (str os))))
+      (str xs))))
 
 (s/fdef pushback-reader
         :args (s/cat :reader ::reader)

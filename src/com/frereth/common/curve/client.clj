@@ -1225,7 +1225,7 @@ like a timing attack."
   [wrapper]
   (if-let [err (agent-error wrapper)]
     (log/error (str err "\nTODO: Is there any way to recover well enough to release the Packet Manager?\n"
-                    (with-out-str (.printStackTrace err))))
+                    (.getStackTrace err)))
     (send wrapper
           (fn [this]
             (shared/release-packet-manager! (::shared/packet-management this))))))
