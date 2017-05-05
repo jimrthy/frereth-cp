@@ -8,7 +8,8 @@
             [com.frereth.common.schema :as fr-sch]
             [hara.event :refer (raise)]
             [taoensso.timbre :as log])
-  (:import [java.io PushbackReader Reader]
+  (:import clojure.lang.ExceptionInfo
+           [java.io PushbackReader Reader]
            [java.lang.reflect Modifier]
            [java.net InetAddress]
            [java.util UUID]))
@@ -157,6 +158,35 @@
 Because I keep using them for heartbeat monitors"
   []
   (async/timeout (* 1000 60 5)))
+
+(s/fdef get-stack-trace
+        :args (s/cat :ex #(instance? Throwable %))
+        :ret (s/coll-of str))
+(defn get-stack-trace
+  [ex]
+  (reduce
+   (fn [acc frame]
+     (conj acc
+           (str "\n" (.getClassName frame)
+                "::" (.getMethodName frame)
+                " at " (.getFileName frame)
+                " line " (.getLineNumber frame))))
+   [] (.getStackTrace ex)))
+
+(s/fdef show-stack-trace
+        :args (s/cat :ex #(instance? Throwable %))
+        :ret string?)
+(defn show-stack-trace
+  "Convert stack trace to a readable string
+Slow and inefficient, but you have bigger issues than
+performance if you're calling this"
+  [ex]
+  (let [base (if (instance? ExceptionInfo ex)
+               (str ex "\n" (pretty (.getData ex)))
+               (str ex))]
+    (reduce #(str %1 %2)
+            base
+            (get-stack-trace ex))))
 
 (s/fdef load-resource
         :args (s/cat :url string?)

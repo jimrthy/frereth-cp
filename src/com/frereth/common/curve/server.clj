@@ -146,15 +146,8 @@
                 (let [trace (.getStackTrace ex)]
                   (log/error ex (str "Failed handling packet type: "
                                      packet-type-id
-                                     "\nThere are " (count trace) " entries in the stack trace"
-                                     (reduce
-                                      (fn [acc frame]
-                                        (str acc
-                                             "\n" (.getClassName frame)
-                                             "::" (.getMethodName frame)
-                                             " at " (.getFileName frame)
-                                             " line " (.getLineNumber frame)))
-                                      "\n* " trace))))
+                                     "\n"
+                                     (util/show-stack-trace ex))))
                 state))))
         (do (log/info "Ignoring packet intended for someone else")
             state)))

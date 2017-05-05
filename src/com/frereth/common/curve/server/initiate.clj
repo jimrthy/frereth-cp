@@ -232,12 +232,16 @@ To be fair, this layer *is* pretty special."
 
 (defn open-client-crypto-box
   [{:keys [::K/nonce
-           ::K/vouch]
+           ::K/vouch-wrapper]
     :as initiate}
    current-client]
-  (let [message-length (- (.readableBytes vouch) K/minimum-vouch-length)
-        clear-text (crypto/open-crypto-box K/initiate-nonce-prefix nonce vouch (get-in current-client [::state/shared-secrets
-                                                                                                       ::state/client-short<->server-short]))]
+  (log/info "Opening the Crypto box we just received from the client using" nonce "on" vouch-wrapper)
+  (let [message-length (- (.readableBytes vouch-wrapper) K/minimum-vouch-length)
+        _ (throw (ex-info "start here"
+                          {:problem "Failing w/ IndexOutOfBoundsException"}))
+        clear-text (crypto/open-crypto-box K/initiate-nonce-prefix nonce vouch-wrapper (get-in current-client [::state/shared-secrets
+                                                                                                               ::state/client-short<->server-short]))]
+    (log/info "Decomposing...")
     (shared/decompose (assoc-in K/initiate-client-vouch-wrapper
                                 [::K/message ::K/length]
                                 message-length)
@@ -284,7 +288,7 @@ To be fair, this layer *is* pretty special."
                      ;; Now we're ready to tackle handling the main message body cryptobox.
                      ;; This corresponds to line 373 in the reference implementation.
                      (try
-                       (let [inner-client-box (open-client-crypto-box initiate)]
+                       (let [inner-client-box (open-client-crypto-box initiate active-client)]
                          (try
                            (when (validate-server-name state inner-client-box)
                              ;; This takes us down to line 381
