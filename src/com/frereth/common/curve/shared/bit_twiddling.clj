@@ -1,10 +1,20 @@
 (ns com.frereth.common.curve.shared.bit-twiddling
   "Shared functions for fiddling with bits"
-  (:require [clojure.spec :as s]
+  (:require [byte-streams :as b-s]
+            [clojure.spec :as s]
             [clojure.tools.logging :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(s/fdef ->string
+        ;; Q: What's legal to send here?
+        :args (s/cat :x (s/or :byte-array bytes
+                              :byte-buf #(instance? io.netty.buffer.ByteBuf %)))
+        :ret string?)
+(defn ->string
+  [x]
+  (with-out-str (b-s/print-bytes x)))
 
 (defn byte-copy!
   "Copies the bytes from src to dst"

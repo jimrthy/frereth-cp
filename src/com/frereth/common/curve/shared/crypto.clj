@@ -1,9 +1,11 @@
 (ns com.frereth.common.curve.shared.crypto
   "Wrap up the low-level crypto functions"
-  (:require [clojure.spec :as s]
+  (:require [byte-streams :as b-s]
+            [clojure.spec :as s]
             [clojure.tools.logging :as log]
             [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.constants :as K])
+            [com.frereth.common.curve.shared.constants :as K]
+            [com.frereth.common.util :as utils])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
@@ -149,11 +151,11 @@ which I'm really not qualified to touch."
                                                      n nonce
                                                      shared-key)]
           (when (not= 0 success)
-            (throw (ex-info "Opening box failed" {::box box
+            (throw (ex-info "Opening box failed" {::box (b-t/->string box)
                                                   ::offset box-offset
                                                   ::length box-length
-                                                  ::nonce nonce
-                                                  ::shared-key shared-key})))
+                                                  ::nonce (b-t/->string nonce)
+                                                  ::shared-key (b-t/->string shared-key)})))
           ;; The * 2 on the zero bytes is important.
           ;; The encryption starts with 0's and prepends them.
           ;; The decryption requires another bunch (of zeros?) in front of that.
@@ -182,19 +184,25 @@ which I'm really not qualified to touch."
                                     int?
                                     #(< -129 % 128)))))
 (defn open-crypto-box
+  "Generally, this is probably the least painful method [so far] to open a crypto box"
   [prefix-bytes suffix-buffer crypto-buffer shared-key]
   (let [nonce (byte-array K/nonce-length)
         crypto-length (.readableBytes crypto-buffer)
         crypto-text (byte-array crypto-length)]
     (b-t/byte-copy! nonce prefix-bytes)
-    (.getBytes suffix-buffer
-               (- K/nonce-length (count prefix-bytes))
-               nonce)
+    (let [prefix-length (count prefix-bytes)]
+      (.getBytes suffix-buffer
+                 0
+                 nonce
+                 prefix-length
+                 (- K/nonce-length prefix-length)))
     (.getBytes crypto-buffer 0 crypto-text)
     (try
       (open-after crypto-text 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
-        (log/error ex "Failed to open box")))))
+        (log/error ex
+                   (str "Failed to open box\n"
+                        (utils/pretty (.getData ex))))))))
 
 (defn random-array
   "Returns an array of n random bytes"
