@@ -15,6 +15,17 @@
            [java.util UUID]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Named constants for timeouts
+;;; TODO: These really don't belong in here
+(defn seconds [] 1000)  ; avoid collision w/ built-in second
+(defn minute [] (* 60 (seconds)))
+(defn hour [] (* 60 (minute)))
+(defn day [] (* 24 (hour)))
+(defn week [] (* 7 (day)))
+;; Yes, this falls apart
+(defn year [] (* 365 day))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
 (s/def ::reader (fr-sch/class-predicate Reader))
@@ -98,6 +109,21 @@
 ;;; Public
 
 ;; TODO: Spec this
+(defn pretty
+  "Return a pretty-printed representation of xs"
+  [& xs]
+  (try
+    (with-out-str (apply pprint/pprint xs))
+    (catch RuntimeException ex
+      (log/error ex "Pretty printing failed (there should be a stack trace about this failure).
+Falling back to standard")
+      (str xs))
+    (catch AbstractMethodError ex
+      ;; Q: Why isn't this a RuntimeException?
+      (log/error ex "Something seriously wrong w/ pretty printing? Falling back to standard:\n")
+      (str xs))))
+
+;; TODO: Spec this
 (defn cheat-sheet
   "Shamelessly borrowed from https://groups.google.com/forum/#!topic/clojure/j5PmMuhG3d8"
   [ns]
@@ -157,7 +183,7 @@
 
 Because I keep using them for heartbeat monitors"
   []
-  (async/timeout (* 1000 60 5)))
+  (async/timeout (* (minute) 5)))
 
 (s/fdef get-stack-trace
         :args (s/cat :ex #(instance? Throwable %))
@@ -222,20 +248,6 @@ Totally fails on multi-home systems. But it's worthwhile as a starting point"
   []
   (System/getProperty "user.home"))
 
-;; TODO: Spec this
-(defn pretty
-  [& xs]
-  (try
-    (with-out-str (apply pprint/pprint xs))
-    (catch RuntimeException ex
-      (log/error ex "Pretty printing failed (there should be a stack trace about this failure).
-Falling back to standard")
-      (str xs))
-    (catch AbstractMethodError ex
-      ;; Q: Why isn't this a RuntimeException?
-      (log/error ex "Something seriously wrong w/ pretty printing? Falling back to standard:\n")
-      (str xs))))
-
 (s/fdef pushback-reader
         :args (s/cat :reader ::reader)
         :ret ::pushback-reader)
@@ -299,13 +311,3 @@ for a more complex-looking example which would be much more appropriate for that
 sort of scenario"
   []
   (count (Thread/getAllStackTraces)))
-
-;;; Named constants for timeouts
-;;; TODO: These really don't belong in here
-;;; Aside from being grossly inaccurate
-(defn seconds [] 1000)  ; avoid collision w/ built-in second
-(defn minute [] (* 60 (seconds)))
-(defn hour [] (* 60 (minute)))
-(defn day [] (* 24 (hour)))
-(defn week [] (* 7 (day)))
-(defn year [] (* 365 day))

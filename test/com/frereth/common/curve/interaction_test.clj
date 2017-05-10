@@ -396,6 +396,10 @@
 
 (deftest handshake
   (log/info "**********************************\nNew Hand-Shake test")
+  ;; Shouldn't be trying to re-use buffers produced at client side on the server.
+  ;; And vice-versa.
+  ;; That's just adding needless complexity
+  (throw (RuntimeException. "Start by isolating the ByteBuf"))
   (let [options (build-hand-shake-options)
         ;; Note that the channel names in here seem backward.
         ;; Remember that they're really a mirror image:

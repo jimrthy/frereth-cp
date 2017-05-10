@@ -210,6 +210,8 @@ But it depends on compose, which would set up circular dependencies"
                       nonce-suffix)
       (crypto/box-after key-pair dst n nonce))))
 
+;; TODO: Needs spec
+;; This one seems interesting
 (defn decompose
   "Note that this very strongly assumes that I have a ByteBuf here.
 
@@ -224,8 +226,7 @@ own ns"
    (fn
      [acc k]
      (let [dscr (k tmplt)
-           cnvrtr (or (::type dscr)
-                      (::K/type dscr))]
+           cnvrtr (::K/type dscr)]
        ;; The correct approach would be to move this (and compose)
        ;; into its own tiny ns that everything else can use.
        ;; helpers seems like a good choice.

@@ -235,16 +235,20 @@ To be fair, this layer *is* pretty special."
            ::K/vouch-wrapper]
     :as initiate}
    current-client]
-  (log/info "Opening the Crypto box we just received from the client using"
+  (log/info "Opening the Crypto box we just received from the client using\n"
             (b-t/->string nonce)
-            "on"
+            "(reference count: " (.refCnt nonce) ") "
+            "on\n"
             (b-t/->string vouch-wrapper))
   (let [message-length (- (.readableBytes vouch-wrapper) K/minimum-vouch-length)]
     ;; Now this is triggering an io.netty.util.IllegalReferenceCountException
     ;; That seems like forward progress.
     ;; It beats my unexplained "opening crypto box failed" error.
-    (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix nonce vouch-wrapper (get-in current-client [::state/shared-secrets
-                                                                                                                    ::state/client-short<->server-short]))]
+    (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix
+                                                nonce
+                                                vouch-wrapper
+                                                (get-in current-client [::state/shared-secrets
+                                                                        ::state/client-short<->server-short]))]
       (do
         (log/info "Decomposing...")
         (shared/decompose (assoc-in K/initiate-client-vouch-wrapper
@@ -261,6 +265,8 @@ To be fair, this layer *is* pretty special."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+;; TODO: Needs spec
 (defn handle!
   [state
    {:keys [:host :message :port]
@@ -272,6 +278,12 @@ To be fair, this layer *is* pretty special."
        (let [tmplt (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (- n minimum-initiate-packet-length))
              initiate (shared/decompose tmplt message)
              client-short-key (::K/clnt-short-pk initiate)]
+         ;; The nonce's reference count has been cleared before it ever gets here.
+         ;; This is silly.
+         (log/info (str "******************************************\n"
+                        "* Nonce:\n* "
+                        (b-t/->string (::K/nonce initiate))
+                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)
            (let [active-client (state/find-client state client-short-key)]
              (if-let [cookie (extract-cookie (::state/cookie-cutter state)
