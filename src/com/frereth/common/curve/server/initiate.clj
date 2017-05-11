@@ -14,7 +14,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Named Constants
 
+;; Q: How did I come up with 560?
+;; A: (+ (+ 8 96 32 16 16 8 368)
+;;       16)
+;; (based on the basic Client Initiate packet details spec)
 (def minimum-initiate-packet-length 560)
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal implementation
@@ -245,6 +250,10 @@ To be fair, this layer *is* pretty special."
             "(reference count: " (.refCnt nonce) ") "
             "on\n"
             (comment (b-t/->string vouch-wrapper)))
+  (.retain vouch-wrapper)
+  (log/info (b-t/->string vouch-wrapper))
+  ;; We're missing the last 16 bytes
+  (log/info "The box we're opening is" (.readableBytes vouch-wrapper) "bytes long")
   (let [message-length (- (.readableBytes vouch-wrapper) K/minimum-vouch-length)]
     ;; Back to a mostly-unexplained "Failed to open box" error.
     (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix
@@ -254,6 +263,9 @@ To be fair, this layer *is* pretty special."
                                                                         ::state/client-short<->server-short]))]
       (do
         (log/info "Decomposing...")
+        ;; clear-text contains a sub-vector.
+        ;; Can't call decompose on that.
+        ;; This is going to fail.
         (shared/decompose (assoc-in K/initiate-client-vouch-wrapper
                                     [::K/message ::K/length]
                                     message-length)
@@ -278,9 +290,13 @@ To be fair, this layer *is* pretty special."
   (or
    (let [n (.readableBytes message)]
      (if (>= n minimum-initiate-packet-length)
-       (let [tmplt (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (- n minimum-initiate-packet-length))
+       ;; My math is off here.
+       ;; If I add 16 to the vouch-wrapper length (the way I've hacked in here),
+       ;; it works.
+       (let [tmplt (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (- n minimum-initiate-packet-length) 16)
              initiate (shared/decompose tmplt message)
              client-short-key (::K/clnt-short-pk initiate)]
+         (throw (RuntimeException. "Figure out my off-by-16 bug"))
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)
            (let [active-client (state/find-client state client-short-key)]
              (if-let [cookie (extract-cookie (::state/cookie-cutter state)

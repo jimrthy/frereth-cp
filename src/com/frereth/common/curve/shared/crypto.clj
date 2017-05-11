@@ -108,11 +108,13 @@
 (defn open-after
   "Low-level direct crypto box opening
 
-  parameter box: crypto box byte array to open
-  parameter box-offset: first byte of box to start opening
-  parameter box-length: how many bytes of box to open
-  parameter nonce: Number used Once for this specific box
-  parameter shared-key: combination of their-public and my-private
+  @parameter box: crypto box byte array to open
+  @parameter box-offset: first byte of box to start opening
+  @parameter box-length: how many bytes of box to open
+  @parameter nonce: Number used Once for this specific box
+  @parameter shared-key: combination of their-public and my-private
+
+Note that this does cope with the extra required 16 bytes of prefix padding
 
 The parameter order is screwy to match the java API.
 

@@ -956,11 +956,17 @@ TODO: Need to ask around about that."
              ::K/inner-vouch (::vouch this)
              ::K/server-name server-name
              ::K/child-message msg}
-        work-area (::shared/work-area this)]
+        work-area (::shared/work-area this)
+        secret (get-in this [::shared-secrets ::client-short<->server-short])]
+    (log/info (str "Encrypting:\n"
+                   src
+                   "\nVouch:\n" (b-t/->string nonce-suffix)
+                   "FIXME: Do not log this!!\n"
+                   "Shared secret:\n" (b-t/->string secret)))
     (shared/build-crypto-box tmplt
                              src
                              (::shared/text work-area)
-                             (get-in this [::shared-secrets ::client-short<->server-short])
+                             secret
                              K/initiate-nonce-prefix
                              nonce-suffix)))
 
@@ -980,7 +986,10 @@ TODO: Need to ask around about that."
         ;; Legal because a) it uses a different prefix and b) it's a different number anyway
         nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area) K/client-nonce-prefix-length)
         crypto-box (build-initiate-interior this msg nonce-suffix)]
-    (log/debug (str "Stuffing " crypto-box " into the initiate packet"))
+    (log/info (str "Stuffing\n"
+                   (b-t/->string crypto-box)
+                   "which is " (count crypto-box) " bytes long\n"
+                   "into the initiate packet"))
     (let [dscr (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (count msg))
           fields #::K{:prefix K/initiate-header
                       :srvr-xtn (::server-extension this)
