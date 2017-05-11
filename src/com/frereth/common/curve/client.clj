@@ -957,10 +957,6 @@ TODO: Need to ask around about that."
              ::K/server-name server-name
              ::K/child-message msg}
         work-area (::shared/work-area this)]
-    ;; This seems to be dropping the child-message part.
-    ;; Or maybe it's happening later on.
-    ;; Wherever it's breaking between here and there, we're only putting together 368 bytes here
-    ;; to send to the server.
     (shared/build-crypto-box tmplt
                              src
                              (::shared/text work-area)

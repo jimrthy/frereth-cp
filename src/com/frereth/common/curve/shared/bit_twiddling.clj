@@ -14,7 +14,6 @@
         :ret string?)
 (defn ->string
   [x]
-  (comment (.retain x))
   (with-out-str (b-s/print-bytes x)))
 
 (defn byte-copy!

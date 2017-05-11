@@ -64,11 +64,6 @@ To be fair, this layer *is* pretty special."
   ;; If there is one, extract the message portion and send that to
   ;; its child (since the ).
   ;; Q: Where was I going with that comment?
-  (log/info (str "******************************************\n"
-                 "* Checking existing client connection\n"
-                        "* Nonce:\n* "
-                        (b-t/->string (::K/nonce initiate))
-                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
   (let [client-short-key (::clnt-short-pk initiate)]
     (when-let [client (state/find-client state client-short-key)]
       (log/info "I packet from known client")
@@ -200,11 +195,6 @@ To be fair, this layer *is* pretty special."
            ::state/last-minute-key]
     :as cookie-cutter}
    initiate]
-  (log/info (str "******************************************\n"
-                 "* Extracting Cookie\n"
-                        "* Nonce:\n* "
-                        (b-t/->string (::K/nonce initiate))
-                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
 
   ;; This corresponds to lines 359-368. Just verify that
   ;; we can open our secret cryptobox cookie using either
@@ -227,11 +217,6 @@ To be fair, this layer *is* pretty special."
     (.getBytes hello-cookie-buffer 0 hello-cookie)
     (let [inner-vouch-bytes (byte-array K/server-cookie-length)]
       (when (decrypt-inner-vouch! cookie-cutter inner-vouch-bytes hello-cookie)
-        (log/info (str "******************************************\n"
-                       "* Decrypted inner-vouch\n"
-                        "* Outer Nonce:\n* "
-                        (b-t/->string (::K/nonce initiate))
-                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
         ;; Reference code:
         ;; Verifies that the "first" 32 bytes (after the 32 bytes of
         ;; decrypted 0 padding) of the 80 bytes it decrypted
@@ -256,14 +241,12 @@ To be fair, this layer *is* pretty special."
     :as initiate}
    current-client]
   (log/info "Opening the Crypto box we just received from the client using\n"
-            (b-t/->string nonce)
+            (comment (b-t/->string nonce))
             "(reference count: " (.refCnt nonce) ") "
             "on\n"
-            (b-t/->string vouch-wrapper))
+            (comment (b-t/->string vouch-wrapper)))
   (let [message-length (- (.readableBytes vouch-wrapper) K/minimum-vouch-length)]
-    ;; Now this is triggering an io.netty.util.IllegalReferenceCountException
-    ;; That seems like forward progress.
-    ;; It beats my unexplained "opening crypto box failed" error.
+    ;; Back to a mostly-unexplained "Failed to open box" error.
     (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix
                                                 nonce
                                                 vouch-wrapper
@@ -298,23 +281,12 @@ To be fair, this layer *is* pretty special."
        (let [tmplt (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (- n minimum-initiate-packet-length))
              initiate (shared/decompose tmplt message)
              client-short-key (::K/clnt-short-pk initiate)]
-         ;; The nonce's reference count has been cleared before it ever gets here.
-         ;; This is silly.
-         (log/info (str "******************************************\n"
-                        "* Top of handle!\n"
-                        "* Nonce:\n* "
-                        (b-t/->string (::K/nonce initiate))
-                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)
            (let [active-client (state/find-client state client-short-key)]
              (if-let [cookie (extract-cookie (::state/cookie-cutter state)
                                              initiate)]
                (do
                  (log/info (str "Succssfully extracted cookie"))
-         (log/info (str "******************************************\n"
-                        "* Nonce:\n* "
-                        (b-t/->string (::K/nonce initiate))
-                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
                  (let [server-short-sk-buffer (::K/srvr-short-sk cookie)
                        server-short-sk (byte-array K/key-length)
                        client-short-pk (byte-array K/key-length)]

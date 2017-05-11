@@ -235,9 +235,7 @@ own ns"
                       ;; .readBytes does not produce a derived buffer.
                       ;; The buffer that gets created here will need to be
                       ;; released separately
-                      ::K/bytes #_(let [buf (.readBytes src (::K/length dscr))]
-                                  (.retain buf)
-                                  buf) (.readBytes src (::K/length dscr))
+                      ::K/bytes (.readBytes src (::K/length dscr))
                       ::K/int-64 (.readLong src)
                       ::K/zeroes (.readSlice src (::K/length dscr))
                       (throw (ex-info "Missing case clause"

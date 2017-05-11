@@ -19,15 +19,6 @@
            com.iwebpp.crypto.TweetNaclFast$Box
            io.netty.buffer.Unpooled))
 
-(comment
-  (let [buf (Unpooled/buffer 4)]
-    (.writeInt buf 42)
-    ;; 1
-    (println "Reference Count:" (.refCnt buf))
-    (bs/print-bytes buf)
-    ;; 0. This seems bad.
-    (println "Reference Count:" (.refCnt buf))))
-
 (deftest basic-sanity
   (testing "Does the basic idea work?"
       (let [server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
