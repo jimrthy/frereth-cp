@@ -19,6 +19,15 @@
            com.iwebpp.crypto.TweetNaclFast$Box
            io.netty.buffer.Unpooled))
 
+(comment
+  (let [buf (Unpooled/buffer 4)]
+    (.writeInt buf 42)
+    ;; 1
+    (println "Reference Count:" (.refCnt buf))
+    (bs/print-bytes buf)
+    ;; 0. This seems bad.
+    (println "Reference Count:" (.refCnt buf))))
+
 (deftest basic-sanity
   (testing "Does the basic idea work?"
       (let [server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
@@ -223,10 +232,10 @@
             " for forwarding along to "
             ->server)
   (is (not (keyword? vouch)))
-  ;; There's something inside out going on.
   ;; We just forwarded the from the server to the
-  ;; client (in wrote-cookie).
-  ;; Now we pulled the Initiate packet in response.
+  ;; client (in forward-cookie).
+  ;; Now we pulled the Initiate packet in response
+  ;; (in wrote-cookie).
   ;; The main point here is to forward that packet
   ;; back to the Server.
   (if-not (or (= vouch ::drained)

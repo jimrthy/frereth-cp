@@ -64,8 +64,14 @@ To be fair, this layer *is* pretty special."
   ;; If there is one, extract the message portion and send that to
   ;; its child (since the ).
   ;; Q: Where was I going with that comment?
+  (log/info (str "******************************************\n"
+                 "* Checking existing client connection\n"
+                        "* Nonce:\n* "
+                        (b-t/->string (::K/nonce initiate))
+                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
   (let [client-short-key (::clnt-short-pk initiate)]
     (when-let [client (state/find-client state client-short-key)]
+      (log/info "I packet from known client")
       (let [packet-nonce-bytes (::nonce initiate)
             packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
             last-packet-nonce (::received-nonce client)]
@@ -194,6 +200,12 @@ To be fair, this layer *is* pretty special."
            ::state/last-minute-key]
     :as cookie-cutter}
    initiate]
+  (log/info (str "******************************************\n"
+                 "* Extracting Cookie\n"
+                        "* Nonce:\n* "
+                        (b-t/->string (::K/nonce initiate))
+                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
+
   ;; This corresponds to lines 359-368. Just verify that
   ;; we can open our secret cryptobox cookie using either
   ;; the current or previous minute-key
@@ -215,6 +227,11 @@ To be fair, this layer *is* pretty special."
     (.getBytes hello-cookie-buffer 0 hello-cookie)
     (let [inner-vouch-bytes (byte-array K/server-cookie-length)]
       (when (decrypt-inner-vouch! cookie-cutter inner-vouch-bytes hello-cookie)
+        (log/info (str "******************************************\n"
+                       "* Decrypted inner-vouch\n"
+                        "* Outer Nonce:\n* "
+                        (b-t/->string (::K/nonce initiate))
+                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
         ;; Reference code:
         ;; Verifies that the "first" 32 bytes (after the 32 bytes of
         ;; decrypted 0 padding) of the 80 bytes it decrypted
@@ -227,6 +244,9 @@ To be fair, this layer *is* pretty special."
               ;; Except that it's really bytes 16-47, isn't it?
               key-array (byte-array (subvec full-decrypted-vouch 0 K/key-length))]
           (when (verify-client-pk-in-vouch initiate key-array)
+            ;; TODO: Need to add a Pooled Allocator to the server state
+            ;; for this.
+            ;; Q: Don't I?
             (let [vouch-buf (Unpooled/wrappedBuffer inner-vouch-bytes)]
               (shared/decompose K/black-box-dscr vouch-buf))))))))
 
@@ -281,6 +301,7 @@ To be fair, this layer *is* pretty special."
          ;; The nonce's reference count has been cleared before it ever gets here.
          ;; This is silly.
          (log/info (str "******************************************\n"
+                        "* Top of handle!\n"
                         "* Nonce:\n* "
                         (b-t/->string (::K/nonce initiate))
                         "* Reference Count: " (.refCnt (::K/nonce initiate))))
@@ -290,6 +311,10 @@ To be fair, this layer *is* pretty special."
                                              initiate)]
                (do
                  (log/info (str "Succssfully extracted cookie"))
+         (log/info (str "******************************************\n"
+                        "* Nonce:\n* "
+                        (b-t/->string (::K/nonce initiate))
+                        "* Reference Count: " (.refCnt (::K/nonce initiate))))
                  (let [server-short-sk-buffer (::K/srvr-short-sk cookie)
                        server-short-sk (byte-array K/key-length)
                        client-short-pk (byte-array K/key-length)]
