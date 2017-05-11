@@ -141,21 +141,25 @@
 
 (defn retrieve-hello
   "This is really a server-side method"
-  [client-chan hello]
-  (println "Pulled HELLO from client")
+  [mem-pool client-chan hello]
+  (log/info "Pulled HELLO from client")
   (let [n (.readableBytes hello)]
     (println "Have" n "bytes to write to " client-chan)
     (if (= 224 n)
-      (strm/try-put! (:chan client-chan)
-                     {:message (Unpooled/wrappedBuffer hello)
-                      :host "test-client"
-                      :port 65536}
-                     500
-                     ::timed-out)
+      (let [copy (.directBuffer mem-pool n)]
+        (.readBytes hello copy)
+        (.release hello)
+        (strm/try-put! (:chan client-chan)
+                       {:message copy
+                        :host "test-client"
+                        :port 65536}
+                       500
+                       ::timed-out))
       (throw (RuntimeException. "Bad Hello")))))
 
 (defn wrote-hello
   [client-chan success]
+  (log/info "Wrote HELLO to server")
   (is success "Failed to write hello to server")
   (is (not= success ::timed-out "Timed out waiting for server to read HELLO"))
   ;; This is timing out both here and in the server side.
@@ -200,23 +204,24 @@
 
 (defn wrote-cookie
   [clnt-> success]
+  (log/info "Wrote cookie packet to Client")
   (is (and success
            (not (keyword? success))))
   (if (not= success ::timeout)
     (do
-      (println "Server Cookie sent to client. Waiting for Initiate packet in response")
+      (log/info "Server Cookie sent to client. Waiting for Initiate packet in response")
       (strm/try-take! clnt-> ::drained 500 ::timeout))))
 
 (defn vouch->server
-  [->server vouch]
+  [mem-pool ->server vouch]
   ;; I don't have any real failure indication available
   ;; if something goes wrong with/on the server trying
   ;; to cope with this incoming vouch.
   ;; I almost need an error stream for dealing with exceptions.
-  (println "Got Initiate packet from client: "
-           vouch
-           " for forwarding along to "
-           ->server)
+  (log/info "Got Initiate packet from client: "
+            vouch
+            " for forwarding along to "
+            ->server)
   (is (not (keyword? vouch)))
   ;; There's something inside out going on.
   ;; We just forwarded the from the server to the
@@ -226,12 +231,15 @@
   ;; back to the Server.
   (if-not (or (= vouch ::drained)
               (= vouch ::timeout))
-    (strm/try-put! (:chan ->server)
-                   {:message vouch
-                    :host "tester-client"
-                    :port 65536}
-                   500
-                   ::timeout)
+    (let [copy (.directBuffer mem-pool (.readableBytes vouch))]
+      (.readBytes vouch copy)
+      (.release vouch)
+      (strm/try-put! (:chan ->server)
+                     {:message copy
+                      :host "tester-client"
+                      :port 65536}
+                     500
+                     ::timeout))
     (throw (ex-info "Retrieving Vouch from client failed"
                     {:failure vouch}))))
 
@@ -399,7 +407,6 @@
   ;; Shouldn't be trying to re-use buffers produced at client side on the server.
   ;; And vice-versa.
   ;; That's just adding needless complexity
-  (throw (RuntimeException. "Start by isolating the ByteBuf"))
   (let [options (build-hand-shake-options)
         ;; Note that the channel names in here seem backward.
         ;; Remember that they're really a mirror image:
@@ -431,18 +438,23 @@
                 ;; Q: Is there anything interesting about the deferred that it
                 ;; currently returns?
                 (let [eventually-started (clnt/start! client)
-                      clnt->srvr (::clnt/chan->server @client)]
+                      clnt->srvr (::clnt/chan->server @client)
+                      ;; Start with one that prefers direct buffers, even though it doesn't
+                      ;; make a lot of sense for this test.
+                      ;; I'm as certain as I can be (without actual metrics) that's the most
+                      ;; realistic picture I'll get of the way it needs to really work
+                      mem-pool (io.netty.buffer.PooledByteBufAllocator. true)]
                   (assert (= chan->server clnt->srvr)
                           (str "Client channels don't match.\n"
                                "Expected:" chan->server
                                "\nHave:" clnt->srvr))
                   (assert chan->server)
-                  (let [write-hello (partial retrieve-hello chan<-client)
+                  (let [write-hello (partial retrieve-hello mem-pool chan<-client)
                         build-cookie (partial wrote-hello chan->client)
                         write-cookie (partial forward-cookie chan<-server)
                         ;; This pulls the Initiate packet from the client
                         get-cookie (partial wrote-cookie chan->server)
-                        write-vouch (partial vouch->server chan<-client)
+                        write-vouch (partial vouch->server mem-pool chan<-client)
                         get-server-response (partial wrote-vouch chan->client)
                         write-server-response (partial finalize chan<-server)
                         _ (println "interaction-test: Starting the stream "
