@@ -117,6 +117,9 @@
 ;; to the long-term secret key it's claiming without
 ;; needing to maintain any state on our part up to this
 ;; point.
+;; (spoiler: it's
+;; (+ 16 32 64 256)
+;; => 368
 (def minimum-vouch-length (+ box-zero-bytes  ; 16
                              ;; 32
                              key-length

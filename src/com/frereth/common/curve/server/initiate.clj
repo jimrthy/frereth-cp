@@ -14,11 +14,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Named Constants
 
-;; Q: How did I come up with 560?
-;; A: (+ (+ 8 96 32 16 16 8 368)
-;;       16)
-;; (based on the basic Client Initiate packet details spec)
-(def minimum-initiate-packet-length 560)
+;; This number is based on the basic Client Initiate packet details spec:
+;; (+ 8 96 32 16 16 8 368)
+(def packet-header-length 544)
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -289,14 +287,17 @@ To be fair, this layer *is* pretty special."
   (log/info "Handling incoming initiate packet: " packet)
   (or
    (let [n (.readableBytes message)]
-     (if (>= n minimum-initiate-packet-length)
-       ;; My math is off here.
-       ;; If I add 16 to the vouch-wrapper length (the way I've hacked in here),
-       ;; it works.
-       (let [tmplt (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (- n minimum-initiate-packet-length) 16)
+     (if (>= n (+ K/box-zero-bytes packet-header-length))
+       ;; Note the extra 16 bytes
+       ;; The minimum packet length is actually
+       ;; (+ 544 K/box-zero-bytes)
+       ;; Because the message *has* to have
+       (let [tmplt (update-in K/initiate-packet-dscr
+                              [::K/vouch-wrapper ::K/length]
+                              +
+                              (- n packet-header-length))
              initiate (shared/decompose tmplt message)
              client-short-key (::K/clnt-short-pk initiate)]
-         (throw (RuntimeException. "Figure out my off-by-16 bug"))
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)
            (let [active-client (state/find-client state client-short-key)]
              (if-let [cookie (extract-cookie (::state/cookie-cutter state)
