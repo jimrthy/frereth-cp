@@ -9,7 +9,7 @@
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
-           io.netty.buffer.ByteBuf))
+           [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -162,13 +162,18 @@ which I'm really not qualified to touch."
           ;; The encryption starts with 0's and prepends them.
           ;; The decryption requires another bunch (of zeros?) in front of that.
           ;; We have to strip them both to get back to the real plain text.
-          (comment (log/info "Decrypted" box-length "bytes into" n "starting with" (aget plain-text (* 2 box-zero-bytes))))
+          (comment (log/info "Decrypted" box-length "bytes into" n "starting with" (aget plain-text K/decrypt-box-zero-bytes)))
           ;; TODO: Compare the speed of doing this with allocating a new
           ;; byte array without the 0-prefix padding and copying it back over
           ;; Keep in mind that we're limited to 1088 bytes per message.
-          (-> plain-text
-              vec
-              (subvec K/decrypt-box-zero-bytes)))))
+          (comment (-> plain-text
+                       vec
+                       (subvec K/decrypt-box-zero-bytes)))
+          (Unpooled/wrappedBuffer plain-text
+                                  K/decrypt-box-zero-bytes
+                                  #_(- box-length K/decrypt-box-zero-bytes)
+                                  #_box-length
+                                  (- box-length K/box-zero-bytes)))))
     (throw (ex-info "Box too small" {::box box
                                      ::offset box-offset
                                      ::length box-length
@@ -182,9 +187,7 @@ which I'm really not qualified to touch."
                      :suffix-buffer #(instance? ByteBuf %)
                      :crypto-buffer #(instance? ByteBuf %)
                      :shared-key ::crypto-key)
-        :ret (s/nilable (s/coll-of (s/and
-                                    int?
-                                    #(< -129 % 128)))))
+        :ret (s/nilable #(instance? ByteBuf %)))
 (defn open-crypto-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
   [prefix-bytes suffix-buffer crypto-buffer shared-key]

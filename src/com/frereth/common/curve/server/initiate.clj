@@ -243,15 +243,9 @@ To be fair, this layer *is* pretty special."
            ::K/vouch-wrapper]
     :as initiate}
    current-client]
-  (log/info "Opening the Crypto box we just received from the client using\n"
-            (comment (b-t/->string nonce))
-            "(reference count: " (.refCnt nonce) ") "
-            "on\n"
-            (comment (b-t/->string vouch-wrapper)))
-  (.retain vouch-wrapper)
-  (log/info (b-t/->string vouch-wrapper))
-  ;; We're missing the last 16 bytes
-  (log/info "The box we're opening is" (.readableBytes vouch-wrapper) "bytes long")
+
+  (log/info "Opening the Crypto box we just received from the client")
+  (log/debug "The box we're opening is" (.readableBytes vouch-wrapper) "bytes long")
   (let [message-length (- (.readableBytes vouch-wrapper) K/minimum-vouch-length)]
     ;; Back to a mostly-unexplained "Failed to open box" error.
     (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix

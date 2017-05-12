@@ -358,7 +358,7 @@ Note that this is really called for side-effects"
       ;; to notify callers immediately
       (try
         (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
-              extracted (shared/decompose K/cookie (Unpooled/wrappedBuffer (byte-array decrypted)))
+              extracted (shared/decompose K/cookie decrypted)
               server-short-term-pk (byte-array K/key-length)
               server-cookie (byte-array K/server-cookie-length)
               server-security (assoc (::server-security this)
@@ -1113,9 +1113,13 @@ terrible approach in an environment that's intended to multi-thread."
           (do
             (log/error (str "Converting cookie to vouch took longer than "
                             timeout
-                            " milliseconds.\nSwitching agent into an error state"))
-            (send wrapper
-                  #(throw (ex-info "cookie->vouch timed out" %)))))))
+                            " milliseconds."))
+            (if (agent-error wrapper)
+              (log/info "Agent failed while we were waiting")
+              (do
+                (log/warn "Switching agent into an error state")
+                (send wrapper
+                      #(throw (ex-info "cookie->vouch timed out" %)))))))))
     (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
                                    (assoc %
                                           :problem (if (= cookie-packet ::drained)

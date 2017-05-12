@@ -154,9 +154,7 @@
                 (.clear message)
                 (let [response
                       (cookie/build-cookie-packet message clnt-xtn srvr-xtn working-nonce crypto-box)]
-                  (log/info (str "Cookie packet built. Returning it.\nByte content:\n"
-                                 (with-out-str (b-s/print-bytes response))
-                                 "Reference count: " (.refCnt response)))
+                  (log/info (str "Cookie packet built. Returning it."))
                   (try
                     (let [dst (get-in state [::state/client-write-chan :chan])]
                       (when-not dst
