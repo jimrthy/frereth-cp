@@ -13,7 +13,7 @@
 
   But that makes it much more difficult to test."
   (:require [byte-streams :as b-s]
-            [clojure.core.async :as async]
+            #_[clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [clojure.tools.logging :as log]
@@ -23,9 +23,8 @@
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.util :as util]
-            [com.stuartsierra.component :as cpt]
+            #_[com.stuartsierra.component :as cpt]
             [manifold.deferred :as deferred]
-            ;; Mixing this and core.async seems dubious, at best
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            [io.netty.buffer ByteBuf Unpooled]))
