@@ -191,10 +191,16 @@
   (array-map ::long-term-public-key {::type ::bytes
                                      ::length key-length}
              ::nonce {::type ::bytes
-                      ::length client-nonce-suffix-length}
+                      ::length server-nonce-suffix-length}
              ::hidden-client-short-pk {::type ::bytes
                                        ::length (+ key-length box-zero-bytes)}
              ::server-name {::type ::bytes
                             ::length server-name-length}
              ::message {::type ::bytes
                         ::length '*}))
+(s/def ::initiate-client-vouch-wrapper
+  (s/keys :req [::long-term-public-key
+                ::nonce
+                ::hidden-client-short-pk
+                ::server-name
+                ::message]))

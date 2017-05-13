@@ -41,6 +41,7 @@
   [x y]
   ;; This has to take constant time.
   ;; No short-cutting!
+  ;; Translated from byte_isequal.c in reference implementation
   (let [nx (count x)
         ny (count y)
         diff (reduce (fn [acc n]

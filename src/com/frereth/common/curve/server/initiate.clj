@@ -238,6 +238,10 @@ To be fair, this layer *is* pretty special."
             (let [vouch-buf (Unpooled/wrappedBuffer inner-vouch-bytes)]
               (shared/decompose K/black-box-dscr vouch-buf))))))))
 
+(s/fdef open-client-crypto-box
+        :args (s/cat :initiate ::K/initiate-packet-spec
+                     :current-client ::client-state)
+        :ret ::K/initiate-client-vouch-wrapper)
 (defn open-client-crypto-box
   [{:keys [::K/nonce
            ::K/vouch-wrapper]
@@ -255,9 +259,6 @@ To be fair, this layer *is* pretty special."
                                                                         ::state/client-short<->server-short]))]
       (do
         (log/info "Decomposing...")
-        ;; clear-text contains a sub-vector.
-        ;; Can't call decompose on that.
-        ;; This is going to fail.
         (shared/decompose (assoc-in K/initiate-client-vouch-wrapper
                                     [::K/message ::K/length]
                                     message-length)
@@ -265,15 +266,33 @@ To be fair, this layer *is* pretty special."
       (do (log/info "Opening client crypto vouch failed")
           nil))))
 
+(s/fdef validate-server-name
+        :args (s/cat :state ::state/state
+                     :inner-client-box ::K/initiate-client-vouch-wrapper)
+        :ret boolean?)
 (defn validate-server-name
   [state inner-client-box]
-  (let [rcvd-name-buffer (::K/server-name inner-client-box)]
-    (throw (RuntimeException. "Get this translated"))))
+  (let [rcvd-name-buffer (::K/server-name inner-client-box)
+        rcvd-name (byte-array (.readableBytes rcvd-name-buffer))]
+    (.readBytes rcvd-name-buffer rcvd-name)
+    (let [my-name (get-in state [::shared/my-keys ::K/server-name])
+          match (b-t/bytes= rcvd-name my-name)]
+      (when-not match
+        (log/warn (str "Message was intended for another server\n"
+                       "Sent to:\n"
+                       (b-t/->string rcvd-name)
+                       "My name:\n\""
+                       (b-t/->string my-name)
+                       "\"\nout of:\n"
+                       (keys (::shared/my-keys state)))))
+      match)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-;; TODO: Needs spec
+(s/fdef handle!
+        :args (s/cat :state ::state/state
+                     :packet ::shared/network-packet))
 (defn handle!
   [state
    {:keys [:host :message :port]
@@ -317,7 +336,7 @@ To be fair, this layer *is* pretty special."
                      (try
                        (when-let [inner-client-box (open-client-crypto-box initiate active-client)]
                          (try
-                           (when (validate-server-name state inner-client-box)
+                           (if (validate-server-name state inner-client-box)
                              ;; This takes us down to line 381
                              (throw (ex-info "Don't stop here!"
                                              {:what "Cope with vouch/initiate"})))

@@ -400,7 +400,7 @@
                ;; Use the key-put functionality to store the secret, then
                ;; hard-code the public key here.
                ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
-                                       ::shared/server-name server-name}}}))
+                                       ::K/server-name server-name}}}))
 
 (deftest handshake
   (log/info "**********************************\nNew Hand-Shake test")

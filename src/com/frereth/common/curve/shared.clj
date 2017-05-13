@@ -76,6 +76,13 @@
 (s/def ::text bytes?)
 (s/def ::work-area (s/keys :req [::text ::working-nonce]))
 
+(s/def ::host string?)
+(s/def ::message bytes?)
+(s/def ::port (s/and int?
+                     pos?
+                     #(< % 65536)))
+(s/def ::network-packet (s/keys :req-un [::host ::message ::port]))
+
 (comment
   ;; Q: Why aren't I using this?
   (s/def ::packet-length (s/and integer?
@@ -108,6 +115,9 @@
                              #(= (count %) K/client-nonce-suffix-length)))
 (s/def ::server-nonce (s/and bytes?
                              #(= (count %) K/server-nonce-suffix-length)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Internal
 
 (defn composition-reduction
   "Reduction function associated for run!ing from compose.

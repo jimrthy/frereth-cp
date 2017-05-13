@@ -171,8 +171,6 @@ which I'm really not qualified to touch."
                        (subvec K/decrypt-box-zero-bytes)))
           (Unpooled/wrappedBuffer plain-text
                                   K/decrypt-box-zero-bytes
-                                  #_(- box-length K/decrypt-box-zero-bytes)
-                                  #_box-length
                                   (- box-length K/box-zero-bytes)))))
     (throw (ex-info "Box too small" {::box box
                                      ::offset box-offset

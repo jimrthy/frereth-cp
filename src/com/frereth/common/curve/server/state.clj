@@ -46,13 +46,16 @@
                                       ::client-short<->server-short
                                       ::client-long<->server-long]))
 
+(s/def ::message-len int?)
+(s/def ::received-nonce int?)
 (s/def ::client-state (s/keys :req [::child-interaction
                                     ::client-security
                                     ::shared/extension
-                                    ;; TODO: Need spec for the next 4
+                                    ;; TODO: Needs spec
                                     ::message
                                     ::message-len
                                     ::received-nonce
+                                    ;; TODO: Needs spec
                                     ::sent-nonce
                                     ::shared-secrets]))
 (s/def ::current-client ::client-state)
@@ -74,7 +77,6 @@
                              ::shared/keydir
                              ::shared/my-keys
                              ::shared/packet-management
-                             ::K/server-name
                              ::shared/working-area]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
