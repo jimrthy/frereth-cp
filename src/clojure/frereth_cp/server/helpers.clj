@@ -1,8 +1,8 @@
-(ns com.frereth.common.curve.server.helpers
+(ns frereth-cp.server.helpers
   "Utility functions that are generally useful for Curve servers"
   (:require [clojure.spec :as s]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.constants :as K]))
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.constants :as K]))
 
 (defn hide-long-arrays
   "Try to make pretty printing less obnoxious

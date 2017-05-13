@@ -1,4 +1,4 @@
-(ns com.frereth.common.curve.shared.constants
+(ns frereth-cp.shared.constants
   "Magical names, numbers, and data structures"
   (:require [clojure.spec :as s]))
 

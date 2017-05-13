@@ -1,18 +1,18 @@
-(ns com.frereth.common.curve.interaction-test
+(ns frereth-cp.interaction-test
   (:require [aleph.netty :as netty]
             [aleph.udp :as udp]
             [byte-streams :as bs]
             [clojure.pprint :refer (pprint)]
             [clojure.test :refer (deftest is testing)]
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.client :as clnt]
-            [com.frereth.common.curve.server :as srvr]
-            [com.frereth.common.curve.server.state :as state]
-            [com.frereth.common.curve.server-test :as server-test]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.constants :as K]
-            [com.frereth.common.curve.shared.crypto :as crypto]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
+            [frereth-cp.client :as clnt]
+            [frereth-cp.server :as srvr]
+            [frereth-cp.server.state :as state]
+            [frereth-cp.server-test :as server-test]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.bit-twiddling :as b-t]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo

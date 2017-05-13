@@ -1,15 +1,15 @@
-(ns com.frereth.common.curve.server.hello
+(ns frereth-cp.server.hello
   "For coping with incoming HELLO packets"
   (:require [byte-streams :as b-s]
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.server.cookie :as cookie]
-            [com.frereth.common.curve.server.helpers :as helpers]
-            [com.frereth.common.curve.server.state :as state]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.constants :as K]
-            [com.frereth.common.curve.shared.crypto :as crypto]
             [com.frereth.common.util :as util]
+            [frereth-cp.server.cookie :as cookie]
+            [frereth-cp.server.helpers :as helpers]
+            [frereth-cp.server.state :as state]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.crypto :as crypto]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream]))
 

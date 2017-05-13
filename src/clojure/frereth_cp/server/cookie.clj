@@ -1,12 +1,12 @@
-(ns com.frereth.common.curve.server.cookie
+(ns frereth-cp.server.cookie
   "For dealing with cookie packets on the server side"
   (:require [byte-streams :as b-s]
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.server.state :as state]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.constants :as K]
-            [com.frereth.common.curve.shared.crypto :as crypto])
+            [frereth-cp.server.state :as state]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.crypto :as crypto])
   (:import io.netty.buffer.Unpooled))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

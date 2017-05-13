@@ -1,19 +1,19 @@
-(ns com.frereth.common.curve.server
+(ns frereth-cp.server
   "Implement the server half of the CurveCP protocol"
   (:require [byte-streams :as b-s]
             [clojure.spec :as s]
             ;; TODO: Really need millisecond precision (at least)
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.server.hello :as hello]
-            [com.frereth.common.curve.server.helpers :as helpers]
-            [com.frereth.common.curve.server.initiate :as initiate]
-            [com.frereth.common.curve.server.state :as state]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.constants :as K]
-            [com.frereth.common.curve.shared.crypto :as crypto]
             [com.frereth.common.util :as util]
+            [frereth-cp.server.hello :as hello]
+            [frereth-cp.server.helpers :as helpers]
+            [frereth-cp.server.initiate :as initiate]
+            [frereth-cp.server.state :as state]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.crypto :as crypto]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream])
   (:import clojure.lang.ExceptionInfo))

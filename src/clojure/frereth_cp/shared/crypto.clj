@@ -1,11 +1,11 @@
-(ns com.frereth.common.curve.shared.crypto
+(ns frereth-cp.shared.crypto
   "Wrap up the low-level crypto functions"
   (:require [byte-streams :as b-s]
             [clojure.spec :as s]
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.constants :as K]
-            [com.frereth.common.util :as utils])
+            [com.frereth.common.util :as utils]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]

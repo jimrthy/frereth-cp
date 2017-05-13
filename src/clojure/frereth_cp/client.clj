@@ -1,4 +1,4 @@
-(ns com.frereth.common.curve.client
+(ns frereth-cp.client
   "Implement the client half of the CurveCP protocol.
 
   It seems like it would be nice if I could just declare
@@ -17,12 +17,12 @@
             [clojure.pprint :refer (pprint)]
             [clojure.spec :as s]
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.crypto :as crypto]
-            [com.frereth.common.curve.shared.constants :as K]
             [com.frereth.common.schema :as schema]
             [com.frereth.common.util :as util]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.constants :as K]
             [com.stuartsierra.component :as cpt]
             [manifold.deferred :as deferred]
             ;; Mixing this and core.async seems dubious, at best

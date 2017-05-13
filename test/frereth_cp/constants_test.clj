@@ -1,4 +1,4 @@
-(ns com.frereth.common.curve.constants-test
+(ns frereth-cp.constants-test
   (:require [com.frereth.common.curve.shared.constants :as K]
             [clojure.test :refer (deftest is testing)]))
 

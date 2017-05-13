@@ -1,4 +1,4 @@
-(ns com.frereth.common.curve.shared
+(ns frereth-cp.shared
   "For pieces shared among client, server, and messaging"
   (:require [byte-streams :as b-s]
             [clojure.java.io :as io]
@@ -6,12 +6,12 @@
             [clojure.spec :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.constants :as K]
+            [com.frereth.common.util :as util]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K]
             ;; Honestly, this has no place here.
             ;; But it's useful for refactoring
-            [com.frereth.common.curve.shared.crypto :as crypto]
-            [com.frereth.common.util :as util])
+            [frereth-cp.shared.crypto :as crypto])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            io.netty.buffer.Unpooled

@@ -1,10 +1,10 @@
-(ns com.frereth.common.curve.client-test
+(ns frereth-cp.client-test
   (:require [clojure.pprint :refer (pprint)]
             [clojure.test :refer (deftest is testing)]
-            [com.frereth.common.curve.client :as clnt]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.crypto :as crypto]
+            [frereth-cp.client :as clnt]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.crypto :as crypto]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))
 

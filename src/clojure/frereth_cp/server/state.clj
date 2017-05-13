@@ -1,12 +1,12 @@
-(ns com.frereth.common.curve.server.state
+(ns frereth-cp.server.state
   "Managing CurveCP server state"
   (:require [clojure.spec :as s]
             [clojure.tools.logging :as log]
-            [com.frereth.common.curve.server.helpers :as helpers]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]
-            [com.frereth.common.curve.shared.constants :as K]
-            [com.frereth.common.curve.shared.crypto :as crypto]))
+            [frereth-cp.server.helpers :as helpers]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.crypto :as crypto]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs

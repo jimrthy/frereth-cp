@@ -1,6 +1,6 @@
-(ns com.frereth.common.curve.shared.bit-twiddling-test
+(ns frereth-cp.shared.bit-twiddling-test
   (:require [clojure.test :refer (deftest is testing)]
-            [com.frereth.common.curve.shared.bit-twiddling :as b-t]))
+            [frereth-cp.shared.bit-twiddling :as b-t]))
 
 (deftest complement-2s
   (testing "positives"

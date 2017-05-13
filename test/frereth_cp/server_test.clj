@@ -1,8 +1,8 @@
-(ns com.frereth.common.curve.server-test
+(ns frereth-cp.server-test
   (:require [clojure.test :refer (deftest is testing)]
-            [com.frereth.common.curve.server :as server]
-            [com.frereth.common.curve.shared :as shared]
-            [com.frereth.common.curve.shared.constants :as K]
+            [frereth-cp.server :as server]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.constants :as K]
             ;; TODO: This also needs to go away
             [com.stuartsierra.component :as cpt]
             [component-dsl.system :as cpt-dsl]
