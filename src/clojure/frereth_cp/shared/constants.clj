@@ -1,6 +1,6 @@
 (ns frereth-cp.shared.constants
   "Magical names, numbers, and data structures"
-  (:require [clojure.spec :as s]))
+  (:require [clojure.spec.alpha :as s]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants

@@ -1,6 +1,6 @@
 (ns frereth-cp.server.initiate
   "For coping with Initiate packets"
-  (:require [clojure.spec :as s]
+  (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]

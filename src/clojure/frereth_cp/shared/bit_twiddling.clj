@@ -1,7 +1,7 @@
 (ns frereth-cp.shared.bit-twiddling
   "Shared functions for fiddling with bits"
   (:require [byte-streams :as b-s]
-            [clojure.spec :as s]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

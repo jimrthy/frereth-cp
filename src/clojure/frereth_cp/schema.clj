@@ -1,5 +1,5 @@
 (ns frereth-cp.schema
-  (:require [clojure.spec :as s]
+  (:require [clojure.spec.alpha :as s]
             [manifold.stream :as strm]))
 
 (defn class-predicate

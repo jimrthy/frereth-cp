@@ -3,7 +3,7 @@
 
   Because I haven't really decided what to do with them yet"
   (:require [clojure.pprint :as pprint]
-            [clojure.spec :as s]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log])
   (:import clojure.lang.ExceptionInfo))
 

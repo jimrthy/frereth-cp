@@ -3,7 +3,7 @@
   (:require [byte-streams :as b-s]
             [clojure.java.io :as io]
             [clojure.pprint :refer (pprint)]
-            [clojure.spec :as s]
+            [clojure.spec.alpha :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
             [frereth-cp.shared.bit-twiddling :as b-t]

@@ -15,7 +15,7 @@
   (:require [byte-streams :as b-s]
             #_[clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
-            [clojure.spec :as s]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.schema :as schema]
             [frereth-cp.shared :as shared]

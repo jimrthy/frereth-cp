@@ -8,8 +8,8 @@ Although tools.namespace may work just fine for what actually happens here"
             [clojure.pprint :refer (pprint)]
             [clojure.reflect :as reflect]
             [clojure.repl :refer :all]  ; dir is very useful
-            [clojure.spec :as s]
-            [clojure.spec.gen :as gen]
+            [clojure.spec.alpha :as s]
+            [clojure.spec.gen.alpha :as gen]
             [clojure.string :as string]
             [clojure.test :as test]
             [clojure.tools.logging :as log]

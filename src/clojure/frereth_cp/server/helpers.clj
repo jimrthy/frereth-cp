@@ -1,6 +1,6 @@
 (ns frereth-cp.server.helpers
   "Utility functions that are generally useful for Curve servers"
-  (:require [clojure.spec :as s]
+  (:require
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]))
 

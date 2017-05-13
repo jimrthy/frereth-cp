@@ -1,6 +1,6 @@
 (ns frereth-cp.server.state
   "Managing CurveCP server state"
-  (:require [clojure.spec :as s]
+  (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.server.helpers :as helpers]
             [frereth-cp.shared :as shared]

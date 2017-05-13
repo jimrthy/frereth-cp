@@ -1,7 +1,7 @@
 (ns frereth-cp.server
   "Implement the server half of the CurveCP protocol"
   (:require [byte-streams :as b-s]
-            [clojure.spec :as s]
+            [clojure.spec.alpha :as s]
             ;; TODO: Really need millisecond precision (at least)
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
