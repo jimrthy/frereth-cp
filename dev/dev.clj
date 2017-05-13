@@ -16,11 +16,11 @@
             [clojure.tools.logging :as log]
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [com.stuartsierra.component :as component]
-            [com.frereth.common.aleph :as aleph]
-            [com.frereth.common.communication :as com-comm]
-            [com.frereth.common.config :as cfg]
-            [com.frereth.common.system :as sys]
-            [com.frereth.common.util :as util]
+            #_[com.frereth.common.aleph :as aleph]
+            #_[com.frereth.common.communication :as com-comm]
+            #_[com.frereth.common.config :as cfg]
+            #_[com.frereth.common.system :as sys]
+            #_[com.frereth.common.util :as util]
             [component-dsl.system :as cpt-dsl]
             [hara.event :refer (raise)]))
 
@@ -34,34 +34,7 @@
   "Constructs the current development system."
   []
   (set! *print-length* 50)
-  (throw (RuntimeException. "This needs reconsideration"))
-  (comment
-    (let [ctx (mq/context 4)
-          socket-pair (mq/build-internal-pair! ctx)
-          reader (fn [sock]
-                   (println "Fake system reading")
-                   (mq/raw-recv! sock))
-          writer (fn [sock msg]
-                   (println "Fake system sending")
-                   (mq/send! sock msg))
-          parameters-tree {:event-loop {:context ctx
-                                        :ex-sock (:lhs socket-pair)
-                                        :in-chan (async/chan)
-                                        :external-reader reader
-                                        :external-writer writer}}
-          ;; Note that this fails on startup:
-          ;; since it's specifically designed to be a component nested among others,
-          ;; it fails when I try to create it at the top level.
-          ;; This is a bug/design flaw, but not really a primary concern.
-          ;; Actually, for this scenario, I could just call it directly and build a component
-          ;; from the definition the event-loop ctor returns
-          config #:component-dsl.system {:structure '{:event-loop com.frereth.common.async-zmq/ctor}
-                                         :dependencies []}]
-      (alter-var-root #'system
-                      (constantly (assoc (cpt-dsl/build config parameters-tree)
-                                         ;; fake-external is here to let me interact with the
-                                         ;; event loop.
-                                         :fake-external (:rhs socket-pair)))))))
+  (throw (RuntimeException. "This needs reconsideration")))
 
 (defn start
   "Starts the current development system."

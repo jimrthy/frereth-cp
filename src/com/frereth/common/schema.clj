@@ -31,13 +31,6 @@ TODO: At the very least, it needs its own spec."
 (def atom-type (class (atom {})))
 (s/def ::atom-type (class-predicate atom-type))
 
-(comment
-  ;; Very tempting to deprecate and just use the mq-common versions.
-  ;; But that does make it more difficult to switch the underlying
-  ;; message queue implementation
-  (def java-byte-array cljeromq.common/byte-array-type)
-  (s/def ::byte-array-seq :cljeromq.common/byte-array-seq)
-  (s/def ::korks :cljeromq.common/korks))
 ;; As a step toward moving away from that completely,
 ;; just copy/paste those definitions I was referencing:
 (def java-byte-array

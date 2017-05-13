@@ -73,7 +73,7 @@ b. lein managed dependencies"
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]]
-  :java-source-paths ["java"]
+  :java-source-paths ["src/java"]
   ;; Pretty sure this was only ever involved for the sake of jzmq.
   ;; TODO: Verify that and then hopefully make it go away
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
@@ -88,4 +88,5 @@ b. lein managed dependencies"
                    :source-paths ["dev"]}
              :uberjar {:aot :all}}
   :repl-options {:init-ns user
-                 :timeout 120000})
+                 :timeout 120000}
+  :source-paths ["src/clojure"])
