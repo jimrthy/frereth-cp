@@ -2,8 +2,12 @@
   "This is really about higher-level messaging abstractions
 Originally written over 0mq. There's an open question about
 how useful they might be in the netty world."
-  (:require [cljeromq.common :as mq-cmn]
-            [cljeromq.core :as mq]
+  ;; One way or another, there's no excuse for referencing
+  ;; cljeromq here.
+  ;; Except possibly as a questionable optimization.
+  ;; Well, and it was easy.
+  (:require #_[cljeromq.common :as mq-cmn]
+            #_[cljeromq.core :as mq]
             [clojure.spec :as s]
             [com.frereth.common.schema :as fr-sch]
             [com.frereth.common.util :as util]
@@ -63,11 +67,12 @@ how useful they might be in the netty world."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
-(s/fdef read-all!
-        :args (s/cat :s #(instance? mq-cmn/Socket %)
-                     :flags :com.frereth.common.schema/korks)
-        :ret (s/or :frames :com.frereth.common.schema/byte-array-seq
-                   :nada nil?))
+(comment
+  (s/fdef read-all!
+          :args (s/cat :s #(instance? mq-cmn/Socket %)
+                       :flags :com.frereth.common.schema/korks)
+          :ret (s/or :frames :com.frereth.common.schema/byte-array-seq
+                     :nada nil?)))
 (defn read-all!
   "N.B. Pretty much by definition, this is non-blocking, as-written.
 This is almost definitely a bug"
@@ -78,20 +83,22 @@ This is almost definitely a bug"
   ;; to do the string conversion.
   ;; Besides, that's pretty silly for the initial
   ;; address/identifier frame(s)
-  (when-let [initial-frame (mq/raw-recv! s :dont-wait)]
-    (loop [acc [initial-frame]
-           more? (mq/has-more? s)]
-      (if more?
-        (do
-          (log/debug "read-all: Reading more")
-          (recur (conj acc (mq/raw-recv! s flags))
-                 (mq/has-more? s)))
-        (do
-          (when-let [result (seq acc)]
-            (println "Incoming: " result)
-            (println "has: " (count result) "entries")
-            (log/debug "read-all: Done. Incoming:\n" (map #(String. %) result))
-            result))))))
+  (comment
+    (when-let [initial-frame (mq/raw-recv! s :dont-wait)]
+      (loop [acc [initial-frame]
+             more? (mq/has-more? s)]
+        (if more?
+          (do
+            (log/debug "read-all: Reading more")
+            (recur (conj acc (mq/raw-recv! s flags))
+                   (mq/has-more? s)))
+          (do
+            (when-let [result (seq acc)]
+              (println "Incoming: " result)
+              (println "has: " (count result) "entries")
+              (log/debug "read-all: Done. Incoming:\n" (map #(String. %) result))
+              result))))))
+  (throw (RuntimeException. "Rewrite that")))
 
 (s/fdef extract-router-message
         :args (s/cat :frames :com.frereth.common.schema/byte-array-seq)
@@ -139,11 +146,12 @@ This is almost definitely a bug"
 ;;; :args is a regex that works like apply
 ;;; Supposed to handle multi-arity seamlessly.
 ;;; Q: How does this actually work?
-(s/fdef router-recv!
-        :args (s/cat :s :cljeromq.common/Socket
-                     :flags :com.frereth.common.schema/korks)
-        :ret (s/or :msg ::router-message
-                   :nada nil?))
+(comment
+  (s/fdef router-recv!
+          :args (s/cat :s :cljeromq.common/Socket
+                       :flags :com.frereth.common.schema/korks)
+          :ret (s/or :msg ::router-message
+                     :nada nil?)))
 (defn router-recv!
   ([s]
    (router-recv! s :wait))
@@ -151,10 +159,11 @@ This is almost definitely a bug"
    (when-let [all-frames (read-all! s flags)]
      (extract-router-message all-frames))))
 
-(s/fdef dealer-recv!
-        :args (s/cat :s :cljeromq.common/Socket
-                     :flags :com.frereth.common.schema/korks)
-        :ret identity)
+(comment
+  (s/fdef dealer-recv!
+          :args (s/cat :s :cljeromq.common/Socket
+                       :flags :com.frereth.common.schema/korks)
+          :ret identity))
 (defn dealer-recv!
   "Really only for the simplest possible case"
   ([s]
@@ -166,37 +175,41 @@ This is almost definitely a bug"
        (assert (= 1 (count content)))
        (-> content first util/deserialize)))))
 
-(s/fdef dealer-send!
-        :args (s/cat :s :cljeromq.common/Socket
-                     :frames :com.frereth.common.schema/byte-array-seq
-                     :flags :com.frereth.common.schema/korks)
-        :ret identity)
+(comment
+  (s/fdef dealer-send!
+          :args (s/cat :s :cljeromq.common/Socket
+                       :frames :com.frereth.common.schema/byte-array-seq
+                       :flags :com.frereth.common.schema/korks)
+          :ret identity))
 (defn dealer-send!
   "For the very simplest scenario, just mimic the req/rep empty address frames"
   ;; TODO: Add an arity that defaults to nil flags
   ([s
     frames
     flags]
-   (let [more-flags (conj flags :send-more)]
-     ;; Separator frame
-     ;; In theory, this could just be acting as a
-     ;; proxy and forwarding along messages.
-     ;; In practice, I don't see that use case
-     ;; ever happening here.
-     (mq/send! s (byte-array 0) more-flags)
-     (doseq [frame (butlast frames)]
-       (mq/send! s frame more-flags))
-     (log/debug "Wrapping up dealer send w/ final frame:\n" (last frames)
-                "\na " (class (last frames)))
-     (mq/send! s (util/serialize (last frames)) flags)))
+   (comment
+     (let [more-flags (conj flags :send-more)]
+       ;; Separator frame
+       ;; In theory, this could just be acting as a
+       ;; proxy and forwarding along messages.
+       ;; In practice, I don't see that use case
+       ;; ever happening here.
+       (mq/send! s (byte-array 0) more-flags)
+       (doseq [frame (butlast frames)]
+         (mq/send! s frame more-flags))
+       (log/debug "Wrapping up dealer send w/ final frame:\n" (last frames)
+                  "\na " (class (last frames)))
+       (mq/send! s (util/serialize (last frames)) flags)))
+   (throw (RuntimeException. "Also needs to be translated")))
   ([s frames]
    (dealer-send! s frames [])))
 
-(s/fdef router-send!
-        :args (s/cat :sock :cljeromq.common/Socket
-                     :msg ::router-message
-                     :flags :com.frereth.common.schema/korks)
-        :ret identity)
+(comment
+  (s/fdef router-send!
+          :args (s/cat :sock :cljeromq.common/Socket
+                       :msg ::router-message
+                       :flags :com.frereth.common.schema/korks)
+          :ret identity))
 (defn router-send!
   ([sock
     msg]
@@ -207,21 +220,23 @@ This is almost definitely a bug"
    (when-let [contents (:contents msg)]
      (let [more-flags (conj flags :send-more)
            addresses (:addresses msg)]
-       (try
-         (mq/send! sock (:id msg) more-flags)
-         (catch NullPointerException ex
-           (log/error ex "Trying to send " (:id msg) "\nacross " sock
-                      "\nusing flags: " more-flags)))
+       (comment
+         (try
+           (mq/send! sock (:id msg) more-flags)
+           (catch NullPointerException ex
+             (log/error ex "Trying to send " (:id msg) "\nacross " sock
+                        "\nusing flags: " more-flags)))
 
-       (if (seq? addresses)
-         (doseq [addr addresses]
-           (mq/send! sock addr more-flags)))
-       ;; Note that dealer-send will account for the NULL separator
-       (if (string? contents)
-         (dealer-send! sock [contents] flags)
-         (if (or (seq? contents) (vector? contents))
-           (dealer-send! sock contents flags)
-           (dealer-send! sock[contents] flags)))))))
+         (if (seq? addresses)
+           (doseq [addr addresses]
+             (mq/send! sock addr more-flags)))
+         ;; Note that dealer-send will account for the NULL separator
+         (if (string? contents)
+           (dealer-send! sock [contents] flags)
+           (if (or (seq? contents) (vector? contents))
+             (dealer-send! sock contents flags)
+             (dealer-send! sock[contents] flags))))
+       (throw (RuntimeException. "also needs to be translated"))))))
 
 (comment
   (let [ctx (mq/context 3)

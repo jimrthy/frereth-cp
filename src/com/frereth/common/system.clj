@@ -1,9 +1,10 @@
 (ns com.frereth.common.system
   "This is another one that doesn't make a lot of sense"
-  (:require [cljeromq.core :as mq]
+  (:require #_[cljeromq.core :as mq]
             [clojure.core.async :as async]
             [clojure.spec :as s]
             [com.frereth.common.async-component]
+            [com.frereth.common.curve.shared :as curve]
             [component-dsl.system :as cpt-dsl]
             [hara.event :refer (raise)])
   (:import [com.stuartsierra.component SystemMap]))
@@ -16,13 +17,14 @@
 ;;; Public
 
 (s/fdef build-event-loop-description
-        :args (s/cat :options (s/keys :unq-opt {::client-keys :cljeromq.curve/key-pair
-                                                ::direction :cljeromq.common/direction
-                                                ::server-key :cljeromq.curve/public
-                                                ::socket-type :cljeromq.common/socket-type}
+        :args (s/cat :options (s/keys :unq-opt {::client-keys ::curve/client-keys
+                                                ; ::direction :cljeromq.common/direction
+                                                ::server-key ::curve/public-key
+                                                ; ::socket-type :cljeromq.common/socket-type
+                                                }
                                       :unq-req {::context :com.frereth.common.zmq-socket/context-wrapper
                                                 ::event-loop-name string?
-                                                ::url :cljeromq.core/zmq-url}))
+                                                ::url ::curve/url}))
         :ret :component-dsl.system/nested-definition)
 (defn build-event-loop-description
   "Return a component description that's suitable for nesting into yours to pass along to cpt-dsl/build
@@ -51,10 +53,11 @@ I'm not sure which alternatives make more sense."
     :or {direction :connect
          socket-type :dealer
          thread-count 2}}]
-  (let [url (cond-> url
+  (let [url #_(cond-> url
               (not (:cljeromq.common/zmq-protocol url)) (assoc :cljeromq.common/zmq-protocol :tcp)
               (not (:cljeromq.common/zmq-address url)) (assoc :cljeromq.common/zmq-address [127 0 0 1])
-              (not (:cljeromq.common/port url)) (assoc :cljeromq.common/port 9182))]
+              (not (:cljeromq.common/port url)) (assoc :cljeromq.common/port 9182))
+        (throw (RuntimeException. "What makes sense here?"))]
     (let [options {::context {:thread-count thread-count}
                    ::event-loop {:_name event-loop-name}
                    ::ex-sock {:zmq-url url
@@ -75,12 +78,22 @@ I'm not sure which alternatives make more sense."
           ;; communicate.
           ;; OTOH, this sort of dependency injection is one of
           ;; the main selling points behind Components
-          struc '{::context
-                  com.frereth.common.zmq-socket/ctx-ctor
-                  ::event-loop com.frereth.common.async-zmq/ctor
-                  ::evt-iface com.frereth.common.async-zmq/ctor-interface
+          struc '{;; Q: Does it make sense to come up with something
+                  ;; to explicitly replace the 0mq Context?
+                  ;; We definitely do need netty/aleph loops,
+                  ;; but the client/server implementations are
+                  ;; quite different. And small enough that it
+                  ;; doesn't seem worth the effort to try to
+                  ;; refactor out the common parts.
+                  ;; ::context com.frereth.common.zmq-socket/ctor
+                  ;; These next two seem more difficult/vital to replace
+                  ;; ::event-loop com.frereth.common.async-zmq/ctor
+                  ;; ::evt-iface com.frereth.common.async-zmq/ctor-interface
                   ::ex-chan com.frereth.common.async-component/chan-ctor
-                  ::ex-sock com.frereth.common.zmq-socket/ctor
+                  ;; And...I'm not sure how I'll even start to replace
+                  ;; this.
+                  ;; If/when I really need to.
+                  ;; ::ex-sock com.frereth.common.zmq-socket/ctor
                   ::in-chan com.frereth.common.async-component/chan-ctor
                   ::status-chan com.frereth.common.async-component/chan-ctor}
           deps {::evt-iface {:ex-sock ::ex-sock

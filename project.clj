@@ -6,13 +6,7 @@ b. lein managed dependencies"
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  ;; Q: Could I totally pull datomic dependencies out of everything else
-  ;; by putting them in here?
-  ;; A: Probably. But it would be a foolish choice. The web and client components
-  ;; really shouldn't have access to that sort of thing.
-  ;; TODO: Pick a date library and use it.
   :dependencies [[aleph "0.4.1"]
-                 [buddy/buddy-core "1.1.1"]
                  [clj-time "0.12.2"]
                  ;; Q: Does this make any sense in production?
                  ;; A: Well, it makes sense for the general runtime which
@@ -46,22 +40,18 @@ b. lein managed dependencies"
                  ;; It does make sense for the client/server (until/unless I just swap
                  ;; it out for hornetq), but I'm writing an app that needs functionality
                  ;; implemented in here, and I really don't want to install this for it.
-                 [com.jimrthy/cljeromq "0.1.0-SNAPSHOT" :exclusions [com.stuartsierra/component
-                                                                     org.clojure/clojure
-                                                                     prismatic/schema]]
                  [com.jimrthy/component-dsl "0.1.2-SNAPSHOT" :exclusions [org.clojure/clojure]]
                  [com.taoensso/timbre "4.7.4" :exclusions [org.clojure/clojure
                                                            org.clojure/tools.reader]]
                  ;; Q: Do I really want this?
                  [fullcontact/full.async "1.0.0" :exclusions [org.clojure/clojure
                                                                org.clojure/core.async]]
-                 ;; TODO: Replace this with either transit or fressian
-                 [gloss "0.2.5" :exclusions [byte-streams
-                                             manifold
-                                             potemkin]]
                  [im.chit/hara.event "2.4.8" :exclusions [org.clojure/clojure]]
+                 [integrant "0.1.5"]
                  [io.aviso/config "0.2.1" :exclusions [org.clojure/clojure
                                                        prismatic/schema]]
+                 ;; Q: Does this really make any sense here?
+                 [io.netty/netty-all "4.1.6.Final"]
                  ;; Because pomegranate and lein conflict.
                  ;; Try the latest versions to see how it works
                  [org.apache.maven.wagon/wagon-http "2.10"]
@@ -72,15 +62,24 @@ b. lein managed dependencies"
                  ;; In particular dates.
                  ;; TODO: Make it ignore those
                  ;; Q: Has the situation improved in the months I've been ignoring it?
-                 #_[mvxcvi/puget "1.0.0" :exclusions [org.clojure/clojure]]
+                 ;; A: It really should have. The issue behind it is closed,
+                 ;; anyway.
+                 ;; Next Q: Does this really gain anything?
+                 #_[mvxcvi/puget "1.0.1" :exclusions [org.clojure/clojure]]
                  [org.clojure/clojure "1.9.0-alpha14"]
                  [org.clojure/core.async "0.2.395" :exclusions [org.clojure/clojure
                                                                 org.clojure/tools.analyzer]]
+                 [org.clojure/test.check "0.9.0"]
+                 [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.analyzer "0.6.9"]
                  [org.clojure/tools.reader "1.0.0-beta3" :exclusions [org.clojure/clojure]]]
+  :java-source-paths ["java"]
+  ;; Pretty sure this was only ever involved for the sake of jzmq.
+  ;; TODO: Verify that and then hopefully make it go away
   :jvm-opts [~(str "-Djava.library.path=/usr/local/lib:" (System/getenv "LD_LIBRARY_PATH"))]
 
-  :profiles {:dev {:dependencies [[org.clojure/java.classpath "0.2.3"
+  :profiles {:dev {:dependencies [[integrant/repl "0.1.0"]
+                                  [org.clojure/java.classpath "0.2.3"
                                    :exclusions [org.clojure/clojure]]
                                   [org.clojure/test.check "0.9.0"]
                                   [org.clojure/tools.namespace "0.2.11"]]
