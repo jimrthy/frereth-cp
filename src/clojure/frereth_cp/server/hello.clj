@@ -2,7 +2,6 @@
   "For coping with incoming HELLO packets"
   (:require [byte-streams :as b-s]
             [clojure.tools.logging :as log]
-            [com.frereth.common.util :as util]
             [frereth-cp.server.cookie :as cookie]
             [frereth-cp.server.helpers :as helpers]
             [frereth-cp.server.state :as state]
@@ -10,6 +9,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream]))
 

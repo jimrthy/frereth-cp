@@ -6,12 +6,12 @@
             [clojure.spec :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
-            [com.frereth.common.util :as util]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             ;; Honestly, this has no place here.
             ;; But it's useful for refactoring
-            [frereth-cp.shared.crypto :as crypto])
+            [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.util :as util])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            io.netty.buffer.Unpooled

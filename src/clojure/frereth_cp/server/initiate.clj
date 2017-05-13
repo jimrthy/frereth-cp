@@ -2,12 +2,12 @@
   "For coping with Initiate packets"
   (:require [clojure.spec :as s]
             [clojure.tools.logging :as log]
-            [com.frereth.common.util :as util]
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto])
+            [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.util :as util])
   (:import clojure.lang.ExceptionInfo
            io.netty.buffer.Unpooled))
 

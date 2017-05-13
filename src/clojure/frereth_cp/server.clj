@@ -5,7 +5,6 @@
             ;; TODO: Really need millisecond precision (at least)
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
-            [com.frereth.common.util :as util]
             [frereth-cp.server.hello :as hello]
             [frereth-cp.server.helpers :as helpers]
             [frereth-cp.server.initiate :as initiate]
@@ -14,6 +13,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream])
   (:import clojure.lang.ExceptionInfo))

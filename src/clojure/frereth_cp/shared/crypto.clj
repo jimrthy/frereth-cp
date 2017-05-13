@@ -3,9 +3,9 @@
   (:require [byte-streams :as b-s]
             [clojure.spec :as s]
             [clojure.tools.logging :as log]
-            [com.frereth.common.util :as utils]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K])
+            [frereth-cp.shared.constants :as K]
+            [frereth-cp.util :as util])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
@@ -205,7 +205,7 @@ which I'm really not qualified to touch."
       (catch ExceptionInfo ex
         (log/error ex
                    (str "Failed to open box\n"
-                        (utils/pretty (.getData ex))))))))
+                        (util/pretty (.getData ex))))))))
 
 (defn random-array
   "Returns an array of n random bytes"
