@@ -330,6 +330,9 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
            (vec encoded)))
 
 (defn safe-nonce
+  "Produce a nonce that's theoretically safe.
+
+Either based upon one previously stashed in keydir or random"
   [dst keydir offset]
   (if keydir
     ;; Read the last saved version from something in keydir

@@ -243,7 +243,7 @@ To be fair, this layer *is* pretty special."
                      :current-client ::client-state)
         :ret ::K/initiate-client-vouch-wrapper)
 (defn open-client-crypto-box
-  [{:keys [::K/nonce
+  [{:keys [::K/outer-i-nonce
            ::K/vouch-wrapper]
     :as initiate}
    current-client]
@@ -253,7 +253,7 @@ To be fair, this layer *is* pretty special."
   (let [message-length (- (.readableBytes vouch-wrapper) K/minimum-vouch-length)]
     ;; Back to a mostly-unexplained "Failed to open box" error.
     (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix
-                                                nonce
+                                                outer-i-nonce
                                                 vouch-wrapper
                                                 (get-in current-client [::state/shared-secrets
                                                                         ::state/client-short<->server-short]))]
@@ -287,6 +287,48 @@ To be fair, this layer *is* pretty special."
                        (keys (::shared/my-keys state)))))
       match)))
 
+(s/fdef verify-client-public-key-triad
+        :args (s/cat :state ::state/state
+                     :client-long-key ::shared/long-pk
+                     :supplied-client-short-key ::shared/short-pk
+                     ;; TODO: Come up with a ByteBuf spec
+                     ::client-message-box any?)
+        :ret (s/nilable boolean?))
+(defn verify-client-public-key-triad
+  "We unwrapped the our original cookie, using the minute-key.
+
+And the actual message box using the client's short-term public key.
+That box included the client's long-term public key.
+
+Now there's a final box nested that contains the short-term key again,
+encrypted with the long-term key.
+
+This step verifies that the client really does have access to that key.
+
+It's flagged as \"optional\" in the reference implementation, ut that seems
+a bit silly.
+
+This corresponds, roughly, to lines 382-391 in the reference implementation.
+
+Note that that includes TODOs re:
+* impose policy limitations on clients: known, maxconn
+* for known clients, retrieve shared secret from cache
+"
+  [state supplied-client-short-key client-message-box]
+  (let [client-long-buffer (::K/long-term-public-key client-message-box)
+        client-long-key (byte-array K/key-length)
+        shared-secret (crypto/box-prepare client-long-key
+                                          (.getSecretKey (get-in state [::shared/my-keys ::shared/long-pair])))]
+    (.getBytes client-long-buffer 0 client-long-key)
+    ;; Failing here.
+    ;; The shared secret doesn't match what the client used to encrypt the box.
+    (when-let [inner-pk (crypto/open-crypto-box
+                         K/vouch-nonce-prefix
+                         (::K/inner-i-nonce client-message-box)
+                         (::K/hidden-client-short-pk client-message-box)
+                         shared-secret)]
+      (b-t/bytes= supplied-client-short-key inner-pk))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -304,7 +346,8 @@ To be fair, this layer *is* pretty special."
        ;; Note the extra 16 bytes
        ;; The minimum packet length is actually
        ;; (+ 544 K/box-zero-bytes)
-       ;; Because the message *has* to have
+       ;; Because the message *has* to have the bytes for 0
+       ;; padding, even if it's 0 length.
        (let [tmplt (update-in K/initiate-packet-dscr
                               [::K/vouch-wrapper ::K/length]
                               +
@@ -327,19 +370,21 @@ To be fair, this layer *is* pretty special."
                                                                        client-short-pk)]
                      (state/alter-client-state! state active-client)
                      ;; Now we've verified that the Initiate packet came from a
-                     ;; client that has the secret key associated with both the short-term
+                     ;; client that has the secret key associated with the short-term
                      ;; public key.
                      ;; It included a secret cookie that we generated sometime within the
                      ;; past couple of minutes.
                      ;; Now we're ready to tackle handling the main message body cryptobox.
                      ;; This corresponds to line 373 in the reference implementation.
                      (try
-                       (when-let [inner-client-box (open-client-crypto-box initiate active-client)]
+                       (when-let [client-message-box (open-client-crypto-box initiate active-client)]
                          (try
-                           (if (validate-server-name state inner-client-box)
+                           (if (validate-server-name state client-message-box)
                              ;; This takes us down to line 381
-                             (throw (ex-info "Don't stop here!"
-                                             {:what "Cope with vouch/initiate"})))
+                             (when (verify-client-public-key-triad state client-short-key client-message-box)
+                               ;; line 392
+                               (throw (ex-info "Don't stop here!"
+                                               {:what "Cope with vouch/initiate"}))))
                            (catch ExceptionInfo ex
                              (log/error ex "Failure after decrypting inner client cryptobox"))))
                           (catch ExceptionInfo ex

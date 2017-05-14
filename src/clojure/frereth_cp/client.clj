@@ -435,12 +435,16 @@ Note that this is really called for side-effects"
     :as this}]
   (let [{:keys [::shared/working-nonce
                 ::shared/text]} work-area
-        keydir (::shared/keydir my-keys)]
+        keydir (::shared/keydir my-keys)
+        nonce-suffix (byte-array K/server-nonce-suffix-length)]
     (if working-nonce
       (do
         (log/info "Setting up working nonce " working-nonce)
         (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
-        (shared/safe-nonce working-nonce keydir K/client-nonce-prefix-length)
+        (shared/safe-nonce nonce-suffix keydir 0)
+        (b-t/byte-copy! working-nonce
+                        K/server-nonce-prefix-length
+                        K/server-nonce-suffix-length nonce-suffix)
 
         (let [short-pair (::shared/short-pair my-keys)]
           (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
@@ -453,17 +457,23 @@ Note that this is really called for side-effects"
               encrypted (crypto/box-after shared-secret
                                           text K/key-length working-nonce)
               vouch (byte-array K/vouch-length)]
+          ;; This fails with an ArrayIndexOutOfBoundsException.
+          ;; Because the vouch and its associated nonce are really two
+          ;; logically distinct fields.
+          ;; They're just getting crammed together here thanks to pointer
+          ;; magic.
+          ;; Well, they used to be.
+          (comment (b-t/byte-copy! vouch
+                                   0
+                                   K/server-nonce-suffix-length
+                                   working-nonce
+                                   K/server-nonce-prefix-length))
           (b-t/byte-copy! vouch
                           0
-                          K/server-nonce-suffix-length
-                          working-nonce
-                          K/server-nonce-prefix-length)
-          (b-t/byte-copy! vouch
-                          K/server-nonce-suffix-length
                           (+ K/box-zero-bytes K/key-length)
-                          encrypted
-                          0)
-          vouch))
+                          encrypted)
+          {::inner-i-nonce nonce-suffix
+           ::vouch vouch}))
       (assert false (str "Missing nonce in packet-management:\n"
                          (keys packet-management))))))
 
@@ -721,8 +731,8 @@ implementation. This is code that I don't understand yet"
                                                            (update state ::child-packets
                                                                    conj bs)]
                                                        (send-messages! a))))))))
-      (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" (keys @this))
-                      this)))
+      (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" @this)
+                      {::state this})))
     (log/warn "That response to Initiate was a failure")))
 
 (defn final-wait
@@ -856,7 +866,7 @@ TODO: Need to ask around about that."
             ;; This is especially important before the Server
             ;; has responded with its first Message so the client
             ;; can switch to sending those.
-            (assoc this ::vouch (build-vouch this)))
+            (into this (build-vouch this)))
           (do
             (log/error (str "Missing server-short-term-pk among\n"
                             (keys (::server-security this))
@@ -943,7 +953,7 @@ TODO: Need to ask around about that."
 
 (defn build-initiate-interior
   "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
-  [this msg nonce-suffix]
+  [this msg outer-nonce-suffix]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   (let [msg-length (count msg)
@@ -951,7 +961,9 @@ TODO: Need to ask around about that."
         tmplt (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)
         server-name (get-in this [::shared/my-keys ::K/server-name])
         _ (assert server-name)
+        inner-nonce-suffix (::inner-i-nonce this)
         src {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
+             ::K/inner-i-nonce inner-nonce-suffix
              ::K/inner-vouch (::vouch this)
              ::K/server-name server-name
              ::K/child-message msg}
@@ -959,7 +971,7 @@ TODO: Need to ask around about that."
         secret (get-in this [::shared-secrets ::client-short<->server-short])]
     (log/info (str "Encrypting:\n"
                    src
-                   "\nVouch:\n" (b-t/->string nonce-suffix)
+                   "\nInner Nonce Suffix:\n" (b-t/->string inner-nonce-suffix)
                    "FIXME: Do not log this!!\n"
                    "Shared secret:\n" (b-t/->string secret)))
     (shared/build-crypto-box tmplt
@@ -967,7 +979,7 @@ TODO: Need to ask around about that."
                              (::shared/text work-area)
                              secret
                              K/initiate-nonce-prefix
-                             nonce-suffix)))
+                             outer-nonce-suffix)))
 
 ;; TODO: Surely I have a ByteBuf spec somewhere.
 (s/fdef build-initiate-packet!
@@ -983,6 +995,7 @@ TODO: Need to ask around about that."
         work-area (::shared/work-area this)
         ;; Just reuse a subset of whatever the server sent us.
         ;; Legal because a) it uses a different prefix and b) it's a different number anyway
+        ;; Note that this is actually for the *outer* nonce.
         nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area) K/client-nonce-prefix-length)
         crypto-box (build-initiate-interior this msg nonce-suffix)]
     (log/info (str "Stuffing\n"
@@ -995,7 +1008,7 @@ TODO: Need to ask around about that."
                       :clnt-xtn (::shared/extension this)
                       :clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
                       :cookie (get-in this [::server-security ::server-cookie])
-                      :nonce nonce-suffix
+                      :outer-i-nonce nonce-suffix
                       :vouch-wrapper crypto-box}]
       (shared/compose dscr
                       fields

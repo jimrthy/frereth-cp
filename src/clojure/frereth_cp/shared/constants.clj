@@ -28,6 +28,8 @@
 
 (s/def ::client-nonce-suffix (s/and bytes?
                                     #(= (count %) client-nonce-suffix-length)))
+(s/def ::server-nonce-suffix (s/and bytes?
+                                    #(= (count %) server-nonce-suffix-length)))
 
 ;; This is a name suitable for submitting a DNS query.
 ;; 1. Its encoder starts with an array of zeros
@@ -91,19 +93,20 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets
 
+(s/def ::inner-i-nonce ::server-nonce-suffix)
+(s/def ::outer-i-nonce ::client-nonce-suffix)
+
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 (def initiate-header (.getBytes (str client-header-prefix "I")))
 
 (def max-vouch-message-length 640)
 
-;; 64 bytes
+;; 48 bytes
 ;; Q: What is this for?
 ;; A: It's that ::inner-vouch portion of the vouch-wrapper.
 ;; Really, neither of those is a great name choice.
-(def vouch-length (+ server-nonce-suffix-length  ; 16
-                     ;; 16
-                     box-zero-bytes
+(def vouch-length (+ box-zero-bytes ;; 16
                      ;; 32
                      key-length))
 ;; The way this is wrapped up seems odd.
@@ -118,12 +121,14 @@
 ;; needing to maintain any state on our part up to this
 ;; point.
 ;; (spoiler: it's
-;; (+ 16 32 64 256)
+;; (+ 16 32 16 48 256)
 ;; => 368
 (def minimum-vouch-length (+ box-zero-bytes  ; 16
                              ;; 32
                              key-length
-                             ;; 64
+                             ;; 16
+                             server-nonce-suffix-length
+                             ;; 48
                              vouch-length
                              ;; 256
                              server-name-length))
@@ -136,9 +141,10 @@
        max-vouch-message-length))
 
 (def vouch-wrapper
-  "Template for composing the informational part of an Initiate Packet's Vouch"
+  "Template for composing the inner part of an Initiate Packet's Vouch that holds everything interesting"
   {::client-long-term-key {::type ::bytes
                            ::length key-length}
+   ::inner-i-nonce {::type ::bytes ::length server-nonce-suffix-length}
    ::inner-vouch {::type ::bytes ::length vouch-length}
    ::server-name {::type ::bytes ::length server-name-length}
    ;; Q: Do I want to allow compose to accept parameters for things like this?
@@ -159,14 +165,15 @@
                               ::length key-length}
              ::cookie {::type ::bytes
                        ::length server-cookie-length}
-             ::nonce {::type ::bytes
-                      ::length client-nonce-suffix-length}
+             ::outer-i-nonce {::type ::bytes
+                            ::length client-nonce-suffix-length}
              ;; It seems like it would be nice to enable nested
              ;; definitions.
              ;; This isn't "just" vouch-wrapper.
-             ;; It's the cryptographic box that contains vouch-wrapper.
+             ;; It's the cryptographic box that contains vouch-wrapper
+             ;; and its related message
              ::vouch-wrapper {::type ::bytes
-                      ::length minimum-vouch-length}))
+                              ::length minimum-vouch-length}))
 
 (s/def ::cookie (s/and bytes?
                        #(= (count %) server-cookie-length)))
@@ -183,15 +190,15 @@
                                             ::clnt-xtn
                                             ::clnt-short-pk
                                             ::cookie
-                                            ;; Q: Is this a client or server nonce?
-                                            ::nonce
+                                            ::outer-i-nonce
                                             ::vouch-wrapper]))
 
 (def initiate-client-vouch-wrapper
+  "TODO: Rename this to something like initiate-client-vouch-message"
   (array-map ::long-term-public-key {::type ::bytes
                                      ::length key-length}
-             ::nonce {::type ::bytes
-                      ::length server-nonce-suffix-length}
+             ::inner-i-nonce {::type ::bytes
+                            ::length server-nonce-suffix-length}
              ::hidden-client-short-pk {::type ::bytes
                                        ::length (+ key-length box-zero-bytes)}
              ::server-name {::type ::bytes
@@ -200,7 +207,7 @@
                         ::length '*}))
 (s/def ::initiate-client-vouch-wrapper
   (s/keys :req [::long-term-public-key
-                ::nonce
+                ::inner-i-nonce
                 ::hidden-client-short-pk
                 ::server-name
                 ::message]))

@@ -474,12 +474,11 @@
                       (when (instance? Exception outcome)
                         (if (instance? RuntimeException outcome)
                           (if (instance? ExceptionInfo outcome)
+                            (log/error outcome (str "FAIL:\n"
+                                                    (with-out-str (pprint (.getData outcome)))))
                             (do
-                              (println "FAIL:" outcome)
-                              (pprint (.getData outcome)))
-                            (do
-                              (println "Ugly failure:" outcome)))
-                          (println "Low Level Failure:" outcome))
+                              (log/error outcome "Ugly failure:")))
+                          (log/error outcome "Low Level Failure:"))
                         (.printStackTrace outcome)
                         (throw outcome))
                       (is (not= outcome ::timeout)))
@@ -489,19 +488,20 @@
                     (is (not= (deref eventually-started 500 ::timeout)
                               ::timeout))))
                 (catch Exception ex
-                  (println (str "Unhandled exception ("
-                                ex
-                                ") escaped!\n"
-                                "Stack Trace:\n"
-                                (with-out-str (.printStackTrace ex))
-                                "\nClient state:\n"
-                                (with-out-str (pprint (clnt/hide-long-arrays @client)))
-                                (if-let [err (agent-error client)]
-                                  (str "\nClient failure:\n" err)
-                                  (str "\n(client agent thinks everything is fine)"))))
+                  (log/error ex
+                             (str "Unhandled exception escaped!\n"
+                                  "Stack Trace:\n"
+                                  ;; This goes to STDOUT.
+                                  ;; TODO: Switch to util/get-stack-trace
+                                  (with-out-str (.printStackTrace ex))
+                                  "\nClient state:\n"
+                                  (with-out-str (pprint (clnt/hide-long-arrays @client)))
+                                  (if-let [err (agent-error client)]
+                                    (str "\nClient failure:\n" err)
+                                    (str "\n(client agent thinks everything is fine)"))))
                   (is (not ex)))
                 (finally
-                  (println "Test done. Stopping server.")
+                  (log/info "Test done. Stopping server.")
                   (srvr/stop! server))))
             (catch clojure.lang.ExceptionInfo ex
               (let [msg (str "Unhandled ex-info:\n"
