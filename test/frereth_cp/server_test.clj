@@ -4,31 +4,8 @@
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
-            ;; TODO: This also needs to go away
-            #_[com.stuartsierra.component :as cpt]
-            #_[component-dsl.system :as cpt-dsl]
             [manifold.stream :as strm])
   (:import io.netty.buffer.Unpooled))
-
-(comment
-  (defrecord StreamOwner [chan]
-    ;; TODO: Make this just totally go away
-    cpt/Lifecycle
-    (start
-      [this]
-      (assoc this :chan (or chan (strm/stream))))
-    (stop
-      [this]
-      (println "Stopping StreamOwner")
-      (when chan
-        (strm/close! chan))
-      (assoc this :chan nil)))
-  (defn chan-ctor
-    [_]
-    (->StreamOwner (strm/stream)))
-
-  (def sys-struct {:cp-server 'com.frereth.common.curve.server/ctor
-                   :client-chan 'com.frereth.common.curve.server-test/chan-ctor}))
 
 (defn system-options
   []
