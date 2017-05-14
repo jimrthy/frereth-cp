@@ -1,70 +1,93 @@
 (ns frereth-cp.server-test
   (:require [clojure.test :refer (deftest is testing)]
             [frereth-cp.server :as server]
+            [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
             ;; TODO: This also needs to go away
-            [com.stuartsierra.component :as cpt]
-            [component-dsl.system :as cpt-dsl]
+            #_[com.stuartsierra.component :as cpt]
+            #_[component-dsl.system :as cpt-dsl]
             [manifold.stream :as strm])
   (:import io.netty.buffer.Unpooled))
 
-(defrecord StreamOwner [chan]
-  ;; TODO: Make this just totally go away
-  cpt/Lifecycle
-  (start
-    [this]
-    (assoc this :chan (or chan (strm/stream))))
-  (stop
-    [this]
-    (println "Stopping StreamOwner")
-    (when chan
-      (strm/close! chan))
-    (assoc this :chan nil)))
-(defn chan-ctor
-  [_]
-  (->StreamOwner (strm/stream)))
+(comment
+  (defrecord StreamOwner [chan]
+    ;; TODO: Make this just totally go away
+    cpt/Lifecycle
+    (start
+      [this]
+      (assoc this :chan (or chan (strm/stream))))
+    (stop
+      [this]
+      (println "Stopping StreamOwner")
+      (when chan
+        (strm/close! chan))
+      (assoc this :chan nil)))
+  (defn chan-ctor
+    [_]
+    (->StreamOwner (strm/stream)))
 
-(def options {:cp-server {:security {:keydir "curve-test"
-                                     ;; Note that name really isn't legal.
-                                     ;; It needs to be something we can pass
-                                     ;; along to DNS, padded to 255 bytes.
-                                     ;; This bug really should show up in
-                                     ;; a test.
-                                     :name "local.test"}
-                          :extension (byte-array [0x01 0x02 0x03 0x04
-                                                  0x05 0x06 0x07 0x08
-                                                  0x09 0x0a 0x0b 0x0c
-                                                  0x0d 0x0e 0x0f 0x10])}})
-(def sys-struct {:cp-server 'com.frereth.common.curve.server/ctor
-                 :client-chan 'com.frereth.common.curve.server-test/chan-ctor})
+  (def sys-struct {:cp-server 'com.frereth.common.curve.server/ctor
+                   :client-chan 'com.frereth.common.curve.server-test/chan-ctor}))
+
+(defn system-options
+  []
+  (let [server-name (shared/encode-server-name "test.frereth.com")]
+    {:cp-server {::shared/extension (byte-array [0x01 0x02 0x03 0x04
+                                                 0x05 0x06 0x07 0x08
+                                                 0x09 0x0a 0x0b 0x0c
+                                                 0x0d 0x0e 0x0f 0x10])
+                 ::shared/my-keys #::shared{::K/server-name server-name
+                                           :keydir "curve-test"}}}))
 
 (defn build
   []
-  (cpt-dsl/build #:component-dsl.system {:structure sys-struct
-                                         :dependencies {:cp-server [:client-chan]}}
-                 options))
+  {:cp-server (server/ctor (:cp-server (system-options)))
+   :client-read-chan {:chan (strm/stream)}
+   :client-write-chan {:chan (strm/stream)}})
+
+(defn start
+  [inited]
+  (let [client-write-chan (:client-write-chan inited)
+        client-read-chan (:client-read-chan inited)]
+    {:cp-server (server/start! (assoc (:cp-server inited)
+                                      ::state/client-read-chan client-read-chan
+                                      ::state/client-write-chan client-write-chan))
+     :client-read-chan client-read-chan
+     :client-write-chan client-write-chan}))
+
+(defn stop
+  [started]
+  (let [ch (get-in started [:client-read-chan :chan])]
+    (strm/close! ch))
+  (let [ch (get-in started [:client-write-chan :chan])]
+    (strm/close! ch))
+  {:cp-server (server/stop! (:cp-server started))
+   :client-read-chan {:chan nil}
+   :client-write-chan {:chan nil}})
 
 (deftest start-stop
   (testing "That we can start and stop successfully"
-    (let [init (build)
-          started (cpt/start init)]
+    (let [inited (build)
+          started (start inited)]
       (is started)
-      (is (cpt/stop started)))))
+      (is (stop started)))))
 (comment
   (def test-sys (build))
-  (alter-var-root #'test-sys cpt/start)
+  (alter-var-root #'test-sys start)
   (-> test-sys :client-chan keys)
   (alter-var-root #'test-sys cpt/stop)
   )
 
 (deftest shake-hands
   (let [init (build)
-        started (cpt/start init)]
+        started (start init)]
     (println "Server should be started now")
     (try
       (println "Sending bogus HELLO")
-      (let [client (get-in started [:client-chan :chan])
+      (let [msg "Howdy!"
+            client (get-in started [:client-write-chan :chan])
+            recvd (strm/try-take! client ::drained 500 ::timed-out)
             ;; Currently, this fails silently (from our perspective).
             ;; Which, really, is a fine thing.
             ;; Although the log message should be improved (since this could
@@ -76,12 +99,16 @@
             ;; (The alternative is to either capture that exchange so
             ;; I can send it manually or reinvent the client's packet
             ;; buildig code)
-            success (deref (strm/try-put! client "Howdy!" 1000 ::timed-out))]
+            success (deref (strm/try-put! client msg 1000 ::timed-out))]
         (println "put! success:" success)
-        (is (not= ::timed-out success)))
+        ;; This is failing.
+        ;; Probably because I'm not really creating a Client.
+        ;; Q: Is that worth actually doing?
+        (is (not= ::timed-out success))
+        (is (= @recvd msg)))
       (finally
         (println "Triggering event loop exit")
-        (cpt/stop started)))))
+        (stop started)))))
 
 (deftest test-cookie-composition
   (let [client-extension (byte-array (take 16 (repeat 0)))
@@ -92,9 +119,9 @@
         to-encode {::K/header K/cookie-header
                    ::K/client-extension client-extension
                    ::K/server-extension server-extension
-                   ::K/nonce (Unpooled/wrappedBuffer working-nonce
-                                                     K/server-nonce-prefix-length
-                                                     K/server-nonce-suffix-length)
+                   ::K/client-nonce-suffix (Unpooled/wrappedBuffer working-nonce
+                                                                   K/server-nonce-prefix-length
+                                                                   K/server-nonce-suffix-length)
                    ;; This is also a great big FAIL:
                    ;; Have to drop the first 16 bytes
                    ;; Q: Have I fixed that yet?
