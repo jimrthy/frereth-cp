@@ -317,9 +317,17 @@ Note that that includes TODOs re:
   [state supplied-client-short-key client-message-box]
   (let [client-long-buffer (::K/long-term-public-key client-message-box)
         client-long-key (byte-array K/key-length)
+        my-long-secret (.getSecretKey (get-in state [::shared/my-keys ::shared/long-pair]))
         shared-secret (crypto/box-prepare client-long-key
-                                          (.getSecretKey (get-in state [::shared/my-keys ::shared/long-pair])))]
+                                          my-long-secret)]
     (.getBytes client-long-buffer 0 client-long-key)
+    (log/info (str "Getting ready to decrypt the inner-most hidden public key\n"
+                   "Supplied client long-term key:\n"
+                   (b-t/->string client-long-key)
+                   "My long-term secret key:\n"
+                   (b-t/->string my-long-secret)
+                   "Shared:\n"
+                   (b-t/->string shared-secret)))
     ;; Failing here.
     ;; The shared secret doesn't match what the client used to encrypt the box.
     (when-let [inner-pk (crypto/open-crypto-box

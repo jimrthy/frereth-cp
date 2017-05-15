@@ -306,17 +306,11 @@ TODO: Need to ask around about that."
               encrypted (crypto/box-after shared-secret
                                           text K/key-length working-nonce)
               vouch (byte-array K/vouch-length)]
-          ;; This fails with an ArrayIndexOutOfBoundsException.
-          ;; Because the vouch and its associated nonce are really two
-          ;; logically distinct fields.
-          ;; They're just getting crammed together here thanks to pointer
-          ;; magic.
-          ;; Well, they used to be.
-          (comment (b-t/byte-copy! vouch
-                                   0
-                                   K/server-nonce-suffix-length
-                                   working-nonce
-                                   K/server-nonce-prefix-length))
+          (log/info (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
+                         "Nonce:\n"
+                         (b-t/->string working-nonce)
+                         "Shared long-long secret (FIXME: Don't log this):\n"
+                         (b-t/->string shared-secret)))
           (b-t/byte-copy! vouch
                           0
                           (+ K/box-zero-bytes K/key-length)

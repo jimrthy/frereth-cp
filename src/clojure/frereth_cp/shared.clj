@@ -302,8 +302,17 @@ And encrypted with a passphrase, of course.
 This really belongs in the crypto ns, but then where does slurp-bytes move?"
   [keydir]
   (if keydir
-    (let [secret (slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))]
-      (TweetNaclFast$Box/keyPair_fromSecretKey secret))
+    (let [secret (slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
+          pair (TweetNaclFast$Box/keyPair_fromSecretKey secret)]
+      (log/info "FIXME: Don't record this\n"
+                "Loaded secret key from file:\n"
+                (b-t/->string secret)
+                "which produced the following key pair:\n"
+                "Secret:\n"
+                (b-t/->string (.getSecretKey pair))
+                "Public:\n"
+                (b-t/->string (.getPublicKey pair)))
+      pair)
     (crypto/random-key-pair)))
 
 (s/fdef encode-server-name

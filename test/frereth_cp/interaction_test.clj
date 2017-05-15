@@ -379,11 +379,15 @@
                                       0x05 0x06 0x07 0x08
                                       0x09 0x0a 0x0b 0x0c
                                       0x0d 0x0e 0x0f 0x10])
+        ;; This is the value we're supplying to the client.
+        ;; It looks like it does not match reality.
         server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
                                     51 -105 -107 -125 -120 -41 83 -46
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         server-name (shared/encode-server-name "test.frereth.com")]
+    ;; Q: Is it worth digging into git blame to try to figure this out?
+    (throw (RuntimeException. "Where did I get server-long-pk?"))
     {::server #::shared{:extension server-extension
                         :my-keys #::shared{::K/server-name server-name
                                            :keydir "curve-test"}}
