@@ -2,6 +2,7 @@
   (:require [clojure.pprint :refer (pprint)]
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as clnt]
+            [frereth-cp.client.cookie :as cookie]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
@@ -51,7 +52,7 @@
         (if (await-for 150 client-agent)
           (do
             (is (not (agent-error client-agent)))
-            (let [cookie-waiter (dfrd/future (clnt/wait-for-cookie))
+            (let [cookie-waiter (dfrd/future (cookie/wait-for-cookie))
                   ;; Q: Worth building a real Cookie response packet instead?
                   basic-check "Did this work?"
                   fut (dfrd/future (let [d (strm/try-put! chan<-server basic-check 150 ::timed-out)]

@@ -6,8 +6,9 @@
             [clojure.test :refer (deftest is testing)]
             [clojure.tools.logging :as log]
             [frereth-cp.client :as clnt]
+            [frereth-cp.client.state :as clnt-state]
             [frereth-cp.server :as srvr]
-            [frereth-cp.server.state :as state]
+            [frereth-cp.server.state :as srvr-state]
             [frereth-cp.server-test :as server-test]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
@@ -180,6 +181,7 @@
   (if-not (keyword? cookie)
     (let [msg (:message cookie)]
       ;; Q: So...how/when can I call release?
+      ;; And do I really need to?
       (netty/acquire msg)
       (let [msg-size (.readableBytes msg)]
         (is (= 200 msg-size)))
@@ -205,12 +207,11 @@
 (defn wrote-cookie
   [clnt-> success]
   (log/info "Wrote cookie packet to Client")
-  (is (and success
-           (not (keyword? success))))
-  (if (not= success ::timeout)
-    (do
-      (log/info "Server Cookie sent to client. Waiting for Initiate packet in response")
-      (strm/try-take! clnt-> ::drained 500 ::timeout))))
+  (assert success)
+  (assert (not (keyword? success)))
+  (when (not= success ::timeout)
+    (log/info "Server Cookie sent to client. Waiting for Initiate packet in response")
+    (strm/try-take! clnt-> ::drained 500 ::timeout)))
 
 (defn vouch->server
   [mem-pool ->server vouch]
@@ -337,14 +338,16 @@
                                     read-notifier))
         hidden [(strm/try-take! read-notifier ::drained 2500 ::timed-out)
                 (strm/try-take! release-notifier ::drained 2500 ::timed-out)]]
-    {::clnt/child child
-     ::clnt/reader  read-notifier
-     ::clnt/release release-notifier
-     ::clnt/writer write-notifier
+    {::clnt-state/child child
+     ::clnt-state/reader  read-notifier
+     ::clnt-state/release release-notifier
+     ::clnt-state/writer write-notifier
      ;; Q: Does it make any difference if I keep this around?
      ::hidden-child hidden}))
 
 (deftest viable-server
+  ;; TODO: Start this from build-hand-shake-options
+  ;; to be sure I'm comparing apples to apples
   (testing "Does handshake start with a usable server?"
     (let [server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
@@ -364,7 +367,7 @@
           (try
             (is (-> server ::srvr/active-clients deref))
             (is (= 0 (-> server ::srvr/active-clients deref count)))
-            (is (not (state/find-client server (.getBytes "won't find this"))))
+            (is (not (srvr-state/find-client server (.getBytes "won't find this"))))
             (finally (srvr/stop! server))))
         (finally
           (strm/close! (:chan server->client))
@@ -388,9 +391,9 @@
                                                0x0c 0x0b 0x0a 0x09
                                                0x08 0x07 0x06 0x05
                                                0x04 0x03 0x02 0x01])
-               ::clnt/child-spawner client-child-spawner
+               ::clnt-state/child-spawner client-child-spawner
                ::shared/my-keys {::K/server-name server-name}
-               ::clnt/server-extension server-extension
+               ::clnt-state/server-extension server-extension
                ;; Q: Where do I get the server's public key?
                ;; A: Right now, I just have the secret key's 32 bytes encoded as
                ;; the alphabet.
@@ -399,8 +402,8 @@
                ;; Then I can just generate a random key pair for the server.
                ;; Use the key-put functionality to store the secret, then
                ;; hard-code the public key here.
-               ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
-                                       ::K/server-name server-name}}}))
+               ::clnt-state/server-security {::clnt-state/server-long-term-pk server-long-pk
+                                             ::K/server-name server-name}}}))
 
 (deftest handshake
   (log/info "**********************************\nNew Hand-Shake test")
@@ -416,8 +419,8 @@
         chan<-server (strm/stream)
         ;; TODO: This seems like it would be a great place to try switching to integrant
         client (clnt/ctor (assoc (::client options)
-                                 ::clnt/chan<-server chan<-server
-                                 ::clnt/chan->server chan->server))]
+                                 ::clnt-state/chan<-server chan<-server
+                                 ::clnt-state/chan->server chan->server))]
     (try
       (let [unstarted-server (srvr/ctor (::server options))
             chan<-client {:chan (strm/stream)}
@@ -428,8 +431,8 @@
                      "...stuff...")
           (try
             (let [server (srvr/start! (assoc unstarted-server
-                                             ::state/client-read-chan chan<-client
-                                             ::state/client-write-chan chan->client))]
+                                             ::srvr-state/client-read-chan chan<-client
+                                             ::srvr-state/client-write-chan chan->client))]
               (try
                 ;; Currently just called for side-effects.
                 ;; TODO: Seems like I really should hide that little detail
@@ -438,7 +441,7 @@
                 ;; Q: Is there anything interesting about the deferred that it
                 ;; currently returns?
                 (let [eventually-started (clnt/start! client)
-                      clnt->srvr (::clnt/chan->server @client)
+                      clnt->srvr (::clnt-state/chan->server @client)
                       ;; Start with one that prefers direct buffers, even though it doesn't
                       ;; make a lot of sense for this test.
                       ;; I'm as certain as I can be (without actual metrics) that's the most
