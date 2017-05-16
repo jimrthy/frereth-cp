@@ -1,6 +1,7 @@
 (ns frereth-cp.shared.crypto-test
   (:require [clojure.test :refer (deftest is)]
             [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]))
 
 (deftest shared-secret-basics
@@ -32,11 +33,11 @@
                                        length
                                        nonce)
           _ (assert crypto-box)
-          ;; I'm doing something badly wrong.
-          ;; This next form fails.
           decrypted (crypto/open-after crypto-box
                                        0
-                                       length
+                                       (+ length K/box-zero-bytes)
                                        nonce
-                                       server-shared)]
-      (is (b-t/bytes= decrypted plain-text)))))
+                                       server-shared)
+          dst (byte-array length)]
+      (.getBytes decrypted 0 dst)
+      (is (b-t/bytes= dst plain-text)))))
