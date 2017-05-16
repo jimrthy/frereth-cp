@@ -373,6 +373,17 @@
           (strm/close! (:chan server->client))
           (strm/close! (:chan server<-client)))))))
 
+(comment
+  (let [v1 (byte-array [0x25 0x6C 0xC9 0xE4
+                        0x19 0xD3 0x18 0x5D
+                        0x33 0x97 0x95 0x83
+                        0x88 0xD7 0x53 0xD2
+                        0xE9 0xB8 0x6D 0xC6
+                        0x9C 0x57 0x73 0x5F
+                        0x59 0xB6 0xEB 0xDF
+                        0x14 0x15 0x6E 0x5F])]
+    (vec v1)))
+
 (defn build-hand-shake-options
   []
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
@@ -380,14 +391,33 @@
                                       0x09 0x0a 0x0b 0x0c
                                       0x0d 0x0e 0x0f 0x10])
         ;; This is the value we're supplying to the client.
-        ;; It looks like it does not match reality.
-        server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
-                                    51 -105 -107 -125 -120 -41 83 -46
-                                    -23 -72 109 -58 -100 87 115 95
-                                    89 -74 -21 -33 20 21 110 95])
+        ;; At first glance, it looks like it does not match reality.
+        ;; Except that it does
+        original-server-long-pk (byte-array [37 108 -55 -28
+                                             25 -45 24 93
+                                             51 -105 -107 -125
+                                             -120 -41 83 -46
+                                             -23 -72 109 -58
+                                             -100 87 115 95
+                                             89 -74 -21 -33
+                                             20 21 110 95])
+        actual-server-long-pk (byte-array [0x25 0x6C 0xC9 0xE4
+                                           0x19 0xD3 0x18 0x5D
+                                           0x33 0x97 0x95 0x83
+                                           0x88 0xD7 0x53 0xD2
+                                           0xE9 0xB8 0x6D 0xC6
+                                           0x9C 0x57 0x73 0x5F
+                                           0x59 0xB6 0xEB 0xDF
+                                           0x14 0x15 0x6E 0x5F])
+        server-long-pk (byte-array [37 108 -55 -28
+                                    25 -45 24 93
+                                    51 -105 -107 -125
+                                    -120 -41 83 -46
+                                    -23 -72 109 -58
+                                    -100 87 115 95
+                                    89 -74 -21 -33
+                                    20 21 110 95])
         server-name (shared/encode-server-name "test.frereth.com")]
-    ;; Q: Is it worth digging into git blame to try to figure this out?
-    (throw (RuntimeException. "Where did I get server-long-pk?"))
     {::server #::shared{:extension server-extension
                         :my-keys #::shared{::K/server-name server-name
                                            :keydir "curve-test"}}

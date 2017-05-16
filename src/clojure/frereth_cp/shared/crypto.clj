@@ -22,14 +22,14 @@
 ;;; Public
 
 (s/fdef box-after
-        :args (s/or :offset-0 (s/cat :key (s/and bytes?
-                                                 #(= (count %) K/key-length))
+        :args (s/or :offset-0 (s/cat :shared-key (s/and bytes?
+                                                        #(= (count %) K/key-length))
                                      :plain-text bytes?
                                      :length integer?
                                      :nonce (s/and bytes?
                                                    #(= (count %) K/nonce-length)))
-                    :offset-n (s/cat :key (s/and bytes?
-                                                 #(= (count %) K/key-length))
+                    :offset-n (s/cat :shared-key (s/and bytes?
+                                                        #(= (count %) K/key-length))
                                      :plain-text bytes?
                                      :offset integer?
                                      :length integer?
@@ -43,7 +43,7 @@
         :ret bytes?)
 (defn box-after
   "Accept some plain text and turn it into cipher text"
-  ([key plain-text length nonce]
+  ([shared-key plain-text length nonce]
    ;; TODO: More benchmarking to see how much difference it makes
    ;; to have 2 separate implementations that allow this one to
    ;; avoid an extra 0 addition.
@@ -59,10 +59,10 @@
          (log/info (str "Encrypting " length " bytes into " padded-length))
          (b-t/byte-copy! plain-buffer K/box-zero-bytes length plain-text)
          (when (= 0
-                  (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key))
+                  (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce shared-key))
            (b-t/sub-byte-array cipher-text K/box-zero-bytes)))))
-   (box-after key plain-text 0 length nonce))
-  ([key plain-text offset length nonce]
+   (box-after shared-key plain-text 0 length nonce))
+  ([shared-key plain-text offset length nonce]
    (when (and (<= (+ length offset) (count plain-text))
               nonce
               (= (count nonce) K/nonce-length))
@@ -70,11 +70,11 @@
            cipher-text (byte-array padded-length)
            plain-buffer (byte-array padded-length)]
        (b-t/byte-copy! plain-buffer K/decrypt-box-zero-bytes length plain-text offset)
-       (when (= 0 (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce key))
+       (when (= 0 (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce shared-key))
          ;; After it's encrypted, we can discard the first 16 bytes.
          ;; But not the other extra 16.
          ;; This is an annoying API pitfall that leads to a lot of
-         ;; annoyance/confusion.
+         ;; confusion.
          (b-t/sub-byte-array cipher-text K/box-zero-bytes))))))
 
 (defn box-prepare

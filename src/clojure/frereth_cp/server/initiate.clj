@@ -323,10 +323,30 @@ Note that that includes TODOs re:
     (.getBytes client-long-buffer 0 client-long-key)
     (log/info (str "Getting ready to decrypt the inner-most hidden public key\n"
                    "Supplied client long-term key:\n"
+                   ;; This next should match:
+                   #_[0x26 0x9f 0x81 0x8d
+                    0x4a 0xfc 0x55 0x04
+                    0xad 0x01 0x34 0xfd
+                    0xb0 0xa4 0xf4 0x12
+                    0xe3 0x64 0x96 0xae
+                    0x8c 0xe7 0x14 0xb5
+                    0x70 0x76 0x62 0xb2
+                    0x64 0xb8 0x3f 0x19]
                    (b-t/->string client-long-key)
                    "My long-term secret key:\n"
                    (b-t/->string my-long-secret)
+                   "My long-term public key:\n"
+                   (b-t/->string (.getPublicKey (get-in state [::shared/my-keys ::shared/long-pair])))
                    "Shared:\n"
+                   ;; Client's version:
+                   #_[0xc5 0x91 0x62 0xcd
+                    0xfe 0xc1 0x33 0x89
+                    0xa3 0xff 0x82 0x3d
+                    0x26 0x2d 0x09 0x03
+                    0x09 0xbc 0x9e 0xdd
+                    0x35 0x87 0x1b 0x1c
+                    0x81 0xb5 0xff 0x2a
+                    0xa9 0xe1 0x6b 0x58]
                    (b-t/->string shared-secret)))
     ;; Failing here.
     ;; The shared secret doesn't match what the client used to encrypt the box.

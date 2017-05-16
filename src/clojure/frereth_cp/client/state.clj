@@ -426,11 +426,16 @@ TODO: Need to ask around about that."
                       {::this this}))))
   (let [server-long-term-pk (::server-long-term-pk server-security)
         long-pair (::shared/long-pair my-keys)
-        short-pair (::shared/short-pair my-keys)]
+        short-pair (::shared/short-pair my-keys)
+        long-shared  (crypto/box-prepare
+                      server-long-term-pk
+                      (.getSecretKey long-pair))]
     (log/info (str "Server long-term public key:\n"
                    (b-t/->string server-long-term-pk)
                    "My long-term public key:\n"
-                   (b-t/->string (.getPublicKey long-pair))))
+                   (b-t/->string (.getPublicKey long-pair))
+                   "Combined, they produced this shared secret:\n"
+                   (b-t/->string long-shared)))
     (into this
           {::child-packets []
            ::client-extension-load-time 0
@@ -444,9 +449,7 @@ TODO: Need to ask around about that."
            ;; here?
            ;; A: Who am I to argue with one of the experts?
            ::shared/extension nil
-           ::shared-secrets {::client-long<->server-long (crypto/box-prepare
-                                                          server-long-term-pk
-                                                          (.getSecretKey long-pair))
+           ::shared-secrets {::client-long<->server-long long-shared
                              ::client-short<->server-long (crypto/box-prepare
                                                            server-long-term-pk
                                                            (.getSecretKey short-pair))}
