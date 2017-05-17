@@ -251,7 +251,6 @@ To be fair, this layer *is* pretty special."
   (log/info "Opening the Crypto box we just received from the client")
   (log/debug "The box we're opening is" (.readableBytes vouch-wrapper) "bytes long")
   (let [message-length (- (.readableBytes vouch-wrapper) K/minimum-vouch-length)]
-    ;; Back to a mostly-unexplained "Failed to open box" error.
     (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix
                                                 outer-i-nonce
                                                 vouch-wrapper
@@ -407,6 +406,19 @@ Note that that includes TODOs re:
                      (try
                        (when-let [client-message-box (open-client-crypto-box initiate active-client)]
                          (try
+                           (log/info (str "Extracted message box from client's Initiate packet.\n"
+                                          "Keys:\n"
+                                          (keys client-message-box)
+                                          "\nThe long-term public key:\n"
+                                          (let [pk (::K/long-term-public-key client-message-box)]
+                                            (.retain pk)
+                                            ;; This matches both the original log
+                                            ;; message and what we see below when we
+                                            ;; try to extract the inner hidden key
+                                            #_[0x63 0xA4 0x65 0xDE
+                                             ,,,
+                                             0x91 0xCC 0xE3 0x02]
+                                            (b-t/->string pk))))
                            (if (validate-server-name state client-message-box)
                              ;; This takes us down to line 381
                              (when (verify-client-public-key-triad state client-short-key client-message-box)

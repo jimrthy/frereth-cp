@@ -345,6 +345,37 @@
      ;; Q: Does it make any difference if I keep this around?
      ::hidden-child hidden}))
 
+(defn double-check-long-term-shared-secrets
+  [client server]
+  (let [client-long (-> client
+                        deref
+                        (get-in [::shared/my-keys ::shared/long-pair]))
+        client-public (.getPublicKey client-long)
+        client-secret (.getSecretKey client-long)
+        server-long (get-in server [::shared/my-keys ::shared/long-pair])
+        server-public (.getPublicKey server-long)
+        server-secret (.getSecretKey server-long)
+        client->server (crypto/box-prepare server-public client-secret)
+        server->client (crypto/box-prepare client-public server-secret)]
+    (testing "Shared secrets match"
+      (log/info "Initial shared secrets:\n"
+                "Client-Secret<->Server-Public:\n"
+                (b-t/->string client->server)
+                "Server-Secret<->Client-Public:\n"
+                (b-t/->string server->client))
+      ;; The shared secret this produces:
+      #_[0xB0 0x99 0xE8 0x62
+       0xC9 0xC0 0x47 0x95
+       0x6E 0xF7 0x14 0xEE
+       0xBC 0xF6 0x82 0x54
+       0x23 0x1B 0x0D 0x88
+       0x1F 0x29 0xA3 0x4C
+       0x22 0xA8 0xAA 0xAA
+         0x56 0xAE 0x75 0x23]
+      ;; This matches what the client generated
+      (is (b-t/bytes= client->server server->client))
+      (is (= (vec client->server) (vec server->client))))))
+
 (deftest viable-server
   ;; TODO: Start this from build-hand-shake-options
   ;; to be sure I'm comparing apples to apples
@@ -409,6 +440,7 @@
                                            0x9C 0x57 0x73 0x5F
                                            0x59 0xB6 0xEB 0xDF
                                            0x14 0x15 0x6E 0x5F])
+        ;; This is the decimal those translate into
         server-long-pk (byte-array [37 108 -55 -28
                                     25 -45 24 93
                                     51 -105 -107 -125
@@ -426,16 +458,26 @@
                                                0x08 0x07 0x06 0x05
                                                0x04 0x03 0x02 0x01])
                ::clnt-state/child-spawner client-child-spawner
+               ;; Based on this, the client should be setting up
+               ;; a random key pair every time.
+               ;; Maybe I'm screwing something up royally and
+               ;; missing a random number generator seed call,
+               ;; but the keys I'm seeing look suspiciously
+               ;; uniform
                ::shared/my-keys {::K/server-name server-name}
                ::clnt-state/server-extension server-extension
-               ;; Q: Where do I get the server's public key?
-               ;; A: Right now, I just have the secret key's 32 bytes encoded as
-               ;; the alphabet.
-               ;; TODO: Really need to mirror what the code does to load the
-               ;; secret key from a file.
-               ;; Then I can just generate a random key pair for the server.
+               ;; Q: Where did I get the server's public key?
+               ;; A: By manually copying over what NaCl produces
+               ;; when I hand it the hard-coded secret key that
+               ;; I'm reusing.
+               ;; Q: Do I want to mirror what the code does to load the
+               ;; secret key from a file?
+               ;; I could just generate a random key pair for the server.
                ;; Use the key-put functionality to store the secret, then
                ;; hard-code the public key here.
+               ;; A: Maybe for some other test.
+               ;; For this one, it's too useful to have known keys
+               ;; getting passed around
                ::clnt-state/server-security {::clnt-state/server-long-term-pk server-long-pk
                                              ::K/server-name server-name}}}))
 
@@ -455,6 +497,8 @@
         client (clnt/ctor (assoc (::client options)
                                  ::clnt-state/chan<-server chan<-server
                                  ::clnt-state/chan->server chan->server))]
+    (log/warn "Verify that (crypto/random-keypair) really is random")
+    (log/warn "TODO: Switch to hard-coded client key pair for debugging ease")
     (try
       (let [unstarted-server (srvr/ctor (::server options))
             chan<-client {:chan (strm/stream)}
@@ -468,6 +512,7 @@
                                              ::srvr-state/client-read-chan chan<-client
                                              ::srvr-state/client-write-chan chan->client))]
               (try
+                (double-check-long-term-shared-secrets client server)
                 ;; Currently just called for side-effects.
                 ;; TODO: Seems like I really should hide that little detail
                 ;; by having it return this.

@@ -401,8 +401,11 @@ TODO: Need to ask around about that."
 
 (defn load-keys
   [my-keys]
-  (let [long-pair (shared/do-load-keypair (::shared/keydir my-keys))
+  (let [key-dir (::shared/keydir my-keys)
+        long-pair (shared/do-load-keypair key-dir)
         short-pair (crypto/random-key-pair)]
+    (log/info (str "Loaded long-term client key pair from '"
+                   key-dir "'"))
     (assoc my-keys
            ::shared/long-pair long-pair
            ::shared/short-pair short-pair)))
