@@ -9,7 +9,7 @@
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.util :as util])
   (:import clojure.lang.ExceptionInfo
-           io.netty.buffer.Unpooled))
+           [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Named Constants
@@ -288,7 +288,6 @@ To be fair, this layer *is* pretty special."
 
 (s/fdef verify-client-public-key-triad
         :args (s/cat :state ::state/state
-                     :client-long-key ::shared/long-pk
                      :supplied-client-short-key ::shared/short-pk
                      ;; TODO: Come up with a ByteBuf spec
                      ::client-message-box any?)
@@ -313,7 +312,9 @@ Note that that includes TODOs re:
 * impose policy limitations on clients: known, maxconn
 * for known clients, retrieve shared secret from cache
 "
-  [state supplied-client-short-key client-message-box]
+  [state
+   ^ByteBuf supplied-client-short-key
+   client-message-box]
   (let [client-long-buffer (::K/long-term-public-key client-message-box)
         client-long-key (byte-array K/key-length)]
     (.getBytes client-long-buffer 0 client-long-key)
@@ -322,15 +323,6 @@ Note that that includes TODOs re:
                                             my-long-secret)]
       (log/info (str "Getting ready to decrypt the inner-most hidden public key\n"
                      "Supplied client long-term key:\n"
-                     ;; This next should match:
-                     #_[0x26 0x9f 0x81 0x8d
-                        0x4a 0xfc 0x55 0x04
-                        0xad 0x01 0x34 0xfd
-                        0xb0 0xa4 0xf4 0x12
-                        0xe3 0x64 0x96 0xae
-                        0x8c 0xe7 0x14 0xb5
-                        0x70 0x76 0x62 0xb2
-                        0x64 0xb8 0x3f 0x19]
                      (b-t/->string client-long-key)
                      "which arrived in: "
                      client-long-buffer
@@ -339,24 +331,17 @@ Note that that includes TODOs re:
                      "My long-term public key:\n"
                      (b-t/->string (.getPublicKey (get-in state [::shared/my-keys ::shared/long-pair])))
                      "Shared:\n"
-                     ;; Client's version:
-                     #_[0xc5 0x91 0x62 0xcd
-                        0xfe 0xc1 0x33 0x89
-                        0xa3 0xff 0x82 0x3d
-                        0x26 0x2d 0x09 0x03
-                        0x09 0xbc 0x9e 0xdd
-                        0x35 0x87 0x1b 0x1c
-                        0x81 0xb5 0xff 0x2a
-                        0xa9 0xe1 0x6b 0x58]
                      (b-t/->string shared-secret)))
-      ;; Failing here.
-      ;; The shared secret doesn't match what the client used to encrypt the box.
-      (when-let [inner-pk (crypto/open-crypto-box
-                           K/vouch-nonce-prefix
-                           (::K/inner-i-nonce client-message-box)
-                           (::K/hidden-client-short-pk client-message-box)
-                           shared-secret)]
-        (b-t/bytes= supplied-client-short-key inner-pk)))))
+      (when-let [^ByteBuf inner-pk-buf (crypto/open-crypto-box
+                                        K/vouch-nonce-prefix
+                                        (::K/inner-i-nonce client-message-box)
+                                        (::K/hidden-client-short-pk client-message-box)
+                                        shared-secret)]
+        (let [inner-pk (byte-array K/key-length)
+              short-pk (byte-array K/key-length)]
+          (.getBytes inner-pk-buf 0 inner-pk)
+          (.getBytes supplied-client-short-key 0 short-pk)
+          (b-t/bytes= short-pk inner-pk))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
