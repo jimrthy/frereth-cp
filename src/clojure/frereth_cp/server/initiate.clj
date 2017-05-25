@@ -313,7 +313,7 @@ Note that that includes TODOs re:
 * for known clients, retrieve shared secret from cache
 "
   [state
-   ^ByteBuf supplied-client-short-key
+   short-pk
    client-message-box]
   (let [client-long-buffer (::K/long-term-public-key client-message-box)
         client-long-key (byte-array K/key-length)]
@@ -337,11 +337,43 @@ Note that that includes TODOs re:
                                         (::K/inner-i-nonce client-message-box)
                                         (::K/hidden-client-short-pk client-message-box)
                                         shared-secret)]
-        (let [inner-pk (byte-array K/key-length)
-              short-pk (byte-array K/key-length)]
+        (let [inner-pk (byte-array K/key-length)]
           (.getBytes inner-pk-buf 0 inner-pk)
-          (.getBytes supplied-client-short-key 0 short-pk)
           (b-t/bytes= short-pk inner-pk))))))
+
+(s/fdef fork
+        :args (s/cat :state ::state/state
+                     :active-client ::state/client-state)
+        :ret ::state/client-state)
+(defn fork
+  [state
+   active-client
+   {:keys [::client-long-pk
+           ::client-short-pk
+           ::server-short-sk
+           ::client-short<->server-short]}]
+  (let [spawner (::state/child-spawner state)
+        child (spawner)]
+    ;; lines 392-415
+    ;; TODO: Need to set up communications with the child.
+    ;; manifold/stream seems like the most obvious.
+    ;; Actually, we should pass the stream to which we write
+    ;; to spawner. And that returns the corresponding stream
+    ;; from which we read
+    ;; lines 416-422
+    (assoc active-client
+           ::state/child-interaction child
+           ::state/message-len 0
+           ;; Reference implementation stores the client-short<->server-short
+           ;; keypair here again.
+           ;; But I already did that during a call to configure-shared-secrets
+           ::state/client-security (assoc (::state/client-security state)
+                                          #:frereth-cp.shared {:long-pk client-long-pk
+                                                               :short-pk client-short-pk
+                                                               :frereth-cp.server/server-short-sk server-short-sk})
+           ::state/received-nonce (throw (RuntimeException. "start here")))
+    (throw (ex-info "Don't stop here!"
+                    {:what "Cope with vouch/initiate"}))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -367,18 +399,18 @@ Note that that includes TODOs re:
                               +
                               (- n packet-header-length))
              initiate (shared/decompose tmplt message)
-             client-short-key (::K/clnt-short-pk initiate)]
+             client-short-key-buf (::K/clnt-short-pk initiate)
+             client-short-pk (byte-array K/key-length)]
+         (.getBytes client-short-key-buf 0 client-short-pk)
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)
-           (let [active-client (state/find-client state client-short-key)]
+           (let [active-client (state/find-client state client-short-pk)]
              (if-let [cookie (extract-cookie (::state/cookie-cutter state)
                                              initiate)]
                (do
                  (log/info (str "Succssfully extracted cookie"))
                  (let [server-short-sk-buffer (::K/srvr-short-sk cookie)
-                       server-short-sk (byte-array K/key-length)
-                       client-short-pk (byte-array K/key-length)]
+                       server-short-sk (byte-array K/key-length)]
                    (.getBytes server-short-sk-buffer 0 server-short-sk)
-                   (.getBytes client-short-key 0 client-short-pk)
                    (let [active-client (state/configure-shared-secrets active-client
                                                                        server-short-sk
                                                                        client-short-pk)]
@@ -392,32 +424,40 @@ Note that that includes TODOs re:
                      ;; This corresponds to line 373 in the reference implementation.
                      (try
                        (when-let [client-message-box (open-client-crypto-box initiate active-client)]
-                         (try
-                           (log/info (str "Extracted message box from client's Initiate packet.\n"
-                                          "Keys:\n"
-                                          (keys client-message-box)
-                                          "\nThe long-term public key:\n"
-                                          (let [pk (::K/long-term-public-key client-message-box)]
-                                            (.retain pk)
-                                            ;; This matches both the original log
-                                            ;; message and what we see below when we
-                                            ;; try to extract the inner hidden key
-                                            #_[0x63 0xA4 0x65 0xDE
-                                             ,,,
-                                             0x91 0xCC 0xE3 0x02]
-                                            (b-t/->string pk))))
-                           (if (validate-server-name state client-message-box)
-                             ;; This takes us down to line 381
-                             (when (verify-client-public-key-triad state client-short-key client-message-box)
-                               ;; line 392
-                               (throw (ex-info "Don't stop here!"
-                                               {:what "Cope with vouch/initiate"}))))
-                           (catch ExceptionInfo ex
-                             (log/error ex "Failure after decrypting inner client cryptobox"))))
+                         (let [client-long-pk (::K/long-term-public-key client-message-box)]
+                           (try
+                             (log/info (str "Extracted message box from client's Initiate packet.\n"
+                                            "Keys:\n"
+                                            (keys client-message-box)
+                                            "\nThe long-term public key:\n"
+                                            (do
+                                              (.retain client-long-pk)
+                                              ;; This matches both the original log
+                                              ;; message and what we see below when we
+                                              ;; try to extract the inner hidden key
+                                              #_[0x63 0xA4 0x65 0xDE
+                                                 ,,,
+                                                 0x91 0xCC 0xE3 0x02]
+                                              (b-t/->string client-long-pk))))
+                             (if (validate-server-name state client-message-box)
+                               ;; This takes us down to line 381
+                               (when (verify-client-public-key-triad state client-short-pk client-message-box)
+                                 (let [client-with-child (fork state
+                                                               active-client
+                                                               {::client-long-pk client-long-pk
+                                                                ::client-short-pk client-short-pk
+                                                                ::server-short-sk server-short-sk})]
+                                   (state/alter-client-state! state client-with-child)
+                                   ;; Q: Will there ever be an opportunity for calling this in
+                                   ;; a purely functional manner?
+                                   ;; Surely there's more to this than just the side-effects
+                                   nil)))
+                             (catch ExceptionInfo ex
+                               (log/error ex "Failure after decrypting inner client cryptobox")))))
                           (catch ExceptionInfo ex
                             (log/error ex "Initiate packet looked good enough to establish client session, but failed later"))))))
                (log/error "FIXME: Debug only: cookie extraction failed")))
-           (log/warn "TODO: Handle additional Initiate packet from " client-short-key)))
+           (log/warn "TODO: Handle additional Initiate packet from " client-short-pk)))
        (log/warn (str "Truncated initiate packet. Only received " n " bytes"))))
    ;; If nothing's changing, just maintain status quo
    state))

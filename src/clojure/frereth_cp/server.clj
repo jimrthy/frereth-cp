@@ -161,6 +161,12 @@
     :as this}]
   (let [stopper (deferred/deferred)
         stopped (promise)]
+    ;; TODO: Rethink using deferred/loop here.
+    ;; strm/consume or strm/consume-async seem like
+    ;; a much better choice.
+    ;; Then I could use strm/periodically to trigger
+    ;; key-rotation.
+    ;; Though, realistically, that should probably happen elsewhere.
     (deferred/loop [this (assoc this
                                 ::timeout (helpers/one-minute))]
       (log/info "Top of Server event loop. Timeout: " (::timeout this) "in"

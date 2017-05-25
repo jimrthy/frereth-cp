@@ -39,10 +39,16 @@
 (s/def ::client-read-chan (s/keys :req [::chan]))
 (s/def ::client-write-chan (s/keys :req [::chan]))
 
+;; OK, now life starts getting interesting.
+;; What, exactly, do we need to do here?
+(s/def ::child-id int?)
+(s/def ::child-interaction (s/keys :req [::child-id]))
+
 (s/def ::client-short<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-short ::shared/shared-secret)
 (s/def ::client-long<->server-long ::shared/shared-secret)
 (s/def ::shared-secrets (s/keys :req [::client-short<->server-long
+                                      ;; Q: Do we want to store the other two?
                                       ::client-short<->server-short
                                       ::client-long<->server-long]))
 
@@ -64,12 +70,17 @@
 (s/def ::active-clients (s/and #(instance? clojure.lang.Atom %)
                                ;; TODO: Should probably verify that this is a map of
                                ;; short keys to ::client-state
-                               #(map? %)))
+                               #(map? (deref %))))
+
+(s/def ::child-spawner (s/fspec :args (s/cat)
+                                :ret ::child-interaction))
 
 (s/def ::state (s/keys :req [::active-clients
+                             ::child-spawner
                              ::client-read-chan
                              ::client-write-chan
                              ::cookie-cutter
+                             ;; This doesn't particularly belong here
                              ::current-client
                              ::event-loop-stopper
                              ::max-active-clients

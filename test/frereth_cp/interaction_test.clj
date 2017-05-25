@@ -345,6 +345,10 @@
      ;; Q: Does it make any difference if I keep this around?
      ::hidden-child hidden}))
 
+(defn server-child-spawner
+  []
+  (throw (RuntimeException. "What should happen here?")))
+
 (defn double-check-long-term-shared-secrets
   [client server]
   (let [client-long (-> client
@@ -452,7 +456,8 @@
         server-name (shared/encode-server-name "test.frereth.com")]
     {::server #::shared{:extension server-extension
                         :my-keys #::shared{::K/server-name server-name
-                                           :keydir "curve-test"}}
+                                           :keydir "curve-test"}
+                        ::srvr-state/child-spawner server-child-spawner}
      ::client {::shared/extension (byte-array [0x10 0x0f 0x0e 0x0d
                                                0x0c 0x0b 0x0a 0x09
                                                0x08 0x07 0x06 0x05
