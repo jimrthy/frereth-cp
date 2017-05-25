@@ -18,6 +18,7 @@
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.client.cookie :as cookie]
+            [frereth-cp.client.hello :as hello]
             [frereth-cp.client.state :as state]
             [frereth-cp.schema :as schema]
             [frereth-cp.shared :as shared]
@@ -25,7 +26,6 @@
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.util :as util]
-            #_[com.stuartsierra.component :as cpt]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
@@ -131,11 +131,11 @@ implementation. This is code that I don't understand yet"
                                     text
                                     vouch
                                     work-area]
-                             :as this} (clientextension-init this)
+                             :as this} (state/clientextension-init this)
                             {:keys [::shared/packet
                                     ::shared/packet-nonce]} packet-management
                             _ (throw (RuntimeException. "this Component nonce isn't updated"))
-                            short-term-nonce (update-client-short-term-nonce
+                            short-term-nonce (state/update-client-short-term-nonce
                                               packet-nonce)
                             working-nonce (::shared/working-nonce work-area)]
                         (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length
@@ -323,7 +323,7 @@ like a timing attack."
     ;; But it probably should, since this is very
     ;; explicitly place-oriented programming working
     ;; with mutable state.
-    (send wrapper do-build-hello)
+    (send wrapper hello/do-build-hello)
     (if (await-for timeout wrapper)
       (cope-with-successful-hello-creation wrapper chan->server timeout)
       (throw (ex-info (str "Timed out after " timeout
