@@ -122,17 +122,17 @@
   (log/debug "Incoming")
   (if (check-packet-length message)
     (let [header (byte-array K/header-length)
-          extension (byte-array K/extension-length)
+          server-extension (byte-array K/extension-length)
           current-reader-index (.readerIndex message)]
       (.readBytes message header)
-      (.readBytes message extension)
+      (.readBytes message server-extension)
       ;; This means that I'll wind up reading the header/extension
       ;; again in the individual handlers.
       ;; Which seems wasteful.
       ;; TODO: Set up alternative reader templates which
       ;; exclude those fields so I don't need to do this.
       (.readerIndex message current-reader-index)
-      (if (verify-my-packet state header extension)
+      (if (verify-my-packet state header server-extension)
         (do
           (log/debug "This packet really is for me")
           (let [packet-type-id (char (aget header (dec K/header-length)))]

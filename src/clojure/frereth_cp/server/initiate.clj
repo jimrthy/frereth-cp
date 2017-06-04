@@ -341,40 +341,6 @@ Note that that includes TODOs re:
           (.getBytes inner-pk-buf 0 inner-pk)
           (b-t/bytes= short-pk inner-pk))))))
 
-(s/fdef fork
-        :args (s/cat :state ::state/state
-                     :active-client ::state/client-state)
-        :ret ::state/client-state)
-(defn fork
-  [state
-   active-client
-   {:keys [::client-long-pk
-           ::client-short-pk
-           ::server-short-sk
-           ::client-short<->server-short]}]
-  (let [spawner (::state/child-spawner state)
-        child (spawner)]
-    ;; lines 392-415
-    ;; TODO: Need to set up communications with the child.
-    ;; manifold/stream seems like the most obvious.
-    ;; Actually, we should pass the stream to which we write
-    ;; to spawner. And that returns the corresponding stream
-    ;; from which we read
-    ;; lines 416-422
-    (assoc active-client
-           ::state/child-interaction child
-           ::state/message-len 0
-           ;; Reference implementation stores the client-short<->server-short
-           ;; keypair here again.
-           ;; But I already did that during a call to configure-shared-secrets
-           ::state/client-security (assoc (::state/client-security state)
-                                          #:frereth-cp.shared {:long-pk client-long-pk
-                                                               :short-pk client-short-pk
-                                                               :frereth-cp.server/server-short-sk server-short-sk})
-           ::state/received-nonce (throw (RuntimeException. "start here")))
-    (throw (ex-info "Don't stop here!"
-                    {:what "Cope with vouch/initiate"}))))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -442,11 +408,18 @@ Note that that includes TODOs re:
                              (if (validate-server-name state client-message-box)
                                ;; This takes us down to line 381
                                (when (verify-client-public-key-triad state client-short-pk client-message-box)
-                                 (let [client-with-child (fork state
-                                                               active-client
-                                                               {::client-long-pk client-long-pk
-                                                                ::client-short-pk client-short-pk
-                                                                ::server-short-sk server-short-sk})]
+                                 (let [client-with-child (state/fork state
+                                                                     (assoc active-client
+                                                                            ;; Seems very likely that I should convert this
+                                                                            ;; to a byte-array
+                                                                            ::client-extension (::K/clnt-xtn initiate)
+                                                                            ::client-ip host
+                                                                            ::client-port port
+                                                                            ;; Q: Convert to byte-array?
+                                                                            ::state/received-nonce (::K/outer-i-nonce initiate))
+                                                                     {::state/client-long-pk client-long-pk
+                                                                      ::state/client-short-pk client-short-pk
+                                                                      ::state/server-short-sk server-short-sk})]
                                    (state/alter-client-state! state client-with-child)
                                    ;; Q: Will there ever be an opportunity for calling this in
                                    ;; a purely functional manner?

@@ -3,10 +3,12 @@
             [aleph.udp :as udp]
             [byte-streams :as bs]
             [clojure.pprint :refer (pprint)]
+            [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
             [clojure.tools.logging :as log]
             [frereth-cp.client :as clnt]
             [frereth-cp.client.state :as clnt-state]
+            [frereth-cp.schema :as specs]
             [frereth-cp.server :as srvr]
             [frereth-cp.server.state :as srvr-state]
             [frereth-cp.server-test :as server-test]
@@ -345,9 +347,17 @@
      ;; Q: Does it make any difference if I keep this around?
      ::hidden-child hidden}))
 
+(s/fdef server-child-spawner
+        :args (s/cat :write-stream ::specs/manifold-stream)
+        :ret ::srvr-state/child-interaction)
 (defn server-child-spawner
-  []
-  (throw (RuntimeException. "What should happen here?")))
+  [write-stream]
+  (let [read-stream (strm/stream)]
+    (future
+      (println "Surely I want to do *something* with this"))
+    #:frereth-cp.server.state {:child-id (gensym)
+                               :read<-child read-stream
+                               :write->child write-stream}))
 
 (defn double-check-long-term-shared-secrets
   [client server]

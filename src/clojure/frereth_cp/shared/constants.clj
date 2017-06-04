@@ -166,7 +166,7 @@
              ::cookie {::type ::bytes
                        ::length server-cookie-length}
              ::outer-i-nonce {::type ::bytes
-                            ::length client-nonce-suffix-length}
+                              ::length client-nonce-suffix-length}
              ;; It seems like it would be nice to enable nested
              ;; definitions.
              ;; This isn't "just" vouch-wrapper.
@@ -194,7 +194,9 @@
                                             ::vouch-wrapper]))
 
 (def initiate-client-vouch-wrapper
-  "TODO: Rename this to something like initiate-client-vouch-message"
+  "This is the actual body (368+M) of the Initiate packet
+
+TODO: Rename this to something like initiate-client-vouch-message"
   (array-map ::long-term-public-key {::type ::bytes
                                      ::length key-length}
              ::inner-i-nonce {::type ::bytes
