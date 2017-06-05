@@ -47,7 +47,8 @@
 (s/def ::write->child ::specs/manifold-stream)
 (s/def ::child-interaction (s/keys :req [::child-id
                                          ::read<-child
-                                         ::write->child]))
+                                         ::write->child]
+                                   :opt [::reader-consumed]))
 
 (s/def ::client-short<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-short ::shared/shared-secret)
@@ -82,7 +83,7 @@
 ;; Q: Does this really need to be an atom?
 (s/def ::active-clients (s/and #(instance? clojure.lang.Atom %)
                                ;; TODO: Should probably verify that this is a map of
-                               ;; short keys to ::client-state
+                               ;; public-short-term-keys to ::client-state
                                #(map? (deref %))))
 
 (s/def ::child-spawner (s/fspec :args (s/cat)
@@ -128,6 +129,8 @@
         :ret nil?)
 (defn alter-client-state!
   [state altered-client]
+  ;; Skip incrementing the numactiveclients count.
+  ;; That's inherent in:
   (swap! (::active-clients state)
          update
          (get-in altered-client [::client-security ::shared/short-pk])
@@ -157,40 +160,6 @@
 (defn find-client
   [state client-short-key]
   (-> state ::active-clients deref (get client-short-key)))
-
-(s/fdef fork
-        :args (s/cat :state ::state
-                     :active-client ::client-state)
-        :ret ::client-state)
-(defn fork
-  [state
-   {:keys [::received-nonce]
-    :as active-client}
-   {:keys [::client-long-pk
-           ::client-short-pk
-           ::server-short-sk
-           ::client-short<->server-short]
-    :as args}
-   last-nonce]
-  (let [spawner (::child-spawner state)
-        writer (strm/stream)
-        child (spawner writer)]
-    ;; lines 392-422
-    (assoc active-client
-           ::child-interaction child
-           ::message-len 0
-           ;; Reference implementation stores the client-short<->server-short
-           ;; keypair here again.
-           ;; But I already did that during a call to configure-shared-secrets
-           ::client-security (assoc (::client-security state)
-                                    #:frereth-cp.shared {:long-pk client-long-pk
-                                                         :short-pk client-short-pk
-                                                         :frereth-cp.server/server-short-sk server-short-sk}))
-    ;; This brings us up to line 423
-    ;; Need to increment numactiveclients
-    ;; And then forward the message to our new(?) child
-    (throw (ex-info "Don't stop here!"
-                    {:what "What happens next?"}))))
 
 (defn hide-secrets!
   [this]

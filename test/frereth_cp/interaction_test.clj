@@ -16,7 +16,7 @@
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [manifold.deferred :as deferred]
+            [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box
@@ -312,7 +312,7 @@
       (log/info (str "Client-child send result to " write-notifier " => "  succeeded " @ " (System/nanoTime)))
       ;; That should work around my current bug, though it's ignoring a
       ;; fundamental design flaw.
-      (deferred/chain release-notifier (partial notified-about-release write-notifier release-notifier read-notifier))
+      (dfrd/chain release-notifier (partial notified-about-release write-notifier release-notifier read-notifier))
       (is succeeded)
       (is (not= succeeded ::timedout)))))
 
@@ -352,12 +352,36 @@
         :ret ::srvr-state/child-interaction)
 (defn server-child-spawner
   [write-stream]
-  (let [read-stream (strm/stream)]
-    (future
-      (println "Surely I want to do *something* with this"))
+  (let [read-stream (strm/stream)
+        echoer (strm/consume (fn [buffer]
+                               (println "Incoming:" buffer)
+                               ;; Realistically, this needs to read the bytes
+                               ;; from the buffer we just received, .release
+                               ;; it, then do something with them.
+                               ;; I don't much care about realism
+                               (let [responded (strm/try-put! write-stream buffer 250 ::time-out)]
+                                 (dfrd/on-realized responded
+                                                   (fn [success]
+                                                     (is success "Did the parent side close its channel?")
+                                                     (is (not= success ::time-out) "Parent too busy"))
+                                                   (fn [failure]
+                                                     (throw (ex-info "Shouldn't be possible"
+                                                                     {::problem failure}))))))
+                             read-stream)]
+    (when (not echoer)
+      (throw (ex-info "strm/consume returned falsey"
+                      {::problem echoer
+                       ::details "Docstring claims it returns a deferred"})))
+    (dfrd/on-realized echoer
+                      (fn [success]
+                        (is success "Per docstring: consume yields true on channel close"))
+                      (fn [failure]
+                        (throw (ex-info "Could this happen if consume throws an exception?"
+                                        {:problem failure}))))
     #:frereth-cp.server.state {:child-id (gensym)
                                :read<-child read-stream
-                               :write->child write-stream}))
+                               :write->child write-stream
+                               ::hidden echoer}))
 
 (defn double-check-long-term-shared-secrets
   [client server]
@@ -556,7 +580,7 @@
                         write-server-response (partial finalize chan<-server)
                         _ (println "interaction-test: Starting the stream "
                                    clnt->srvr)
-                        fut (deferred/chain (strm/take! clnt->srvr)
+                        fut (dfrd/chain (strm/take! clnt->srvr)
                               write-hello
                               build-cookie
                               write-cookie

@@ -23,6 +23,12 @@
 
 (def client-header-prefix "QvnQ5Xl")
 
+(def send-child-message-timeout
+  "in milliseconds"
+  ;; Q: What's realistic?
+  ;; (TODO: this should probably be dynamically customizable)
+  2500)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 

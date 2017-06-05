@@ -2,12 +2,15 @@
   "For coping with Initiate packets"
   (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
+            [frereth-cp.server.message :as message]
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.util :as util])
+            [frereth-cp.util :as util]
+            [manifold.deferred :as dfrd]
+            [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            [io.netty.buffer ByteBuf Unpooled]))
 
@@ -408,19 +411,44 @@ Note that that includes TODOs re:
                              (if (validate-server-name state client-message-box)
                                ;; This takes us down to line 381
                                (when (verify-client-public-key-triad state client-short-pk client-message-box)
-                                 (let [client-with-child (state/fork state
-                                                                     (assoc active-client
-                                                                            ;; Seems very likely that I should convert this
-                                                                            ;; to a byte-array
-                                                                            ::client-extension (::K/clnt-xtn initiate)
-                                                                            ::client-ip host
-                                                                            ::client-port port
-                                                                            ;; Q: Convert to byte-array?
-                                                                            ::state/received-nonce (::K/outer-i-nonce initiate))
-                                                                     {::state/client-long-pk client-long-pk
-                                                                      ::state/client-short-pk client-short-pk
-                                                                      ::state/server-short-sk server-short-sk})]
+                                 (let [rcvd-nonce-buffer (::K/outer-i-nonce initiate)
+                                       rcvd-nonce-array (byte-array K/client-nonce-suffix-length)
+                                       _ (.getBytes rcvd-nonce-buffer 0 rcvd-nonce-array)
+                                       _ (.release rcvd-nonce-buffer)
+                                       rcvd-nonce (b-t/uint64-unpack rcvd-nonce-array)
+                                       active-client (assoc active-client
+                                                            ;; Seems very likely that I should convert this
+                                                            ;; to a byte-array
+                                                            ::client-extension (::K/clnt-xtn initiate)
+                                                            ::client-ip host
+                                                            ::client-port port
+                                                            ::state/received-nonce rcvd-nonce)
+                                       writer (strm/stream)
+                                       spawner (::state/child-spawner state)
+                                       child (spawner writer)
+                                       client-with-child (assoc active-client
+                                                                ::state/child-interaction (assoc child
+                                                                                                 ::state/reader-consumed (message/add-listener! state child))
+                                                                ;; Q: What is this for?
+                                                                ;; It doesn't seem to match
+                                                                ::state/message-len 0
+                                                                ;; Reference implementation stores the client-short<->server-short
+                                                                ;; keypair here again.
+                                                                ;; But I already did that during a call to configure-shared-secrets
+                                                                ::state/client-security (into (::state/client-security state)
+                                                                                              #:frereth-cp.shared {:long-pk client-long-pk
+                                                                                                                   :short-pk client-short-pk
+                                                                                                                   :frereth-cp.server/server-short-sk server-short-sk}))]
                                    (state/alter-client-state! state client-with-child)
+
+                                   ;; And then forward the message to our new(?) child
+                                   (let [sent (strm/try-put! (::state/write->child child)
+                                                             (::K/child-message client-message-box)
+                                                             K/send-child-message-timeout
+                                                             ::timeout)]
+                                     (dfrd/on-realized sent
+                                                       (fn [x] (println "success!" x))
+                                                       (fn [x] (println "boo!" x))))
                                    ;; Q: Will there ever be an opportunity for calling this in
                                    ;; a purely functional manner?
                                    ;; Surely there's more to this than just the side-effects

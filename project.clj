@@ -3,9 +3,9 @@
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[aleph "0.4.1"]
-                 [org.clojure/clojure "1.9.0-alpha16"]
-                 [org.clojure/spec.alpha "0.1.108"]]
+  :dependencies [[aleph "0.4.3"]
+                 [org.clojure/clojure "1.9.0-alpha17"]
+                 [org.clojure/spec.alpha "0.1.123"]]
   :java-source-paths ["src/java"]
   ;; Pretty sure this was only ever involved for the sake of jzmq.
   ;; TODO: Verify that and then hopefully make it go away
