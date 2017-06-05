@@ -1,5 +1,5 @@
 (ns frereth-cp.constants-test
-  (:require [com.frereth.common.curve.shared.constants :as K]
+  (:require [frereth-cp.shared.constants :as K]
             [clojure.test :refer (deftest is testing)]))
 
 (deftest test-initiate-message-length-filter

@@ -3,6 +3,7 @@
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as clnt]
             [frereth-cp.client.cookie :as cookie]
+            [frereth-cp.client.hello :as hello]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
@@ -48,7 +49,7 @@
         ;; Q: Doesn't this also need to send the packet?
         ;; A: Probably.
         ;; Trying to send a bogus response fails below.
-        (send client-agent clnt/do-build-hello)
+        (send client-agent hello/do-build-hello)
         (if (await-for 150 client-agent)
           (do
             (is (not (agent-error client-agent)))
@@ -76,7 +77,7 @@
   (testing "Can I build a Hello packet?"
     (let [client-agent (raw-client nil)
           client @client-agent
-          updated (clnt/do-build-hello client)]
+          updated (hello/do-build-hello client)]
       (let [p-m (::shared/packet-management updated)
             nonce (::shared/packet-nonce p-m)]
         (is p-m)
