@@ -84,6 +84,7 @@ Note that this is really called for side-effects"
                    (b-t/->string working-nonce)))
 
     (let [packet (build-actual-hello-packet this short-term-nonce working-nonce)]
+      (log/info "hello packet built inside the agent. Returning/updating")
       (update this ::shared/packet-management
               (fn [current]
                 (assoc current

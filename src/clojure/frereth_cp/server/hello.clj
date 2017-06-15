@@ -25,7 +25,7 @@
     :as state}
    message
    crypto-box]
-  (log/warn "Depcecated. Use crypto/open-crypto-box instead")
+  (log/warn "Deprecated. Use crypto/open-crypto-box instead")
   (let [long-keys (::shared/long-pair my-keys)]
     (when-not long-keys
       ;; Log whichever was missing and throw

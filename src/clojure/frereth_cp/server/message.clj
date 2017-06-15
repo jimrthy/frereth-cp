@@ -13,7 +13,9 @@
 (defn child-reader
   [buffer]
   ;; This really needs to encompass lines 453-495 of curvecpserver.c
-  (throw (RuntimeException. "How should this work?")))
+  ;; I think I really should be seeing this exception now, when my
+  ;; unit test echoes back its initial message.
+  (throw (RuntimeException. "Where is this ball getting dropped?")))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

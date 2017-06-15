@@ -423,6 +423,9 @@ Note that that includes TODOs re:
                                                             ::client-ip host
                                                             ::client-port port
                                                             ::state/received-nonce rcvd-nonce)
+                                       ;; API/design Q: Does it make sense for me to supply this?
+                                       ;; I'm responsible for writing to it, which means I should control
+                                       ;; when it closes...but it feels more than a little silly
                                        writer (strm/stream)
                                        spawner (::state/child-spawner state)
                                        child (spawner writer)
@@ -438,17 +441,27 @@ Note that that includes TODOs re:
                                                                 ::state/client-security (into (::state/client-security state)
                                                                                               #:frereth-cp.shared {:long-pk client-long-pk
                                                                                                                    :short-pk client-short-pk
-                                                                                                                   :frereth-cp.server/server-short-sk server-short-sk}))]
+                                                                                                                   :frereth-cp.server/server-short-sk server-short-sk}))
+                                       child-reader (::state/write->child child)]
+                                   ;; This doesn't actually matter. That field should probably be
+                                   ;; considered a private black-box member from our perspective.
+                                   ;; But it seems helpful for keeping which is what straight
+                                   (assert (= writer child-reader))
                                    (state/alter-client-state! state client-with-child)
 
                                    ;; And then forward the message to our new(?) child
-                                   (let [sent (strm/try-put! (::state/write->child child)
-                                                             (::K/child-message client-message-box)
+                                   (log/debug (str "Trying to send child-message from "
+                                                  (keys client-message-box)))
+                                   (let [sent (strm/try-put! writer
+                                                             (::K/message client-message-box)
                                                              K/send-child-message-timeout
                                                              ::timeout)]
                                      (dfrd/on-realized sent
-                                                       (fn [x] (println "success!" x))
-                                                       (fn [x] (println "boo!" x))))
+                                                       (fn [x]
+                                                         (if (not= x ::timeout)
+                                                           (log/info "Message forwarded to new child: " x)
+                                                           (log/error "Timed out trying to send message to" child)))
+                                                       (fn [x] (log/info "Forwarding message to new child failed: " x))))
                                    ;; Q: Will there ever be an opportunity for calling this in
                                    ;; a purely functional manner?
                                    ;; Surely there's more to this than just the side-effects

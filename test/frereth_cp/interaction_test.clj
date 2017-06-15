@@ -351,10 +351,12 @@
         :args (s/cat :write-stream ::specs/manifold-stream)
         :ret ::srvr-state/child-interaction)
 (defn server-child-spawner
-  [write-stream]
-  (let [read-stream (strm/stream)
+  [read-stream]
+  (log/info "Spawning a server child")
+  (let [write-stream (strm/stream)
         echoer (strm/consume (fn [buffer]
-                               (println "Incoming:" buffer)
+                               (log/info "Incoming:" buffer)
+                               (assert buffer)
                                ;; Realistically, this needs to read the bytes
                                ;; from the buffer we just received, .release
                                ;; it, then do something with them.
@@ -379,8 +381,8 @@
                         (throw (ex-info "Could this happen if consume throws an exception?"
                                         {:problem failure}))))
     #:frereth-cp.server.state {:child-id (gensym)
-                               :read<-child read-stream
-                               :write->child write-stream
+                               :read<-child write-stream
+                               :write->child read-stream
                                ::hidden echoer}))
 
 (defn double-check-long-term-shared-secrets
@@ -578,8 +580,8 @@
                         write-vouch (partial vouch->server mem-pool chan<-client)
                         get-server-response (partial wrote-vouch chan->client)
                         write-server-response (partial finalize chan<-server)
-                        _ (println "interaction-test: Starting the stream "
-                                   clnt->srvr)
+                        _ (log/info "interaction-test: Starting the stream "
+                                    clnt->srvr)
                         fut (dfrd/chain (strm/take! clnt->srvr)
                               write-hello
                               build-cookie
@@ -590,7 +592,7 @@
                               write-server-response
                               (fn [wrote]
                                 (is (not= wrote ::timeout))))]
-                    (println "Dereferencing the deferreds set up by handshake")
+                    (log/info "Dereferencing the deferreds set up by handshake")
                     (let [outcome (deref fut 5000 ::timeout)]
                       (when (instance? Exception outcome)
                         (if (instance? RuntimeException outcome)
