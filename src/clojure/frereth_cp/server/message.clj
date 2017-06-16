@@ -12,10 +12,20 @@
 
 (defn child-reader
   [buffer]
+  ;; This may be something that needs to happen higher up in a
+  ;; real message-specific ns that encompasses both client and
+  ;; server.
+  ;; Really, curvecpserver.c lines 425-427 cover everything that
+  ;; needs to happen in here
+  ;; Note that that looks about the same as lines 351-355
+  (throw (RuntimeException. "Where does this ball go?")))
+
+(defn child-writer
+  [buffer]
   ;; This really needs to encompass lines 453-495 of curvecpserver.c
   ;; I think I really should be seeing this exception now, when my
   ;; unit test echoes back its initial message.
-  (throw (RuntimeException. "Where is this ball getting dropped?")))
+  (throw (RuntimeException. "How do I get the messages back?")))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
