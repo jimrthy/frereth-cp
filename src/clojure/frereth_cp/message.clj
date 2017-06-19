@@ -56,14 +56,28 @@ congestion control algorithm")
 ;;;              Double nsecperblock
 ;;;              Update trigger times
 ;;;           goto sendblock
+
 ;;;  357-410: Try sending a new block: (DJB)
-;;;      357-378:  ???
+;;;      357-378:  Sets up a new block to send
+;;;                Along w/ related data flags in parallel arrays
 ;;;    380 sendblock:
 ;;;        Resending old block will goto this
 ;;;        It's in the middle of a do {} while(0) loop
-;;;      382-406:  ???
+;;;      382-406:  Build (and send) the message packet
+;;;                N.B.: Ignores most of the ACK bits
 ;;;      408: earliestblocktime_compute()
+
 ;;;  411-435: try receiving messages: (DJB)
+;;;           From parent (over watch8)
+;;;           417-433: for loop from 0-bytes read
+;;;                    Copies bytes from incoming message buffer to message[][]
+
 ;;;  436-614: try processing a message: (DJB)
+;;;           Lots of code in here.
+;;;           This seems like the interesting part
+
 ;;;  615-632: try sending data to child: (DJB)
+;;;           Big picture: copy data from receivebuf to the child[1] pipe
+;;;           Then zero the receivevalid flags
 ;;;  634-643: try closing pipe to child: (DJB)
+;;;           Well, maybe. If we're done with it
