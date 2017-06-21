@@ -12,26 +12,6 @@ in a specific (and apparently undocumented) communications protocol.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
-(def incoming
-  "Number of blocks in inbound queue
-
-  Must be a power of 2"
-  64)
-
-(def outgoing
-  "Number of blocks in outbound queue
-
-Must be a power of 2"
-  128)
-
-(def outgoing-1
-  "Decremented size of outbound queue
-
-Used w/ bitwise-and to calculate modulo and wrap circular index
-
-Because this is used more often than outgoing"
-  (dec outgoing))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -42,6 +22,11 @@ Because this is used more often than outgoing"
 ;;; Position of a block's first byte within the stream
 ;;; Corresponds to blockpos
 (s/def ::start-pos int?)
+
+;;; Looks like a count:
+;;; How many times has this block been sent?
+;;; Corresponds to blocktransmissions[]
+(s/def ::transmissions int?)
 
 ;;; Time of last message sending this block
 ;;; 0 means ACK'd
@@ -54,27 +39,59 @@ Because this is used more often than outgoing"
 
 (s/def ::block (s/keys :req [::length
                              ::start-pos
-                             ::time]))
+                             ::time
+                             ::transmissions]))
 (s/def ::blocks (s/and (s/coll-of ::block)
                        ;; Actually, the length must be a power of 2
                        ;; TODO: Improve this spec!
                        ;; (Reference implementation uses 128)
                        #(= (rem (count %) 2) 0)))
 
-;;; Index into the start of a circular queue
-;;; Q: Is this a good idea?
-(s/def ::block-first int?)
-
-;; Number of outgoing blocks being tracked
-(s/def ::block-num integer?)
-
 ;; If nonzero: minimum of active ::time values
-(s/def ::earliest-time integer?)
+(s/def ::earliest-time int?)
 
-(s/def ::state (s/keys ::req [::block-first
-                              ::block-num
-                              ::blocks
-                              ::earliest-time]))
+;; Number of initial bytes sent and fully acknowledged
+(s/def ::send-acked int?)
+;; Number of additional bytes to send (i.e. haven't been sent yet)
+(s/def ::send-bytes int?)
+;; within sendbytes, number of bytes absorbed into blocks
+(s/def ::send-processed int?)
+;; Those 3 really swirld around the sendbuf array/circular queue
+;; For this pass, at least, I'm trying to avoid anything along those lines
+
+;; 2048 for normal EOF after sendbytes
+;; 4096 for error after sendbytes
+;; Dual-purposing a magic constant bit for both the
+;; over-wire communications flag and the
+;; internal behavioral flow-controller
+;; chafes.
+;; TODO: Don't.
+(s/def ::send-eof #{false ::normal ::error})
+(s/def ::send-eof-processed boolean?)
+(s/def ::send-eof-acked boolean?)
+
+;; Totally undocumented (so far)
+(s/def ::total-blocks int?)
+(s/def ::total-block-transmissions int?)
+
+(s/def ::state (s/keys ::req [::blocks
+                              ::earliest-time
+                              ::send-eof
+                              ::send-eof-processed
+                              ::send-eof-acked
+                              ::total-blocks
+                              ::total-block-transmissions]))
+
+(defn initial-state
+  ;; TODO: This should probably just be public
+  []
+  {::blocks []
+   ::earliest-time 0
+   ::send-eof false
+   ::send-eof-processed false
+   ::send-eof-acked false
+   ::total-blocks 0
+   ::total-block-transmissions 0})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -102,9 +119,14 @@ Based on earliestblocktime_compute, in lines 138-154
   "Mark blocks between positions start and stop as ACK'd
 
 Based [cleverly] on acknowledged, running from lines 155-185"
-  [{:keys [::block-first
-           ::block-num
-           ::blocks]
+  [{:keys [::blocks
+           ::send-acked
+           ::send-bytes
+           ::send-processed
+           ::send-eof
+           ::send-eof-acked
+           ::total-block-transmissions
+           ::total-blocks]
     :as state}
    start
    stop]
@@ -112,21 +134,25 @@ Based [cleverly] on acknowledged, running from lines 155-185"
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
 ;;;                    Updates totalblocktransmissions and totalblocks
-    (let [pre-acked (map (fn [n]
-                           (let [pos (bit-and (+ block-first n) outgoing-1)]
-                             ;; This raises the spectacle of a huge open question:
-                             ;; do I want to bother with the trappings of a circular
-                             ;; buffer?
-                             ;; It seems likely to reduce GC somewhat, but nowhere
-                             ;; near what I could achieve even just building everything
-                             ;; on byte-arrays.
-                             ;; Which simply is not going to happen until there's
-                             ;; convincing evidence that it's worthwhile.
-                             ;; (It probably is, but not for a first pass, even though
-                             ;; that's a more accurate translation).
-                             ))
-                     (range block-num))]
-      (throw (RuntimeException. "Translate the rest"))
+    (let [acked (reduce (fn [{:keys [::n]
+                              :as acc}
+                             block]
+                          (let [start-pos (::start-pos block)]
+                            (if (<= start
+                                    start-pos
+                                    (+ start-pos (::length block))
+                                    stop)
+                              (-> acc
+                                  (assoc-in [::blocks n ::time] 0)
+                                  (update ::total-blocks inc)
+                                  (update ::total-block-transmissions + (::transmissions block)))
+                              (update acc ::n inc))))
+                        (assoc state ::n 0)
+                        blocks)]
+      ;; To match the next block, the main point is to discard
+      ;; the first sequence of blocks that have been ACK'd
+      ;; drop-while seems obvious
+      ;; However, we also need to update send-acked, send-bytes, and send-processed
 ;;;           168-176: Updates globals for adjacent blocks that
 ;;;                    have been ACK'd
 ;;;                    This includes some counters that seem important:
@@ -135,9 +161,21 @@ Based [cleverly] on acknowledged, running from lines 155-185"
 ;;;                        sendbytes
 ;;;                        sendprocessed
 ;;;                        blockfirst
+      (let [[to-drop to-keep] (split-with #(= 0 (::time %)) acked)
+            dropped-block-lengths (apply + (map ::length to-drop))
+            state (update state ::send-acked + dropped-block-lengths)
+            state (update state ::send-bytes - dropped-block-lengths)
+            state (update state ::send-processed - dropped-block-lengths)
 ;;;           177-182: Possibly set sendeofacked flag
+            state (or (when (and send-eof
+                                 (= start 0)
+                                 (> stop (+ (::send-acked state)
+                                            (::send-bytes state)))
+                                 (not send-eof-acked))
+                        (update state ::send-eof-acked true))
+                      state)]
 ;;;           183: earliestblocktime_compute()
-      )
+        (assoc state ::earliest-time (earliest-block-time blocks))))
     ;;; No change
     state))
 
