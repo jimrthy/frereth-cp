@@ -6,25 +6,127 @@ This is really a generic buffer program
 The \"parent\" child/server reads/writes to pipes that this provides,
 in a specific (and apparently undocumented) communications protocol.
 
-This, in turn, reads/writes data from/to a child that it spawns.
+  This, in turn, reads/writes data from/to a child that it spawns."
+  (:require [clojure.spec.alpha :as s]))
 
-At least, that's the impression I'm getting based on my
-preliminary first few pages of the file I'm getting ready to
-translate.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Magic constants
 
-And then immediately after that, I think I hit the Chicago
-congestion control algorithm")
+(def incoming
+  "Number of blocks in inbound queue
 
-;;;; Q: what's in the reference implementation?
-;;;; A:
-;;;; 1-66 boilerplate
-;;;; 67-137 global declarations
-;;;; 138-154: earliestblocktime_compute
-;;;           Looks like it's finding a min
+  Must be a power of 2"
+  64)
+
+(def outgoing
+  "Number of blocks in outbound queue
+
+Must be a power of 2"
+  128)
+
+(def outgoing-1
+  "Decremented size of outbound queue
+
+Used w/ bitwise-and to calculate modulo and wrap circular index
+
+Because this is used more often than outgoing"
+  (dec outgoing))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
+;;; number of bytes in each block
+;;; Corresponds to blocklen
+(s/def ::length int?)
+
+;;; Position of a block's first byte within the stream
+;;; Corresponds to blockpos
+(s/def ::start-pos int?)
+
+;;; Time of last message sending this block
+;;; 0 means ACK'd
+;;; It seems like this would make more sense
+;;; as an unsigned.
+;;; But the reference specifically defines it as
+;;; a long long.
+;;; (Corresponds to the blocktime array)
+(s/def ::time int?)
+
+(s/def ::block (s/keys :req [::length
+                             ::start-pos
+                             ::time]))
+(s/def ::blocks (s/and (s/coll-of ::block)
+                       ;; Actually, the length must be a power of 2
+                       ;; TODO: Improve this spec!
+                       ;; (Reference implementation uses 128)
+                       #(= (rem (count %) 2) 0)))
+
+;;; Index into the start of a circular queue
+;;; Q: Is this a good idea?
+(s/def ::block-first int?)
+
+;; Number of outgoing blocks being tracked
+(s/def ::block-num integer?)
+
+;; If nonzero: minimum of active ::time values
+(s/def ::earliest-time integer?)
+
+(s/def ::state (s/keys ::req [::block-first
+                              ::block-num
+                              ::blocks
+                              ::earliest-time]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Internal
+
+(s/fdef earliest-block-time
+        :args (s/coll-of ::block)
+        :ret nat-int?)
+(defn earliest-block-time
+  "Calculate the earliest time
+
+Based on earliestblocktime_compute, in lines 138-154
+"
+  [blocks]
+  ;;; Comment from DJB:
+  ;;; XXX: use priority queue
+  (min (map ::time blocks)))
+
 ;;;; 155-185: acknowledged(start, stop)
+(s/fdef acknowledged
+        :args (s/cat :state ::state
+                     :start int?
+                     :stop int?)
+        :ret ::state)
+(defn mark-acknowledged
+  "Mark blocks between positions start and stop as ACK'd
+
+Based [cleverly] on acknowledged, running from lines 155-185"
+  [{:keys [::block-first
+           ::block-num
+           ::blocks]
+    :as state}
+   start
+   stop]
+  (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
 ;;;                    Updates totalblocktransmissions and totalblocks
+    (let [pre-acked (map (fn [n]
+                           (let [pos (bit-and (+ block-first n) outgoing-1)]
+                             ;; This raises the spectacle of a huge open question:
+                             ;; do I want to bother with the trappings of a circular
+                             ;; buffer?
+                             ;; It seems likely to reduce GC somewhat, but nowhere
+                             ;; near what I could achieve even just building everything
+                             ;; on byte-arrays.
+                             ;; Which simply is not going to happen until there's
+                             ;; convincing evidence that it's worthwhile.
+                             ;; (It probably is, but not for a first pass, even though
+                             ;; that's a more accurate translation).
+                             ))
+                     (range block-num))]
+      (throw (RuntimeException. "Translate the rest"))
 ;;;           168-176: Updates globals for adjacent blocks that
 ;;;                    have been ACK'd
 ;;;                    This includes some counters that seem important:
@@ -35,6 +137,12 @@ congestion control algorithm")
 ;;;                        blockfirst
 ;;;           177-182: Possibly set sendeofacked flag
 ;;;           183: earliestblocktime_compute()
+      )
+    ;;; No change
+    state))
+
+;;;; Q: what else is in the reference implementation?
+;;;; A:
 
 ;;;; 186-654 main
 ;;;          186-204 boilerplate
@@ -130,3 +238,6 @@ congestion control algorithm")
 
 ;;; 456-542: Loop over (range blocknum)
 ;;; (getting into details)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public
