@@ -7,7 +7,8 @@ The \"parent\" child/server reads/writes to pipes that this provides,
 in a specific (and apparently undocumented) communications protocol.
 
   This, in turn, reads/writes data from/to a child that it spawns."
-  (:require [clojure.spec.alpha :as s]))
+  (:require [clojure.spec.alpha :as s]
+            [frereth-cp.message.specs :as specs]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
@@ -15,169 +16,9 @@ in a specific (and apparently undocumented) communications protocol.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-;;; number of bytes in each block
-;;; Corresponds to blocklen
-(s/def ::length int?)
-
-;;; Position of a block's first byte within the stream
-;;; Corresponds to blockpos
-(s/def ::start-pos int?)
-
-;;; Looks like a count:
-;;; How many times has this block been sent?
-;;; Corresponds to blocktransmissions[]
-(s/def ::transmissions int?)
-
-;;; Time of last message sending this block
-;;; 0 means ACK'd
-;;; It seems like this would make more sense
-;;; as an unsigned.
-;;; But the reference specifically defines it as
-;;; a long long.
-;;; (Corresponds to the blocktime array)
-(s/def ::time int?)
-
-(s/def ::block (s/keys :req [::length
-                             ::start-pos
-                             ::time
-                             ::transmissions]))
-(s/def ::blocks (s/and (s/coll-of ::block)
-                       ;; Actually, the length must be a power of 2
-                       ;; TODO: Improve this spec!
-                       ;; (Reference implementation uses 128)
-                       #(= (rem (count %) 2) 0)))
-
-;; If nonzero: minimum of active ::time values
-(s/def ::earliest-time int?)
-
-;; Number of initial bytes sent and fully acknowledged
-(s/def ::send-acked int?)
-;; Number of additional bytes to send (i.e. haven't been sent yet)
-(s/def ::send-bytes int?)
-;; within sendbytes, number of bytes absorbed into blocks
-(s/def ::send-processed int?)
-;; Those 3 really swirld around the sendbuf array/circular queue
-;; For this pass, at least, I'm trying to avoid anything along those lines
-
-;; 2048 for normal EOF after sendbytes
-;; 4096 for error after sendbytes
-;; Dual-purposing a magic constant bit for both the
-;; over-wire communications flag and the
-;; internal behavioral flow-controller
-;; chafes.
-;; TODO: Don't.
-(s/def ::send-eof #{false ::normal ::error})
-(s/def ::send-eof-processed boolean?)
-(s/def ::send-eof-acked boolean?)
-
-;; Totally undocumented (so far)
-(s/def ::total-blocks int?)
-(s/def ::total-block-transmissions int?)
-
-(s/def ::state (s/keys ::req [::blocks
-                              ::earliest-time
-                              ::send-eof
-                              ::send-eof-processed
-                              ::send-eof-acked
-                              ::total-blocks
-                              ::total-block-transmissions]))
-
-(defn initial-state
-  ;; TODO: This should probably just be public
-  []
-  {::blocks []
-   ::earliest-time 0
-   ::send-eof false
-   ::send-eof-processed false
-   ::send-eof-acked false
-   ::total-blocks 0
-   ::total-block-transmissions 0})
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
-(s/fdef earliest-block-time
-        :args (s/coll-of ::block)
-        :ret nat-int?)
-(defn earliest-block-time
-  "Calculate the earliest time
-
-Based on earliestblocktime_compute, in lines 138-154
-"
-  [blocks]
-  ;;; Comment from DJB:
-  ;;; XXX: use priority queue
-  (min (map ::time blocks)))
-
-;;;; 155-185: acknowledged(start, stop)
-(s/fdef acknowledged
-        :args (s/cat :state ::state
-                     :start int?
-                     :stop int?)
-        :ret ::state)
-(defn mark-acknowledged
-  "Mark blocks between positions start and stop as ACK'd
-
-Based [cleverly] on acknowledged, running from lines 155-185"
-  [{:keys [::blocks
-           ::send-acked
-           ::send-bytes
-           ::send-processed
-           ::send-eof
-           ::send-eof-acked
-           ::total-block-transmissions
-           ::total-blocks]
-    :as state}
-   start
-   stop]
-  (if (not= start stop)
-;;;           159-167: Flag these blocks as sent
-;;;                    Marks blocks between start and stop as ACK'd
-;;;                    Updates totalblocktransmissions and totalblocks
-    (let [acked (reduce (fn [{:keys [::n]
-                              :as acc}
-                             block]
-                          (let [start-pos (::start-pos block)]
-                            (if (<= start
-                                    start-pos
-                                    (+ start-pos (::length block))
-                                    stop)
-                              (-> acc
-                                  (assoc-in [::blocks n ::time] 0)
-                                  (update ::total-blocks inc)
-                                  (update ::total-block-transmissions + (::transmissions block)))
-                              (update acc ::n inc))))
-                        (assoc state ::n 0)
-                        blocks)]
-      ;; To match the next block, the main point is to discard
-      ;; the first sequence of blocks that have been ACK'd
-      ;; drop-while seems obvious
-      ;; However, we also need to update send-acked, send-bytes, and send-processed
-;;;           168-176: Updates globals for adjacent blocks that
-;;;                    have been ACK'd
-;;;                    This includes some counters that seem important:
-;;;                        blocknum
-;;;                        sendacked
-;;;                        sendbytes
-;;;                        sendprocessed
-;;;                        blockfirst
-      (let [[to-drop to-keep] (split-with #(= 0 (::time %)) acked)
-            dropped-block-lengths (apply + (map ::length to-drop))
-            state (update state ::send-acked + dropped-block-lengths)
-            state (update state ::send-bytes - dropped-block-lengths)
-            state (update state ::send-processed - dropped-block-lengths)
-;;;           177-182: Possibly set sendeofacked flag
-            state (or (when (and send-eof
-                                 (= start 0)
-                                 (> stop (+ (::send-acked state)
-                                            (::send-bytes state)))
-                                 (not send-eof-acked))
-                        (update state ::send-eof-acked true))
-                      state)]
-;;;           183: earliestblocktime_compute()
-        (assoc state ::earliest-time (earliest-block-time blocks))))
-    ;;; No change
-    state))
 
 ;;;; Q: what else is in the reference implementation?
 ;;;; A:
@@ -279,3 +120,14 @@ Based [cleverly] on acknowledged, running from lines 155-185"
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(defn initial-state
+  ;; TODO: This should probably just be public
+  []
+  {::specs/blocks []
+   ::specs/earliest-time 0
+   ::specs/send-eof false
+   ::specs/send-eof-processed false
+   ::specs/send-eof-acked false
+   ::specs/total-blocks 0
+   ::specs/total-block-transmissions 0})
