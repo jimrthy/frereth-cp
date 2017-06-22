@@ -8,7 +8,8 @@ in a specific (and apparently undocumented) communications protocol.
 
   This, in turn, reads/writes data from/to a child that it spawns."
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.specs :as specs]))
+            [frereth-cp.message.specs :as specs]
+            [manifold.stream :as strm]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
@@ -25,7 +26,26 @@ in a specific (and apparently undocumented) communications protocol.
 
 ;;;; 186-654 main
 ;;;          186-204 boilerplate
+
+(s/fdef start-event-loops!
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn start-event-loops!
+  "
 ;;;          205-259 fork child
+"
+  [{:keys [::specs/event-streams]
+    :as state}]
+  (let [{:keys [::specs/child ::specs/parent]} event-streams]
+    ;; I think the main idea is that I should set up transducing
+    ;; pipelines between child and parent
+    ;; That isn't right, though.
+    ;; The entire point,really, is to maintain a buffer between the
+    ;; two until the blocks in that buffer have been ACK'd
+    ;; Although managing the congestion control aspects of that
+    ;; buffer definitely play a part
+    (throw (RuntimeException. "What should this look like?"))))
+
 ;;;          260-263 set up some globals
 ;;;          264-645 main event loop
 ;;;          645-651 wait on children to exit
@@ -35,7 +55,39 @@ in a specific (and apparently undocumented) communications protocol.
 ;;;  263-269: exit if done
 ;;;  271-306: Decide what and when to poll, based on global state
 ;;;  307-318: Poll for incoming data
+
+(defn child-consumer
+  "Pulls blocks of bytes from the child.
+
+Meant to be called by stream/consume-async, so it can
+supply back-pressure. This breaks a fundamental assumption
+of the original, but that's implicitly the way it works.
+
+Note that the deferred returned by consume-async yields
+true when either
+a) source is exhausted
+b) the deferred this returns yields false
+
+The only obvious way to distinguish an error exit seems
+to be having this forward along an Exception.
+
 ;;;  319-336: Maybe read bytes from child
+"
+  [{:keys [::specs/event-streams]
+    :as state}
+   block]
+  ;; I should be able to get the same outcome
+  ;; by using strm/connect.
+  ;; Although the reference implementation does
+  ;; set up a buffer limit of 128K, which would
+  ;; be more difficult to set up here.
+
+  ;; The original does have a side-effect of updating
+  ;; recent between here and trying to send.
+  ;; That seems like it might matter
+  (throw (RuntimeException. "This seems pretty pointless"))
+  (strm/put! (::specs/parent event-streams) block))
+
 ;;;  337: update recent
 ;;;  339-356: Try re-sending an old block: (DJB)
 ;;;           Picks out the oldest block that's waiting for an ACK
@@ -121,13 +173,26 @@ in a specific (and apparently undocumented) communications protocol.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(s/fdef start!
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn start!
+  [state]
+  (assoc state :event-loops (start-event-loops! state)))
+
+(s/fdef initial-state
+        :args (s/cat :parent ::specs/parent
+                     :child ::specs/child)
+        :ret ::specs/state)
 (defn initial-state
-  ;; TODO: This should probably just be public
-  []
+  [parent-stream
+   child-stream]
   {::specs/blocks []
    ::specs/earliest-time 0
    ::specs/send-eof false
    ::specs/send-eof-processed false
    ::specs/send-eof-acked false
    ::specs/total-blocks 0
-   ::specs/total-block-transmissions 0})
+   ::specs/total-block-transmissions 0
+   ::specs/event-streams {::specs/child child-stream
+                          ::specs/parent parent-stream}})

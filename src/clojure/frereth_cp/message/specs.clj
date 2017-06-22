@@ -57,10 +57,18 @@
 ;; within sendbytes, number of bytes absorbed into blocks
 (s/def ::send-processed int?)
 
-(s/def ::state (s/keys ::req [::blocks
-                              ::earliest-time
-                              ::send-eof
-                              ::send-eof-processed
-                              ::send-eof-acked
-                              ::total-blocks
-                              ::total-block-transmissions]))
+;; I *know* I've spec'd out manifold.stream around here somewhere
+;; TODO: Use that for these next two
+(s/def ::stream any?)
+(s/def ::child ::stream)
+(s/def ::parent ::stream)
+(s/def ::event-streams (s/keys :req [::child ::parent]))
+
+(s/def ::state (s/keys :req [::blocks
+                             ::earliest-time
+                             ::send-eof
+                             ::send-eof-processed
+                             ::send-eof-acked
+                             ::total-blocks
+                             ::total-block-transmissions]
+                       :opt [::event-streams]))
