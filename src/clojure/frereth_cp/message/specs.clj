@@ -1,6 +1,13 @@
 (ns frereth-cp.message.specs
   "Common specs that are shared among message namespaces"
-  (:require [clojure.spec.alpha :as s]))
+  (:require [clojure.spec.alpha :as s]
+            [frereth-cp.util :as util])
+  (:import io.netty.buffer.ByteBuf))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
+(s/def ::buf #(instance? ByteBuf %))
 
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
@@ -24,7 +31,8 @@
 ;;; Corresponds to blocktransmissions[]
 (s/def ::transmissions int?)
 
-(s/def ::block (s/keys :req [::length
+(s/def ::block (s/keys :req [::buf
+                             ::length
                              ::start-pos
                              ::time
                              ::transmissions]))
@@ -37,6 +45,14 @@
 ;; If nonzero: minimum of active ::time values
 (s/def ::earliest-time int?)
 
+;;; These next 3 really swirld around the sendbuf array/circular queue
+;; Number of initial bytes sent and fully acknowledged
+(s/def ::send-acked int?)
+;; Number of additional bytes to send (i.e. haven't been sent yet)
+(s/def ::send-bytes int?)
+;; within sendbytes, number of bytes absorbed into blocks
+(s/def ::send-processed int?)
+
 ;; These keys map to flags to send over the wire:
 ;; 2048 for normal EOF after sendbytes
 ;; 4096 for error after sendbytes
@@ -48,15 +64,6 @@
 (s/def ::total-blocks int?)
 (s/def ::total-block-transmissions int?)
 
-;;; These next 3 really swirld around the sendbuf array/circular queue
-;;; For this pass, at least, I'm trying to avoid anything along those lines
-;; Number of initial bytes sent and fully acknowledged
-(s/def ::send-acked int?)
-;; Number of additional bytes to send (i.e. haven't been sent yet)
-(s/def ::send-bytes int?)
-;; within sendbytes, number of bytes absorbed into blocks
-(s/def ::send-processed int?)
-
 ;; I *know* I've spec'd out manifold.stream around here somewhere
 ;; TODO: Use that for these next two
 (s/def ::stream any?)
@@ -64,8 +71,12 @@
 (s/def ::parent ::stream)
 (s/def ::event-streams (s/keys :req [::child ::parent]))
 
+(s/def ::recent int?)
+
 (s/def ::state (s/keys :req [::blocks
                              ::earliest-time
+                             ::recent
+                             ::send-bytes
                              ::send-eof
                              ::send-eof-processed
                              ::send-eof-acked

@@ -14,18 +14,42 @@ in a specific (and apparently undocumented) communications protocol.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
+(def send-byte-buf-size
+  "How many child bytes will we buffer to send?
+
+Don't want this too big, to avoid buffer bloat effects.
+
+At the same time, it seems likely that the optimum will
+vary from one application to the next.
+
+Start with the default.
+
+The reference implementation notes that this absolutely
+must be a power of 2. Pretty sure that's because it involves
+a circular buffer and uses bitwise ands for quick/cheap
+modulo arithmetic."
+  131072)
+
+(def stream-length-limit
+  "How many bytes can the stream send before we've exhausted the address space?
+
+(dec (pow 2 60)): this allows > 200 GB/second continuously for a year"
+  1152921504606846976)
+
+(def k-4
+  "a.k.a. 4k
+
+For whatever reason, DJB picked this as the end-point to refuse to read
+more child data before we hit send-byte-buf-size.
+
+Presumably that reason was good"
+  4096)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal
-
-
-;;;; Q: what else is in the reference implementation?
-;;;; A:
-
-;;;; 186-654 main
-;;;          186-204 boilerplate
+;;; Internal Helpers
 
 (s/fdef start-event-loops!
         :args (s/cat :state ::specs/state)
@@ -44,51 +68,89 @@ in a specific (and apparently undocumented) communications protocol.
     ;; two until the blocks in that buffer have been ACK'd
     ;; Although managing the congestion control aspects of that
     ;; buffer definitely play a part
-    (throw (RuntimeException. "What should this look like?"))))
+    (throw (RuntimeException. "What should this look like?"))
+    (assoc state ::specs/recent (System/nanoTime))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Internal API
+
+;;;; Q: what else is in the reference implementation?
+;;;; A:
+;;;; 186-654 main
+;;;          186-204 boilerplate
 
 ;;;          260-263 set up some globals
 ;;;          264-645 main event loop
 ;;;          645-651 wait on children to exit
 ;;;          652-653 exit codes
 
-;;;; 264-645 main event loop
-;;;  263-269: exit if done
-;;;  271-306: Decide what and when to poll, based on global state
-;;;  307-318: Poll for incoming data
+;;; 264-645 main event loop
+;;; 263-269: exit if done
+;;; 271-306: Decide what and when to poll, based on global state
 
+;;; This next piece seems like it deserves a prominent place.
+;;; But, really, it needs to be deeply hidden from the end-programmer.
+;;; I want it to be easy for me to change out and swap around, but
+;;; that means no one else should ever really even need to know that
+;;; it happens (no matter how vital it obviously is)
+;;; 307-318: Poll for incoming data
+;;;     317 XXX: keepalives
+
+(s/fdef child-consumer
+        :args (s/cat :state ::specs/state
+                     :buf ::specs/buf))
 (defn child-consumer
   "Pulls blocks of bytes from the child.
 
-Meant to be called by stream/consume-async, so it can
-supply back-pressure. This breaks a fundamental assumption
-of the original, but that's implicitly the way it works.
+The obvious approach is just to feed ByteBuffers
+from the child stream to the parent stream.
 
-Note that the deferred returned by consume-async yields
-true when either
-a) source is exhausted
-b) the deferred this returns yields false
-
-The only obvious way to distinguish an error exit seems
-to be having this forward along an Exception.
-
-;;;  319-336: Maybe read bytes from child
+The obvious approach completely misses the point that
+this is a buffer. We need to hang onto those buffers
+here until they've been ACK'd.
 "
   [{:keys [::specs/event-streams]
     :as state}
-   block]
-  ;; I should be able to get the same outcome
-  ;; by using strm/connect.
-  ;; Although the reference implementation does
-  ;; set up a buffer limit of 128K, which would
-  ;; be more difficult to set up here.
-
-  ;; The original does have a side-effect of updating
-  ;; recent between here and trying to send.
-  ;; That seems like it might matter
-  (throw (RuntimeException. "This seems pretty pointless"))
-  (strm/put! (::specs/parent event-streams) block))
-
+   buf]
+  ;; Q: Need to apply back-pressure if we
+  ;; already have ~124K pending?
+  ;; (It doesn't seem like it should matter, except
+  ;; as an upstream signal that there's a network
+  ;; issue)
+  (let [block {::buf buf
+               ::transmissions 0}
+        send-bytes (+ (::send-bytes state) (.getReadableBytes buf))]
+    (when (>= send-bytes stream-length-limit)
+      ;; Want to be sure standard error handlers don't catch
+      ;; this...it needs to force a fresh handshake.
+      (throw (AssertionError. "End of stream")))
+    (-> state
+        (update ::blocks conj block)
+        (assoc ::send-bytes send-bytes)
 ;;;  337: update recent
+        (assoc  ::recent (System/nanoTime)))))
+
+(s/fdef possibly-add-child-bytes
+        :args (s/cat :state ::specs/state
+                     :buf ::specs/buf))
+(defn possibly-add-child-bytes
+  "Read bytes from a child buffer...if we have room
+
+;;;  319-336: Maybe read bytes from child
+"
+  [state
+   buf]
+  (let [send-bytes (::send-bytes state)]
+    ;; Line 322: This also needs to account for send-acked
+    ;; Q: Is that an important part of the algorithm, or is
+    ;; it "just" dealing with the fact that we have a circular
+    ;; buffer with parts that have not yet been GC'd?
+    ;; And is it possible to tease apart that distinction?
+    (when (< (+ send-bytes k-4) send-byte-buf-size)
+      (let [available-buffer-space (- send-byte-buf-size)
+            buffer (.readBytes buf available-buffer-space)]
+        (child-consumer state buffer)))))
+
 ;;;  339-356: Try re-sending an old block: (DJB)
 ;;;           Picks out the oldest block that's waiting for an ACK
 ;;;           If it's older than (+ lastpanic (* 4 rtt_timeout))
@@ -189,6 +251,11 @@ to be having this forward along an Exception.
    child-stream]
   {::specs/blocks []
    ::specs/earliest-time 0
+   ;; In the original, this is a local in main rather than a global
+   ;; Q: Is there any difference that might matter to me, other
+   ;; than being allocated on the stack instead of the heap?
+   ;; (Assuming globals go on the heap. TODO: Look that up)
+   ::specs/recent 0
    ::specs/send-eof false
    ::specs/send-eof-processed false
    ::specs/send-eof-acked false
