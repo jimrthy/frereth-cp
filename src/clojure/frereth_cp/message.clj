@@ -45,6 +45,12 @@ more child data before we hit send-byte-buf-size.
 Presumably that reason was good"
   4096)
 
+(def n-sec-per-block
+  "This *is* mutable
+
+Seems vital, but undocumented"
+  specs/sec->n-sec)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -151,12 +157,32 @@ here until they've been ACK'd.
             buffer (.readBytes buf available-buffer-space)]
         (child-consumer state buffer)))))
 
+(s/fdef check-for-previous-block-to-resend
+        :args ::state
+        :ret (s/nilable ::state))
+(defn check-for-previous-block-to-resend
+  "Returns a modified state to resend, or nil if it's safe to move on to something fresh
 ;;;  339-356: Try re-sending an old block: (DJB)
 ;;;           Picks out the oldest block that's waiting for an ACK
 ;;;           If it's older than (+ lastpanic (* 4 rtt_timeout))
 ;;;              Double nsecperblock
 ;;;              Update trigger times
 ;;;           goto sendblock
+
+"
+  [{:keys [::specs/recent
+           ::specs/earliest-time
+           ::specs/last-block-time
+           ::specs/rtt-timeout]
+    :as state}]
+  (when (and (< recent (+ last-block-time n-sec-per-block))
+             (not= earliest-time)
+             (>= recent (+ earliest-time rtt-timeout)))
+    ;; This gets us to line 344
+    ;; It finds the first block that matches earliest-time
+    ;; It's going to re-send that block
+    ;; But first, it might adjust some of the globals.
+    (throw (RuntimeException. "There are some interesting details here"))))
 
 ;;;  357-410: Try sending a new block: (DJB)
 ;;;      357-378:  Sets up a new block to send
@@ -174,6 +200,12 @@ here until they've been ACK'd.
 ;;;                the write to FD9 at offset +7, which is the
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
+
+(defn pick-next-block-to-send
+  [state]
+  (let [state' (check-for-previous-block-to-resend state)]
+    (throw (RuntimeException. "keep going"))))
+
 ;;;      408: earliestblocktime_compute()
 
 ;;;  411-435: try receiving messages: (DJB)
@@ -256,6 +288,7 @@ here until they've been ACK'd.
    ;; than being allocated on the stack instead of the heap?
    ;; (Assuming globals go on the heap. TODO: Look that up)
    ::specs/recent 0
+   ::specs/rtt-timeout specs/sec->n-sec
    ::specs/send-eof false
    ::specs/send-eof-processed false
    ::specs/send-eof-acked false

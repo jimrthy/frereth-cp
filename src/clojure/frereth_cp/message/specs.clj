@@ -5,6 +5,13 @@
   (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Magic Constants
+
+(def sec->n-sec
+  "Starting point for several values"
+  1000000000)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
 (s/def ::buf #(instance? ByteBuf %))
@@ -43,7 +50,12 @@
                        #(= (rem (count %) 2) 0)))
 
 ;; If nonzero: minimum of active ::time values
+;; Corresponds to earliestblocktime in original
 (s/def ::earliest-time int?)
+;; Corresponds to lastblocktime in original
+;; Undocumented, but it looks like the value of recent
+;; at the end of the previous send to parent
+(s/def ::last-block-time int?)
 
 ;;; These next 3 really swirld around the sendbuf array/circular queue
 ;; Number of initial bytes sent and fully acknowledged
@@ -71,11 +83,27 @@
 (s/def ::parent ::stream)
 (s/def ::event-streams (s/keys :req [::child ::parent]))
 
+;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
+;; These feed off recent, but are basically undocumented
+(s/def ::last-panic int?)
+(s/def ::last-edge int?)
 
+;;; Bits that are (somehow) vital to the flow-control algorithm
+(s/def ::rtt-timeout int?)
+
+;; Q: Does it make sense to split this up?
+;; That seems to be begging for trouble, although
+;; nothing but ::blocks should involve much memory usage.
+;; Then again, remember the lesson about conj'ing
+;; hundreds of seqs
 (s/def ::state (s/keys :req [::blocks
                              ::earliest-time
+                             ::last-block-time
+                             ::last-panic
+                             ::last-edge
                              ::recent
+                             ::rtt-timeout
                              ::send-bytes
                              ::send-eof
                              ::send-eof-processed
