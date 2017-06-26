@@ -45,12 +45,6 @@ more child data before we hit send-byte-buf-size.
 Presumably that reason was good"
   4096)
 
-(def n-sec-per-block
-  "This *is* mutable
-
-Seems vital, but undocumented"
-  specs/sec->n-sec)
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -170,19 +164,36 @@ here until they've been ACK'd.
 ;;;           goto sendblock
 
 "
-  [{:keys [::specs/recent
+  [{:keys [::specs/blocks
            ::specs/earliest-time
            ::specs/last-block-time
+           ::specs/last-edge
+           ::specs/last-panic
+           ::specs/n-sec-per-block
+           ::specs/recent
            ::specs/rtt-timeout]
     :as state}]
   (when (and (< recent (+ last-block-time n-sec-per-block))
-             (not= earliest-time)
+             (not= 0 earliest-time)
              (>= recent (+ earliest-time rtt-timeout)))
     ;; This gets us to line 344
     ;; It finds the first block that matches earliest-time
-    ;; It's going to re-send that block
+    ;; It's going to re-send that block (it *does* exist...right?)
+    ;; TODO: Need to verify that nothing fell through the cracks
     ;; But first, it might adjust some of the globals.
-    (throw (RuntimeException. "There are some interesting details here"))))
+    (reduce (fn [_ block]
+              (when (= earliest-time (::specs/time block))
+                (reduced
+                 (assoc
+                  (if (> recent (+ last-panic (* 4 rtt-timeout)))
+                    (assoc state
+                           ::n-sec-per-block (* n-sec-per-block 2)
+                           ::last-panic recent
+                           ::last-edge recent)
+                    state)
+                  ::block-to-resend block))))
+            nil
+            blocks)))
 
 ;;;  357-410: Try sending a new block: (DJB)
 ;;;      357-378:  Sets up a new block to send
@@ -203,8 +214,9 @@ here until they've been ACK'd.
 
 (defn pick-next-block-to-send
   [state]
-  (let [state' (check-for-previous-block-to-resend state)]
-    (throw (RuntimeException. "keep going"))))
+  (if-let [state' (check-for-previous-block-to-resend state)]
+    (throw (RuntimeException. "keep going"))
+    (throw (RuntimeException. "anything newer available?"))))
 
 ;;;      408: earliestblocktime_compute()
 
@@ -283,6 +295,8 @@ here until they've been ACK'd.
    child-stream]
   {::specs/blocks []
    ::specs/earliest-time 0
+   ;; Seems vital, albeit undocumented
+   ::specs/n-sec-per-block specs/sec->n-sec
    ;; In the original, this is a local in main rather than a global
    ;; Q: Is there any difference that might matter to me, other
    ;; than being allocated on the stack instead of the heap?

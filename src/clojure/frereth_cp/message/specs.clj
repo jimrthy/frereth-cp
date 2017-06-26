@@ -100,8 +100,9 @@
 (s/def ::state (s/keys :req [::blocks
                              ::earliest-time
                              ::last-block-time
-                             ::last-panic
                              ::last-edge
+                             ::last-panic
+                             ::n-sec-per-block
                              ::recent
                              ::rtt-timeout
                              ::send-bytes
