@@ -9,7 +9,8 @@ in a specific (and apparently undocumented) communications protocol.
   This, in turn, reads/writes data from/to a child that it spawns."
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.message.specs :as specs]
-            [manifold.stream :as strm]))
+            [manifold.stream :as strm])
+  (:import io.netty.buffer.Unpooled))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
@@ -44,6 +45,20 @@ more child data before we hit send-byte-buf-size.
 
 Presumably that reason was good"
   4096)
+
+(def max-outgoing-blocks
+  "How many outgoing, non-ACK'd blocks will we buffer?
+
+Corresponds to OUTGOING in the reference implementation.
+
+That includes a comment that it absolutely must be a power of 2.
+
+I think that's because it uses bitwise and for modulo to cope
+with the ring buffer semantics, but there may be a deeper motivation."
+  128)
+
+(def max-block-length
+  512)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -100,16 +115,16 @@ Presumably that reason was good"
         :args (s/cat :state ::specs/state
                      :buf ::specs/buf))
 (defn child-consumer
-  "Pulls blocks of bytes from the child.
+  "Accepts blocks of bytes from the child.
 
 The obvious approach is just to feed ByteBuffers
-from the child stream to the parent stream.
+from this callback to the parent's callback.
 
 The obvious approach completely misses the point that
 this is a buffer. We need to hang onto those buffers
 here until they've been ACK'd.
 "
-  [{:keys [::specs/event-streams]
+  [{:keys [::specs/send-bytes]
     :as state}
    buf]
   ;; Q: Need to apply back-pressure if we
@@ -119,22 +134,39 @@ here until they've been ACK'd.
   ;; issue)
   (let [block {::buf buf
                ::transmissions 0}
-        send-bytes (+ (::send-bytes state) (.getReadableBytes buf))]
+        send-bytes (+ send-bytes (.getReadableBytes buf))]
     (when (>= send-bytes stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.
       (throw (AssertionError. "End of stream")))
     (-> state
+        ;; TODO: Verify that
         (update ::blocks conj block)
-        (assoc ::send-bytes send-bytes)
+        (assoc ::send-bytes send-bytes
 ;;;  337: update recent
-        (assoc  ::recent (System/nanoTime)))))
+               ::recent (System/nanoTime)))))
 
 (s/fdef possibly-add-child-bytes
         :args (s/cat :state ::specs/state
                      :buf ::specs/buf))
 (defn possibly-add-child-bytes
   "Read bytes from a child buffer...if we have room
+
+This is upside down: the API should be that
+child makes a callback.
+
+The only real question seems to be what happens
+when that buffer overflows.
+
+In the original, that buffer is really just an
+anonymous pipe between the processes, so there
+should be quite a lot of room.
+
+According to the pipe(7) man page, linux provides
+16 \"pages\" of buffer space. So 64K, if the page
+size is 4K. At least, it has since 2.6.11.
+
+Prior to that, it was limited to 4K.
 
 ;;;  319-336: Maybe read bytes from child
 "
@@ -195,12 +227,84 @@ here until they've been ACK'd.
             nil
             blocks)))
 
-;;;  357-410: Try sending a new block: (DJB)
-;;;      357-378:  Sets up a new block to send
-;;;                Along w/ related data flags in parallel arrays
-;;;    380 sendblock:
-;;;        Resending old block will goto this
-;;;        It's in the middle of a do {} while(0) loop
+(defn check-for-new-block-to-send
+  "Q: Is there a new block ready to send?
+
+  357-378:  Sets up a new block to send
+  Along w/ related data flags in parallel arrays"
+  [{:keys [::specs/blocks
+           ::specs/last-block-time
+           ::specs/n-sec-per-block
+           ::specs/recent
+           ::specs/send-acked
+           ::specs/send-bytes
+           ::specs/send-eof
+           ::specs/send-eof-processed
+           ::specs/send-processed
+           ::specs/want-ping]
+    :as state}]
+  (when (and (>= recent (+ last-block-time n-sec-per-block))
+             (< (count blocks) max-outgoing-blocks)
+             (or want-ping
+                 ;; This next style clause is used several times in
+                 ;; the reference implementation.
+                 ;; The actual check is negative in context, so
+                 ;; it's really a not
+                 ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
+                 ;; This is my best guess about how to translate that, but I
+                 ;; really need to build a little C program to verify the
+                 ;; syntax
+                 (if send-eof
+                   (not send-eof-processed)
+                   (< send-bytes send-processed))))
+    ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
+    (let [start-pos (+ send-acked send-processed)
+          block-length (max (- send-bytes send-processed)
+                            max-block-length)
+          ;; This next construct seems pretty ridiculous.
+          ;; It's just assuring that (<= send-byte-buf-size (+ start-pos block-length))
+          ;; The bitwise-and is a shortcut for module that used to be faster,
+          ;; once upon a time (Q: does it make any difference at all these days?)
+          ;; Then again, maybe it's a vital piece to the puzzle.
+          ;; TODO: Get an opinion from a cryptographer.
+          block-length (if (> (+ (bit-and start-pos (dec send-byte-buf-size))
+                                 block-length)
+                              send-byte-buf-size)
+                         (- send-byte-buf-size (bit-and start-pos (dec send-byte-buf-size)))
+                         block-length)
+          eof (if (= send-processed send-bytes)
+                send-eof
+                false)
+          ;; TODO: Use Pooled buffers instead!  <---
+          block {::specs/buf (Unpooled/buffer 1024)  ;; Q: How big should this be?
+                 ::specs/length block-length
+                 ::specs/send-eof eof
+                 ::specs/start-pos start-pos
+                 ;; Q: What about ::specs/time?
+                 ::specs/transmissions 0}
+          ;; XXX: or could have the full block in post-buffer space (DJB)
+          ;; "absorb" this new block -- JRG
+          send-processed (+ send-processed block-length)]
+      (-> state
+          (update ::specs/blocks conj block)
+          (update ::send-processed + block-length)
+          (assoc ::send-eof-processed (and (= send-processed send-bytes)
+                                           send-eof
+                                           true))))))
+
+(defn calculate-state-after-send
+  "This is mostly setting up the buffer to do the send
+
+  Starts with line 380 sendblock:
+  Resending old block will goto this
+
+  It's in the middle of a do {} while(0) loop"
+  [state]
+  ;; pos tells me which block in blocks to send.
+  ;; For a new block, it's the last.
+  ;; For a repeat, it's...whichever one was found.
+  ;;
+  (throw (RuntimeException. "I need pos after all"))
 ;;;      382-406:  Build (and send) the message packet
 ;;;                N.B.: Ignores most of the ACK bits
 ;;;                And really does not seem to match the spec
@@ -211,12 +315,31 @@ here until they've been ACK'd.
 ;;;                the write to FD9 at offset +7, which is the
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
+  (throw (RuntimeException. "Write this")))
+
+(defn send-block!
+  "Actually send the message block
+
+  Corresponds to line 404"
+  [state]
+  ;; Don't forget the special offset+7
+  (throw (RuntimeException. "sendblock:")))
 
 (defn pick-next-block-to-send
   [state]
-  (if-let [state' (check-for-previous-block-to-resend state)]
-    (throw (RuntimeException. "keep going"))
-    (throw (RuntimeException. "anything newer available?"))))
+  (or (check-for-previous-block-to-resend state)
+;;;       357-410: Try sending a new block: (-- DJB)
+                  ;; There's goto-fun overlap with resending
+                  ;; a previous block -- JRG
+      (check-for-new-block-to-send state)))
+
+(defn maybe-send-block
+  [state]
+  (if-let [state' (pick-next-block-to-send state)]
+    (let [state'' (calculate-state-after-send state')]
+      (send-block! state'')
+      state'')
+    state))
 
 ;;;      408: earliestblocktime_compute()
 
@@ -288,11 +411,13 @@ here until they've been ACK'd.
 
 (s/fdef initial-state
         :args (s/cat :parent ::specs/parent
-                     :child ::specs/child)
+                     :child ::specs/child
+                     :want-ping ::specs/want-ping)
         :ret ::specs/state)
 (defn initial-state
   [parent-stream
-   child-stream]
+   child-stream
+   want-ping]
   {::specs/blocks []
    ::specs/earliest-time 0
    ;; Seems vital, albeit undocumented
@@ -309,4 +434,5 @@ here until they've been ACK'd.
    ::specs/total-blocks 0
    ::specs/total-block-transmissions 0
    ::specs/event-streams {::specs/child child-stream
-                          ::specs/parent parent-stream}})
+                          ::specs/parent parent-stream}
+   ::specs/want-ping want-ping})

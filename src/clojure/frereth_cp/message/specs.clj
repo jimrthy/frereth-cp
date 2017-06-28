@@ -20,6 +20,11 @@
 ;;; Corresponds to blocklen
 (s/def ::length int?)
 
+;; This maps to a bitflag to send over the wire:
+;; 2048 for normal EOF after sendbytes
+;; 4096 for error after sendbytes
+(s/def ::send-eof #{false ::normal ::error})
+
 ;;; Position of a block's first byte within the stream
 ;;; Corresponds to blockpos
 (s/def ::start-pos int?)
@@ -40,6 +45,7 @@
 
 (s/def ::block (s/keys :req [::buf
                              ::length
+                             ::send-eof
                              ::start-pos
                              ::time
                              ::transmissions]))
@@ -65,10 +71,6 @@
 ;; within sendbytes, number of bytes absorbed into blocks
 (s/def ::send-processed int?)
 
-;; These keys map to flags to send over the wire:
-;; 2048 for normal EOF after sendbytes
-;; 4096 for error after sendbytes
-(s/def ::send-eof #{false ::normal ::error})
 (s/def ::send-eof-acked boolean?)
 (s/def ::send-eof-processed boolean?)
 
@@ -77,7 +79,10 @@
 (s/def ::total-block-transmissions int?)
 
 ;; I *know* I've spec'd out manifold.stream around here somewhere
-;; TODO: Use that for these next two
+;; CANCELLED: Use that for these next two
+;; These need to be callbacks.
+;; Letting the streaming/asynchronous details spread the way I have
+;; has made everything drastically more complicated.
 (s/def ::stream any?)
 (s/def ::child ::stream)
 (s/def ::parent ::stream)
@@ -91,6 +96,8 @@
 
 ;;; Bits that are (somehow) vital to the flow-control algorithm
 (s/def ::rtt-timeout int?)
+
+(s/def ::want-ping #{false ::immediate ::second-1})
 
 ;; Q: Does it make sense to split this up?
 ;; That seems to be begging for trouble, although
@@ -110,5 +117,6 @@
                              ::send-eof-processed
                              ::send-eof-acked
                              ::total-blocks
-                             ::total-block-transmissions]
+                             ::total-block-transmissions
+                             ::want-ping]
                        :opt [::event-streams]))
