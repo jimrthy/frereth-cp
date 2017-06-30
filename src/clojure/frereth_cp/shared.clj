@@ -378,5 +378,16 @@ Or there's probably something similar in guava"
 
 (def all-zeros
   "To avoid creating this over and over.
-TODO: Refactor this to a function"
+
+Q: Refactor this to a function?
+(note that that makes like quite a bit more difficult for zero-out!)"
   (zero-bytes 128))
+
+(defn zero-out!
+  "Shove zeros into the byte-array at dst, from indexes start to end"
+  [dst start end]
+  (let [n (- end start)]
+    (when (<= (count all-zeros) n)
+      (alter-var-root all-zeros
+                      (fn [_] (zero-bytes n)))))
+  (b-t/byte-copy! dst start end all-zeros))

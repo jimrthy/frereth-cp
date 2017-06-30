@@ -20,6 +20,8 @@
 ;;; Corresponds to blocklen
 (s/def ::length int?)
 
+(s/def ::message-id int?)
+
 ;; This maps to a bitflag to send over the wire:
 ;; 2048 for normal EOF after sendbytes
 ;; 4096 for error after sendbytes
@@ -45,6 +47,7 @@
 
 (s/def ::block (s/keys :req [::buf
                              ::length
+                             ::message-id
                              ::send-eof
                              ::start-pos
                              ::time
@@ -54,6 +57,7 @@
                        ;; TODO: Improve this spec!
                        ;; (Reference implementation uses 128)
                        #(= (rem (count %) 2) 0)))
+(s/def ::current-block ::block)
 
 ;; If nonzero: minimum of active ::time values
 ;; Corresponds to earliestblocktime in original
@@ -119,4 +123,5 @@
                              ::total-blocks
                              ::total-block-transmissions
                              ::want-ping]
-                       :opt [::event-streams]))
+                       :opt [::current-block
+                             ::event-streams]))

@@ -8,7 +8,10 @@ in a specific (and apparently undocumented) communications protocol.
 
   This, in turn, reads/writes data from/to a child that it spawns."
   (:require [clojure.spec.alpha :as s]
+            [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
             [manifold.stream :as strm])
   (:import io.netty.buffer.Unpooled))
 
@@ -37,6 +40,10 @@ modulo arithmetic."
 (dec (pow 2 60)): this allows > 200 GB/second continuously for a year"
   1152921504606846976)
 
+(def k-1
+  "a.k.a 1k"
+  1024)
+
 (def k-4
   "a.k.a. 4k
 
@@ -60,6 +67,9 @@ with the ring buffer semantics, but there may be a deeper motivation."
 (def max-block-length
   512)
 
+;; (dec (pow 2 32))
+(def MAX_32_UINT 4294967295)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -75,6 +85,7 @@ with the ring buffer semantics, but there may be a deeper motivation."
 "
   [{:keys [::specs/event-streams]
     :as state}]
+  ;; Note that the entire idea of using event streams here was unwise.
   (let [{:keys [::specs/child ::specs/parent]} event-streams]
     ;; I think the main idea is that I should set up transducing
     ;; pipelines between child and parent
@@ -223,7 +234,7 @@ Prior to that, it was limited to 4K.
                            ::last-panic recent
                            ::last-edge recent)
                     state)
-                  ::block-to-resend block))))
+                  ::block-to-send block))))
             nil
             blocks)))
 
@@ -290,21 +301,20 @@ Prior to that, it was limited to 4K.
           (update ::send-processed + block-length)
           (assoc ::send-eof-processed (and (= send-processed send-bytes)
                                            send-eof
-                                           true))))))
+                                           true)
+                 ::block-to-send block)))))
 
-(defn calculate-state-after-send
+(defn pre-calculate-state-after-send
   "This is mostly setting up the buffer to do the send
 
   Starts with line 380 sendblock:
   Resending old block will goto this
 
   It's in the middle of a do {} while(0) loop"
-  [state]
-  ;; pos tells me which block in blocks to send.
-  ;; For a new block, it's the last.
-  ;; For a repeat, it's...whichever one was found.
-  ;;
-  (throw (RuntimeException. "I need pos after all"))
+  [{:keys [::specs/block-to-send
+           ::specs/buf
+           ::specs/recent]
+    :as state}]
 ;;;      382-406:  Build (and send) the message packet
 ;;;                N.B.: Ignores most of the ACK bits
 ;;;                And really does not seem to match the spec
@@ -315,7 +325,42 @@ Prior to that, it was limited to 4K.
 ;;;                the write to FD9 at offset +7, which is the
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
-  (throw (RuntimeException. "Write this")))
+
+  ;; This takes me back to requiring ::pos
+  (throw (RuntimeException. "More important to update the proper place in ::blocks"))
+  (let [state'
+        (-> state
+            (update-in [::specs/block-to-send ::specs/transmissions] inc)
+            (update-in [::specs/block-to-send ::specs/time recent])
+            (update-in [::specs/block-to-send ::message-id] (fn [n]
+                                                              (let [n' (inc n)]
+                                                                ;; Stupid unsigned math
+                                                                (if (> n' MAX_32_UINT)
+                                                                  1 n')))))
+        {:keys [::specs/block-to-send]} state'
+        block-length (::length block-to-send)
+        ;; constraints: u multiple of 16; u >= 16; u <= 1088; u >= 48 + blocklen[pos]
+        ;; (-- DJB)
+        u (+ 64 block-length)
+        ;; Q: How many bytes are we going to send for this block?
+        u (condp <=
+              ;; Stair-step the number of bytes that will get sent for this block
+              ;; Suspect that this has something to do with traffic-shaping
+              ;; analysis
+              192 192
+              320 320
+              576 576
+              1088 1088
+              (throw (AssertionError. "block too big")))]
+    (when (or (neg? block-length)
+              (> k-1 block-length))
+      (throw (AssertionError. "illegal block length")))
+    (shared/zero-out! buf 0 8)
+    ;; This extra length byte is a key part of the reference
+    ;; interface.
+    ;; Q: Does it make any sense in this context?
+    (aset buf 7 (quot u 16))
+    (throw (RuntimeException. "Keep going at line 398"))))
 
 (defn send-block!
   "Actually send the message block
@@ -336,12 +381,14 @@ Prior to that, it was limited to 4K.
 (defn maybe-send-block
   [state]
   (if-let [state' (pick-next-block-to-send state)]
-    (let [state'' (calculate-state-after-send state')]
+    (let [state'' (pre-calculate-state-after-send state')]
       (send-block! state'')
-      state'')
-    state))
-
 ;;;      408: earliestblocktime_compute()
+      ;; TODO: Honestly, we could probably shave some time/effort by
+      ;; just tracking the earliest block here instead of searching for
+      ;; it in check-for-previous-block-to-resend
+      (assoc state'' ::earliest-time (help/earliest-block-time (::blocks state''))))
+    state))
 
 ;;;  411-435: try receiving messages: (DJB)
 ;;;           From parent (over watch8)
