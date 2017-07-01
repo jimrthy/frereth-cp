@@ -160,13 +160,14 @@ implementation. This is code that I don't understand yet"
                             (throw (ex-info "done" {})))
                           (b-t/byte-copy! working-nonce 0 K/client-nonce-prefix-length
                                           K/initiate-nonce-prefix)
-                          ;; Reference version starts by zeroing first 32 bytes.
-                          ;; I thought we just needed 16 for the encryption buffer
-                          ;; And that doesn't really seem to apply here
-                          ;; Q: What's up with this?
-                          ;; (it doesn't seem to match the spec, either)
-                          (b-t/byte-copy! text 0 32 shared/all-zeros)
-                          (b-t/byte-copy! text 32 K/key-length
+                          ;; TODO: Use compose instead
+                          (shared/zero-out! text 0 K/decrypt-box-zero-bytes)
+                          ;; This 32-byte padding seems very surprising, since the
+                          ;; specs all seem to point to just needing 16.
+                          ;; That's just one of the fun little details about the
+                          ;; way the underlying library works.
+                          (b-t/byte-copy! text K/decrypt-box-zero-bytes
+                                          K/key-length
                                           (.getPublicKey (::shared/long-pair my-keys)))
                           (b-t/byte-copy! text 64 64 vouch)
                           (b-t/byte-copy! text
