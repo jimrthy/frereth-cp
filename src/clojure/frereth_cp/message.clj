@@ -41,16 +41,15 @@ modulo arithmetic."
   1152921504606846976)
 
 (def k-1
-  "a.k.a 1k"
+  "a.k.a. 1k"
   1024)
 
+(def k-2
+  "a.k.a. 2k"
+  2048)
+
 (def k-4
-  "a.k.a. 4k
-
-For whatever reason, DJB picked this as the end-point to refuse to read
-more child data before we hit send-byte-buf-size.
-
-Presumably that reason was good"
+  "a.k.a. 4k"
   4096)
 
 (def max-outgoing-blocks
@@ -69,6 +68,9 @@ with the ring buffer semantics, but there may be a deeper motivation."
 
 ;; (dec (pow 2 32))
 (def MAX_32_UINT 4294967295)
+
+(def error-eof k-4)
+(def normal-eof k-2)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -185,10 +187,15 @@ Prior to that, it was limited to 4K.
    buf]
   (let [send-bytes (::send-bytes state)]
     ;; Line 322: This also needs to account for send-acked
+    ;; For whatever reason, DJB picked this as the end-point to refuse to read
+    ;; more child data before we hit send-byte-buf-size.
+    ;; Presumably that reason remains valid
+
     ;; Q: Is that an important part of the algorithm, or is
     ;; it "just" dealing with the fact that we have a circular
     ;; buffer with parts that have not yet been GC'd?
     ;; And is it possible to tease apart that distinction?
+
     (when (< (+ send-bytes k-4) send-byte-buf-size)
       (let [available-buffer-space (- send-byte-buf-size)
             buffer (.readBytes buf available-buffer-space)]
@@ -304,6 +311,25 @@ Prior to that, it was limited to 4K.
                                            true)
                  ::block-to-send block)))))
 
+(s/fdef calculate-message-data-block-length
+        :args ::specs/block
+        :ret (s/and nat-int?
+                    ;; max possible:
+                    ;; k-4 is the flag for FAIL.
+                    ;; + k-1 for the actual message length
+                    ;; This has other restrictions based on
+                    ;; the implementation details, but those
+                    ;; aren't covered by the spec
+                    #(< (+ k-1 k-4) %)))
+(defn calculate-message-data-block-length
+  [block]
+  (let [len (::specs/length block)]
+    (bit-or len
+            (case (::specs/send-eof block)
+              false 0
+              ::specs/normal ::normal-eof
+              ::specs/error ::fail-eod))))
+
 (defn pre-calculate-state-after-send
   "This is mostly setting up the buffer to do the send
 
@@ -313,6 +339,7 @@ Prior to that, it was limited to 4K.
   It's in the middle of a do {} while(0) loop"
   [{:keys [::specs/block-to-send
            ::specs/buf
+           ::specs/next-message-id
            ::specs/recent]
     :as state}]
 ;;;      382-406:  Build (and send) the message packet
@@ -328,22 +355,22 @@ Prior to that, it was limited to 4K.
 
   ;; This takes me back to requiring ::pos
   (throw (RuntimeException. "More important to update the proper place in ::blocks"))
-  (let [state'
+  (let [next-message-id (let [n' (inc next-message-id)]
+                          ;; Stupid unsigned math
+                          (if (> n' MAX_32_UINT)
+                            1 n'))
+        state'
         (-> state
             (update-in [::specs/block-to-send ::specs/transmissions] inc)
             (update-in [::specs/block-to-send ::specs/time recent])
-            (update-in [::specs/block-to-send ::message-id] (fn [n]
-                                                              (let [n' (inc n)]
-                                                                ;; Stupid unsigned math
-                                                                (if (> n' MAX_32_UINT)
-                                                                  1 n')))))
+            (assoc-in [::specs/block-to-send ::message-id] next-message-id)
+            (assoc ::next-message-id next-message-id))
         {:keys [::specs/block-to-send]} state'
         block-length (::length block-to-send)
         ;; constraints: u multiple of 16; u >= 16; u <= 1088; u >= 48 + blocklen[pos]
         ;; (-- DJB)
-        u (+ 64 block-length)
-        ;; Q: How many bytes are we going to send for this block?
-        u (condp <=
+        ;; Set the number of bytes we're going to send for this block?
+        u (condp <= (+ 64 block-length)
               ;; Stair-step the number of bytes that will get sent for this block
               ;; Suspect that this has something to do with traffic-shaping
               ;; analysis
@@ -351,7 +378,9 @@ Prior to that, it was limited to 4K.
               320 320
               576 576
               1088 1088
-              (throw (AssertionError. "block too big")))]
+              (throw (AssertionError. "block too big")))
+        send-buf ::FIXME-missing
+        send-buf-size ::FIXME-missing]
     (when (or (neg? block-length)
               (> k-1 block-length))
       (throw (AssertionError. "illegal block length")))
@@ -360,7 +389,28 @@ Prior to that, it was limited to 4K.
     ;; interface.
     ;; Q: Does it make any sense in this context?
     (aset buf 7 (quot u 16))
-    (throw (RuntimeException. "Keep going at line 398"))))
+    (b-t/uint32-pack! buf 8 next-message-id)
+    ;; XXX: include any acknowledgments that have piled up (--DJB)
+    ;; SUCC/FAIL flag | data block size
+    (b-t/uint16-pack! buf 46 (calculate-message-data-block-length block-to-send))
+    ;; stream position of the first byte in the data block being sent
+    (b-t/uint64-pack! buf 48 (::start-pos block-to-send))
+    ;; Actual buffer to send
+    ;; Q: Where did send-buf come from?
+    ;; It has to be another circular byte buffer
+    ;; that's populated by reading from child.
+    ;; It seems like this approach makes a lot of sense,
+    ;; but I keep pushing back against it and thinking/hoping that
+    ;; a pooled ByteBuffer will be fast enough.
+    (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
+                                                                                (dec send-buf-size)))
+    ;; Reference implementation waits until after the actual write before setting any of
+    ;; the next pieces. But it's a single-threaded process that's going to block at the write,
+    ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
+    (assoc state'
+           ::last-block-time recent
+           ::want-ping 0
+           ::earliest-time (help/earliest-block-time (::blocks state')))))
 
 (defn send-block!
   "Actually send the message block

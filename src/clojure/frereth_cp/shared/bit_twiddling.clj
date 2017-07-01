@@ -111,6 +111,26 @@ OTOH, I'm only using it for coping with the nonce.
     n
     (+ n 256)))
 
+(defn uint16-pack!
+  "Sets 4 bytes in dst (starting at offset n) to x"
+  [^bytes dst ^Long n ^Short x]
+  (doseq [i (range n (+ n Short/BYTES))]
+     (let [bits-to-shift (* (- i n) Byte/SIZE)]
+       (aset-byte dst i (-> x
+                            (unsigned-bit-shift-right bits-to-shift)
+                            (bit-and 0xff)
+                            possibly-2s-complement)))))
+
+(defn uint32-pack!
+  "Sets 4 bytes in dst (starting at offset n) to x"
+  [^bytes dst ^Long n ^Integer x]
+  (doseq [i (range n (+ n Integer/BYTES))]
+     (let [bits-to-shift (* (- i n) Byte/SIZE)]
+       (aset-byte dst i (-> x
+                            (unsigned-bit-shift-right bits-to-shift)
+                            (bit-and 0xff)
+                            possibly-2s-complement)))))
+
 (defn uint64-pack!
   "Sets 8 bytes in dst (starting at offset n) to x
 

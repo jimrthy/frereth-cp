@@ -57,6 +57,9 @@
                        ;; TODO: Improve this spec!
                        ;; (Reference implementation uses 128)
                        #(= (rem (count %) 2) 0)))
+;; TODO: This has to go away.
+;; Really need a ::cursor that points to the ::block inside
+;; ::state instead.
 (s/def ::current-block ::block)
 
 ;; If nonzero: minimum of active ::time values
@@ -114,6 +117,7 @@
                              ::last-edge
                              ::last-panic
                              ::n-sec-per-block
+                             ::next-message-id
                              ::recent
                              ::rtt-timeout
                              ::send-bytes
