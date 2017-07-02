@@ -70,7 +70,13 @@
 ;; at the end of the previous send to parent
 (s/def ::last-block-time int?)
 
-;;; These next 3 really swirld around the sendbuf array/circular queue
+;;; These next 5 really swirld around the sendbuf array/circular queue
+;; Need something to act as the array that backs the circular buffer.
+;; This seems dubious, but I have to start somewhere
+(s/def ::send-buf ::buf)
+;; This is really the maximum length that we're willing to allocate
+;; to this buffer
+(s/def ::send-buf-size nat-int?)
 ;; Number of initial bytes sent and fully acknowledged
 (s/def ::send-acked int?)
 ;; Number of additional bytes to send (i.e. haven't been sent yet)
@@ -111,6 +117,7 @@
 ;; nothing but ::blocks should involve much memory usage.
 ;; Then again, remember the lesson about conj'ing
 ;; hundreds of seqs
+;; TODO: These really need a better namespace
 (s/def ::state (s/keys :req [::blocks
                              ::earliest-time
                              ::last-block-time
@@ -120,6 +127,8 @@
                              ::next-message-id
                              ::recent
                              ::rtt-timeout
+                             ::send-buf
+                             ::send-buf-size
                              ::send-bytes
                              ::send-eof
                              ::send-eof-processed

@@ -340,7 +340,9 @@ Prior to that, it was limited to 4K.
   [{:keys [::specs/block-to-send
            ::specs/buf
            ::specs/next-message-id
-           ::specs/recent]
+           ::specs/recent
+           ::specs/send-buf
+           ::specs/send-buf-size]
     :as state}]
 ;;;      382-406:  Build (and send) the message packet
 ;;;                N.B.: Ignores most of the ACK bits
@@ -378,9 +380,7 @@ Prior to that, it was limited to 4K.
               320 320
               576 576
               1088 1088
-              (throw (AssertionError. "block too big")))
-        send-buf ::FIXME-missing
-        send-buf-size ::FIXME-missing]
+              (throw (AssertionError. "block too big")))]
     (when (or (neg? block-length)
               (> k-1 block-length))
       (throw (AssertionError. "illegal block length")))
@@ -395,15 +395,21 @@ Prior to that, it was limited to 4K.
     (b-t/uint16-pack! buf 46 (calculate-message-data-block-length block-to-send))
     ;; stream position of the first byte in the data block being sent
     (b-t/uint64-pack! buf 48 (::start-pos block-to-send))
-    ;; Actual buffer to send
-    ;; Q: Where did send-buf come from?
-    ;; It has to be another circular byte buffer
-    ;; that's populated by reading from child.
-    ;; It seems like this approach makes a lot of sense,
-    ;; but I keep pushing back against it and thinking/hoping that
-    ;; a pooled ByteBuffer will be fast enough.
-    (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
-                                                                                (dec send-buf-size)))
+    ;; Copy bytes to the send-buf
+    ;; TODO: make this thread-safe.
+    ;; Need to save the initial read-index because we aren't ready
+    ;; to discard the buffer until it's been ACK'd.
+    ;; This is a fairly hefty departure from the reference implementation,
+    ;; which is all based around the circular buffer concept.
+    ;; I keep telling myself that a ByteBuffer will surely be fast
+    ;; enough.
+    (.markReaderIndex buf)
+    (.writeBytes send-buf buf)
+    (.resetReaderIndex buf)
+    ;; This is the approach taken by the reference implementation
+    (comment
+      (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
+                                                                                  (dec send-buf-size))))
     ;; Reference implementation waits until after the actual write before setting any of
     ;; the next pieces. But it's a single-threaded process that's going to block at the write,
     ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
@@ -525,6 +531,8 @@ Prior to that, it was limited to 4K.
    ;; (Assuming globals go on the heap. TODO: Look that up)
    ::specs/recent 0
    ::specs/rtt-timeout specs/sec->n-sec
+   ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
+   ::specs/send-buf-size send-byte-buf-size
    ::specs/send-eof false
    ::specs/send-eof-processed false
    ::specs/send-eof-acked false
