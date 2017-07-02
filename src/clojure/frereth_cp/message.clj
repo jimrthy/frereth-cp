@@ -8,6 +8,7 @@ in a specific (and apparently undocumented) communications protocol.
 
   This, in turn, reads/writes data from/to a child that it spawns."
   (:require [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
@@ -72,6 +73,12 @@ with the ring buffer semantics, but there may be a deeper motivation."
 (def error-eof k-4)
 (def normal-eof k-2)
 
+(def max-child-buffer-size
+  "Maximum message blocks from parent to child that we'll buffer before dropping
+
+  must be power of 2 -- DJB"
+  64)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -85,18 +92,19 @@ with the ring buffer semantics, but there may be a deeper motivation."
   "
 ;;;          205-259 fork child
 "
-  [{:keys [::specs/event-streams]
+  [{:keys [::specs/callbacks]
     :as state}]
-  ;; Note that the entire idea of using event streams here was unwise.
-  (let [{:keys [::specs/child ::specs/parent]} event-streams]
-    ;; I think the main idea is that I should set up transducing
-    ;; pipelines between child and parent
+  (let [{:keys [::specs/->child ::specs/->parent]} callbacks]
+    ;; I think the main idea of this module is that I should set up
+    ;; transducing pipelines between child and parent
     ;; That isn't right, though.
-    ;; The entire point,really, is to maintain a buffer between the
+    ;; The entire point, really, is to maintain a buffer between the
     ;; two until the blocks in that buffer have been ACK'd
     ;; Although managing the congestion control aspects of that
     ;; buffer definitely play a part
     (throw (RuntimeException. "What should this look like?"))
+
+    ;; This covers line 260
     (assoc state ::specs/recent (System/nanoTime))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -133,9 +141,20 @@ with the ring buffer semantics, but there may be a deeper motivation."
 The obvious approach is just to feed ByteBuffers
 from this callback to the parent's callback.
 
-The obvious approach completely misses the point that
+That obvious approach completely misses the point that
 this is a buffer. We need to hang onto those buffers
 here until they've been ACK'd.
+
+This approach was really designed as an event that
+would be triggered when an event arrives on a stream.
+Or maybe as part of an event loop that polls various
+streams for available events.
+
+It really should just be a plain function call.
+I think this is really what I have planned for
+the ::child-> key under state.
+
+TODO: Untangle the strands and get this usable.
 "
   [{:keys [::specs/send-bytes]
     :as state}
@@ -153,7 +172,6 @@ here until they've been ACK'd.
       ;; this...it needs to force a fresh handshake.
       (throw (AssertionError. "End of stream")))
     (-> state
-        ;; TODO: Verify that
         (update ::blocks conj block)
         (assoc ::send-bytes send-bytes
 ;;;  337: update recent
@@ -231,18 +249,20 @@ Prior to that, it was limited to 4K.
     ;; It's going to re-send that block (it *does* exist...right?)
     ;; TODO: Need to verify that nothing fell through the cracks
     ;; But first, it might adjust some of the globals.
-    (reduce (fn [_ block]
-              (when (= earliest-time (::specs/time block))
+    (reduce (fn [{:keys [::block-index]
+                  :as acc} block]
+              (if (= earliest-time (::specs/time block))
                 (reduced
                  (assoc
                   (if (> recent (+ last-panic (* 4 rtt-timeout)))
                     (assoc state
-                           ::n-sec-per-block (* n-sec-per-block 2)
-                           ::last-panic recent
-                           ::last-edge recent)
-                    state)
-                  ::block-to-send block))))
-            nil
+                           ::specs/current-block-cursor [block-index]
+                           ::specs/n-sec-per-block (* n-sec-per-block 2)
+                           ::specs/last-panic recent
+                           ::specs/last-edge recent))))
+                (update acc ::block-index inc)))
+            (assoc state
+                   ::block-index 0)
             blocks)))
 
 (defn check-for-new-block-to-send
@@ -302,14 +322,18 @@ Prior to that, it was limited to 4K.
                  ::specs/transmissions 0}
           ;; XXX: or could have the full block in post-buffer space (DJB)
           ;; "absorb" this new block -- JRG
-          send-processed (+ send-processed block-length)]
+          send-processed (+ send-processed block-length)
+          ;; We're going to append this block to the end.
+          ;; So we want don't want (dec length) here the
+          ;; way you might expect.
+          cursor [(count (::specs/blocks state))]]
       (-> state
           (update ::specs/blocks conj block)
-          (update ::send-processed + block-length)
-          (assoc ::send-eof-processed (and (= send-processed send-bytes)
-                                           send-eof
-                                           true)
-                 ::block-to-send block)))))
+          (update ::specs/send-processed + block-length)
+          (assoc ::specs/send-eof-processed (and (= send-processed send-bytes)
+                                                 send-eof
+                                                 true)
+                 ::specs/current-block-cursor cursor)))))
 
 (s/fdef calculate-message-data-block-length
         :args ::specs/block
@@ -321,7 +345,7 @@ Prior to that, it was limited to 4K.
                     ;; the implementation details, but those
                     ;; aren't covered by the spec
                     #(< (+ k-1 k-4) %)))
-(defn calculate-message-data-block-length
+(defn calculate-message-data-block-length-flags
   [block]
   (let [len (::specs/length block)]
     (bit-or len
@@ -373,26 +397,43 @@ Prior to that, it was limited to 4K.
         ;; (-- DJB)
         ;; Set the number of bytes we're going to send for this block?
         u (condp <= (+ 64 block-length)
-              ;; Stair-step the number of bytes that will get sent for this block
-              ;; Suspect that this has something to do with traffic-shaping
-              ;; analysis
-              192 192
-              320 320
-              576 576
-              1088 1088
-              (throw (AssertionError. "block too big")))]
+            ;; Stair-step the number of bytes that will get sent for this block
+            ;; Suspect that this has something to do with traffic-shaping
+            ;; analysis
+            ;; Q: Would named constants be useful here at all?
+            192 192
+            320 320
+            576 576
+            1088 1088
+            (throw (AssertionError. "block too big")))]
     (when (or (neg? block-length)
               (> k-1 block-length))
       (throw (AssertionError. "illegal block length")))
+    ;; We need a prefix byte that tells the other end (/ length 16)
+    ;; I'm fairly certain that this extra up-front padding is to set
+    ;; up word alignment boundaries so the actual byte copies can proceed
+    ;; quickly.
+    ;; TODO: Time it without this to see whether it makes any difference.
+    (comment)
     (shared/zero-out! buf 0 8)
     ;; This extra length byte is a key part of the reference
     ;; interface.
     ;; Q: Does it make any sense in this context?
     (aset buf 7 (quot u 16))
+
+    (comment
+      ;; This is probably the way I need to handle that,
+      ;; Since buf really needs to be a ByteBuf
+      ;; But I'm jumbling together ByteBuf vs. Byte Array
+      ;; (see the various calls to pack! that follow)
+      ;; This is broken.
+      (.writeBytes buf (byte-array 7))
+      (.writeByte buf (quot u 16)))
+
     (b-t/uint32-pack! buf 8 next-message-id)
     ;; XXX: include any acknowledgments that have piled up (--DJB)
     ;; SUCC/FAIL flag | data block size
-    (b-t/uint16-pack! buf 46 (calculate-message-data-block-length block-to-send))
+    (b-t/uint16-pack! buf 46 (calculate-message-data-block-length-flags block-to-send))
     ;; stream position of the first byte in the data block being sent
     (b-t/uint64-pack! buf 48 (::start-pos block-to-send))
     ;; Copy bytes to the send-buf
@@ -418,12 +459,15 @@ Prior to that, it was limited to 4K.
            ::want-ping 0
            ::earliest-time (help/earliest-block-time (::blocks state')))))
 
-(defn send-block!
-  "Actually send the message block
+(defn block->parent!
+  "Actually send the message block to the parent
 
-  Corresponds to line 404"
-  [state]
+  Corresponds to line 404 under the sendblock: label"
+  [{{:keys [::specs/->parent]} ::specs/callbacks
+    :keys [::specs/send-buf]
+    :as state}]
   ;; Don't forget the special offset+7
+  (->parent (.copy send-buf ))
   (throw (RuntimeException. "sendblock:")))
 
 (defn pick-next-block-to-send
@@ -438,7 +482,7 @@ Prior to that, it was limited to 4K.
   [state]
   (if-let [state' (pick-next-block-to-send state)]
     (let [state'' (pre-calculate-state-after-send state')]
-      (send-block! state'')
+      (block->parent! state'')
 ;;;      408: earliestblocktime_compute()
       ;; TODO: Honestly, we could probably shave some time/effort by
       ;; just tracking the earliest block here instead of searching for
@@ -446,12 +490,43 @@ Prior to that, it was limited to 4K.
       (assoc state'' ::earliest-time (help/earliest-block-time (::blocks state''))))
     state))
 
+(s/fdef parent->
+        :args (s/cat :state ::specs/state
+                     :buf ::specs/buf)
+        :ret ::specs/state)
+(defn parent->
+  "Receive a ByteBuf from parent
+
 ;;;  411-435: try receiving messages: (DJB)
+  "
+  [{:keys [::specs/->child-buffer]
+    :as state} buf]
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
 ;;;                    Copies bytes from incoming message buffer to message[][]
+  (when (= 0 (.readableBytes buf))
+    (throw (AssertionError. "Bad Message")))
+
+  ;; Reference implementation is really reading bytes from
+  ;; a stream.
+  ;; It reads the first byte to get the length of the block,
+  ;; pulls the next byte from the stream, calculates the stream
+  ;; length, double-checks for failure conditions, and then copies
+  ;; the bytes into the last spot in the global message array
+  ;; (assuming that array/buffer hasn't filled up waiting for the
+  ;; client to process it).
+
+  ;; I'm going to take a simpler and easier approach, at least for
+  ;; the first pass
+  (if (< max-child-buffer-size (count ->child-buffer))
+    ;; Q: Do I need anything else?
+    (update state ::->child-buffer conj buf)
+    (do
+      (log/warn "Child buffer overflow")
+      state)))
 
 ;;;  436-614: try processing a message: (DJB)
+;;; TODO: Get back to this
 ;;;           Lots of code in here.
 ;;;           This seems like the interesting part
 ;;;           440: sets maxblocklen=1024
@@ -513,31 +588,35 @@ Prior to that, it was limited to 4K.
   (assoc state :event-loops (start-event-loops! state)))
 
 (s/fdef initial-state
-        :args (s/cat :parent ::specs/parent
-                     :child ::specs/child
+        :args (s/cat :parent-callback ::specs/->parent
+                     :child-callback ::specs/->child
+                     ;; Q: What's the difference to spec that this
+                     ;; argument is optional?
                      :want-ping ::specs/want-ping)
         :ret ::specs/state)
 (defn initial-state
-  [parent-stream
-   child-stream
-   want-ping]
-  {::specs/blocks []
-   ::specs/earliest-time 0
-   ;; Seems vital, albeit undocumented
-   ::specs/n-sec-per-block specs/sec->n-sec
-   ;; In the original, this is a local in main rather than a global
-   ;; Q: Is there any difference that might matter to me, other
-   ;; than being allocated on the stack instead of the heap?
-   ;; (Assuming globals go on the heap. TODO: Look that up)
-   ::specs/recent 0
-   ::specs/rtt-timeout specs/sec->n-sec
-   ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
-   ::specs/send-buf-size send-byte-buf-size
-   ::specs/send-eof false
-   ::specs/send-eof-processed false
-   ::specs/send-eof-acked false
-   ::specs/total-blocks 0
-   ::specs/total-block-transmissions 0
-   ::specs/event-streams {::specs/child child-stream
-                          ::specs/parent parent-stream}
-   ::specs/want-ping want-ping})
+  ([parent-callback
+     child-callback
+    want-ping]
+   {::specs/blocks []
+    ::specs/earliest-time 0
+    ;; Seems vital, albeit undocumented
+    ::specs/n-sec-per-block specs/sec->n-sec
+    ;; In the original, this is a local in main rather than a global
+    ;; Q: Is there any difference that might matter to me, other
+    ;; than being allocated on the stack instead of the heap?
+    ;; (Assuming globals go on the heap. TODO: Look that up)
+    ::specs/recent 0
+    ::specs/rtt-timeout specs/sec->n-sec
+    ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
+    ::specs/send-buf-size send-byte-buf-size
+    ::specs/send-eof false
+    ::specs/send-eof-processed false
+    ::specs/send-eof-acked false
+    ::specs/total-blocks 0
+    ::specs/total-block-transmissions 0
+    ::specs/callbacks {::specs/child child-callback
+                       ::specs/parent parent-callback}
+    ::specs/want-ping want-ping})
+  ([parent-callback child-callback]
+   (initial-state parent-callback child-callback false)))

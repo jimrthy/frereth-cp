@@ -57,10 +57,8 @@
                        ;; TODO: Improve this spec!
                        ;; (Reference implementation uses 128)
                        #(= (rem (count %) 2) 0)))
-;; TODO: This has to go away.
-;; Really need a ::cursor that points to the ::block inside
-;; ::state instead.
-(s/def ::current-block ::block)
+(s/def ::current-block-cursor (s/coll-of (s/or :vec-index nat-int?
+                                               :map-key keyword?)))
 
 ;; If nonzero: minimum of active ::time values
 ;; Corresponds to earliestblocktime in original
@@ -91,15 +89,16 @@
 (s/def ::total-blocks int?)
 (s/def ::total-block-transmissions int?)
 
-;; I *know* I've spec'd out manifold.stream around here somewhere
-;; CANCELLED: Use that for these next two
-;; These need to be callbacks.
-;; Letting the streaming/asynchronous details spread the way I have
-;; has made everything drastically more complicated.
-(s/def ::stream any?)
-(s/def ::child ::stream)
-(s/def ::parent ::stream)
-(s/def ::event-streams (s/keys :req [::child ::parent]))
+(s/def ::callback (s/fspec :args (s/cat :buf ::buf)
+                           :ret boolean?))
+(s/def ::->child ::callback)
+(s/def ::child-> ::callback)
+(s/def ::->parent ::callback)
+(s/def ::parent-> ::callback)
+(s/def ::callbacks (s/keys :req [::->child
+                                 ::child->
+                                 ::->parent
+                                 ::parent->]))
 
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
@@ -125,6 +124,7 @@
                              ::last-panic
                              ::n-sec-per-block
                              ::next-message-id
+                             ::->child-buffer
                              ::recent
                              ::rtt-timeout
                              ::send-buf
@@ -136,5 +136,5 @@
                              ::total-blocks
                              ::total-block-transmissions
                              ::want-ping]
-                       :opt [::current-block
-                             ::event-streams]))
+                       :opt [::callbacks
+                             ::current-block-cursor]))
