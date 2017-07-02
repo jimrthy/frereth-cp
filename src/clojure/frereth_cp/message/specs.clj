@@ -2,7 +2,8 @@
   "Common specs that are shared among message namespaces"
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.util :as util])
-  (:import io.netty.buffer.ByteBuf))
+  (:import clojure.lang.BigInt
+           io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -15,12 +16,18 @@
 ;;; Specs
 
 (s/def ::buf #(instance? ByteBuf %))
+(s/def ::big-int #(instance? BigInt %))
 
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
 (s/def ::length int?)
 
 (s/def ::message-id int?)
+
+;; This is defined as a long long in the reference
+;; implementation.
+;; Try to avoid expanding it to a BigInt.
+(s/def ::n-sec-per-block int?)
 
 ;; This maps to a bitflag to send over the wire:
 ;; 2048 for normal EOF after sendbytes
@@ -68,6 +75,17 @@
 ;; at the end of the previous send to parent
 (s/def ::last-block-time int?)
 
+;; Undocumented.
+;; Starts out at 512, then switches to 1024 as soon as
+;; we can start processing a message that goes to the
+;; child.
+(s/def ::max-block-length nat-int?)
+
+;; number of initial bytes fully received --DJB
+(s/def ::receive-bytes nat-int?)
+;; within receivebytes, number of bytes given to child -- DJB
+(s/def ::receive-written nat-int?)
+
 ;;; These next 5 really swirld around the sendbuf array/circular queue
 ;; Need something to act as the array that backs the circular buffer.
 ;; This seems dubious, but I have to start somewhere
@@ -103,11 +121,25 @@
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
 ;; These feed off recent, but are basically undocumented
-(s/def ::last-panic int?)
+(s/def ::last-doubling int?)
 (s/def ::last-edge int?)
+(s/def ::last-panic int?)
 
 ;;; Bits that are (somehow) vital to the flow-control algorithm
-(s/def ::rtt-timeout int?)
+(s/def ::rtt ::big-int)
+(s/def ::rtt-average ::big-int)
+(s/def ::rtt-deviation ::big-int)
+(s/def ::rtt-highwater ::big-int)
+(s/def ::rtt-lowwater ::big-int)
+;; These next 5 are defined as long long in the reference,
+;; but they seem to be used as bool
+(s/def ::rtt-phase boolean?)
+(s/def ::rtt-seen-older-high boolean?)
+(s/def ::rtt-seen-older-low boolean?)
+(s/def ::rtt-seen-recent-high boolean?)
+(s/def ::rtt-seen-recent-low boolean?)
+(s/def ::rtt-timeout ::big-int)
+(s/def ::last-speed-adjustment ::big-int)
 
 (s/def ::want-ping #{false ::immediate ::second-1})
 
@@ -120,12 +152,28 @@
 (s/def ::state (s/keys :req [::blocks
                              ::earliest-time
                              ::last-block-time
+                             ::last-doubling
                              ::last-edge
                              ::last-panic
+                             ::last-speed-adjustment
+                             ::max-block-length
                              ::n-sec-per-block
                              ::next-message-id
                              ::->child-buffer
+                             ::receive-written
+                             ::receive-bytes
                              ::recent
+                             ::rtt
+                             ::rtt-average
+                             ;; Q: Does rtt-delta belong in here?
+                             ::rtt-deviation
+                             ::rtt-highwater
+                             ::rtt-lowwater
+                             ::rtt-phase
+                             ::rtt-seen-older-high
+                             ::rtt-seen-older-low
+                             ::rtt-seen-recent-high
+                             ::rtt-seen-recent-low
                              ::rtt-timeout
                              ::send-buf
                              ::send-buf-size

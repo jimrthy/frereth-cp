@@ -13,11 +13,50 @@ in a specific (and apparently undocumented) communications protocol.
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.crypto :as crypto]
             [manifold.stream :as strm])
   (:import io.netty.buffer.Unpooled))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
+
+(def stream-length-limit
+  "How many bytes can the stream send before we've exhausted the address space?
+
+(dec (pow 2 60)): this allows > 200 GB/second continuously for a year"
+  1152921504606846976)
+
+(def k-div4
+  "aka 1/4 k"
+  256)
+
+(def k-div2
+  "aka 1/2 k"
+  512)
+
+(def k-1
+  "aka 1k"
+  1024)
+
+(def k-2
+  "aka 2k"
+  2048)
+
+(def k-4
+  "aka 4k"
+  4096)
+
+(def k-8
+  "aka 8k"
+  8192)
+
+(def k-64
+  "aka 128k"
+  65536)
+
+(def k-128
+  "aka 128k"
+  131072)
 
 (def send-byte-buf-size
   "How many child bytes will we buffer to send?
@@ -33,25 +72,7 @@ The reference implementation notes that this absolutely
 must be a power of 2. Pretty sure that's because it involves
 a circular buffer and uses bitwise ands for quick/cheap
 modulo arithmetic."
-  131072)
-
-(def stream-length-limit
-  "How many bytes can the stream send before we've exhausted the address space?
-
-(dec (pow 2 60)): this allows > 200 GB/second continuously for a year"
-  1152921504606846976)
-
-(def k-1
-  "a.k.a. 1k"
-  1024)
-
-(def k-2
-  "a.k.a. 2k"
-  2048)
-
-(def k-4
-  "a.k.a. 4k"
-  4096)
+  k-128)
 
 (def max-outgoing-blocks
   "How many outgoing, non-ACK'd blocks will we buffer?
@@ -78,6 +99,24 @@ with the ring buffer semantics, but there may be a deeper motivation."
 
   must be power of 2 -- DJB"
   64)
+
+(def min-msg-len 48)
+(def max-msg-len 1088)
+(def ms-5
+  "5 milliseconds, in nanoseconds"
+  5000000)
+
+(def secs-1
+  "in nanoseconds"
+  specs/sec->n-sec)
+
+(def secs-10
+  "in nanoseconds"
+  (* secs-1 10))
+
+(def minute-1
+  "in nanoseconds"
+  (* 60 secs-1))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -525,15 +564,294 @@ Prior to that, it was limited to 4K.
       (log/warn "Child buffer overflow")
       state)))
 
-;;;  436-614: try processing a message: (DJB)
-;;; TODO: Get back to this
-;;;           Lots of code in here.
-;;;           This seems like the interesting part
-;;;           440: sets maxblocklen=1024
-;;;                Q: Why was it ever 512?
-;;;                Guess: for initial Message part of Initiate packet
-;;;          444-609: handle this message if it's comprehensible: (DJB)
-;;;          610-614: counters/looping
+(defn do-send-ack
+  "Write ACK buffer to parent
+
+Line 608"
+  [{{:keys [::specs/->parent]} ::specs/callbacks
+    buf ::specs/buf
+    :as state}]
+  ;; Q: Is it really this simple/easy?
+  (->parent buf))
+
+(defn prep-send-ack
+  "Lines 595-606"
+  [{:keys [::specs/buf]
+    :as state}
+   message-id]
+  (if (not= message-id)
+    (let [u 192]
+      ;; XXX: delay acknowledgments  --DJB
+      (.writeLong buf (quot u 16))
+      ;; This gets us to line 599
+      (throw (RuntimeException. "Start here")))
+    ;; Don't want to ACK a pure-ACK message with no content
+    state))
+
+(s/fdef do-actual-read
+        :args (:state ::specs/state)
+        :ret ::specs/state)
+(defn do-actual-read
+  "Lines 562-593"
+  [state]
+  (throw (RuntimeException. "Translate this")))
+
+(defn read-long
+  [bb]
+  (.readLong bb))
+
+(defn read-int
+  [bb]
+  (.readInt bb))
+
+(defn read-short
+  [bb]
+  (.readShort bb))
+
+(s/fdef flag-acked-others
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn flag-acked-others
+  "Lines 544-560"
+  [{:keys [::specs/buf]
+    :as state}]
+  (let [indexes (map (fn [startfn stopfn]
+                       [(startfn buf) (stopfn buf)])
+                     [(constantly 0) read-long]  ; 0-8
+                     [read-int read-short]       ; 16-20
+                     [read-short read-short]     ; 22-24
+                     [read-short read-short]     ; 26-28
+                     [read-short read-short]     ; 30-32
+                     [read-short read-short])]   ; 34-36
+    (reduce (fn [state [start stop]]
+              (help/mark-acknowledged state start stop))
+            state
+            indexes)))
+
+(s/fdef recalc-rtt-average
+        :args (s/cat :state ::state
+                     :rtt ::rtt)
+        :ret ::state)
+(defn recalc-rtt-average
+  "Lines 460-466"
+  [{:keys [::specs/rtt-average]
+    :as state}
+   rtt]
+  (if (not= 0 rtt-average)
+    (assoc state
+           ::n-sec-per-block rtt
+           ::rtt-average rtt
+           ::rtt-deviation (quot rtt 2)
+           ::rtt-highwater rtt
+           ::rtt-lowwater rtt)
+    state))
+
+(s/fdef jacobson-adjust-block-time
+        :args (s/cat :n-sec-per-block ::specs/n-sec-per-block)
+        :ret ::specs/n-sec-per-block)
+(defn jacobson-adjust-block-time
+  "Lines 496-509"
+  [n-sec-per-block]
+  ;; This next magic number matches the send-byte-buf-size, but that's
+  ;; almost definitely just a coincidence
+  (if (< n-sec-per-block k-128)
+    n-sec-per-block
+    ;; DJB had this to say.
+    ;; As 4 separate comments.
+    ;; additive increase: adjust 1/N by a constant c
+    ;; rtt-fair additive increase: adjust 1/N by a constant c every nanosecond
+    ;; approximation: adjust 1/N by cN every N nanoseconds
+    ;; i.e., N <- 1/(1/N + cN) = N/(1 + cN^2) every N nanoseconds
+    (if (< n-sec-per-block 16777216)
+      (let [u (quot n-sec-per-block k-128)]
+        (- n-sec-per-block (* u u u)))
+      (let [d (double n-sec-per-block)]
+        (long (/ d (inc (/ (* d d) 2251799813685248.0))))))))
+
+(s/fdef adjust-rtt-phase
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn adjust-rtt-phase
+  "Lines 511-521"
+  [{:keys [::specs/n-sec-per-block
+           ::specs/recent
+           ::specs/rtt-phase
+           ::specs/rtt-seen-older-high
+           ::specs/rtt-seen-older-low]
+    :as state}]
+  (if (not rtt-phase)
+    (if rtt-seen-older-high
+      (assoc state
+             ::specs/rtt-phase true
+             ::specs/last-edge recent
+             ::specs/n-sec-per-block (+ n-sec-per-block
+                                        (crypto/random-mod (quot n-sec-per-block 4))))
+      state)
+    (if rtt-seen-older-low
+      (assoc state ::specs/rtt-phase false)
+      state)))
+
+(defn jacobson's-retransmission-timeout
+  "Jacobson's retransmission timeout calculation: --DJB
+
+  I'm lumping lines 467-527 into here, even though I haven't
+  seen the actual paper describing the algorithm. This is the
+  basic algorithm that TCP uses pretty much everywhere. -- JRG"
+  [{:keys [::last-doubling
+           ::last-edge
+           ::last-speed-adjustment
+           ::n-sec-per-block
+           ::recent
+           ::rtt
+           ::rtt-average
+           ::rtt-deviation
+           ::rtt-highwater
+           ::rtt-lowwater
+           ::rtt-seen-recent-high
+           ::rtt-seen-recent-low
+           ::rtt-timeout]
+    :as state}]
+  (let [rtt-delta (- rtt-average rtt)
+        rtt-average (+ rtt-average (/ rtt-delta 8))
+        rtt-delta (if (> 0 rtt-delta)
+                    (- rtt-delta)
+                    rtt-delta)
+        rtt-delta (- rtt-delta rtt-deviation)
+        rtt-deviation (+ rtt-deviation (/ rtt-delta 4))
+        rtt-timeout (+ rtt-average (* 4 rtt-deviation))
+        ;; adjust for delayed acks with anti-spiking: --DJB
+        rtt-timeout (+ rtt-timeout (* 8 n-sec-per-block))
+
+        ;; recognizing top and bottom of congestion cycle:  --DJB
+        rtt-delta (- rtt rtt-highwater)
+        rtt-highwater (+ rtt-highwater (/ rtt-delta k-1))
+        rtt-delta (- rtt rtt-lowwater)
+        rtt-lowwater (+ rtt-lowwater
+                        (if (> rtt-delta 0)
+                          (/ rtt-delta k-8)
+                          (/ rtt-delta k-div4)))
+        rtt-seen-recent-high (> rtt-average (+ rtt-highwater ms-5))
+        rtt-seen-recent-low (and (not rtt-seen-recent-high)
+                                 (< rtt-average rtt-lowwater))]
+    (when (>= recent (+ last-speed-adjustment (* 16 n-sec-per-block)))
+      (let [n-sec-per-block (if (> (- recent last-speed-adjustment) secs-10)
+                              (+ secs-1 (crypto/random-mod (quot n-sec-per-block 8)))
+                              n-sec-per-block)
+            n-sec-per-block (jacobson-adjust-block-time n-sec-per-block)
+            state (assoc state ::n-sec-per-block n-sec-per-block)
+            {:keys [::specs/rtt-seen-recent-high ::specs/rtt-seen-recent-low]
+             :as state} (adjust-rtt-phase state)
+            state (assoc state
+                         ::specs/last-speed-adjustment recent
+                         ::specs/n-sec-per-block n-sec-per-block
+
+                         ::specs/rtt-average rtt-average
+                         ::specs/rtt-deviation rtt-deviation
+                         ::specs/rtt-highwater rtt-highwater
+                         ::specs/rtt-lowwater rtt-lowwater
+                         ::specs/rtt-timeout rtt-timeout
+
+                         ::specs/seen-older-high rtt-seen-recent-high
+                         ::specs/seen-older-low rtt-seen-recent-low
+                         ::specs/seen-recent-high false
+                         ::specs/seen-recent-low false)
+            been-a-minute? (- recent last-edge minute-1)]
+        (cond
+          (and been-a-minute?
+               (< recent (+ last-doubling
+                            (* 4 n-sec-per-block)
+                            (* 64 rtt-timeout)
+                            ms-5))) state
+          (and (not been-a-minute?)
+               (< recent (+ last-doubling
+                            (* 4 n-sec-per-block)
+                            (* 2 rtt-timeout)))) state
+          (<= (dec k-64) n-sec-per-block) state
+          :else (assoc state {::n-sec-per-block (quot n-sec-per-block 2)
+                              ::last-doubling recent
+                              ::last-edge (if (not= 0 last-edge) recent last-edge)}))))))
+
+(s/fdef flag-acked
+        :args (s/cat :state ::specs/state
+                     :acked-block ::specs/block)
+        :ret ::state)
+(defn flag-acked
+  "It looks like this is coping with the first sent/ACK'd message from the child
+
+  TODO: Better name
+  Lines 458-541"
+  [{:keys [::recent]
+    :as state}
+   {:keys [::time]
+    :as acked-block}]
+  (let [rtt (- recent time)
+        state (recalc-rtt-average state rtt)]
+    (jacobson's-retransmission-timeout state)))
+
+(s/fdef handle-comprehensible-child-message
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn handle-comprehensible-child-message
+  "Lots of code in here.
+
+  This seems like the interesting part.
+  444-609: handle this message if it's comprehensible: (DJB)"
+  [{:keys [::specs/blocks
+           ::specs/->child-buffer]
+    :as state}]
+  (let [msg (first ->child-buffer)
+        len (.getReadableBytes msg)]
+    (when (and (>= len min-msg-len)
+               (<= len max-msg-len))
+      (let [msg-id (.readUnsignedInt msg) ;; won't need this (until later?), but need to update read-index anyway
+            ack-id (.readUnsignedInt msg)
+            ;; Note that there's something terribly wrong if we
+            ;; have multiple blocks with the same message ID.
+            ;; Q: Isn't there?
+            acked-blocks (filter #(= ack-id (::message-id %))
+                                 blocks)
+            state (reduce (partial flag-acked state) acked-blocks)
+            ;; That takes us down to line 544
+            state (flag-acked-others state)
+            state (do-actual-read state)
+            state (prep-send-ack state msg-id)]
+        (do-send-ack state)
+        state))))
+
+(s/fdef try-processing-message
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn try-processing-message
+  "436-614: try processing a message: --DJB"
+  [{:keys [::specs/->child-buffer
+           ::specs/receive-bytes
+           ::specs/receive-written]
+    :as state}]
+  (when-not (or (= 0 (count ->child-buffer))
+                ;; This next check includes an &&
+                ;; to verify that tochild is > 0 (I'm
+                ;; pretty sure that's just verifying that
+                ;; it's open)
+                ;; The meaning of receive-written and
+                ;; receive-bytes doesn't seem to mesh
+                ;; with the comments about them, based
+                ;; on this test.
+                ;; Maybe it will make more sense when
+                ;; I get more translated over
+                (< receive-written receive-bytes))
+    ;; 440: sets maxblocklen=1024
+    ;; Q: Why was it ever 512?
+    ;; Guess: for initial Message part of Initiate packet
+    (let [state (assoc state ::max-byte-length k-1)]
+      ;; 610-614: counters/looping
+      (update
+       (handle-comprehensible-child-message state)
+       ::specs/->child-buffer
+       ;; Q: Do I need to convert the lazy seq this creates
+       ;; back to a vec?
+       ;; ByteBuf life cycle issues seem like they might lead
+       ;; to lots of problems later if I don't.
+       #(drop 1 %)))))
 
 ;;;  615-632: try sending data to child: (DJB)
 ;;;           Big picture: copy data from receivebuf to the child[1] pipe
@@ -600,13 +918,25 @@ Prior to that, it was limited to 4K.
     want-ping]
    {::specs/blocks []
     ::specs/earliest-time 0
+    ::specs/last-doubling 0
+    ::specs/last-edge 0
+    ::specs/last-speed-adjustment 0
+    ::specs/max-block-length k-div2
     ;; Seems vital, albeit undocumented
     ::specs/n-sec-per-block specs/sec->n-sec
+    ::specs/receive-bytes 0
+    ::specs/receive-written 0
     ;; In the original, this is a local in main rather than a global
     ;; Q: Is there any difference that might matter to me, other
     ;; than being allocated on the stack instead of the heap?
     ;; (Assuming globals go on the heap. TODO: Look that up)
     ::specs/recent 0
+    ::specs/rtt 0
+    ::specs/rtt-phase false
+    ::specs/rtt-seen-older-high false
+    ::specs/rtt-seen-older-low false
+    ::specs/rtt-seen-recent-high false
+    ::specs/rtt-seen-recent-lowi false
     ::specs/rtt-timeout specs/sec->n-sec
     ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
     ::specs/send-buf-size send-byte-buf-size
