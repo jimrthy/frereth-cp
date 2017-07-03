@@ -576,25 +576,34 @@ Line 608"
 
 (defn prep-send-ack
   "Lines 595-606"
-  [{:keys [::specs/buf]
+  [{:keys [::specs/buf
+           ::specs/current-block-cursor
+           ::specs/receive-bytes
+           ::specs/receive-eof
+           ::specs/receive-total-bytes]
     :as state}
    message-id]
   (if (not= message-id)
     (let [u 192]
       ;; XXX: delay acknowledgments  --DJB
       (.writeLong buf (quot u 16))
-      ;; This gets us to line 599
-      (throw (RuntimeException. "Start here")))
+      (.writeInt buf message-id)
+      (.writeLong buf (if (and receive-eof
+                               (= receive-bytes receive-total-bytes))
+                        (inc receive-bytes)
+                        receive-bytes))
+      ;; XXX: incorporate selective acknowledgments --DJB
+      )
     ;; Don't want to ACK a pure-ACK message with no content
     state))
 
-(s/fdef do-actual-read
+(s/fdef read-from-parent!
         :args (:state ::specs/state)
         :ret ::specs/state)
-(defn do-actual-read
+(defn read-from-parent!
   "Lines 562-593"
   [state]
-  (throw (RuntimeException. "Translate this")))
+  (throw (RuntimeException. "Start here")))
 
 (defn read-long
   [bb]
@@ -813,7 +822,7 @@ Line 608"
             state (reduce (partial flag-acked state) acked-blocks)
             ;; That takes us down to line 544
             state (flag-acked-others state)
-            state (do-actual-read state)
+            state (read-from-parent! state)
             state (prep-send-ack state msg-id)]
         (do-send-ack state)
         state))))
@@ -853,9 +862,31 @@ Line 608"
        ;; to lots of problems later if I don't.
        #(drop 1 %)))))
 
-;;;  615-632: try sending data to child: (DJB)
-;;;           Big picture: copy data from receivebuf to the child[1] pipe
-;;;           Then zero the receivevalid flags
+(defn forward-to-child
+  "From the buffer that parent has filled
+
+  615-632: try sending data to child: --DJB
+
+  Big picture: copy data from receivebuf to the child[1] pipe
+  Then zero the receivevalid flags"
+  [{:keys [::specs/->child]
+    :as callbacks}
+   buf]
+  ;; There isn't any real buffering in this direction.
+  ;; If the child's open, write whichever bytes are available
+  ;; in receive-buf.
+  ;; Those bytes would have pulled in pretty much directly above,
+  ;; in read-from-parent! and then ACK'd.
+  ;; So maybe this part isn't a total waste, but there are definitely
+  ;; pieces that feel silly.
+
+  ;; At the very most, it seems as though this should amount to
+  ;; something like
+  (->child buf))
+
+;;;
+;;;
+;;;
 ;;;  634-643: try closing pipe to child: (DJB)
 ;;;           Well, maybe. If we're done with it
 
@@ -925,6 +956,8 @@ Line 608"
     ;; Seems vital, albeit undocumented
     ::specs/n-sec-per-block specs/sec->n-sec
     ::specs/receive-bytes 0
+    ::specs/receive-eof false
+    ::specs/receive-total-bytes 0
     ::specs/receive-written 0
     ;; In the original, this is a local in main rather than a global
     ;; Q: Is there any difference that might matter to me, other

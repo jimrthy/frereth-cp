@@ -32,7 +32,9 @@
 ;; This maps to a bitflag to send over the wire:
 ;; 2048 for normal EOF after sendbytes
 ;; 4096 for error after sendbytes
-(s/def ::send-eof #{false ::normal ::error})
+(s/def ::eof-flag #{false ::normal ::error})
+(s/def ::receive-eof) ::eof-flag
+(s/def ::send-eof ::eof-flag)
 
 ;;; Position of a block's first byte within the stream
 ;;; Corresponds to blockpos
@@ -83,6 +85,8 @@
 
 ;; number of initial bytes fully received --DJB
 (s/def ::receive-bytes nat-int?)
+;; total number of bytes in stream, if receiveeof --DJB
+(s/def ::receive-total-bytes int?)
 ;; within receivebytes, number of bytes given to child -- DJB
 (s/def ::receive-written nat-int?)
 
@@ -160,8 +164,10 @@
                              ::n-sec-per-block
                              ::next-message-id
                              ::->child-buffer
-                             ::receive-written
                              ::receive-bytes
+                             ::receive-eof
+                             ::receive-total-bytes
+                             ::receive-written
                              ::recent
                              ::rtt
                              ::rtt-average
