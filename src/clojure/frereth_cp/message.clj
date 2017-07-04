@@ -15,7 +15,7 @@ in a specific (and apparently undocumented) communications protocol.
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
             [manifold.stream :as strm])
-  (:import io.netty.buffer.Unpooled))
+  (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
@@ -215,48 +215,6 @@ TODO: Untangle the strands and get this usable.
         (assoc ::send-bytes send-bytes
 ;;;  337: update recent
                ::recent (System/nanoTime)))))
-
-(s/fdef possibly-add-child-bytes
-        :args (s/cat :state ::specs/state
-                     :buf ::specs/buf))
-(defn possibly-add-child-bytes
-  "Read bytes from a child buffer...if we have room
-
-This is upside down: the API should be that
-child makes a callback.
-
-The only real question seems to be what happens
-when that buffer overflows.
-
-In the original, that buffer is really just an
-anonymous pipe between the processes, so there
-should be quite a lot of room.
-
-According to the pipe(7) man page, linux provides
-16 \"pages\" of buffer space. So 64K, if the page
-size is 4K. At least, it has since 2.6.11.
-
-Prior to that, it was limited to 4K.
-
-;;;  319-336: Maybe read bytes from child
-"
-  [state
-   buf]
-  (let [send-bytes (::send-bytes state)]
-    ;; Line 322: This also needs to account for send-acked
-    ;; For whatever reason, DJB picked this as the end-point to refuse to read
-    ;; more child data before we hit send-byte-buf-size.
-    ;; Presumably that reason remains valid
-
-    ;; Q: Is that an important part of the algorithm, or is
-    ;; it "just" dealing with the fact that we have a circular
-    ;; buffer with parts that have not yet been GC'd?
-    ;; And is it possible to tease apart that distinction?
-
-    (when (< (+ send-bytes k-4) send-byte-buf-size)
-      (let [available-buffer-space (- send-byte-buf-size)
-            buffer (.readBytes buf available-buffer-space)]
-        (child-consumer state buffer)))))
 
 (s/fdef check-for-previous-block-to-resend
         :args ::state
@@ -529,53 +487,6 @@ Prior to that, it was limited to 4K.
       (assoc state'' ::earliest-time (help/earliest-block-time (::blocks state''))))
     state))
 
-(s/fdef parent->
-        :args (s/cat :state ::specs/state
-                     :buf ::specs/buf)
-        :ret ::specs/state)
-(defn parent->
-  "Receive a ByteBuf from parent
-
-  411-435: try receiving messages: (DJB)
-
-  It seems like this is probably inside-out now.
-
-  The parent is going to call this. It should trigger
-  the pieces that naturally fall downstream and lead
-  to writing the bytes to the child.
-
-  It's replacing one of the polling triggers that
-  set off the main() event loop. Need to adjust for
-  that fundamental strategic change
-  "
-  [{:keys [::specs/->child-buffer]
-    :as state} buf]
-;;;           From parent (over watch8)
-;;;           417-433: for loop from 0-bytes read
-;;;                    Copies bytes from incoming message buffer to message[][]
-  (when (= 0 (.readableBytes buf))
-    ;; Yes, this is supposed to kill the entire process
-    ;; TODO: Be more graceful
-    (throw (AssertionError. "Bad Message")))
-
-  ;; Reference implementation is really reading bytes from
-  ;; a stream.
-  ;; It reads the first byte to get the length of the block,
-  ;; pulls the next byte from the stream, calculates the stream
-  ;; length, double-checks for failure conditions, and then copies
-  ;; the bytes into the last spot in the global message array
-  ;; (assuming that array/buffer hasn't filled up waiting for the
-  ;; client to process it).
-
-  ;; I'm going to take a simpler and easier approach, at least for
-  ;; the first pass
-  (if (< max-child-buffer-size (count ->child-buffer))
-    ;; Q: Do I need anything else?
-    (update state ::->child-buffer conj buf)
-    (do
-      (log/warn "Child buffer overflow")
-      state)))
-
 (defn send-ack!
   "Write ACK buffer to parent
 
@@ -617,7 +528,7 @@ Line 608"
   [{:keys [::specs/buf]
     :as state}]
   ;; 562-574: calculate start/stop bytes
-  (let [D (read-short buf)
+  (let [D (help/read-ushort buf)
         SF (bit-and D (+ k-2 k-4))
         D (- D SF)]
     (when (and (<= D 1024)
@@ -630,7 +541,7 @@ Line 608"
                ;; It doesn't make a lot of sense in this
                ;; approach
                #_(> (+ 48 D) len))
-      (let [start-byte (read-long buf)
+      (let [start-byte (help/read-ulong buf)
             stop-byte (+ D start-byte)]
         ;; of course, flow control would avoid this case -- DJB
         ;; I've just totally painted receivebuf out of the picture.
@@ -646,19 +557,7 @@ Line 608"
           ;; 581-588: copy incoming into receivebuf
           ;;          set the receivevalid flag
 
-          (throw (RuntimeException. "Translate this")))))))
-
-(defn read-long
-  [bb]
-  (.readLong bb))
-
-(defn read-int
-  [bb]
-  (.readInt bb))
-
-(defn read-short
-  [bb]
-  (.readShort bb))
+          (throw (RuntimeException. "Q: What does receivebuf look like?")))))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
@@ -669,12 +568,12 @@ Line 608"
     :as state}]
   (let [indexes (map (fn [startfn stopfn]
                        [(startfn buf) (stopfn buf)])
-                     [(constantly 0) read-long]  ; 0-8
-                     [read-int read-short]       ; 16-20
-                     [read-short read-short]     ; 22-24
-                     [read-short read-short]     ; 26-28
-                     [read-short read-short]     ; 30-32
-                     [read-short read-short])]   ; 34-36
+                     [(constantly 0) help/read-ulong]  ; 0-8
+                     [help/read-uint help/read-ushort]       ; 16-20
+                     [help/read-ushort help/read-ushort]     ; 22-24
+                     [help/read-ushort help/read-ushort]     ; 26-28
+                     [help/read-ushort help/read-ushort]     ; 30-32
+                     [help/read-ushort help/read-ushort])]   ; 34-36
     ;; TODO: Desperately need to test this out to verify
     ;; that it does what I think
     (reduce (fn [state [start stop]]
@@ -857,8 +756,8 @@ Line 608"
         len (.getReadableBytes msg)]
     (when (and (>= len min-msg-len)
                (<= len max-msg-len))
-      (let [msg-id (.readUnsignedInt msg) ;; won't need this (until later?), but need to update read-index anyway
-            ack-id (.readUnsignedInt msg)
+      (let [msg-id (help/read-uint msg) ;; won't need this (until later?), but need to update read-index anyway
+            ack-id (help/read-uint msg)
             ;; Note that there's something terribly wrong if we
             ;; have multiple blocks with the same message ID.
             ;; Q: Isn't there?
@@ -981,6 +880,11 @@ Line 608"
   [state]
   (assoc state :event-loops (start-event-loops! state)))
 
+(defn halt!
+  [state]
+  ;; TODO: Surely there's something
+  state)
+
 (s/fdef initial-state
         :args (s/cat :parent-callback ::specs/->parent
                      :child-callback ::specs/->child
@@ -1028,3 +932,93 @@ Line 608"
     ::specs/want-ping want-ping})
   ([parent-callback child-callback]
    (initial-state parent-callback child-callback false)))
+
+(s/fdef child->
+        :args (s/cat :state ::specs/state
+                     :buf ::specs/buf))
+(defn child->
+  "Read bytes from a child buffer...if we have room
+
+This is upside down: the API should be that
+child makes a callback.
+
+The only real question seems to be what happens
+when that buffer overflows.
+
+In the original, that buffer is really just an
+anonymous pipe between the processes, so there
+should be quite a lot of room.
+
+According to the pipe(7) man page, linux provides
+16 \"pages\" of buffer space. So 64K, if the page
+size is 4K. At least, it has since 2.6.11.
+
+Prior to that, it was limited to 4K.
+
+;;;  319-336: Maybe read bytes from child
+"
+  [state
+   buf]
+  (let [send-bytes (::send-bytes state)]
+    ;; Line 322: This also needs to account for send-acked
+    ;; For whatever reason, DJB picked this as the end-point to refuse to read
+    ;; more child data before we hit send-byte-buf-size.
+    ;; Presumably that reason remains valid
+
+    ;; Q: Is that an important part of the algorithm, or is
+    ;; it "just" dealing with the fact that we have a circular
+    ;; buffer with parts that have not yet been GC'd?
+    ;; And is it possible to tease apart that distinction?
+
+    (when (< (+ send-bytes k-4) send-byte-buf-size)
+      (let [available-buffer-space (- send-byte-buf-size)
+            buffer (.readBytes buf available-buffer-space)]
+        (child-> state buffer)))))
+
+(s/fdef parent->
+        :args (s/cat :state ::specs/state
+                     :buf ::specs/buf)
+        :ret ::specs/state)
+(defn parent->
+  "Receive a ByteBuf from parent
+
+  411-435: try receiving messages: (DJB)
+
+  It seems like this is probably inside-out now.
+
+  The parent is going to call this. It should trigger
+  the pieces that naturally fall downstream and lead
+  to writing the bytes to the child.
+
+  It's replacing one of the polling triggers that
+  set off the main() event loop. Need to adjust for
+  that fundamental strategic change
+  "
+  [{:keys [::specs/->child-buffer]
+    :as state}
+   ^ByteBuf buf]
+;;;           From parent (over watch8)
+;;;           417-433: for loop from 0-bytes read
+;;;                    Copies bytes from incoming message buffer to message[][]
+  (when (= 0 (.readableBytes buf))
+    ;; Yes, this is supposed to kill the entire process
+    ;; TODO: Be more graceful
+    (throw (AssertionError. "Bad Message")))
+
+  ;; Reference implementation is really reading bytes from
+  ;; a stream.
+  ;; It reads the first byte to get the length of the block,
+  ;; pulls the next byte from the stream, calculates the stream
+  ;; length, double-checks for failure conditions, and then copies
+  ;; the bytes into the last spot in the global message array
+  ;; (assuming that array/buffer hasn't filled up waiting for the
+  ;; client to process it).
+
+  ;; I'm going to take a simpler and easier approach, at least for
+  ;; the first pass
+  (if (< max-child-buffer-size (count ->child-buffer))
+    ;; Q: Do I need anything else?
+    (update state ::->child-buffer conj buf)
+    (do
+      (log/warn "Child buffer overflow")
+      state)))

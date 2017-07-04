@@ -1,7 +1,8 @@
 (ns frereth-cp.message.helpers
   "Top-level message helpers"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.specs :as specs]))
+            [frereth-cp.message.specs :as specs])
+  (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -92,3 +93,27 @@ Based [cleverly] on acknowledged, running from lines 155-185"
         (assoc state ::specs/earliest-time (earliest-block-time blocks))))
     ;;; No change
     state))
+
+(defn read-long
+  [^ByteBuf bb]
+  (.readLong bb))
+
+(defn read-ulong
+  [^ByteBuf bb]
+  (.readUnsignedLong bb))
+
+(defn read-int
+  [^ByteBuf bb]
+  (.readInt bb))
+
+(defn read-uint
+  [^ByteBuf bb]
+  (.readUnsignedInt bb))
+
+(defn read-short
+  [^ByteBuf bb]
+  (.readShort bb))
+
+(defn read-ushort
+  [^ByteBuf bb]
+  (.readUnsignedShort bb))

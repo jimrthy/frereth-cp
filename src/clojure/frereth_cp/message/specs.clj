@@ -33,7 +33,7 @@
 ;; 2048 for normal EOF after sendbytes
 ;; 4096 for error after sendbytes
 (s/def ::eof-flag #{false ::normal ::error})
-(s/def ::receive-eof) ::eof-flag
+(s/def ::receive-eof ::eof-flag)
 (s/def ::send-eof ::eof-flag)
 
 ;;; Position of a block's first byte within the stream
