@@ -15,8 +15,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(s/def ::buf #(instance? ByteBuf %))
 (s/def ::big-int #(instance? BigInt %))
+(s/def ::buf #(instance? ByteBuf %))
 
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
@@ -83,6 +83,8 @@
 ;; child.
 (s/def ::max-block-length nat-int?)
 
+;; circular queue beyond receivewritten; size must be power of 2 --DJB
+(s/def ::receive-buf ::buf)
 ;; number of initial bytes fully received --DJB
 (s/def ::receive-bytes nat-int?)
 ;; total number of bytes in stream, if receiveeof --DJB
@@ -191,4 +193,6 @@
                              ::total-block-transmissions
                              ::want-ping]
                        :opt [::callbacks
-                             ::current-block-cursor]))
+                             ::current-block-cursor
+                             ::receive-buf
+                             ::strm->child]))

@@ -1,62 +1,33 @@
 (ns frereth-cp.message
   "Translation of curvecpmessage.c
 
-This is really a generic buffer program
+  This is really a generic buffer program
 
-The \"parent\" child/server reads/writes to pipes that this provides,
-in a specific (and apparently undocumented) communications protocol.
+  The \"parent\" child/server reads/writes to pipes that this provides,
+  in a specific (and apparently undocumented) communications protocol.
 
-  This, in turn, reads/writes data from/to a child that it spawns."
-  (:require [clojure.spec.alpha :as s]
+  This, in turn, reads/writes data from/to a child that it spawns.
+
+  I keep wanting to think of this as a simple transducer and just
+  skip the buffering pieces, but they (and the flow control) are
+  really the main point."
+  (:require #_[clojure.core.async :as async]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
+            [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
+            ;; This next reference should go away
+            ;; Except...I *am* using it as part of
+            ;; aleph.
             [manifold.stream :as strm])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
-
-(def stream-length-limit
-  "How many bytes can the stream send before we've exhausted the address space?
-
-(dec (pow 2 60)): this allows > 200 GB/second continuously for a year"
-  1152921504606846976)
-
-(def k-div4
-  "aka 1/4 k"
-  256)
-
-(def k-div2
-  "aka 1/2 k"
-  512)
-
-(def k-1
-  "aka 1k"
-  1024)
-
-(def k-2
-  "aka 2k"
-  2048)
-
-(def k-4
-  "aka 4k"
-  4096)
-
-(def k-8
-  "aka 8k"
-  8192)
-
-(def k-64
-  "aka 128k"
-  65536)
-
-(def k-128
-  "aka 128k"
-  131072)
 
 (def send-byte-buf-size
   "How many child bytes will we buffer to send?
@@ -72,7 +43,7 @@ The reference implementation notes that this absolutely
 must be a power of 2. Pretty sure that's because it involves
 a circular buffer and uses bitwise ands for quick/cheap
 modulo arithmetic."
-  k-128)
+  K/k-128)
 
 (def max-outgoing-blocks
   "How many outgoing, non-ACK'd blocks will we buffer?
@@ -86,13 +57,10 @@ with the ring buffer semantics, but there may be a deeper motivation."
   128)
 
 (def max-block-length
-  512)
+  K/k-div2)
 
-;; (dec (pow 2 32))
-(def MAX_32_UINT 4294967295)
-
-(def error-eof k-4)
-(def normal-eof k-2)
+(def error-eof K/k-4)
+(def normal-eof K/k-2)
 
 (def max-child-buffer-size
   "Maximum message blocks from parent to child that we'll buffer before dropping
@@ -102,21 +70,6 @@ with the ring buffer semantics, but there may be a deeper motivation."
 
 (def min-msg-len 48)
 (def max-msg-len 1088)
-(def ms-5
-  "5 milliseconds, in nanoseconds"
-  5000000)
-
-(def secs-1
-  "in nanoseconds"
-  specs/sec->n-sec)
-
-(def secs-10
-  "in nanoseconds"
-  (* secs-1 10))
-
-(def minute-1
-  "in nanoseconds"
-  (* 60 secs-1))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -133,18 +86,36 @@ with the ring buffer semantics, but there may be a deeper motivation."
 "
   [{:keys [::specs/callbacks]
     :as state}]
-  (let [{:keys [::specs/->child ::specs/->parent]} callbacks]
-    ;; I think the main idea of this module is that I should set up
-    ;; transducing pipelines between child and parent
-    ;; That isn't right, though.
-    ;; The entire point, really, is to maintain a buffer between the
-    ;; two until the blocks in that buffer have been ACK'd
-    ;; Although managing the congestion control aspects of that
-    ;; buffer definitely play a part
+  (let [{:keys [::specs/->child ::specs/->parent]} callbacks
+        strm->child (strm/stream)]
+    ;; At its heart, the reference implementation message event
+    ;; loop is driven by a poller.
+    ;; That checks for input on:
+    ;; fd 8 (from the parent)
+    ;; tochild[1] (to child)
+    ;; fromchild[0] (from child)
+    ;; and a timeout (based on the messaging state).
     (throw (RuntimeException. "What should this look like?"))
 
-    ;; This covers line 260
-    (assoc state ::specs/recent (System/nanoTime))))
+    ;; I want to keep any sort of deferred/async details
+    ;; as well-hidden as possible.
+    ;; This is a boundary piece that almost seems tailor-made.
+    ;; Although I really do need to figure out what makes sense
+    ;; as "buffer size."
+    ;; And it might make a lot of sense to spread it farther
+    ;; than I'm using it now to try to take advantage of
+    ;; the transducer capabilities.
+    ;; By the same token, it's very tempting to just use
+    ;; a core.async channel instead.
+    ;; The only reason I'm not now is that I already have
+    ;; access to manifold thanks to aleph, and I don't want
+    ;; to restart my JVM to update build.boot to get access
+    ;; to core.async.
+    (strm/consume ->child strm->child)
+    (assoc state
+           ::specs/strm->child strm->child
+           ;; This covers line 260
+           ::specs/recent (System/nanoTime))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal API
@@ -206,7 +177,7 @@ TODO: Untangle the strands and get this usable.
   (let [block {::buf buf
                ::transmissions 0}
         send-bytes (+ send-bytes (.getReadableBytes buf))]
-    (when (>= send-bytes stream-length-limit)
+    (when (>= send-bytes K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.
       (throw (AssertionError. "End of stream")))
@@ -341,7 +312,7 @@ TODO: Untangle the strands and get this usable.
                     ;; This has other restrictions based on
                     ;; the implementation details, but those
                     ;; aren't covered by the spec
-                    #(< (+ k-1 k-4) %)))
+                    #(< (+ K/k-1 error-eof) %)))
 (defn calculate-message-data-block-length-flags
   [block]
   (let [len (::specs/length block)]
@@ -380,7 +351,7 @@ TODO: Untangle the strands and get this usable.
   (throw (RuntimeException. "More important to update the proper place in ::blocks"))
   (let [next-message-id (let [n' (inc next-message-id)]
                           ;; Stupid unsigned math
-                          (if (> n' MAX_32_UINT)
+                          (if (> n' K/MAX_32_UINT)
                             1 n'))
         state'
         (-> state
@@ -404,7 +375,7 @@ TODO: Untangle the strands and get this usable.
             1088 1088
             (throw (AssertionError. "block too big")))]
     (when (or (neg? block-length)
-              (> k-1 block-length))
+              (> K/k-1 block-length))
       (throw (AssertionError. "illegal block length")))
     ;; We need a prefix byte that tells the other end (/ length 16)
     ;; I'm fairly certain that this extra up-front padding is to set
@@ -525,11 +496,13 @@ Line 608"
         :ret ::specs/state)
 (defn extract-message-from-parent
   "Lines 562-593"
-  [{:keys [::specs/buf]
+  [{:keys [::specs/buf
+           ::specs/receive-buf
+           ::specs/receive-written]
     :as state}]
   ;; 562-574: calculate start/stop bytes
   (let [D (help/read-ushort buf)
-        SF (bit-and D (+ k-2 k-4))
+        SF (bit-and D (+ normal-eof error-eof))
         D (- D SF)]
     (when (and (<= D 1024)
                ;; In the reference implementation,
@@ -544,20 +517,42 @@ Line 608"
       (let [start-byte (help/read-ulong buf)
             stop-byte (+ D start-byte)]
         ;; of course, flow control would avoid this case -- DJB
-        ;; I've just totally painted receivebuf out of the picture.
-        ;; Q: How foolish was that?
-        (comment (when (<= stop-byte (+ receive-written (count receivebuf)))))
-        ;; 576-579: SF (StopFlag? deals w/ EOF)
-        (let [receive-eof (case SF
-                            0 false
-                            k-2 ::specs/normal
-                            k-4 ::specs/error)
-              receive-total-bytes (if (not= SF 0)
-                                    stop-byte)]
-          ;; 581-588: copy incoming into receivebuf
-          ;;          set the receivevalid flag
+        ;; Q: What does that mean? --JRG
+        (when (<= stop-byte (+ receive-written (.writableBytes receive-buf)))
+          ;; 576-579: SF (StopFlag? deals w/ EOF)
+          (let [receive-eof (case SF
+                              0 false
+                              normal-eof ::specs/normal
+                              error-eof ::specs/error)
+                receive-total-bytes (if (not= SF 0)
+                                      stop-byte)
+                ;; It's tempting to use a Pooled buffer here instead.
+                ;; That temptation is wrong.
+                ;; There's no good reason for this to be direct memory,
+                ;; and "the JVM garbage collector...works OK for heap buffers,
+                ;; but not direct buffers" (according to netty.io's wiki entry
+                ;; about using it as a generic performance library).
+                ;; It *is* tempting to retain the original direct
+                ;; memory in which it arrived as long as possible. That approach
+                ;; would probably make a lot more sense if I were using a JNI
+                ;; layer for encryption.
+                ;; As it stands, we've already stomped all over the source
+                ;; memory long before it got here.
+                receive-buf (Unpooled/buffer D)]
+            ;; 581-588: copy incoming into receivebuf
+            ;;          set the receivevalid flag
+            ;; There are at least a couple of curve balls in the air right here:
+            ;; 1. Only write bytes at stream addresses(?)
+            ;;    (< receive-written where (+ receive-written receive-buf-size))
+            ;; 2. Update the receive-valid flag associated with each byte as we go
+            ;;    The receivevalid array is declared with this comment:
+            ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
+            ;; 3. The array of receivevalid flags is used in the loop between lines
+            ;;    589-593 to decide how much to increment receive-bytes.
+            ;;    It's cleared on line 630, after we've written the bytes to the
+            ;;    child pipe.
 
-          (throw (RuntimeException. "Q: What does receivebuf look like?")))))))
+            (throw (RuntimeException. "Q: What does receivebuf look like?"))))))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
@@ -607,7 +602,7 @@ Line 608"
   [n-sec-per-block]
   ;; This next magic number matches the send-byte-buf-size, but that's
   ;; almost definitely just a coincidence
-  (if (< n-sec-per-block k-128)
+  (if (< n-sec-per-block K/k-128)
     n-sec-per-block
     ;; DJB had this to say.
     ;; As 4 separate comments.
@@ -616,7 +611,7 @@ Line 608"
     ;; approximation: adjust 1/N by cN every N nanoseconds
     ;; i.e., N <- 1/(1/N + cN) = N/(1 + cN^2) every N nanoseconds
     (if (< n-sec-per-block 16777216)
-      (let [u (quot n-sec-per-block k-128)]
+      (let [u (quot n-sec-per-block K/k-128)]
         (- n-sec-per-block (* u u u)))
       (let [d (double n-sec-per-block)]
         (long (/ d (inc (/ (* d d) 2251799813685248.0))))))))
@@ -677,18 +672,18 @@ Line 608"
 
         ;; recognizing top and bottom of congestion cycle:  --DJB
         rtt-delta (- rtt rtt-highwater)
-        rtt-highwater (+ rtt-highwater (/ rtt-delta k-1))
+        rtt-highwater (+ rtt-highwater (/ rtt-delta K/k-1))
         rtt-delta (- rtt rtt-lowwater)
         rtt-lowwater (+ rtt-lowwater
                         (if (> rtt-delta 0)
-                          (/ rtt-delta k-8)
-                          (/ rtt-delta k-div4)))
-        rtt-seen-recent-high (> rtt-average (+ rtt-highwater ms-5))
+                          (/ rtt-delta K/k-8)
+                          (/ rtt-delta K/k-div4)))
+        rtt-seen-recent-high (> rtt-average (+ rtt-highwater K/ms-5))
         rtt-seen-recent-low (and (not rtt-seen-recent-high)
                                  (< rtt-average rtt-lowwater))]
     (when (>= recent (+ last-speed-adjustment (* 16 n-sec-per-block)))
-      (let [n-sec-per-block (if (> (- recent last-speed-adjustment) secs-10)
-                              (+ secs-1 (crypto/random-mod (quot n-sec-per-block 8)))
+      (let [n-sec-per-block (if (> (- recent last-speed-adjustment) K/secs-10)
+                              (+ K/secs-1 (crypto/random-mod (quot n-sec-per-block 8)))
                               n-sec-per-block)
             n-sec-per-block (jacobson-adjust-block-time n-sec-per-block)
             state (assoc state ::n-sec-per-block n-sec-per-block)
@@ -708,18 +703,18 @@ Line 608"
                          ::specs/seen-older-low rtt-seen-recent-low
                          ::specs/seen-recent-high false
                          ::specs/seen-recent-low false)
-            been-a-minute? (- recent last-edge minute-1)]
+            been-a-minute? (- recent last-edge K/minute-1)]
         (cond
           (and been-a-minute?
                (< recent (+ last-doubling
                             (* 4 n-sec-per-block)
                             (* 64 rtt-timeout)
-                            ms-5))) state
+                            K/ms-5))) state
           (and (not been-a-minute?)
                (< recent (+ last-doubling
                             (* 4 n-sec-per-block)
                             (* 2 rtt-timeout)))) state
-          (<= (dec k-64) n-sec-per-block) state
+          (<= (dec K/k-64) n-sec-per-block) state
           :else (assoc state {::n-sec-per-block (quot n-sec-per-block 2)
                               ::last-doubling recent
                               ::last-edge (if (not= 0 last-edge) recent last-edge)}))))))
@@ -796,7 +791,7 @@ Line 608"
     ;; 440: sets maxblocklen=1024
     ;; Q: Why was it ever 512?
     ;; Guess: for initial Message part of Initiate packet
-    (let [state (assoc state ::max-byte-length k-1)]
+    (let [state (assoc state ::max-byte-length K/k-1)]
       ;; 610-614: counters/looping
       (update
        (handle-comprehensible-child-message state)
@@ -814,23 +809,21 @@ Line 608"
 
   Big picture: copy data from receivebuf to the child[1] pipe
   Then zero the receivevalid flags"
-  [{:keys [::specs/->child]
-    :as callbacks}
-   buf]
-  ;; There isn't any real buffering in this direction.
-  ;; If the child's open, write whichever bytes are available
-  ;; in receive-buf.
+  [{:keys [::specs/strm->child
+           ::specs/receive-buf]
+    :as state}]
+  ;; If the child's open *and available for output*, write whichever
+  ;; bytes are available in receive-buf.
   ;; Those bytes would have pulled in pretty much directly above,
   ;; in read-from-parent! and then ACK'd.
-  ;; So maybe this part isn't a total waste, but there are definitely
-  ;; pieces that feel silly.
 
-  ;; At the very most, it seems as though this should amount to
-  ;; something like:
-  (->child buf)
-  ;; But not quite. I *have* just finished a lot of work to
-  ;; extract the bits the child cares about
-  )
+  ;; Note that this probably needs to go through some sort of
+  ;; potentially blocking queue. Like, say, a core.async channel.
+  ;; Although, really, we need to verify that the queue is
+  ;; available for writing before we try (line 616)
+
+  ;; So I probably need something that starts like this:
+  (strm/try-put! strm->child receive-buf 0 ::timeout))
 
 ;;;
 ;;;
@@ -901,7 +894,7 @@ Line 608"
     ::specs/last-doubling 0
     ::specs/last-edge 0
     ::specs/last-speed-adjustment 0
-    ::specs/max-block-length k-div2
+    ::specs/max-block-length K/k-div2
     ;; Seems vital, albeit undocumented
     ::specs/n-sec-per-block specs/sec->n-sec
     ::specs/receive-bytes 0
@@ -970,7 +963,7 @@ Prior to that, it was limited to 4K.
     ;; buffer with parts that have not yet been GC'd?
     ;; And is it possible to tease apart that distinction?
 
-    (when (< (+ send-bytes k-4) send-byte-buf-size)
+    (when (< (+ send-bytes K/k-4) send-byte-buf-size)
       (let [available-buffer-space (- send-byte-buf-size)
             buffer (.readBytes buf available-buffer-space)]
         (child-> state buffer)))))

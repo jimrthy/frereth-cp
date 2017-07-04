@@ -1,6 +1,7 @@
 (ns frereth-cp.message.message-test
   (:require [clojure.test :refer (deftest is testing)]
-            [frereth-cp.message :as message])
+            [frereth-cp.message :as message]
+            [frereth-cp.message.constants :as K])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest basic-echo
@@ -26,8 +27,9 @@
         initialized (message/initial-state parent-cb child-cb)
         state (message/start! initialized)]
     (try
-      (let [src (Unpooled/buffer message/k-1)
-            packet (byte-array (range 1088))]
+      (let [src (Unpooled/buffer K/k-1)
+            ;; It seems tough to believe
+            packet (byte-array (range message/max-msg-len))]
         (message/parent-> state src)
         (let [outcome (deref response 1000 ::timeout)]
           (is (not= outcome ::timeout))
