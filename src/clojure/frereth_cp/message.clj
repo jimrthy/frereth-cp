@@ -536,7 +536,17 @@ Prior to that, it was limited to 4K.
 (defn parent->
   "Receive a ByteBuf from parent
 
-;;;  411-435: try receiving messages: (DJB)
+  411-435: try receiving messages: (DJB)
+
+  It seems like this is probably inside-out now.
+
+  The parent is going to call this. It should trigger
+  the pieces that naturally fall downstream and lead
+  to writing the bytes to the child.
+
+  It's replacing one of the polling triggers that
+  set off the main() event loop. Need to adjust for
+  that fundamental strategic change
   "
   [{:keys [::specs/->child-buffer]
     :as state} buf]
@@ -544,6 +554,8 @@ Prior to that, it was limited to 4K.
 ;;;           417-433: for loop from 0-bytes read
 ;;;                    Copies bytes from incoming message buffer to message[][]
   (when (= 0 (.readableBytes buf))
+    ;; Yes, this is supposed to kill the entire process
+    ;; TODO: Be more graceful
     (throw (AssertionError. "Bad Message")))
 
   ;; Reference implementation is really reading bytes from
@@ -564,7 +576,7 @@ Prior to that, it was limited to 4K.
       (log/warn "Child buffer overflow")
       state)))
 
-(defn do-send-ack
+(defn send-ack!
   "Write ACK buffer to parent
 
 Line 608"
@@ -597,13 +609,44 @@ Line 608"
     ;; Don't want to ACK a pure-ACK message with no content
     state))
 
-(s/fdef read-from-parent!
+(s/fdef extract-message-from-parent
         :args (:state ::specs/state)
         :ret ::specs/state)
-(defn read-from-parent!
+(defn extract-message-from-parent
   "Lines 562-593"
-  [state]
-  (throw (RuntimeException. "Start here")))
+  [{:keys [::specs/buf]
+    :as state}]
+  ;; 562-574: calculate start/stop bytes
+  (let [D (read-short buf)
+        SF (bit-and D (+ k-2 k-4))
+        D (- D SF)]
+    (when (and (<= D 1024)
+               ;; In the reference implementation,
+               ;; len = 16 * (unsigned long long) messagelen[pos]
+               ;; (assigned at line 443)
+               ;; This next check looks like it really
+               ;; amounts to "have we read all the bytes
+               ;; in this block from the parent pipe?"
+               ;; It doesn't make a lot of sense in this
+               ;; approach
+               #_(> (+ 48 D) len))
+      (let [start-byte (read-long buf)
+            stop-byte (+ D start-byte)]
+        ;; of course, flow control would avoid this case -- DJB
+        ;; I've just totally painted receivebuf out of the picture.
+        ;; Q: How foolish was that?
+        (comment (when (<= stop-byte (+ receive-written (count receivebuf)))))
+        ;; 576-579: SF (StopFlag? deals w/ EOF)
+        (let [receive-eof (case SF
+                            0 false
+                            k-2 ::specs/normal
+                            k-4 ::specs/error)
+              receive-total-bytes (if (not= SF 0)
+                                    stop-byte)]
+          ;; 581-588: copy incoming into receivebuf
+          ;;          set the receivevalid flag
+
+          (throw (RuntimeException. "Translate this")))))))
 
 (defn read-long
   [bb]
@@ -617,10 +660,10 @@ Line 608"
   [bb]
   (.readShort bb))
 
-(s/fdef flag-acked-others
+(s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
-(defn flag-acked-others
+(defn flag-acked-others!
   "Lines 544-560"
   [{:keys [::specs/buf]
     :as state}]
@@ -632,6 +675,8 @@ Line 608"
                      [read-short read-short]     ; 26-28
                      [read-short read-short]     ; 30-32
                      [read-short read-short])]   ; 34-36
+    ;; TODO: Desperately need to test this out to verify
+    ;; that it does what I think
     (reduce (fn [state [start stop]]
               (help/mark-acknowledged state start stop))
             state
@@ -819,12 +864,13 @@ Line 608"
             ;; Q: Isn't there?
             acked-blocks (filter #(= ack-id (::message-id %))
                                  blocks)
-            state (reduce (partial flag-acked state) acked-blocks)
-            ;; That takes us down to line 544
-            state (flag-acked-others state)
-            state (read-from-parent! state)
-            state (prep-send-ack state msg-id)]
-        (do-send-ack state)
+            state (-> (partial flag-acked state)
+                      (reduce acked-blocks)
+                      ;; That takes us down to line 544
+                      (flag-acked-others! state)
+                      (extract-message-from-parent state)
+                      (prep-send-ack state msg-id))]
+        (send-ack! state)
         state))))
 
 (s/fdef try-processing-message
@@ -881,8 +927,11 @@ Line 608"
   ;; pieces that feel silly.
 
   ;; At the very most, it seems as though this should amount to
-  ;; something like
-  (->child buf))
+  ;; something like:
+  (->child buf)
+  ;; But not quite. I *have* just finished a lot of work to
+  ;; extract the bits the child cares about
+  )
 
 ;;;
 ;;;
@@ -909,10 +958,6 @@ Line 608"
 ;;;                  Those are really the length at position 38 and initial
 ;;;                  offset at position 40, thanks to starting the send
 ;;;                  with length/16 at offset 7.
-;;;        562-574: calculate start/stop bytes
-;;;        576-579: SF (StopFlag? deals w/ EOF)
-;;;        581-588: copy incoming into receivebuf
-;;;                 set the receivevalid flag
 ;;;        589-593: increment the receivebytes count
 ;;;        595: never acknowledge a pure acknowledgment (DJB)
 ;;;             This short-circuits if something extracts to 0
