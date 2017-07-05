@@ -29,6 +29,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
+(def recv-byte-buf-size
+  "How many bytes from the parent will we buffer to send to the child?"
+  K/k-128)
+
 (def send-byte-buf-size
   "How many child bytes will we buffer to send?
 
@@ -95,7 +99,7 @@ with the ring buffer semantics, but there may be a deeper motivation."
     ;; tochild[1] (to child)
     ;; fromchild[0] (from child)
     ;; and a timeout (based on the messaging state).
-    (throw (RuntimeException. "What should this look like?"))
+    (throw (RuntimeException. "Probably need something similar for ->parent"))
 
     ;; I want to keep any sort of deferred/async details
     ;; as well-hidden as possible.
@@ -146,13 +150,13 @@ with the ring buffer semantics, but there may be a deeper motivation."
         :args (s/cat :state ::specs/state
                      :buf ::specs/buf))
 (defn child-consumer
-  "Accepts blocks of bytes from the child.
+  "Accepts buffers of bytes from the child.
 
 The obvious approach is just to feed ByteBuffers
 from this callback to the parent's callback.
 
 That obvious approach completely misses the point that
-this is a buffer. We need to hang onto those buffers
+this ns is a buffer. We need to hang onto those buffers
 here until they've been ACK'd.
 
 This approach was really designed as an event that
@@ -319,8 +323,8 @@ TODO: Untangle the strands and get this usable.
     (bit-or len
             (case (::specs/send-eof block)
               false 0
-              ::specs/normal ::normal-eof
-              ::specs/error ::fail-eod))))
+              ::specs/normal normal-eof
+              ::specs/error error-eof))))
 
 (defn pre-calculate-state-after-send
   "This is mostly setting up the buffer to do the send
@@ -435,8 +439,9 @@ TODO: Untangle the strands and get this usable.
     :keys [::specs/send-buf]
     :as state}]
   ;; Don't forget the special offset+7
-  (->parent (.copy send-buf ))
-  (throw (RuntimeException. "sendblock:")))
+  ;; Although it probably doesn't make a lot of
+  ;; sense after switching to ByteBuf
+  (->parent (.copy send-buf)))
 
 (defn pick-next-block-to-send
   [state]
@@ -488,7 +493,13 @@ Line 608"
                         receive-bytes))
       ;; XXX: incorporate selective acknowledgments --DJB
       )
-    ;; Don't want to ACK a pure-ACK message with no content
+    ;; never acknowledge a pure acknowledgment --DJB
+    ;; I've seen at least one email pointing out that the
+    ;; author (Matthew Dempsky...he's the only person I've
+    ;; run across who's published any notes about
+    ;; the messaging protocol) has a scenario where the
+    ;; child just hangs, waiting for an ACK to the ACKs
+    ;; it sends 4 times a second.
     state))
 
 (s/fdef extract-message-from-parent
@@ -496,12 +507,12 @@ Line 608"
         :ret ::specs/state)
 (defn extract-message-from-parent
   "Lines 562-593"
-  [{:keys [::specs/buf
-           ::specs/receive-buf
+  [{:keys [::specs/receive-buf
+           ::specs/receive-bytes
            ::specs/receive-written]
     :as state}]
   ;; 562-574: calculate start/stop bytes
-  (let [D (help/read-ushort buf)
+  (let [D (help/read-ushort receive-buf)
         SF (bit-and D (+ normal-eof error-eof))
         D (- D SF)]
     (when (and (<= D 1024)
@@ -514,7 +525,7 @@ Line 608"
                ;; It doesn't make a lot of sense in this
                ;; approach
                #_(> (+ 48 D) len))
-      (let [start-byte (help/read-ulong buf)
+      (let [start-byte (help/read-ulong receive-buf)
             stop-byte (+ D start-byte)]
         ;; of course, flow control would avoid this case -- DJB
         ;; Q: What does that mean? --JRG
@@ -538,32 +549,41 @@ Line 608"
                 ;; layer for encryption.
                 ;; As it stands, we've already stomped all over the source
                 ;; memory long before it got here.
-                receive-buf (Unpooled/buffer D)]
+                output-buf (Unpooled/buffer D)]
             ;; 581-588: copy incoming into receivebuf
-            ;;          set the receivevalid flag
-            ;; There are at least a couple of curve balls in the air right here:
-            ;; 1. Only write bytes at stream addresses(?)
-            ;;    (< receive-written where (+ receive-written receive-buf-size))
-            ;; 2. Update the receive-valid flag associated with each byte as we go
-            ;;    The receivevalid array is declared with this comment:
-            ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
-            ;; 3. The array of receivevalid flags is used in the loop between lines
-            ;;    589-593 to decide how much to increment receive-bytes.
-            ;;    It's cleared on line 630, after we've written the bytes to the
-            ;;    child pipe.
+            (let [min-k (min 0 (- receive-written start-byte))  ; drop bytes we've already written
+                  max-rcvd (+ receive-written recv-byte-buf-size)
+                  max-k (min D (- max-rcvd start-byte))]
+              (.skipBytes receive-buf min-k)
+              (.readBytes receive-buf output-buf max-k)
+              ;; Q: Do I just want to release it, since I'm done with it?
+              (.discardSomeReadBytes receive-buf)
+              ;;          set the receivevalid flags
+              ;; There are at least a couple of curve balls in the air right here:
+              ;; 1. Only write bytes at stream addresses(?)
+              ;;    (< receive-written where (+ receive-written receive-buf-size))
+              ;; 2. Update the receive-valid flag associated with each byte as we go
+              ;;    The receivevalid array is declared with this comment:
+              ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
+              ;; 3. The array of receivevalid flags is used in the loop between lines
+              ;;    589-593 to decide how much to increment receive-bytes.
+              ;;    It's cleared on line 630, after we've written the bytes to the
+              ;;    child pipe.
 
-            (throw (RuntimeException. "Q: What does receivebuf look like?"))))))))
+              (update state ::receive-bytes + (min (- max-rcvd receive-bytes)
+                                                   ;; This is the middle of the for loop on line 591
+                                                   (throw (RuntimeException. "Start here w/ interaction between receivevalid and receivewritten")))))))))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn flag-acked-others!
   "Lines 544-560"
-  [{:keys [::specs/buf]
+  [{:keys [::specs/receive-buf]
     :as state}]
   (let [indexes (map (fn [startfn stopfn]
-                       [(startfn buf) (stopfn buf)])
-                     [(constantly 0) help/read-ulong]  ; 0-8
+                       [(startfn receive-buf) (stopfn receive-buf)])
+                     [(constantly 0) help/read-ulong]        ;  0-8
                      [help/read-uint help/read-ushort]       ; 16-20
                      [help/read-ushort help/read-ushort]     ; 22-24
                      [help/read-ushort help/read-ushort]     ; 26-28
@@ -740,10 +760,10 @@ Line 608"
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn handle-comprehensible-child-message
-  "Lots of code in here.
+  "handle this message if it's comprehensible: (DJB)
 
   This seems like the interesting part.
-  444-609: handle this message if it's comprehensible: (DJB)"
+  lines 444-609"
   [{:keys [::specs/blocks
            ::specs/->child-buffer]
     :as state}]
@@ -776,17 +796,15 @@ Line 608"
            ::specs/receive-bytes
            ::specs/receive-written]
     :as state}]
-  (when-not (or (= 0 (count ->child-buffer))
+  (when-not (or (= 0 (count ->child-buffer))  ; any incoming messages to process?
                 ;; This next check includes an &&
                 ;; to verify that tochild is > 0 (I'm
                 ;; pretty sure that's just verifying that
                 ;; it's open)
-                ;; The meaning of receive-written and
-                ;; receive-bytes doesn't seem to mesh
-                ;; with the comments about them, based
-                ;; on this test.
-                ;; Maybe it will make more sense when
-                ;; I get more translated over
+                ;; I think the point of this next check
+                ;; is back-pressure:
+                ;; If we have pending bytes from the parent that have not
+                ;; been written to the child, don't add more.
                 (< receive-written receive-bytes))
     ;; 440: sets maxblocklen=1024
     ;; Q: Why was it ever 512?
