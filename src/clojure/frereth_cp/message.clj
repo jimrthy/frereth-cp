@@ -552,27 +552,28 @@ Line 608"
                 output-buf (Unpooled/buffer D)]
             ;; 581-588: copy incoming into receivebuf
             (let [min-k (min 0 (- receive-written start-byte))  ; drop bytes we've already written
-                  max-rcvd (+ receive-written recv-byte-buf-size)
-                  max-k (min D (- max-rcvd start-byte))]
+                  max-rcvd (+ receive-written recv-byte-buf-size)  ; This is an address in the stream
+                  max-k (min D (- max-rcvd start-byte))
+                  delta-k (- max-k min-k)]
+              ;; There are at least a couple of curve balls in the air right here:
+              ;; 1. Only write bytes at stream addresses(?)
+              ;;    (< receive-written where (+ receive-written receive-buf-size))
               (.skipBytes receive-buf min-k)
               (.readBytes receive-buf output-buf max-k)
               ;; Q: Do I just want to release it, since I'm done with it?
               (.discardSomeReadBytes receive-buf)
               ;;          set the receivevalid flags
-              ;; There are at least a couple of curve balls in the air right here:
-              ;; 1. Only write bytes at stream addresses(?)
-              ;;    (< receive-written where (+ receive-written receive-buf-size))
               ;; 2. Update the receive-valid flag associated with each byte as we go
               ;;    The receivevalid array is declared with this comment:
               ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
+
               ;; 3. The array of receivevalid flags is used in the loop between lines
               ;;    589-593 to decide how much to increment receive-bytes.
               ;;    It's cleared on line 630, after we've written the bytes to the
               ;;    child pipe.
-
+              ;; I'm fairly certain this is what that for loop amounts to
               (update state ::receive-bytes + (min (- max-rcvd receive-bytes)
-                                                   ;; This is the middle of the for loop on line 591
-                                                   (throw (RuntimeException. "Start here w/ interaction between receivevalid and receivewritten")))))))))))
+                                                   (+ receive-bytes delta-k))))))))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
