@@ -183,6 +183,7 @@
                              ::rtt-seen-recent-high
                              ::rtt-seen-recent-low
                              ::rtt-timeout
+                             ::send-acked
                              ::send-buf
                              ::send-buf-size
                              ::send-bytes

@@ -78,6 +78,9 @@ with the ring buffer semantics, but there may be a deeper motivation."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+(s/def ::state-atom (s/and #(instance? clojure.lang.Atom %)
+                           #(s/valid? ::specs/state (deref %))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
@@ -99,7 +102,6 @@ with the ring buffer semantics, but there may be a deeper motivation."
     ;; tochild[1] (to child)
     ;; fromchild[0] (from child)
     ;; and a timeout (based on the messaging state).
-    (throw (RuntimeException. "Probably need something similar for ->parent"))
 
     ;; I want to keep any sort of deferred/async details
     ;; as well-hidden as possible.
@@ -116,6 +118,18 @@ with the ring buffer semantics, but there may be a deeper motivation."
     ;; to restart my JVM to update build.boot to get access
     ;; to core.async.
     (strm/consume ->child strm->child)
+    ;; It seems like I should set up something similar on the
+    ;; ->parent side. But the reference implementation just
+    ;; writes to that when it's ready.
+    ;; The reference docs include all sorts of warnings that
+    ;; we should expect these writes to drop packets and
+    ;; fail and just deal with them.
+    ;; The important thing is that they cannot block.
+    ;; Or maybe those warnings are about the reads here.
+    ;; Either way, they shouldn't apply to this approach,
+    ;; since I'm using ByteBuf instances instead of anonymous
+    ;; pipes.
+    ;; TODO: Track them down and verify.
     (assoc state
            ::specs/strm->child strm->child
            ;; This covers line 260
@@ -170,7 +184,8 @@ the ::child-> key under state.
 
 TODO: Untangle the strands and get this usable.
 "
-  [{:keys [::specs/send-bytes]
+  [{:keys [::specs/send-acked
+           ::specs/send-bytes]
     :as state}
    buf]
   ;; Q: Need to apply back-pressure if we
@@ -178,9 +193,14 @@ TODO: Untangle the strands and get this usable.
   ;; (It doesn't seem like it should matter, except
   ;; as an upstream signal that there's a network
   ;; issue)
-  (let [block {::buf buf
-               ::transmissions 0}
-        send-bytes (+ send-bytes (.getReadableBytes buf))]
+  (let [;; In the original, this is the offset into the circular
+        ;; buf where we're going to start writing incoming bytes.
+        pos (+ (rem send-acked send-byte-buf-size) send-bytes)
+        available-buffer-space (- send-byte-buf-size pos)
+        bytes-to-read (min available-buffer-space (.getReadableBytes buf))
+        send-bytes (+ send-bytes bytes-to-read)
+        block {::buf buf
+               ::transmissions 0}]
     (when (>= send-bytes K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.
@@ -882,6 +902,25 @@ Line 608"
 ;;; 456-542: Loop over (range blocknum)
 ;;; (getting into details)
 
+(defn trigger-event-loop!
+  "This gets triggered any time there's a write event
+
+  This mainly means that someone called parent-> or child->,
+  but also includes periodic timeouts"
+  [state-atom]
+  ;; It seems as though this should kick off the shebang.
+  ;; Realistically, it should do the same sort of work that
+  ;; happens at the top of main() in the reference implementation
+  ;; to skip working on pieces that couldn't possibly be ready
+  ;; yet.
+  ;; And this must be thread-safe.
+  ;; I'm very tempted to have the caller send a signal to
+  ;; a go loop instead.
+  ;; I'm also very tempted to just stick state into an agent
+  ;; instead of an atom.
+  ;; This needs more thought.
+  (throw (RuntimeException. "How should this work?")))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -930,8 +969,9 @@ Line 608"
     ::specs/rtt-seen-older-high false
     ::specs/rtt-seen-older-low false
     ::specs/rtt-seen-recent-high false
-    ::specs/rtt-seen-recent-lowi false
+    ::specs/rtt-seen-recent-low false
     ::specs/rtt-timeout specs/sec->n-sec
+    ::specs/send-acked 0
     ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
     ::specs/send-buf-size send-byte-buf-size
     ::specs/send-eof false
@@ -946,13 +986,11 @@ Line 608"
    (initial-state parent-callback child-callback false)))
 
 (s/fdef child->
-        :args (s/cat :state ::specs/state
-                     :buf ::specs/buf))
+        :args (s/cat :state-atom ::state-atom
+                     :buf ::specs/buf)
+        :ret ::state-atom)
 (defn child->
   "Read bytes from a child buffer...if we have room
-
-This is upside down: the API should be that
-child makes a callback.
 
 The only real question seems to be what happens
 when that buffer overflows.
@@ -969,9 +1007,10 @@ Prior to that, it was limited to 4K.
 
 ;;;  319-336: Maybe read bytes from child
 "
-  [state
+  [state-atom
    buf]
-  (let [send-bytes (::send-bytes state)]
+  (let [state @state-atom
+        send-bytes (::send-bytes state)]
     ;; Line 322: This also needs to account for send-acked
     ;; For whatever reason, DJB picked this as the end-point to refuse to read
     ;; more child data before we hit send-byte-buf-size.
@@ -982,13 +1021,15 @@ Prior to that, it was limited to 4K.
     ;; buffer with parts that have not yet been GC'd?
     ;; And is it possible to tease apart that distinction?
 
-    (when (< (+ send-bytes K/k-4) send-byte-buf-size)
-      (let [available-buffer-space (- send-byte-buf-size)
-            buffer (.readBytes buf available-buffer-space)]
-        (child-> state buffer)))))
+    (if (< (+ send-bytes K/k-4) send-byte-buf-size)
+      (let [result (swap! state-atom #(child-consumer % buf))]
+        (trigger-event-loop! result)
+        result)
+      state-atom)))
 
 (s/fdef parent->
-        :args (s/cat :state ::specs/state
+        :args (s/cat :state (s/and #(instance? clojure.lang.Atom %)
+                                   #(s/valid? ::specs/state (deref %)))
                      :buf ::specs/buf)
         :ret ::specs/state)
 (defn parent->
@@ -996,24 +1037,20 @@ Prior to that, it was limited to 4K.
 
   411-435: try receiving messages: (DJB)
 
-  It seems like this is probably inside-out now.
-
   The parent is going to call this. It should trigger
   the pieces that naturally fall downstream and lead
   to writing the bytes to the child.
 
   It's replacing one of the polling triggers that
-  set off the main() event loop. Need to adjust for
-  that fundamental strategic change
-  "
-  [{:keys [::specs/->child-buffer]
-    :as state}
+  set off the main() event loop. Need to account for
+  that fundamental strategic change"
+  [state-atom
    ^ByteBuf buf]
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
 ;;;                    Copies bytes from incoming message buffer to message[][]
   (when (= 0 (.readableBytes buf))
-    ;; Yes, this is supposed to kill the entire process
+    ;; This is supposed to kill the entire process
     ;; TODO: Be more graceful
     (throw (AssertionError. "Bad Message")))
 
@@ -1028,9 +1065,18 @@ Prior to that, it was limited to 4K.
 
   ;; I'm going to take a simpler and easier approach, at least for
   ;; the first pass
-  (if (< max-child-buffer-size (count ->child-buffer))
-    ;; Q: Do I need anything else?
-    (update state ::->child-buffer conj buf)
-    (do
-      (log/warn "Child buffer overflow")
-      state)))
+  (let [{:keys [::specs/->child-buffer]} @state-atom
+        incoming-size (count ->child-buffer)
+        result
+        (if (<= max-msg-len incoming-size)
+          ;; Q: Do I need anything else?
+          ;; A: Definitely! This needs to trigger the sequence that
+          ;; leads to writing these bytes to the child
+          (swap! state-atom update ::->child-buffer conj buf)
+          (do
+            (log/warn (str "Child buffer overflow\n"
+                           "Incoming message is " incoming-size
+                           " / " max-msg-len))
+            state-atom))]
+    (trigger-event-loop! state-atom)
+    result))

@@ -28,14 +28,19 @@
         state (message/start! initialized)]
     (try
       (let [src (Unpooled/buffer K/k-1)
-            ;; It seems tough to believe
             packet (byte-array (range message/max-msg-len))]
-        (message/parent-> state src)
-        (let [outcome (deref response 1000 ::timeout)]
+        (.writeBytes src packet)
+        (let [wrote (future (message/parent-> state src))
+              outcome (deref response 1000 ::timeout)]
           (is (not= outcome ::timeout))
           (when-not (= outcome ::timeout)
             (is (= @parent-state 2))
-            (is (not outcome) "What else do we have here?"))))
+            (is (not outcome) "What else do we have here?"))
+          (is (realized? wrote))
+          (when (realized? wrote)
+            (let [outcome @wrote]
+              ;; Pretty sure that returns the new state
+              (is (not outcome) "What should we have here?")))))
       (finally
         (message/halt! state)))))
 
