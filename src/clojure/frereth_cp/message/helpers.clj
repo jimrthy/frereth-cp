@@ -5,7 +5,7 @@
   (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal
+;;; Public
 
 (s/fdef earliest-block-time
         :args (s/coll-of ::specs/block)

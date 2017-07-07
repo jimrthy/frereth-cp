@@ -122,6 +122,20 @@ with the ring buffer semantics, but there may be a deeper motivation."
 ;;; 307-318: Poll for incoming data
 ;;;     317 XXX: keepalives
 
+(defn room-for-child-bytes?
+  [{:keys [::specs/send-bytes]
+    :as state}]
+  ;; Line 322: This also needs to account for send-acked
+  ;; For whatever reason, DJB picked this as the end-point to refuse to read
+  ;; more child data before we hit send-byte-buf-size.
+  ;; Presumably that reason remains valid
+
+  ;; Q: Is that an important part of the algorithm, or is
+  ;; it "just" dealing with the fact that we have a circular
+  ;; buffer with parts that have not yet been GC'd?
+  ;; And is it possible to tease apart that distinction?
+  (< (+ send-bytes K/k-4) send-byte-buf-size))
+
 (s/fdef child-consumer
         :args (s/cat :state ::specs/state
                      :buf ::specs/buf))
@@ -205,20 +219,20 @@ TODO: Untangle the strands and get this usable.
     ;; It's going to re-send that block (it *does* exist...right?)
     ;; TODO: Need to verify that nothing fell through the cracks
     ;; But first, it might adjust some of the globals.
-    (reduce (fn [{:keys [::block-index]
-                  :as acc} block]
+    (reduce (fn [{:keys [::specs/current-block-cursor]
+                  :as acc}
+                 block]
               (if (= earliest-time (::specs/time block))
                 (reduced
                  (assoc
                   (if (> recent (+ last-panic (* 4 rtt-timeout)))
                     (assoc state
-                           ::specs/current-block-cursor [block-index]
                            ::specs/n-sec-per-block (* n-sec-per-block 2)
                            ::specs/last-panic recent
                            ::specs/last-edge recent))))
-                (update acc ::block-index inc)))
+                (update-in acc [::specs/current-block-cursor 0] inc)))
             (assoc state
-                   ::block-index 0)
+                   ::specs/current-block-cursor [0])
             blocks)))
 
 (defn check-for-new-block-to-send
@@ -927,6 +941,64 @@ Line 608"
          ;; This covers line 260
          ::specs/recent (System/nanoTime)))
 
+(defn trigger-io
+  [state]
+  (-> state
+      (assoc ::specs/recent (System/nanoTime))
+      maybe-send-block
+      try-processing-message
+      forward-to-child
+      ;; At the end, there's a block that closes the pipe
+      ;; to the child if we're done.
+      ;; I think the point is that we'll quit polling on
+      ;; that and start short-circuiting out of the blocks
+      ;; that might do the send, once we've hit EOF
+      ;; Q: is there anything sensible I can do here to
+      ;; produce the same effect?
+      ))
+
+(defn trigger-from-timer
+  [state]
+  (trigger-io state))
+
+(defn trigger-from-parent
+  "Message block arrived from parent. We have work to do."
+  [state buf]
+  ;; This is basically an iteration of the top-level
+  ;; event-loop handler from main().
+  ;; I can skip the pieces that only relate to reading
+  ;; from the child, because I'm using an active callback
+  ;; approach, and this was triggered by a block of
+  ;; data coming from the parent.
+  (-> state
+      ;; Q: Are the next 2 lines worth their own functions?
+      (update ::specs/->child-buffer conj buf)
+      (assoc ::specs/recent (System/nanoTime))
+      maybe-send-block
+      ;; Next obvious piece is the "try receiving messages:"
+      ;; block.
+      ;; But I've already changed the order of operations by
+      ;; doing that up front in parent->, which is what called
+      ;; this.
+      ;; Now that I'm going back through the big-picture items,
+      ;; that decision seems less valid than it did when I was
+      ;; staring at each tree in the forest.
+      ;; It probably doesn't matter, but I've dealt with enough
+      ;; subtleties in the original code that I'm very nervous
+      ;; about that "probably"
+      ;; OTOH, this leaves everything that follows pleasingly
+      ;; duplicated (and ripe for refactoring) with trigger-from-timer
+      ;; and trigger-from-child
+      try-processing-message
+      forward-to-child))
+
+(defn trigger-from-child
+  [state buf]
+  (trigger-io
+   (if (room-for-child-bytes? state)
+     (child-consumer state buf)
+     state)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -1015,31 +1087,20 @@ Prior to that, it was limited to 4K.
 "
   [state-agent
    buf]
-  (let [{:keys [::specs/strm-child->
-                ::specs/send-bytes]
-         :as state } @state-agent]
-    ;; Line 322: This also needs to account for send-acked
-    ;; For whatever reason, DJB picked this as the end-point to refuse to read
-    ;; more child data before we hit send-byte-buf-size.
-    ;; Presumably that reason remains valid
-
-    ;; Q: Is that an important part of the algorithm, or is
-    ;; it "just" dealing with the fact that we have a circular
-    ;; buffer with parts that have not yet been GC'd?
-    ;; And is it possible to tease apart that distinction?
-
-    (if (< (+ send-bytes K/k-4) send-byte-buf-size)
-      ;; I'm torn about send vs. send-off here.
-      ;;
-      (send-off
-       state-agent
-       ;; This is really just the first stage of the segment
-       ;; loop that this needs to trigger.
-       ;; TODO: Switch to a function that starts by calling
-       ;; child-consumer and then feeds its result through
-       ;; everything else that needs to happen
-       child-consumer
-       buf))))
+  ;; I'm torn about send vs. send-off here.
+  ;; This very well *could* take a measurable amount
+  ;; of time, and we could wind up with a ton of threads
+  ;; if there's a lot of data flowing back and forth.
+  ;; Note that the client count isn't a direct factor here,
+  ;; since each client should receive its own agent.
+  ;; This is something to watch and measure.
+  ;; Go with send for now, since it's recommended for
+  ;; CPU- (as opposed to IO-) bound actions.
+  ;; And I don't think there's anything here that
+  ;; could block.
+  ;; Except for those actual pesky sends to the
+  ;; child/parent.
+  (send state-agent trigger-from-child buf))
 
 (s/fdef parent->
         :args (s/cat :state ::state-agent
@@ -1062,35 +1123,33 @@ Prior to that, it was limited to 4K.
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
 ;;;                    Copies bytes from incoming message buffer to message[][]
-  (when (= 0 (.readableBytes buf))
-    ;; This is supposed to kill the entire process
-    ;; TODO: Be more graceful
-    (throw (AssertionError. "Bad Message")))
+  (let [incoming-size (.readableBytes buf)]
+    (when (= 0 incoming-size)
+      ;; This is supposed to kill the entire process
+      ;; TODO: Be more graceful
+      (throw (AssertionError. "Bad Message")))
 
-  ;; Reference implementation is really reading bytes from
-  ;; a stream.
-  ;; It reads the first byte to get the length of the block,
-  ;; pulls the next byte from the stream, calculates the stream
-  ;; length, double-checks for failure conditions, and then copies
-  ;; the bytes into the last spot in the global message array
-  ;; (assuming that array/buffer hasn't filled up waiting for the
-  ;; client to process it).
+    ;; Reference implementation is really reading bytes from
+    ;; a stream.
+    ;; It reads the first byte to get the length of the block,
+    ;; pulls the next byte from the stream, calculates the stream
+    ;; length, double-checks for failure conditions, and then copies
+    ;; the bytes into the last spot in the global message array
+    ;; (assuming that array/buffer hasn't filled up waiting for the
+    ;; client to process it).
 
-  ;; I'm going to take a simpler and easier approach, at least for
-  ;; the first pass
-  (let [{:keys [::specs/->child-buffer
-                ::specs/strm-parent->]} @state-agent
-        incoming-size (count ->child-buffer)]
-    (if (<= max-msg-len incoming-size)
-      (send-off state-agent  (fn [a]
-                               ;; This seems likely to suffer from the same
-                               ;; problem as child->.
-                               ;; It really needs to trigger off the entire
-                               ;; event chain that starts here.
-                               (let [a' (update a ::->child-buffer conj buf)]
-                                 (try-processing-message a'))))
-      (do
-        (log/warn (str "Child buffer overflow\n"
-                       "Incoming message is " incoming-size
-                       " / " max-msg-len))
-        state-agent))))
+    ;; I'm going to take a simpler and easier approach, at least for
+    ;; the first pass
+    (let [{:keys [::specs/->child-buffer]} @state-agent
+          previously-buffered-message-count (count ->child-buffer)]
+      ;; Probably need to do something with previously-buffered-message-count
+      ;; Definitely need to check the number of bytes that have not
+      ;; been forwarded along yet
+      (if (<= max-msg-len incoming-size)
+        ;; See comments in child-> re: send vs. send-off
+        (send state-agent  trigger-from-parent buf)
+        (do
+          (log/warn (str "Child buffer overflow\n"
+                         "Incoming message is " incoming-size
+                         " / " max-msg-len))
+          state-agent)))))

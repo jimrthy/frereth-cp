@@ -55,4 +55,6 @@
 (deftest simulate-dropped-acks
   ;; When other side fails to respond "quickly enough",
   ;; should re-send message blocks
+  ;; This adds an entirely new wrinkle (event scheduling)
+  ;; to the mix
   (is false "Write this"))
