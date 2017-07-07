@@ -5,6 +5,28 @@
   (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Internal Helpers
+
+(defn flag-acked-blocks
+  [start stop
+   {:keys [::n]
+    :as acc}
+   {:keys [::specs/start-pos
+           ::specs/transmissions]
+    :as block}]
+  (when-not transmissions
+    (throw (ex-info (str "Missing transmissions") {::problem block})))
+  (if (<= start
+          start-pos
+          (+ start-pos (::specs/length block))
+          stop)
+    (-> acc
+        (assoc-in [::specs/blocks n ::specs/time] 0)
+        (update ::specs/total-blocks inc)
+        (update ::specs/total-block-transmissions + transmissions))
+    (update acc ::n inc)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
 (s/fdef earliest-block-time
@@ -18,7 +40,9 @@ Based on earliestblocktime_compute, in lines 138-153
   [blocks]
   ;;; Comment from DJB:
   ;;; XXX: use priority queue
-  (min (map ::specs/time blocks)))
+  (min (map ::specs/time
+            ;; Time 0 means it's been ACK'd and is ready to discard
+            (filter #(not= 0 (::specs/time %)) blocks))))
 
 ;;;; 155-185: acknowledged(start, stop)
 (s/fdef acknowledged
@@ -45,19 +69,7 @@ Based [cleverly] on acknowledged, running from lines 155-185"
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
 ;;;                    Updates totalblocktransmissions and totalblocks
-    (let [acked (reduce (fn [{:keys [::n]
-                              :as acc}
-                             block]
-                          (let [start-pos (::specs/start-pos block)]
-                            (if (<= start
-                                    start-pos
-                                    (+ start-pos (::specs/length block))
-                                    stop)
-                              (-> acc
-                                  (assoc-in [::specs/blocks n ::specs/time] 0)
-                                  (update ::specs/total-blocks inc)
-                                  (update ::specs/total-block-transmissions + (::specs/transmissions block)))
-                              (update acc ::n inc))))
+    (let [acked (reduce (partial flag-acked-blocks start stop)
                         (assoc state ::n 0)
                         blocks)]
       ;; To match the next block, the main point is to discard
@@ -100,7 +112,9 @@ Based [cleverly] on acknowledged, running from lines 155-185"
 
 (defn read-ulong
   [^ByteBuf bb]
-  (.readUnsignedLong bb))
+  (let [incoming (.readLong bb)]
+    (assert (<= 0 incoming) "Need to cope with the stupidity of java not having unsigned numbers")
+    incoming))
 
 (defn read-int
   [^ByteBuf bb]

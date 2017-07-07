@@ -34,6 +34,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
+(set! *warn-on-reflection* true)
+
 (def recv-byte-buf-size
   "How many bytes from the parent will we buffer to send to the child?"
   K/k-128)
@@ -165,7 +167,7 @@ TODO: Untangle the strands and get this usable.
   [{:keys [::specs/send-acked
            ::specs/send-bytes]
     :as state}
-   buf]
+   ^ByteBuf buf]
   ;; Q: Need to apply back-pressure if we
   ;; already have ~124K pending?
   ;; (It doesn't seem like it should matter, except
@@ -175,7 +177,7 @@ TODO: Untangle the strands and get this usable.
         ;; buf where we're going to start writing incoming bytes.
         pos (+ (rem send-acked send-byte-buf-size) send-bytes)
         available-buffer-space (- send-byte-buf-size pos)
-        bytes-to-read (min available-buffer-space (.getReadableBytes buf))
+        bytes-to-read (min available-buffer-space (.readableBytes buf))
         send-bytes (+ send-bytes bytes-to-read)
         block {::buf buf
                ::transmissions 0}]
@@ -204,14 +206,17 @@ TODO: Untangle the strands and get this usable.
 "
   [{:keys [::specs/blocks
            ::specs/earliest-time
-           ::specs/last-block-time
            ::specs/last-edge
            ::specs/last-panic
            ::specs/n-sec-per-block
            ::specs/recent
            ::specs/rtt-timeout]
     :as state}]
-  (when (and (< recent (+ last-block-time n-sec-per-block))
+  (assert (and earliest-time
+               n-sec-per-block
+               recent
+               rtt-timeout))
+  (when (and (< recent (+ earliest-time n-sec-per-block))
              (not= 0 earliest-time)
              (>= recent (+ earliest-time rtt-timeout)))
     ;; This gets us to line 344
@@ -241,7 +246,7 @@ TODO: Untangle the strands and get this usable.
   357-378:  Sets up a new block to send
   Along w/ related data flags in parallel arrays"
   [{:keys [::specs/blocks
-           ::specs/last-block-time
+           ::specs/earliest-time
            ::specs/n-sec-per-block
            ::specs/recent
            ::specs/send-acked
@@ -251,7 +256,7 @@ TODO: Untangle the strands and get this usable.
            ::specs/send-processed
            ::specs/want-ping]
     :as state}]
-  (when (and (>= recent (+ last-block-time n-sec-per-block))
+  (when (and (>= recent (+ earliest-time n-sec-per-block))
              (< (count blocks) max-outgoing-blocks)
              (or want-ping
                  ;; This next style clause is used several times in
@@ -332,11 +337,11 @@ TODO: Untangle the strands and get this usable.
 
   It's in the middle of a do {} while(0) loop"
   [{:keys [::specs/block-to-send
-           ::specs/buf
            ::specs/next-message-id
            ::specs/recent
-           ::specs/send-buf
            ::specs/send-buf-size]
+    ^ByteBuf buf ::specs/buf
+    ^ByteBuf send-buf ::specs/send-buf
     :as state}]
 ;;;      382-406:  Build (and send) the message packet
 ;;;                N.B.: Ignores most of the ACK bits
@@ -380,16 +385,14 @@ TODO: Untangle the strands and get this usable.
               (> K/k-1 block-length))
       (throw (AssertionError. "illegal block length")))
     ;; We need a prefix byte that tells the other end (/ length 16)
-    ;; I'm fairly certain that this extra up-front padding is to set
+    ;; I'm fairly certain that this extra up-front padding
+    ;; (writing it as a word) is to set
     ;; up word alignment boundaries so the actual byte copies can proceed
     ;; quickly.
-    ;; TODO: Time it without this to see whether it makes any difference.
-    (comment)
-    (shared/zero-out! buf 0 8)
     ;; This extra length byte is a key part of the reference
     ;; interface.
     ;; Q: Does it make any sense in this context?
-    (aset buf 7 (quot u 16))
+    (.writeLong buf (quot u 16))
 
     (comment
       ;; This is probably the way I need to handle that,
@@ -434,7 +437,7 @@ TODO: Untangle the strands and get this usable.
 
   Corresponds to line 404 under the sendblock: label"
   [{{:keys [::specs/->parent]} ::specs/callbacks
-    :keys [::specs/send-buf]
+    ^ByteBuf send-buf ::specs/send-buf
     :as state}]
   ;; Don't forget the special offset+7
   ;; Although it probably doesn't make a lot of
@@ -473,11 +476,11 @@ Line 608"
 
 (defn prep-send-ack
   "Lines 595-606"
-  [{:keys [::specs/buf
-           ::specs/current-block-cursor
+  [{:keys [::specs/current-block-cursor
            ::specs/receive-bytes
            ::specs/receive-eof
            ::specs/receive-total-bytes]
+    ^ByteBuf buf ::specs/buf
     :as state}
    message-id]
   (if (not= message-id)
@@ -505,9 +508,9 @@ Line 608"
         :ret ::specs/state)
 (defn extract-message-from-parent
   "Lines 562-593"
-  [{:keys [::specs/receive-buf
-           ::specs/receive-bytes
+  [{:keys [::specs/receive-bytes
            ::specs/receive-written]
+    ^ByteBuf receive-buf ::specs/receive-buf
     :as state}]
   ;; 562-574: calculate start/stop bytes
   (let [D (help/read-ushort receive-buf)
@@ -551,7 +554,7 @@ Line 608"
             ;; 581-588: copy incoming into receivebuf
             (let [min-k (min 0 (- receive-written start-byte))  ; drop bytes we've already written
                   max-rcvd (+ receive-written recv-byte-buf-size)  ; This is an address in the stream
-                  max-k (min D (- max-rcvd start-byte))
+                  ^Long max-k (min D (- max-rcvd start-byte))
                   delta-k (- max-k min-k)]
               ;; There are at least a couple of curve balls in the air right here:
               ;; 1. Only write bytes at stream addresses(?)
@@ -580,16 +583,15 @@ Line 608"
   "Lines 544-560"
   [{:keys [::specs/receive-buf]
     :as state}]
-  (let [indexes (map (fn [startfn stopfn]
+  (assert receive-buf (str "Missing receive-buf among\n" (keys state)))
+  (let [indexes (map (fn [[startfn stopfn]]
                        [(startfn receive-buf) (stopfn receive-buf)])
-                     [(constantly 0) help/read-ulong]        ;  0-8
-                     [help/read-uint help/read-ushort]       ; 16-20
-                     [help/read-ushort help/read-ushort]     ; 22-24
-                     [help/read-ushort help/read-ushort]     ; 26-28
-                     [help/read-ushort help/read-ushort]     ; 30-32
-                     [help/read-ushort help/read-ushort])]   ; 34-36
-    ;; TODO: Desperately need to test this out to verify
-    ;; that it does what I think
+                     [[(constantly 0) help/read-ulong]   ;  0-8
+                      [help/read-uint help/read-ushort]       ; 16-20
+                      [help/read-ushort help/read-ushort]     ; 22-24
+                      [help/read-ushort help/read-ushort]     ; 26-28
+                      [help/read-ushort help/read-ushort]     ; 30-32
+                      [help/read-ushort help/read-ushort]])]   ; 34-36
     (reduce (fn [state [start stop]]
               (help/mark-acknowledged state start stop))
             state
@@ -766,8 +768,8 @@ Line 608"
   [{:keys [::specs/blocks
            ::specs/->child-buffer]
     :as state}]
-  (let [msg (first ->child-buffer)
-        len (.getReadableBytes msg)]
+  (let [^ByteBuf msg (first ->child-buffer)
+        len (.readableBytes msg)]
     (when (and (>= len min-msg-len)
                (<= len max-msg-len))
       (let [msg-id (help/read-uint msg) ;; won't need this (until later?), but need to update read-index anyway
@@ -777,10 +779,9 @@ Line 608"
             ;; Q: Isn't there?
             acked-blocks (filter #(= ack-id (::message-id %))
                                  blocks)
-            state (-> (partial flag-acked state)
-                      (reduce acked-blocks)
+            state (-> (reduce flag-acked state acked-blocks)
                       ;; That takes us down to line 544
-                      (flag-acked-others! state)
+                      flag-acked-others!
                       (extract-message-from-parent state)
                       (prep-send-ack state msg-id))]
         (send-ack! state)
@@ -1003,11 +1004,17 @@ Line 608"
 ;;; Public
 
 (s/fdef start!
-        :args (s/cat :state ::specs/state)
-        :ret ::specs/state)
+        :args (s/cat :state ::state-agent)
+        :ret ::state-agent)
 (defn start!
-  [state]
-  (assoc state :event-loops (start-event-loops! state)))
+  ([state-agent timeout]
+   (send state-agent start-event-loops!)
+   (if (await-for timeout state-agent)
+     state-agent
+     (throw (ex-info "Starting failed"
+                     {::problem (agent-error state-agent)}))))
+  ([state-agent]
+   (start! state-agent 250)))
 
 (defn halt!
   [state]
@@ -1052,9 +1059,11 @@ Line 608"
            ::specs/send-acked 0
            ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
            ::specs/send-buf-size send-byte-buf-size
+           ::specs/send-bytes 0
            ::specs/send-eof false
            ::specs/send-eof-processed false
            ::specs/send-eof-acked false
+           ::specs/send-processed 0
            ::specs/total-blocks 0
            ::specs/total-block-transmissions 0
            ::specs/callbacks {::specs/child child-callback

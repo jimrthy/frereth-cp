@@ -190,6 +190,7 @@
                              ::send-eof
                              ::send-eof-processed
                              ::send-eof-acked
+                             ::send-processed
                              ::total-blocks
                              ::total-block-transmissions
                              ::want-ping]
