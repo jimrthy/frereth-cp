@@ -11,8 +11,7 @@
   I keep wanting to think of this as a simple transducer and just
   skip the buffering pieces, but they (and the flow control) are
   really the main point."
-  (:require #_[clojure.core.async :as async]
-            [clojure.spec.alpha :as s]
+  (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
@@ -20,9 +19,15 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.util :as utils]
+            [manifold.deferred :as dfrd]
+            [manifold.executor :as exec]
             ;; This next reference should go away
             ;; Except...I *am* using it as part of
-            ;; aleph.
+            ;; aleph. And, really, what alternatives
+            ;; are available?
+            ;; (agents and core.async seem to be the
+            ;; best)
             [manifold.stream :as strm])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
@@ -75,6 +80,14 @@ with the ring buffer semantics, but there may be a deeper motivation."
 (def min-msg-len 48)
 (def max-msg-len 1088)
 
+(def write-from-parent-timeout
+  "milliseconds before we give up on writing a packet from parent to child"
+  5000)
+
+(def write-from-child-timeout
+  "milliseconds before we give up on writing a packet from child to parent"
+  5000)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -83,57 +96,6 @@ with the ring buffer semantics, but there may be a deeper motivation."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
-
-(s/fdef start-event-loops!
-        :args (s/cat :state ::specs/state)
-        :ret ::specs/state)
-(defn start-event-loops!
-  "
-;;;          205-259 fork child
-"
-  [{:keys [::specs/callbacks]
-    :as state}]
-  (let [{:keys [::specs/->child ::specs/->parent]} callbacks
-        strm->child (strm/stream)]
-    ;; At its heart, the reference implementation message event
-    ;; loop is driven by a poller.
-    ;; That checks for input on:
-    ;; fd 8 (from the parent)
-    ;; tochild[1] (to child)
-    ;; fromchild[0] (from child)
-    ;; and a timeout (based on the messaging state).
-
-    ;; I want to keep any sort of deferred/async details
-    ;; as well-hidden as possible.
-    ;; This is a boundary piece that almost seems tailor-made.
-    ;; Although I really do need to figure out what makes sense
-    ;; as "buffer size."
-    ;; And it might make a lot of sense to spread it farther
-    ;; than I'm using it now to try to take advantage of
-    ;; the transducer capabilities.
-    ;; By the same token, it's very tempting to just use
-    ;; a core.async channel instead.
-    ;; The only reason I'm not now is that I already have
-    ;; access to manifold thanks to aleph, and I don't want
-    ;; to restart my JVM to update build.boot to get access
-    ;; to core.async.
-    (strm/consume ->child strm->child)
-    ;; It seems like I should set up something similar on the
-    ;; ->parent side. But the reference implementation just
-    ;; writes to that when it's ready.
-    ;; The reference docs include all sorts of warnings that
-    ;; we should expect these writes to drop packets and
-    ;; fail and just deal with them.
-    ;; The important thing is that they cannot block.
-    ;; Or maybe those warnings are about the reads here.
-    ;; Either way, they shouldn't apply to this approach,
-    ;; since I'm using ByteBuf instances instead of anonymous
-    ;; pipes.
-    ;; TODO: Track them down and verify.
-    (assoc state
-           ::specs/strm->child strm->child
-           ;; This covers line 260
-           ::specs/recent (System/nanoTime))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal API
@@ -165,6 +127,8 @@ with the ring buffer semantics, but there may be a deeper motivation."
                      :buf ::specs/buf))
 (defn child-consumer
   "Accepts buffers of bytes from the child.
+
+  Lines 319-337
 
 The obvious approach is just to feed ByteBuffers
 from this callback to the parent's callback.
@@ -921,6 +885,52 @@ Line 608"
   ;; This needs more thought.
   (throw (RuntimeException. "How should this work?")))
 
+(s/fdef start-event-loops!
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn start-event-loops!
+  "
+;;;          205-259 fork child
+"
+  [{:keys [::specs/callbacks]
+    :as state}]
+  (let [{:keys [::specs/->child ::specs/->parent]} callbacks
+        executor (exec/utilization-executor)
+        strm->child (dfrd/onto (strm/stream) executor)
+        strm-child-> (dfrd/onto (strm/stream) executor)
+        strm-parent-> (dfrd/onto (strm/stream) executor)]
+    ;; At its heart, the reference implementation message event
+    ;; loop is driven by a poller.
+    ;; That checks for input on:
+    ;; fd 8 (from the parent)
+    ;; tochild[1] (to child)
+    ;; fromchild[0] (from child)
+    ;; and a timeout (based on the messaging state).
+
+    ;; I want to keep any sort of deferred/async details
+    ;; as well-hidden as possible.
+    ;; This is a boundary piece that almost seems tailor-made.
+    ;; Although I really do need to figure out what makes sense
+    ;; as "buffer size."
+    ;; And it might make a lot of sense to spread it farther
+    ;; than I'm using it now to try to take advantage of
+    ;; the transducer capabilities.
+    ;; By the same token, it's very tempting to just use
+    ;; a core.async channel instead.
+    ;; The only reason I'm not now is that I already have
+    ;; access to manifold thanks to aleph, and I don't want
+    ;; to restart my JVM to update build.boot to get access
+    ;; to core.async.
+    (strm/consume ->child strm->child)
+    (strm/consume try-processing-message strm-parent->)
+    (strm/consume child-consumer strm-child->)
+    (assoc state
+           ;; This covers line 260
+           ::specs/recent (System/nanoTime)
+           ::specs/strm->child strm->child
+           ::specs/strm-child-> strm-child->
+           ::specs/strm-parent-> strm-parent->)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -1009,8 +1019,9 @@ Prior to that, it was limited to 4K.
 "
   [state-atom
    buf]
-  (let [state @state-atom
-        send-bytes (::send-bytes state)]
+  (let [{:keys [::specs/strm-child->
+                ::specs/send-bytes]
+         :as state } @state-atom]
     ;; Line 322: This also needs to account for send-acked
     ;; For whatever reason, DJB picked this as the end-point to refuse to read
     ;; more child data before we hit send-byte-buf-size.
@@ -1022,9 +1033,30 @@ Prior to that, it was limited to 4K.
     ;; And is it possible to tease apart that distinction?
 
     (if (< (+ send-bytes K/k-4) send-byte-buf-size)
-      (let [result (swap! state-atom #(child-consumer % buf))]
-        (trigger-event-loop! result)
-        result)
+      (let [success (strm/try-put!
+                     strm-child->
+                     ;; Fun detail:
+                     ;; We are almost definitely going to be updating the
+                     ;; state-atom later down the chain.
+                     ;; In order to keep the whole idea thread-safe, though,
+                     ;; each call from here really needs its own
+                     ;; version of buf that downstream pieces will read
+                     ;; to set up those modifications.
+                     ;; This really rolls us back to the idea that
+                     ;; those downstream pieces should be accumulating
+                     ;; the changes that need to be applied when those
+                     ;; handlers are finished.
+                     ;; Or we should really be updating an agent.
+                     (assoc state ::specs/buf buf)
+                     write-from-child-timeout
+                     ::timeout)]
+        (dfrd/on-realized success
+                          (fn [delta]
+                            (throw (RuntimeException. "How should this work?")))
+                          (fn [err]
+                            (log/error (str "child->\n"
+                                            err))))
+        state-atom)
       state-atom)))
 
 (s/fdef parent->
@@ -1065,7 +1097,8 @@ Prior to that, it was limited to 4K.
 
   ;; I'm going to take a simpler and easier approach, at least for
   ;; the first pass
-  (let [{:keys [::specs/->child-buffer]} @state-atom
+  (let [{:keys [::specs/->child-buffer
+                ::specs/strm-parent->]} @state-atom
         incoming-size (count ->child-buffer)
         result
         (if (<= max-msg-len incoming-size)
@@ -1077,6 +1110,11 @@ Prior to that, it was limited to 4K.
             (log/warn (str "Child buffer overflow\n"
                            "Incoming message is " incoming-size
                            " / " max-msg-len))
-            state-atom))]
-    (trigger-event-loop! state-atom)
+            state-atom))
+        success (strm/try-put! strm-parent-> state-atom write-from-parent-timeout  ::time-out)]
+    (dfrd/on-realized success
+                      (fn [x] (log/debug (str "Triggering event loop from parent:" x)))
+                      ;; This seems really bad.
+                      (fn [err] (log/error (str "Triggering event loop from parent:\n"
+                                                (utils/pretty err)))))
     result))

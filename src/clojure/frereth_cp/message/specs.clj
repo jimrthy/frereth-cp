@@ -1,7 +1,8 @@
 (ns frereth-cp.message.specs
   "Common specs that are shared among message namespaces"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.util :as util])
+            [frereth-cp.util :as util]
+            [manifold.stream :as strm])
   (:import clojure.lang.BigInt
            io.netty.buffer.ByteBuf))
 
@@ -17,6 +18,12 @@
 
 (s/def ::big-int #(instance? BigInt %))
 (s/def ::buf #(instance? ByteBuf %))
+
+;; Q: Would sink? be more appropriate?
+(s/def ::stream strm/sinkable?)
+(s/def ::strm->child ::stream)
+(s/def ::strm-child-> ::stream)
+(s/def ::strm-parent-> ::stream)
 
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
@@ -196,4 +203,6 @@
                        :opt [::callbacks
                              ::current-block-cursor
                              ::receive-buf
-                             ::strm->child]))
+                             ::strm->child
+                             ::strm-child->
+                             ::strm-parent->]))
