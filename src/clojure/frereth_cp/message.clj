@@ -91,8 +91,8 @@ with the ring buffer semantics, but there may be a deeper motivation."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(s/def ::state-atom (s/and #(instance? clojure.lang.Atom %)
-                           #(s/valid? ::specs/state (deref %))))
+(s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
+                            #(s/valid? ::specs/state (deref %))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
@@ -815,6 +815,13 @@ Line 608"
   [{:keys [::specs/strm->child
            ::specs/receive-buf]
     :as state}]
+  ;; Doesn't seem to be used.
+  ;; Which is good. Should be able to just call
+  ;; ->child (which is what the try-put!
+  ;; would do eventually on some thread) directly.
+  ;; This leaves the question "What should happen if
+  ;; that blocks?"
+  (throw (RuntimeException. "obsolete"))
   ;; If the child's open *and available for output*, write whichever
   ;; bytes are available in receive-buf.
   ;; Those bytes would have pulled in pretty much directly above,
@@ -889,47 +896,36 @@ Line 608"
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn start-event-loops!
-  "
+  "This still needs to set up timers...which are going to be interesting.
 ;;;          205-259 fork child
 "
   [{:keys [::specs/callbacks]
     :as state}]
-  (let [{:keys [::specs/->child ::specs/->parent]} callbacks
-        executor (exec/utilization-executor)
-        strm->child (dfrd/onto (strm/stream) executor)
-        strm-child-> (dfrd/onto (strm/stream) executor)
-        strm-parent-> (dfrd/onto (strm/stream) executor)]
-    ;; At its heart, the reference implementation message event
-    ;; loop is driven by a poller.
-    ;; That checks for input on:
-    ;; fd 8 (from the parent)
-    ;; tochild[1] (to child)
-    ;; fromchild[0] (from child)
-    ;; and a timeout (based on the messaging state).
+  ;; At its heart, the reference implementation message event
+  ;; loop is driven by a poller.
+  ;; That checks for input on:
+  ;; fd 8 (from the parent)
+  ;; tochild[1] (to child)
+  ;; fromchild[0] (from child)
+  ;; and a timeout (based on the messaging state).
 
-    ;; I want to keep any sort of deferred/async details
-    ;; as well-hidden as possible.
-    ;; This is a boundary piece that almost seems tailor-made.
-    ;; Although I really do need to figure out what makes sense
-    ;; as "buffer size."
-    ;; And it might make a lot of sense to spread it farther
-    ;; than I'm using it now to try to take advantage of
-    ;; the transducer capabilities.
-    ;; By the same token, it's very tempting to just use
-    ;; a core.async channel instead.
-    ;; The only reason I'm not now is that I already have
-    ;; access to manifold thanks to aleph, and I don't want
-    ;; to restart my JVM to update build.boot to get access
-    ;; to core.async.
-    (strm/consume ->child strm->child)
-    (strm/consume try-processing-message strm-parent->)
-    (strm/consume child-consumer strm-child->)
-    (assoc state
-           ;; This covers line 260
-           ::specs/recent (System/nanoTime)
-           ::specs/strm->child strm->child
-           ::specs/strm-child-> strm-child->
-           ::specs/strm-parent-> strm-parent->)))
+  ;; I want to keep any sort of deferred/async details
+  ;; as well-hidden as possible.
+  ;; This is a boundary piece that almost seems tailor-made.
+  ;; Although I really do need to figure out what makes sense
+  ;; as "buffer size."
+  ;; And it might make a lot of sense to spread it farther
+  ;; than I'm using it now to try to take advantage of
+  ;; the transducer capabilities.
+  ;; By the same token, it's very tempting to just use
+  ;; a core.async channel instead.
+  ;; The only reason I'm not now is that I already have
+  ;; access to manifold thanks to aleph, and I don't want
+  ;; to restart my JVM to update build.boot to get access
+  ;; to core.async.
+  (assoc state
+         ;; This covers line 260
+         ::specs/recent (System/nanoTime)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -952,53 +948,53 @@ Line 608"
                      ;; Q: What's the difference to spec that this
                      ;; argument is optional?
                      :want-ping ::specs/want-ping)
-        :ret ::specs/state)
+        :ret ::state-agent)
 (defn initial-state
   ([parent-callback
-     child-callback
+    child-callback
     want-ping]
-   {::specs/blocks []
-    ::specs/earliest-time 0
-    ::specs/last-doubling 0
-    ::specs/last-edge 0
-    ::specs/last-speed-adjustment 0
-    ::specs/max-block-length K/k-div2
-    ;; Seems vital, albeit undocumented
-    ::specs/n-sec-per-block specs/sec->n-sec
-    ::specs/receive-bytes 0
-    ::specs/receive-eof false
-    ::specs/receive-total-bytes 0
-    ::specs/receive-written 0
-    ;; In the original, this is a local in main rather than a global
-    ;; Q: Is there any difference that might matter to me, other
-    ;; than being allocated on the stack instead of the heap?
-    ;; (Assuming globals go on the heap. TODO: Look that up)
-    ::specs/recent 0
-    ::specs/rtt 0
-    ::specs/rtt-phase false
-    ::specs/rtt-seen-older-high false
-    ::specs/rtt-seen-older-low false
-    ::specs/rtt-seen-recent-high false
-    ::specs/rtt-seen-recent-low false
-    ::specs/rtt-timeout specs/sec->n-sec
-    ::specs/send-acked 0
-    ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
-    ::specs/send-buf-size send-byte-buf-size
-    ::specs/send-eof false
-    ::specs/send-eof-processed false
-    ::specs/send-eof-acked false
-    ::specs/total-blocks 0
-    ::specs/total-block-transmissions 0
-    ::specs/callbacks {::specs/child child-callback
-                       ::specs/parent parent-callback}
-    ::specs/want-ping want-ping})
+   (agent {::specs/blocks []
+           ::specs/earliest-time 0
+           ::specs/last-doubling 0
+           ::specs/last-edge 0
+           ::specs/last-speed-adjustment 0
+           ::specs/max-block-length K/k-div2
+           ;; Seems vital, albeit undocumented
+           ::specs/n-sec-per-block specs/sec->n-sec
+           ::specs/receive-bytes 0
+           ::specs/receive-eof false
+           ::specs/receive-total-bytes 0
+           ::specs/receive-written 0
+           ;; In the original, this is a local in main rather than a global
+           ;; Q: Is there any difference that might matter to me, other
+           ;; than being allocated on the stack instead of the heap?
+           ;; (Assuming globals go on the heap. TODO: Look that up)
+           ::specs/recent 0
+           ::specs/rtt 0
+           ::specs/rtt-phase false
+           ::specs/rtt-seen-older-high false
+           ::specs/rtt-seen-older-low false
+           ::specs/rtt-seen-recent-high false
+           ::specs/rtt-seen-recent-low false
+           ::specs/rtt-timeout specs/sec->n-sec
+           ::specs/send-acked 0
+           ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
+           ::specs/send-buf-size send-byte-buf-size
+           ::specs/send-eof false
+           ::specs/send-eof-processed false
+           ::specs/send-eof-acked false
+           ::specs/total-blocks 0
+           ::specs/total-block-transmissions 0
+           ::specs/callbacks {::specs/child child-callback
+                              ::specs/parent parent-callback}
+           ::specs/want-ping want-ping}))
   ([parent-callback child-callback]
    (initial-state parent-callback child-callback false)))
 
 (s/fdef child->
-        :args (s/cat :state-atom ::state-atom
+        :args (s/cat :state-agent ::state-agent
                      :buf ::specs/buf)
-        :ret ::state-atom)
+        :ret ::state-agent)
 (defn child->
   "Read bytes from a child buffer...if we have room
 
@@ -1017,11 +1013,11 @@ Prior to that, it was limited to 4K.
 
 ;;;  319-336: Maybe read bytes from child
 "
-  [state-atom
+  [state-agent
    buf]
   (let [{:keys [::specs/strm-child->
                 ::specs/send-bytes]
-         :as state } @state-atom]
+         :as state } @state-agent]
     ;; Line 322: This also needs to account for send-acked
     ;; For whatever reason, DJB picked this as the end-point to refuse to read
     ;; more child data before we hit send-byte-buf-size.
@@ -1033,37 +1029,22 @@ Prior to that, it was limited to 4K.
     ;; And is it possible to tease apart that distinction?
 
     (if (< (+ send-bytes K/k-4) send-byte-buf-size)
-      (let [success (strm/try-put!
-                     strm-child->
-                     ;; Fun detail:
-                     ;; We are almost definitely going to be updating the
-                     ;; state-atom later down the chain.
-                     ;; In order to keep the whole idea thread-safe, though,
-                     ;; each call from here really needs its own
-                     ;; version of buf that downstream pieces will read
-                     ;; to set up those modifications.
-                     ;; This really rolls us back to the idea that
-                     ;; those downstream pieces should be accumulating
-                     ;; the changes that need to be applied when those
-                     ;; handlers are finished.
-                     ;; Or we should really be updating an agent.
-                     (assoc state ::specs/buf buf)
-                     write-from-child-timeout
-                     ::timeout)]
-        (dfrd/on-realized success
-                          (fn [delta]
-                            (throw (RuntimeException. "How should this work?")))
-                          (fn [err]
-                            (log/error (str "child->\n"
-                                            err))))
-        state-atom)
-      state-atom)))
+      ;; I'm torn about send vs. send-off here.
+      ;;
+      (send-off
+       state-agent
+       ;; This is really just the first stage of the segment
+       ;; loop that this needs to trigger.
+       ;; TODO: Switch to a function that starts by calling
+       ;; child-consumer and then feeds its result through
+       ;; everything else that needs to happen
+       child-consumer
+       buf))))
 
 (s/fdef parent->
-        :args (s/cat :state (s/and #(instance? clojure.lang.Atom %)
-                                   #(s/valid? ::specs/state (deref %)))
+        :args (s/cat :state ::state-agent
                      :buf ::specs/buf)
-        :ret ::specs/state)
+        :ret ::state-agent)
 (defn parent->
   "Receive a ByteBuf from parent
 
@@ -1076,7 +1057,7 @@ Prior to that, it was limited to 4K.
   It's replacing one of the polling triggers that
   set off the main() event loop. Need to account for
   that fundamental strategic change"
-  [state-atom
+  [state-agent
    ^ByteBuf buf]
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
@@ -1098,23 +1079,18 @@ Prior to that, it was limited to 4K.
   ;; I'm going to take a simpler and easier approach, at least for
   ;; the first pass
   (let [{:keys [::specs/->child-buffer
-                ::specs/strm-parent->]} @state-atom
-        incoming-size (count ->child-buffer)
-        result
-        (if (<= max-msg-len incoming-size)
-          ;; Q: Do I need anything else?
-          ;; A: Definitely! This needs to trigger the sequence that
-          ;; leads to writing these bytes to the child
-          (swap! state-atom update ::->child-buffer conj buf)
-          (do
-            (log/warn (str "Child buffer overflow\n"
-                           "Incoming message is " incoming-size
-                           " / " max-msg-len))
-            state-atom))
-        success (strm/try-put! strm-parent-> state-atom write-from-parent-timeout  ::time-out)]
-    (dfrd/on-realized success
-                      (fn [x] (log/debug (str "Triggering event loop from parent:" x)))
-                      ;; This seems really bad.
-                      (fn [err] (log/error (str "Triggering event loop from parent:\n"
-                                                (utils/pretty err)))))
-    result))
+                ::specs/strm-parent->]} @state-agent
+        incoming-size (count ->child-buffer)]
+    (if (<= max-msg-len incoming-size)
+      (send-off state-agent  (fn [a]
+                               ;; This seems likely to suffer from the same
+                               ;; problem as child->.
+                               ;; It really needs to trigger off the entire
+                               ;; event chain that starts here.
+                               (let [a' (update a ::->child-buffer conj buf)]
+                                 (try-processing-message a'))))
+      (do
+        (log/warn (str "Child buffer overflow\n"
+                       "Incoming message is " incoming-size
+                       " / " max-msg-len))
+        state-agent))))
