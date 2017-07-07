@@ -2,6 +2,7 @@
   (:require [clojure.test :refer (deftest is testing)]
             [frereth-cp.message :as message]
             [frereth-cp.message.constants :as K]
+            [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
@@ -67,7 +68,8 @@
       (let [flagged (message/flag-acked-others! {::specs/receive-buf buf})]
         (is (not flagged) "What should that look like?")))))
 
-(deftest check-flacked-others
+(defn build-ack-flag-message-portion
+  []
   (let [^ByteBuf buf (Unpooled/buffer 48)]
     ;; There are no .writeUnsigned??? methods
     ;; This seems problematic.
@@ -86,53 +88,86 @@
     (.writeShort buf 24)  ; bytes between ranges 5-6
     (.writeShort buf 32)  ; bytes in range #6
     (let [bytes-acked (+ 56 256 25 8 16 32)
+          now (System/nanoTime)
           start-blocks [{::specs/start-pos 10
                          ::specs/length 40
+                         ::specs/time (- now 1)
                          ::specs/transmissions 1}  ; Covered by range 1
                         {::specs/start-pos 60
                          ::specs/length 256
+                         ::specs/time (- now 2)
                          ::specs/transmissions 2} ; Range 2
                         {::specs/start-pos 316
                          ::specs/length 64
+                         ::specs/time (- now 3)
                          ::specs/transmissions 3}  ; Partially covered by range 3
                         {::specs/start-pos 380
                          ::specs/length 8
+                         ::specs/time (- now 4)
                          ::specs/transmissions 4}   ; Covered by range 4
                         {::specs/start-pos 388
                          ::specs/length 12
+                         ::specs/time (- now 5)
                          ::specs/transmissions 5}  ; Gap between 4 and 5
                         {::specs/start-pos 400
                          ::specs/length 16
+                         ::specs/time (- now 6)
                          ::specs/transmissions 6}  ; Block 5
                         {::specs/start-pos 440
                          ::specs/length 32
-                         ::specs/transmissions 7}]  ; block 6
-          start-state {::specs/blocks start-blocks
-                       ::specs/receive-buf buf
-                       ::specs/send-acked 0
-                       ::specs/send-bytes bytes-acked
-                       ::specs/send-processed (* 2 bytes-acked)
-                       ::specs/total-block-transmissions 0
-                       ::specs/total-blocks 0}
-          {:keys [::specs/blocks
-                  ::specs/send-acked
-                  ::specs/send-bytes
-                  ::specs/send-processed
-                  ::specs/total-blocks
-                  ::specs/total-block-transmissions]
-           :as flagged} (message/flag-acked-others! start-state)
-          expected-remaining-blocks [{::specs/start-pos 316
-                                      ::specs/length 64
-                                      ::specs/transmissions 3}
-                                     {::specs/start-pos 388
-                                      ::specs/length 12
-                                      ::specs/transmissions 5}]]
-      (is (= 4 total-blocks))
-      (is (= 0 send-acked) "Bytes that have been ACK'd")
-      (is (= 78 send-bytes) "Bytess that have not been ACK'd")
-      (is (= 0 send-processed) "Sent bytes that have been absorbed into blocks")
-      (is (= 20 total-block-transmissions))
-      (is (= expected-remaining-blocks blocks)))))
+                         ::specs/time (- now 7)
+                         ::specs/transmissions 7}]]   ; block 6
+      {::specs/blocks start-blocks
+       ::specs/earliest-time 0
+       ::specs/receive-buf buf
+       ::specs/send-acked 0
+       ::specs/send-bytes bytes-acked
+       ::specs/send-processed (* 2 bytes-acked)
+       ::specs/total-block-transmissions 0
+       ::specs/total-blocks 0})))
+
+(deftest check-flag-acked-block
+  (let [start-state (build-ack-flag-message-portion)
+        flagged (help/flag-acked-blocks 0 56
+                                        (assoc start-state ::help/n 0)
+                                        (first (::specs/blocks start-state)))]
+    (throw (RuntimeException. "Start back here"))
+    (is (= (update-in start-state [::specs/blocks 0 ::specs/time] (constantly 0))
+           (dissoc flagged ::help/n)))
+    (let [flagged (help/flag-acked-blocks 0 56
+                                          (assoc start-state ::help/n 1)
+                                          (second (::specs/blocks start-state)))]
+      (is (= (assoc start-state ::help/n 2)
+             flagged)))))
+
+(deftest check-mark-acked
+  (let [start-state (build-ack-flag-message-portion)
+        acked (help/mark-acknowledged start-state 0 56)]
+    (is (= (keys start-state) (keys acked)))
+    (is (= (::specs/blocks (assoc-in start-state [::specs/blocks 0 ::specs/time] 0))
+           (::specs/blocks acked)))))
+
+(deftest check-flacked-others
+  (let [start-state (build-ack-flag-message-portion)
+        {:keys [::specs/blocks
+                ::specs/send-acked
+                ::specs/send-bytes
+                ::specs/send-processed
+                ::specs/total-blocks
+                ::specs/total-block-transmissions]
+         :as flagged} (message/flag-acked-others! start-state)
+        expected-remaining-blocks [{::specs/start-pos 316
+                                    ::specs/length 64
+                                    ::specs/transmissions 3}
+                                   {::specs/start-pos 388
+                                    ::specs/length 12
+                                    ::specs/transmissions 5}]]
+    (is (= 4 total-blocks))
+    (is (= 0 send-acked) "Bytes that have been ACK'd")
+    (is (= 78 send-bytes) "Bytess that have not been ACK'd")
+    (is (= 0 send-processed) "Sent bytes that have been absorbed into blocks")
+    (is (= 20 total-block-transmissions))
+    (is (= expected-remaining-blocks blocks))))
 
 (deftest parallel-parent-test
   (testing "parent-> should be thread-safe"

@@ -16,15 +16,17 @@
     :as block}]
   (when-not transmissions
     (throw (ex-info (str "Missing transmissions") {::problem block})))
-  (if (<= start
-          start-pos
-          (+ start-pos (::specs/length block))
-          stop)
-    (-> acc
-        (assoc-in [::specs/blocks n ::specs/time] 0)
-        (update ::specs/total-blocks inc)
-        (update ::specs/total-block-transmissions + transmissions))
-    (update acc ::n inc)))
+  (update
+   (if (<= start
+           start-pos
+           (+ start-pos (::specs/length block))
+           stop)
+     (-> acc
+         (assoc-in [::specs/blocks n ::specs/time] 0)
+         (update ::specs/total-blocks inc)
+         (update ::specs/total-block-transmissions + transmissions))
+     acc)
+   ::n inc))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -53,7 +55,7 @@ Based on earliestblocktime_compute, in lines 138-153
 (defn mark-acknowledged
   "Mark blocks between positions start and stop as ACK'd
 
-Based [cleverly] on acknowledged, running from lines 155-185"
+Based [cleverly] on acknowledged(), running from lines 155-185"
   [{:keys [::specs/blocks
            ::specs/send-acked
            ::specs/send-bytes

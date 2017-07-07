@@ -592,10 +592,22 @@ Line 608"
                       [help/read-ushort help/read-ushort]     ; 26-28
                       [help/read-ushort help/read-ushort]     ; 30-32
                       [help/read-ushort help/read-ushort]])]   ; 34-36
-    (reduce (fn [state [start stop]]
-              (help/mark-acknowledged state start stop))
-            state
-            indexes)))
+    (dissoc
+     (reduce (fn [{:keys [::stop-byte]
+                   :as state}
+                  [start stop]]
+               ;; This can't be right. Needs to be based on absolute
+               ;; stream addresses.
+               ;; Q: Doesn't it?
+               ;; A: Yes, definitely
+               (let [start-byte (+ stop-byte start)
+                     stop-byte (+ start-byte stop)]
+                 (assoc
+                  (help/mark-acknowledged state start-byte stop-byte)
+                  ::stop-byte stop-byte)))
+             (assoc state ::stop-byte 0)
+             indexes)
+     ::start-byte)))
 
 (s/fdef recalc-rtt-average
         :args (s/cat :state ::state
