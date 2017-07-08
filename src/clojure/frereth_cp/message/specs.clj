@@ -195,4 +195,5 @@
                              ::want-ping]
                        :opt [::callbacks
                              ::current-block-cursor
+                             ;; Q: Do I want anything to do with this?
                              ::receive-buf]))

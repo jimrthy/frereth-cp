@@ -8,68 +8,6 @@
             [frereth-cp.message.specs :as specs])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
-(deftest basic-echo
-  (let [response (promise)
-        parent-state (atom 0)
-        parent-cb (fn [_ rsp]
-                    (let [dst (byte-array (.readableBytes rsp))
-                          response-state @parent-state]
-                      (.getBytes rsp 0 dst)
-                      ;; Should get 2 callbacks here:
-                      ;; 1. The ACK
-                      ;; 2. The actual response
-                      ;; Although, depending on timing, 3 or
-                      ;; more are possible
-                      ;; (If we don't end this quickly enough to
-                      ;; avoid a repeated send, for example)
-                      (when (= response-state 1)
-                        (deliver response dst))
-                      (swap! parent-state inc)))
-        child-cb (fn [state byte-buf]
-                   ;; Just echo it directly back
-                   (message/child-> state byte-buf))
-        initialized (message/initial-state parent-cb child-cb)
-        state (message/start! initialized)]
-    (try
-      (let [src (Unpooled/buffer K/k-1)
-            packet (byte-array (range message/max-msg-len))]
-        (.writeBytes src packet)
-        (let [wrote (future (message/parent-> state src))
-              outcome (deref response 1000 ::timeout)]
-          (if (not (agent-error state))
-            (do
-              (is (not= outcome ::timeout))
-              (when-not (= outcome ::timeout)
-                (is (= @parent-state 2))
-                (is (not outcome) "What else do we have here?"))
-              (is (realized? wrote))
-              (when (realized? wrote)
-                (let [outcome @wrote]
-                  ;; Pretty sure that returns the new state
-                  (is (not outcome) "What should we have here?"))))
-            (is (not (agent-error state))))))
-      (finally
-        (message/halt! state)))))
-
-(deftest check-big-flacked-others
-  (testing "Values for big message streams"
-    (let [^ByteBuf buf (Unpooled/buffer 48)]
-      ;; We're going to have to be able to cope with big numbers
-      ;; sooner or later
-      (.writeLong buf -56)   ; bytes in range #1
-      (.writeInt buf -4)     ; bytes between ranges 1-2
-      (.writeShort buf -256) ; bytes in range #1
-      (.writeShort buf 7)   ; bytes between ranges 2-3
-      (.writeShort buf 25)  ; bytes in range #3
-      (.writeShort buf 32)  ; bytes between ranges 3-4
-      (.writeShort buf 8)   ; bytes in range #4
-      (.writeShort buf 12)  ; bytes between ranges 4-5
-      (.writeShort buf 16)  ; bytes in range #5
-      (.writeShort buf 24)  ; bytes between ranges 5-6
-      (.writeShort buf 32)  ; bytes in range #6
-      (let [flagged (message/flag-acked-others! {::specs/receive-buf buf})]
-        (is (not flagged) "What should that look like?")))))
-
 (defn build-ack-flag-message-portion
   []
   (let [^ByteBuf buf (Unpooled/buffer 48)]
@@ -152,6 +90,72 @@
        ::specs/send-processed (* 2 bytes-acked)  ; 786
        ::specs/total-block-transmissions 0
        ::specs/total-blocks 0})))
+
+(deftest basic-echo
+  (let [response (promise)
+        parent-state (atom 0)
+        parent-cb (fn [_ rsp]
+                    (let [dst (byte-array (.readableBytes rsp))
+                          response-state @parent-state]
+                      (.getBytes rsp 0 dst)
+                      ;; Should get 2 callbacks here:
+                      ;; 1. The ACK
+                      ;; 2. The actual response
+                      ;; Although, depending on timing, 3 or
+                      ;; more are possible
+                      ;; (If we don't end this quickly enough to
+                      ;; avoid a repeated send, for example)
+                      (when (= response-state 1)
+                        (deliver response dst))
+                      (swap! parent-state inc)))
+        child-cb (fn [state byte-buf]
+                   ;; Just echo it directly back
+                   (message/child-> state byte-buf))
+        initialized (message/initial-state parent-cb child-cb)
+        state (message/start! initialized)]
+    (try
+      (let [src (Unpooled/buffer K/k-1)
+            ;; TODO: Need to start with something like the
+            ;; ByteBuf (and pending un-ACK'd packets) generated
+            ;; by  build-ack-flag-message-portion
+            packet (byte-array (range message/max-msg-len))]
+        (.writeBytes src packet)
+        (let [wrote (future (message/parent-> state src))
+              outcome (deref response 1000 ::timeout)]
+          (if (not (agent-error state))
+            (do
+              (is (not= outcome ::timeout))
+              (when-not (= outcome ::timeout)
+                (is (= @parent-state 2))
+                (is (not outcome) "What else do we have here?"))
+              (is (realized? wrote))
+              (when (realized? wrote)
+                (let [outcome @wrote]
+                  ;; Pretty sure that returns the new state
+                  (is (not outcome) "What should we have here?"))))
+            (is (not (agent-error state))))))
+      (finally
+        (message/halt! state)))))
+
+(deftest check-big-flacked-others
+  ;; This needs to be expanded to match the behavior in check-flacked-others
+  (testing "Values for big message streams"
+    (let [^ByteBuf buf (Unpooled/buffer 48)]
+      ;; We're going to have to be able to cope with big numbers
+      ;; sooner or later
+      (.writeLong buf -56)   ; bytes in range #1
+      (.writeInt buf -4)     ; bytes between ranges 1-2
+      (.writeShort buf -256) ; bytes in range #1
+      (.writeShort buf 7)   ; bytes between ranges 2-3
+      (.writeShort buf 25)  ; bytes in range #3
+      (.writeShort buf 32)  ; bytes between ranges 3-4
+      (.writeShort buf 8)   ; bytes in range #4
+      (.writeShort buf 12)  ; bytes between ranges 4-5
+      (.writeShort buf 16)  ; bytes in range #5
+      (.writeShort buf 24)  ; bytes between ranges 5-6
+      (.writeShort buf 32)  ; bytes in range #6
+      (let [flagged (message/flag-acked-others! {::specs/receive-buf buf})]
+        (is (not flagged) "What should that look like?")))))
 
 (deftest check-flag-acked-block
   (let [start-state (build-ack-flag-message-portion)

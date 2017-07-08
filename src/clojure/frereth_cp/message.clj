@@ -354,19 +354,18 @@ TODO: Untangle the strands and get this usable.
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
 
-  ;; This takes me back to requiring ::pos
-  (throw (RuntimeException. "More important to update the proper place in ::blocks"))
   (let [next-message-id (let [n' (inc next-message-id)]
                           ;; Stupid unsigned math
                           (if (> n' K/MAX_32_UINT)
                             1 n'))
+        cursor (vec (concat [::specs/blocks] (::specs/current-block-cursor state)))
         state'
         (-> state
-            (update-in [::specs/block-to-send ::specs/transmissions] inc)
-            (update-in [::specs/block-to-send ::specs/time recent])
-            (assoc-in [::specs/block-to-send ::message-id] next-message-id)
+            (update-in (conj cursor ::specs/transmissions) inc)
+            (update-in (conj cursor ::specs/time) (constantly recent))
+            (assoc-in (conj cursor ::message-id) next-message-id)
             (assoc ::next-message-id next-message-id))
-        {:keys [::specs/block-to-send]} state'
+        block-to-send (get-in state' cursor)
         block-length (::length block-to-send)
         ;; constraints: u multiple of 16; u >= 16; u <= 1088; u >= 48 + blocklen[pos]
         ;; (-- DJB)
@@ -384,6 +383,8 @@ TODO: Untangle the strands and get this usable.
     (when (or (neg? block-length)
               (> K/k-1 block-length))
       (throw (AssertionError. "illegal block length")))
+    ;; TODO: Use compose for this next part?
+
     ;; We need a prefix byte that tells the other end (/ length 16)
     ;; I'm fairly certain that this extra up-front padding
     ;; (writing it as a word) is to set
@@ -393,22 +394,13 @@ TODO: Untangle the strands and get this usable.
     ;; interface.
     ;; Q: Does it make any sense in this context?
     (.writeLong buf (quot u 16))
-
-    (comment
-      ;; This is probably the way I need to handle that,
-      ;; Since buf really needs to be a ByteBuf
-      ;; But I'm jumbling together ByteBuf vs. Byte Array
-      ;; (see the various calls to pack! that follow)
-      ;; This is broken.
-      (.writeBytes buf (byte-array 7))
-      (.writeByte buf (quot u 16)))
-
-    (b-t/uint32-pack! buf 8 next-message-id)
+    (.writeInt buf next-message-id)
     ;; XXX: include any acknowledgments that have piled up (--DJB)
+    (.writeBytes buf #^bytes shared/all-zeros 0 36)  ; all the ACK fields
     ;; SUCC/FAIL flag | data block size
-    (b-t/uint16-pack! buf 46 (calculate-message-data-block-length-flags block-to-send))
+    (.writeShort buf (calculate-message-data-block-length-flags block-to-send))
     ;; stream position of the first byte in the data block being sent
-    (b-t/uint64-pack! buf 48 (::start-pos block-to-send))
+    (.writeLong buf (::start-pos block-to-send))
     ;; Copy bytes to the send-buf
     ;; TODO: make this thread-safe.
     ;; Need to save the initial read-index because we aren't ready
@@ -452,7 +444,13 @@ TODO: Untangle the strands and get this usable.
                   ;; a previous block -- JRG
       (check-for-new-block-to-send state)))
 
-(defn maybe-send-block
+(s/fdef maybe-send-block!
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn maybe-send-block!
+  "Possibly send a block from child to parent
+
+  There's a lot going on in here."
   [state]
   (if-let [state' (pick-next-block-to-send state)]
     (let [state'' (pre-calculate-state-after-send state')]
@@ -471,6 +469,10 @@ Line 608"
   [{{:keys [::specs/->parent]} ::specs/callbacks
     buf ::specs/buf
     :as state}]
+  (when-not ->parent
+    (throw (ex-info "Missing ->parent callback"
+                    {::callbacks (::specs/callbacks state)
+                     ::available-keys (keys state)})))
   ;; Q: Is it really this simple/easy?
   (->parent buf))
 
@@ -509,12 +511,13 @@ Line 608"
 (defn extract-message-from-parent
   "Lines 562-593"
   [{:keys [::specs/receive-bytes
-           ::specs/receive-written]
-    ^ByteBuf receive-buf ::specs/receive-buf
+           ::specs/receive-written
+           ::specs/->child-buffer]
     :as state}]
   ;; 562-574: calculate start/stop bytes
-  (let [D (help/read-ushort receive-buf)
-        SF (bit-and D (+ normal-eof error-eof))
+  (let [^ByteBuf receive-buf (last ->child-buffer)
+        D (help/read-ushort receive-buf)
+        SF (bit-and D (bit-or normal-eof error-eof))
         D (- D SF)]
     (when (and (<= D 1024)
                ;; In the reference implementation,
@@ -553,15 +556,21 @@ Line 608"
                 output-buf (Unpooled/buffer D)]
             ;; 581-588: copy incoming into receivebuf
             (let [min-k (min 0 (- receive-written start-byte))  ; drop bytes we've already written
-                  max-rcvd (+ receive-written recv-byte-buf-size)  ; This is an address in the stream
+                  ;; Address at the limit of our buffer size
+                  max-rcvd (+ receive-written recv-byte-buf-size)
                   ^Long max-k (min D (- max-rcvd start-byte))
                   delta-k (- max-k min-k)]
+              (assert (<= 0 max-k))
+              (assert (<= 0 delta-k))
               ;; There are at least a couple of curve balls in the air right here:
               ;; 1. Only write bytes at stream addresses(?)
               ;;    (< receive-written where (+ receive-written receive-buf-size))
               (.skipBytes receive-buf min-k)
               (.readBytes receive-buf output-buf max-k)
               ;; Q: Do I just want to release it, since I'm done with it?
+              ;; Bigger Q: Shouldn't I just discard it completely?
+              ;; And I've totally dropped the ball with output-buf.
+              ;; The longer I look at this function, the fishier it smells.
               (.discardSomeReadBytes receive-buf)
               ;;          set the receivevalid flags
               ;; 2. Update the receive-valid flag associated with each byte as we go
@@ -581,33 +590,34 @@ Line 608"
         :ret ::specs/state)
 (defn flag-acked-others!
   "Lines 544-560"
-  [{:keys [::specs/receive-buf]
+  [{:keys [::specs/->child-buffer]
     :as state}]
-  (assert receive-buf (str "Missing receive-buf among\n" (keys state)))
-  (let [indexes (map (fn [[startfn stopfn]]
-                       [(startfn receive-buf) (stopfn receive-buf)])
-                     [[(constantly 0) help/read-ulong]   ;  0-8
-                      [help/read-uint help/read-ushort]       ; 16-20
-                      [help/read-ushort help/read-ushort]     ; 22-24
-                      [help/read-ushort help/read-ushort]     ; 26-28
-                      [help/read-ushort help/read-ushort]     ; 30-32
-                      [help/read-ushort help/read-ushort]])]   ; 34-36
-    (dissoc
-     (reduce (fn [{:keys [::stop-byte]
-                   :as state}
-                  [start stop]]
-               ;; This can't be right. Needs to be based on absolute
-               ;; stream addresses.
-               ;; Q: Doesn't it?
-               ;; A: Yes, definitely
-               (let [start-byte (+ stop-byte start)
-                     stop-byte (+ start-byte stop)]
-                 (assoc
-                  (help/mark-acknowledged! state start-byte stop-byte)
-                  ::stop-byte stop-byte)))
-             (assoc state ::stop-byte 0)
-             indexes)
-     ::start-byte)))
+  (let [receive-buf (last ->child-buffer)]
+    (assert receive-buf (str "Missing receive-buf among\n" (keys state)))
+    (let [indexes (map (fn [[startfn stopfn]]
+                         [(startfn receive-buf) (stopfn receive-buf)])
+                       [[(constantly 0) help/read-ulong]   ;  0-8
+                        [help/read-uint help/read-ushort]       ; 16-20
+                        [help/read-ushort help/read-ushort]     ; 22-24
+                        [help/read-ushort help/read-ushort]     ; 26-28
+                        [help/read-ushort help/read-ushort]     ; 30-32
+                        [help/read-ushort help/read-ushort]])]   ; 34-36
+      (dissoc
+       (reduce (fn [{:keys [::stop-byte]
+                     :as state}
+                    [start stop]]
+                 ;; This can't be right. Needs to be based on absolute
+                 ;; stream addresses.
+                 ;; Q: Doesn't it?
+                 ;; A: Yes, definitely
+                 (let [start-byte (+ stop-byte start)
+                       stop-byte (+ start-byte stop)]
+                   (assoc
+                    (help/mark-acknowledged! state start-byte stop-byte)
+                    ::stop-byte stop-byte)))
+               (assoc state ::stop-byte 0)
+               indexes)
+       ::start-byte))))
 
 (s/fdef recalc-rtt-average
         :args (s/cat :state ::state
@@ -794,8 +804,8 @@ Line 608"
             state (-> (reduce flag-acked state acked-blocks)
                       ;; That takes us down to line 544
                       flag-acked-others!
-                      (extract-message-from-parent state)
-                      (prep-send-ack state msg-id))]
+                      extract-message-from-parent
+                      (prep-send-ack msg-id))]
         (send-ack! state)
         state))))
 
@@ -821,6 +831,7 @@ Line 608"
     ;; 440: sets maxblocklen=1024
     ;; Q: Why was it ever 512?
     ;; Guess: for initial Message part of Initiate packet
+
     (let [state (assoc state ::max-byte-length K/k-1)]
       ;; 610-614: counters/looping
       (update
@@ -958,7 +969,7 @@ Line 608"
   [state]
   (-> state
       (assoc ::specs/recent (System/nanoTime))
-      maybe-send-block
+      maybe-send-block!
       try-processing-message
       forward-to-child
       ;; At the end, there's a block that closes the pipe
@@ -986,8 +997,10 @@ Line 608"
   (-> state
       ;; Q: Are the next 2 lines worth their own functions?
       (update ::specs/->child-buffer conj buf)
+      ;; This one really seems so, since I'm calling it
+      ;; in at least 3 different places now
       (assoc ::specs/recent (System/nanoTime))
-      maybe-send-block
+      maybe-send-block!
       ;; Next obvious piece is the "try receiving messages:"
       ;; block.
       ;; But I've already changed the order of operations by
@@ -1044,7 +1057,8 @@ Line 608"
   ([parent-callback
     child-callback
     want-ping]
-   (agent {::specs/blocks []
+   (agent {::specs/->child-buffer []
+           ::specs/blocks []
            ::specs/earliest-time 0
            ::specs/last-doubling 0
            ::specs/last-edge 0
@@ -1160,17 +1174,30 @@ Prior to that, it was limited to 4K.
     ;; client to process it).
 
     ;; I'm going to take a simpler and easier approach, at least for
-    ;; the first pass
-    (let [{:keys [::specs/->child-buffer]} @state-agent
-          previously-buffered-message-count (count ->child-buffer)]
-      ;; Probably need to do something with previously-buffered-message-count
-      ;; Definitely need to check the number of bytes that have not
-      ;; been forwarded along yet
-      (if (<= max-msg-len incoming-size)
-        ;; See comments in child-> re: send vs. send-off
-        (send state-agent  trigger-from-parent buf)
-        (do
-          (log/warn (str "Child buffer overflow\n"
-                         "Incoming message is " incoming-size
-                         " / " max-msg-len))
-          state-agent)))))
+    ;; the first pass.
+    ;; Note that I've actually taken 2 approaches that, really, are
+    ;; mutually exclusive.
+    ;; trigger-from-parent is expecting to have a ::->child-buffer key
+    ;; that's really a vector that we can just conj onto.
+    (let [{:keys [::specs/->child-buffer]} @state-agent]
+      (if (< (count ->child-buffer) max-child-buffer-size)
+        (let [previously-buffered-message-bytes (reduce + 0
+                                                    (map (fn [^ByteBuf buf]
+                                                           (.readableBytes buf))
+                                                         ->child-buffer))]
+          ;; Probably need to do something with previously-buffered-message-bytes.
+          ;; Definitely need to check the number of bytes that have not
+          ;; been forwarded along yet.
+          ;; However, the reference implementation does not.
+          ;; Then again...it's basically a self-enforcing
+          ;; 64K buffer, so maybe it's already covered, and I just wasted
+          ;; CPU cycles calculating it.
+          (if (<= max-msg-len incoming-size)
+            ;; See comments in child-> re: send vs. send-off
+            (send state-agent  trigger-from-parent buf)
+            (do
+              (log/warn (str "Child buffer overflow\n"
+                             "Incoming message is " incoming-size
+                             " / " max-msg-len))
+              state-agent)))
+        state-agent))))

@@ -56,9 +56,12 @@ Based on earliestblocktime_compute, in lines 138-153
   [blocks]
   ;;; Comment from DJB:
   ;;; XXX: use priority queue
-  (apply min (map ::specs/time
-                  ;; Time 0 means it's been ACK'd and is ready to discard
-                  (filter #(not= 0 (::specs/time %)) blocks))))
+  (let [un-acked-blocks (filter #(not= 0 (::specs/time %)) blocks)]
+    (if (< 0 (count un-acked-blocks))
+      (apply min (map ::specs/time
+                      ;; Time 0 means it's been ACK'd and is ready to discard
+                      un-acked-blocks))
+      0)))
 
 ;;;; 155-185: acknowledged(start, stop)
 (s/fdef acknowledged
