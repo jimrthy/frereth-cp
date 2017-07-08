@@ -1,5 +1,7 @@
 (ns frereth-cp.message.message-test
-  (:require [clojure.test :refer (deftest is testing)]
+  (:require [clojure.data]
+            [clojure.pprint :refer (pprint)]
+            [clojure.test :refer (deftest is testing)]
             [frereth-cp.message :as message]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
@@ -88,32 +90,57 @@
     (.writeShort buf 24)  ; bytes between ranges 5-6
     (.writeShort buf 32)  ; bytes in range #6
     (let [bytes-acked (+ 56 256 25 8 16 32)
-          now (System/nanoTime)
-          start-blocks [{::specs/start-pos 10
+          now #_(System/nanoTime) 1234
+          ;; To be safe, any test that uses these needs
+          ;; to .release() these buffers before it ends.
+          ;; Q: Doesn't it?
+          b1 (Unpooled/buffer 16)
+          _ (.writeBytes b1 (byte-array [1]))
+          b2 (Unpooled/buffer 16)
+          _ (.writeBytes b2 (byte-array [2]))
+          b3 (Unpooled/buffer 16)
+          _ (.writeBytes b3 (byte-array [1]))
+          b4 (Unpooled/buffer 16)
+          _ (.writeBytes b4 (byte-array [2]))
+          b5 (Unpooled/buffer 16)
+          _ (.writeBytes b5 (byte-array [1]))
+          b6 (Unpooled/buffer 16)
+          _ (.writeBytes b6 (byte-array [2]))
+          b7 (Unpooled/buffer 16)
+          _ (.writeBytes b7 (byte-array [2]))
+          start-blocks [{::specs/buf b1
+                         ::specs/start-pos 10
                          ::specs/length 40
                          ::specs/time (- now 1)
                          ::specs/transmissions 1}  ; Covered by range 1
-                        {::specs/start-pos 60
+                        {::specs/buf b2
+                         ::specs/start-pos 60
                          ::specs/length 256
                          ::specs/time (- now 2)
                          ::specs/transmissions 2} ; Range 2
-                        {::specs/start-pos 316
+                        {::specs/buf b3
+                         ::specs/start-pos 316
                          ::specs/length 64
                          ::specs/time (- now 3)
                          ::specs/transmissions 3}  ; Partially covered by range 3
-                        {::specs/start-pos 380
+                        ;; Since that hasn't been ACK'd, we can'd drop any of the rest
+                        {::specs/buf b4
+                         ::specs/start-pos 380
                          ::specs/length 8
                          ::specs/time (- now 4)
                          ::specs/transmissions 4}   ; Covered by range 4
-                        {::specs/start-pos 388
+                        {::specs/buf b5
+                         ::specs/start-pos 388
                          ::specs/length 12
                          ::specs/time (- now 5)
                          ::specs/transmissions 5}  ; Gap between 4 and 5
-                        {::specs/start-pos 400
+                        {::specs/buf b6
+                         ::specs/start-pos 400
                          ::specs/length 16
                          ::specs/time (- now 6)
                          ::specs/transmissions 6}  ; Block 5
-                        {::specs/start-pos 440
+                        {::specs/buf b7
+                         ::specs/start-pos 440
                          ::specs/length 32
                          ::specs/time (- now 7)
                          ::specs/transmissions 7}]]   ; block 6
@@ -121,8 +148,8 @@
        ::specs/earliest-time 0
        ::specs/receive-buf buf
        ::specs/send-acked 0
-       ::specs/send-bytes bytes-acked
-       ::specs/send-processed (* 2 bytes-acked)
+       ::specs/send-bytes 1000   ; Something bigger than what's getting acked
+       ::specs/send-processed (* 2 bytes-acked)  ; 786
        ::specs/total-block-transmissions 0
        ::specs/total-blocks 0})))
 
@@ -131,43 +158,82 @@
         flagged (help/flag-acked-blocks 0 56
                                         (assoc start-state ::help/n 0)
                                         (first (::specs/blocks start-state)))]
-    (throw (RuntimeException. "Start back here"))
-    (is (= (update-in start-state [::specs/blocks 0 ::specs/time] (constantly 0))
-           (dissoc flagged ::help/n)))
-    (let [flagged (help/flag-acked-blocks 0 56
-                                          (assoc start-state ::help/n 1)
-                                          (second (::specs/blocks start-state)))]
-      (is (= (assoc start-state ::help/n 2)
-             flagged)))))
+    (try
+      (is (= (-> start-state
+                 (update-in [::specs/blocks 0 ::specs/time] (constantly 0))
+                 (assoc ::specs/total-block-transmissions 1
+                        ::specs/total-blocks 1))
+             (dissoc flagged ::help/n)))
+      (let [flagged (help/flag-acked-blocks 0 56
+                                            (assoc start-state ::help/n 1)
+                                            (second (::specs/blocks start-state)))]
+        (is (= (assoc start-state ::help/n 2)
+               flagged)))
+      (finally
+        (doseq [b (::specs/blocks start-state)]
+          (.release (::specs/buf b)))))))
 
 (deftest check-mark-acked
   (let [start-state (build-ack-flag-message-portion)
-        acked (help/mark-acknowledged start-state 0 56)]
-    (is (= (keys start-state) (keys acked)))
-    (is (= (::specs/blocks (assoc-in start-state [::specs/blocks 0 ::specs/time] 0))
-           (::specs/blocks acked)))))
+        acked (help/mark-acknowledged! start-state 0 56)]
+    (try
+      (comment (pprint acked))
+      (is (= (keys start-state) (keys acked)))
+      ;; It's tempting to convert these to a set to make
+      ;; comparing problems easier.
+      ;; But start-state has invalid data now, since one of
+      ;; its ByteBuf instances has been released.
+      (let [b1 (::specs/blocks start-state)
+            b1n (count b1)
+            b2 (::specs/blocks acked)
+            b2n (count b2)]
+        (when-not (= (dec b1n) b2n)
+          ;; Can't call clojure.data/diff due to the same issue with
+          ;; the released ByteBuf
+          #_(comment (pprint (clojure.data/diff b1 b2)))
+          (is (= (dec b1n) b2n)
+              (str "Start-state has " b1n
+                   " blocks.\nFlagged version has "
+                   b2n
+                   "\n"))))
+      (is (= (drop 1 (::specs/blocks start-state))
+             (::specs/blocks acked)))
+      (finally
+        ;; Don't do this over start-state, since 1 of its buffers has been released
+        (doseq [b (::specs/blocks acked)]
+          (.release (::specs/buf b)))))))
 
 (deftest check-flacked-others
-  (let [start-state (build-ack-flag-message-portion)
-        {:keys [::specs/blocks
-                ::specs/send-acked
-                ::specs/send-bytes
-                ::specs/send-processed
-                ::specs/total-blocks
-                ::specs/total-block-transmissions]
-         :as flagged} (message/flag-acked-others! start-state)
-        expected-remaining-blocks [{::specs/start-pos 316
-                                    ::specs/length 64
-                                    ::specs/transmissions 3}
-                                   {::specs/start-pos 388
-                                    ::specs/length 12
-                                    ::specs/transmissions 5}]]
-    (is (= 4 total-blocks))
-    (is (= 0 send-acked) "Bytes that have been ACK'd")
-    (is (= 78 send-bytes) "Bytess that have not been ACK'd")
-    (is (= 0 send-processed) "Sent bytes that have been absorbed into blocks")
-    (is (= 20 total-block-transmissions))
-    (is (= expected-remaining-blocks blocks))))
+  (let [start-state (build-ack-flag-message-portion)]
+    (let [{:keys [::specs/blocks
+                  ::specs/send-acked
+                  ::specs/send-bytes
+                  ::specs/send-processed
+                  ::specs/total-blocks
+                  ::specs/total-block-transmissions]
+           :as flagged} (message/flag-acked-others! start-state)
+          expected-remaining-blocks (drop 2 (::specs/blocks start-state))]
+      (try
+        (let [dropped-block-length (reduce + 0
+                                           (->> start-state
+                                                ::specs/blocks
+                                                (take 2)
+                                                (map ::specs/length)))]
+          (is (= 5 total-blocks) "Total blocks ACK'd")
+          (is (= (+ (get-in start-state [::specs/blocks 0 ::specs/length])
+                    (get-in start-state [::specs/blocks 1 ::specs/length]))
+                 send-acked) "Bytes that have been dropped")
+          (is (= (- (::specs/send-bytes start-state)
+                    dropped-block-length)
+                 send-bytes) "Bytess that have not been sent but not dropped")
+          (is (= (- (::specs/send-processed start-state) dropped-block-length)
+                 send-processed) "Sent bytes that have been absorbed into blocks")
+          (is (= 20 total-block-transmissions))
+          (is (= (map #(dissoc % ::specs/time) expected-remaining-blocks)
+                 (map #(dissoc % ::specs/time) blocks))))
+        (finally
+          (doseq [b (::specs/blocks flagged)]
+            (.release (::specs/buf b))))))))
 
 (deftest parallel-parent-test
   (testing "parent-> should be thread-safe"

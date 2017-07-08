@@ -603,7 +603,7 @@ Line 608"
                (let [start-byte (+ stop-byte start)
                      stop-byte (+ start-byte stop)]
                  (assoc
-                  (help/mark-acknowledged state start-byte stop-byte)
+                  (help/mark-acknowledged! state start-byte stop-byte)
                   ::stop-byte stop-byte)))
              (assoc state ::stop-byte 0)
              indexes)

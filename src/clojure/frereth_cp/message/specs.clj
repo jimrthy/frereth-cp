@@ -61,10 +61,9 @@
                              ::start-pos
                              ::time
                              ::transmissions]))
+;; Q: If I try to convert this to a set, what happens
+;; when ::buf changes?
 (s/def ::blocks (s/and (s/coll-of ::block)
-                       ;; Actually, the length must be a power of 2
-                       ;; TODO: Improve this spec!
-                       ;; (Reference implementation uses 128)
                        #(= (rem (count %) 2) 0)))
 (s/def ::current-block-cursor (s/coll-of (s/or :vec-index nat-int?
                                                :map-key keyword?)))

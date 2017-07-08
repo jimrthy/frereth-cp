@@ -5,8 +5,22 @@
   (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
+(s/def ::n nat-int?)
+
+(s/def ::block-counting-state (s/merge ::specs/state
+                                       (s/keys :req [::n])))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+(s/fdef flag-acked-blocks
+        :args (s/cat :start int?
+                     :stop int?
+                     :acc ::block-counting-state
+                     :block ::specs/block)
+        :ret ::block-counting-state)
 (defn flag-acked-blocks
   [start stop
    {:keys [::n]
@@ -14,8 +28,8 @@
    {:keys [::specs/start-pos
            ::specs/transmissions]
     :as block}]
-  (when-not transmissions
-    (throw (ex-info (str "Missing transmissions") {::problem block})))
+  {:pre [transmissions]}
+  (println "flag-acked-blocks:" start "-" stop "for" block)
   (update
    (if (<= start
            start-pos
@@ -42,9 +56,9 @@ Based on earliestblocktime_compute, in lines 138-153
   [blocks]
   ;;; Comment from DJB:
   ;;; XXX: use priority queue
-  (min (map ::specs/time
-            ;; Time 0 means it's been ACK'd and is ready to discard
-            (filter #(not= 0 (::specs/time %)) blocks))))
+  (apply min (map ::specs/time
+                  ;; Time 0 means it's been ACK'd and is ready to discard
+                  (filter #(not= 0 (::specs/time %)) blocks))))
 
 ;;;; 155-185: acknowledged(start, stop)
 (s/fdef acknowledged
@@ -52,7 +66,7 @@ Based on earliestblocktime_compute, in lines 138-153
                      :start int?
                      :stop int?)
         :ret ::specs/state)
-(defn mark-acknowledged
+(defn mark-acknowledged!
   "Mark blocks between positions start and stop as ACK'd
 
 Based [cleverly] on acknowledged(), running from lines 155-185"
@@ -67,6 +81,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     :as state}
    start
    stop]
+  (println "Setting ACK flags on a" (class blocks))
   (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
@@ -74,6 +89,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     (let [acked (reduce (partial flag-acked-blocks start stop)
                         (assoc state ::n 0)
                         blocks)]
+      (println "Done w/ initial flag reduce:\n" acked)
       ;; To match the next block, the main point is to discard
       ;; the first sequence of blocks that have been ACK'd
       ;; drop-while seems obvious
@@ -86,24 +102,27 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                        sendbytes
 ;;;                        sendprocessed
 ;;;                        blockfirst
-      (let [[to-drop to-keep] (split-with #(= 0 (::specs/time %)) acked)
+      (let [[to-drop to-keep] (split-with #(= 0 (::specs/time %)) (::specs/blocks acked))
+            _ (println "Keeping:\n" to-keep "\n\n")
             dropped-block-lengths (apply + (map ::specs/length to-drop))
             ;; TODO: Drop reliance on these
-            ;; Instead: need something like:
-            _ (comment (doseq [block to-drop] (.release (::buffer block))))
-            state (update state ::specs/send-acked + dropped-block-lengths)
-            state (update state ::specs/send-bytes - dropped-block-lengths)
-            state (update state ::specs/send-processed - dropped-block-lengths)
-            state (assoc state ::specs/blocks to-keep)
+            state (-> acked
+                      (update ::specs/send-acked + dropped-block-lengths)
+                      (update ::specs/send-bytes - dropped-block-lengths)
+                      (update ::specs/send-processed - dropped-block-lengths)
+                      (assoc ::specs/blocks (vec to-keep)))
 ;;;           177-182: Possibly set sendeofacked flag
-            state (or (when (and send-eof
-                                 (= start 0)
-                                 (> stop (+ (::specs/send-acked state)
-                                            (::specs/send-bytes state)))
-                                 (not send-eof-acked))
-                        (update state ::specs/send-eof-acked true))
-                      state)]
+            state (if (and send-eof
+                           (= start 0)
+                           (> stop (+ (::specs/send-acked state)
+                                      (::specs/send-bytes state)))
+                           (not send-eof-acked))
+                    (update state ::specs/send-eof-acked true)
+                    state)]
 ;;;           183: earliestblocktime_compute()
+        (doseq [block to-drop]
+          (println "Releasing the buf associated with" block)
+          (.release (::specs/buf block)))
         (assoc state ::specs/earliest-time (earliest-block-time blocks))))
     ;;; No change
     state))
