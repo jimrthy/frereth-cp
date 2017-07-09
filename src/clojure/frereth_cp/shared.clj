@@ -14,7 +14,7 @@
             [frereth-cp.util :as util])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
-           io.netty.buffer.Unpooled
+           [io.netty.buffer ByteBuf Unpooled]
            java.security.SecureRandom))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -186,7 +186,11 @@ Needing to declare these things twice is annoying."
 (defn compose
   "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt
 
-  This should probably be named compose! and return nil"
+  This should probably be named compose! and return nil
+
+  Better: Just create a new ByteBuf and return that.
+
+  Q: Why did I write it to update dst this way?"
   [tmplt fields dst]
   (comment (log/info (str "Putting\n" (util/pretty fields)
                           fields "\ninto\n" dst
@@ -220,17 +224,21 @@ But it depends on compose, which would set up circular dependencies"
                       nonce-suffix)
       (crypto/box-after key-pair dst n nonce))))
 
-;; TODO: Needs spec
-;; This one seems interesting
+(s/fdef decompose
+        ;; TODO: tmplt needs a spec for the values
+        :args (s/cat :tmplt map?
+                     :src #(instance? ByteBuf %))
+        ;; TODO: Really should match each value in tmplt
+        ;; with the corresponding value in ret and clarify
+        ;; a type that way.
+        :fn #(= (-> % :ret keys)
+                (-> % :tmplt keys))
+        :ret map?)
 (defn decompose
   "Note that this very strongly assumes that I have a ByteBuf here.
 
-And that it's a victim of mid-stream refactoring.
-
-Some of the templates are defined here. Others have moved to constants.
-
-TODO: Clean this up and move it (and compose, and helpers) into their
-own ns"
+  TODO: Clean this up and move it (and compose, and helpers) into their
+  own ns"
   [tmplt src]
   (reduce
    (fn

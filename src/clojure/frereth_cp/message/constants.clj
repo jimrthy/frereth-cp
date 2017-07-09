@@ -62,3 +62,43 @@
 (def minute-1
   "in nanoseconds"
   (* 60 secs-1))
+
+(def error-eof k-4)
+(def normal-eof k-2)
+
+(def recv-byte-buf-size
+  "How many bytes from the parent will we buffer to send to the child?"
+  k-128)
+
+(def send-byte-buf-size
+  "How many child bytes will we buffer to send?
+
+Don't want this too big, to avoid buffer bloat effects.
+
+At the same time, it seems likely that the optimum will
+vary from one application to the next.
+
+Start with the default.
+
+The reference implementation notes that this absolutely
+must be a power of 2. Pretty sure that's because it involves
+a circular buffer and uses bitwise ands for quick/cheap
+modulo arithmetic."
+  k-128)
+
+(def min-msg-len 48)
+(def max-msg-len 1088)
+
+(def max-outgoing-blocks
+  "How many outgoing, non-ACK'd blocks will we buffer?
+
+Corresponds to OUTGOING in the reference implementation.
+
+That includes a comment that it absolutely must be a power of 2.
+
+I think that's because it uses bitwise and for modulo to cope
+with the ring buffer semantics, but there may be a deeper motivation."
+  128)
+
+(def max-block-length
+  k-div2)
