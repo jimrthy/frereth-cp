@@ -330,7 +330,7 @@ TODO: Untangle the strands and get this usable.
               ::specs/error error-eof))))
 
 (defn pre-calculate-state-after-send
-  "This is mostly setting up the buffer to do the send
+  "This is mostly setting up the buffer to do the send from child to parent
 
   Starts with line 380 sendblock:
   Resending old block will goto this
@@ -341,7 +341,6 @@ TODO: Untangle the strands and get this usable.
            ::specs/recent
            ::specs/send-buf-size]
     ^ByteBuf buf ::specs/buf
-    ^ByteBuf send-buf ::specs/send-buf
     :as state}]
 ;;;      382-406:  Build (and send) the message packet
 ;;;                N.B.: Ignores most of the ACK bits
@@ -410,19 +409,20 @@ TODO: Untangle the strands and get this usable.
     ;; I keep telling myself that a ByteBuffer will surely be fast
     ;; enough.
     (.markReaderIndex buf)
-    (.writeBytes send-buf buf)
-    (.resetReaderIndex buf)
-    ;; This is the approach taken by the reference implementation
-    (comment
-      (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
-                                                                                  (dec send-buf-size))))
-    ;; Reference implementation waits until after the actual write before setting any of
-    ;; the next pieces. But it's a single-threaded process that's going to block at the write,
-    ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
-    (assoc state'
-           ::last-block-time recent
-           ::want-ping 0
-           ::earliest-time (help/earliest-block-time (::blocks state')))))
+    (let [send-buf (Unpooled/buffer (.readableBytes buf))]
+      (.writeBytes send-buf buf)
+      (.resetReaderIndex buf)
+      ;; This is the approach taken by the reference implementation
+      (comment
+        (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
+                                                                                    (dec send-buf-size))))
+      ;; Reference implementation waits until after the actual write before setting any of
+      ;; the next pieces. But it's a single-threaded process that's going to block at the write,
+      ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
+      (assoc state'
+             ::specs/last-block-time recent
+             ::specs/send-buf send-buf
+             ::specs/want-ping 0))))
 
 (defn block->parent!
   "Actually send the message block to the parent
@@ -434,7 +434,8 @@ TODO: Untangle the strands and get this usable.
   ;; Don't forget the special offset+7
   ;; Although it probably doesn't make a lot of
   ;; sense after switching to ByteBuf
-  (->parent (.copy send-buf)))
+  (when send-buf
+    (->parent send-buf)))
 
 (defn pick-next-block-to-send
   [state]
@@ -459,7 +460,8 @@ TODO: Untangle the strands and get this usable.
       ;; TODO: Honestly, we could probably shave some time/effort by
       ;; just tracking the earliest block here instead of searching for
       ;; it in check-for-previous-block-to-resend
-      (assoc state'' ::earliest-time (help/earliest-block-time (::blocks state''))))
+      (dissoc (assoc state'' ::earliest-time (help/earliest-block-time (::blocks state'')))
+              ::specs/send-buf))
     state))
 
 (defn send-ack!
@@ -467,14 +469,16 @@ TODO: Untangle the strands and get this usable.
 
 Line 608"
   [{{:keys [::specs/->parent]} ::specs/callbacks
-    buf ::specs/buf
+    ^ByteBuf send-buf ::specs/send-buf
     :as state}]
-  (when-not ->parent
-    (throw (ex-info "Missing ->parent callback"
-                    {::callbacks (::specs/callbacks state)
-                     ::available-keys (keys state)})))
-  ;; Q: Is it really this simple/easy?
-  (->parent buf))
+  (if send-buf
+    (do
+      (when-not ->parent
+        (throw (ex-info "Missing ->parent callback"
+                        {::callbacks (::specs/callbacks state)
+                         ::available-keys (keys state)})))
+      (->parent send-buf))
+    (log/debug "No bytes to send...presumably we just processed a pure ACK")))
 
 (defn prep-send-ack
   "Lines 595-606"
@@ -482,27 +486,31 @@ Line 608"
            ::specs/receive-bytes
            ::specs/receive-eof
            ::specs/receive-total-bytes]
-    ^ByteBuf buf ::specs/buf
+    ^ByteBuf buf ::specs/send-buf
     :as state}
    message-id]
-  (if (not= message-id)
-    (let [u 192]
+  (when-not receive-bytes
+    (throw (ex-info "Missing receive-bytes"
+                    {::among (keys state)})))
+  ;; never acknowledge a pure acknowledgment --DJB
+  ;; I've seen at least one email pointing out that the
+  ;; author (Matthew Dempsky...he's the only person I've
+  ;; run across who's published any notes about
+  ;; the messaging protocol) has a scenario where the
+  ;; child just hangs, waiting for an ACK to the ACKs
+  ;; it sends 4 times a second.
+  (if (not= message-id 0)
+    (let [send-buf (Unpooled/buffer send-byte-buf-size)
+          u 192]
       ;; XXX: delay acknowledgments  --DJB
-      (.writeLong buf (quot u 16))
-      (.writeInt buf message-id)
-      (.writeLong buf (if (and receive-eof
-                               (= receive-bytes receive-total-bytes))
-                        (inc receive-bytes)
-                        receive-bytes))
-      ;; XXX: incorporate selective acknowledgments --DJB
-      )
-    ;; never acknowledge a pure acknowledgment --DJB
-    ;; I've seen at least one email pointing out that the
-    ;; author (Matthew Dempsky...he's the only person I've
-    ;; run across who's published any notes about
-    ;; the messaging protocol) has a scenario where the
-    ;; child just hangs, waiting for an ACK to the ACKs
-    ;; it sends 4 times a second.
+      (.writeLong send-buf (quot u 16))
+      (.writeInt send-buf message-id)
+      (.writeLong send-buf (if (and receive-eof
+                                    (= receive-bytes receive-total-bytes))
+                             (inc receive-bytes)
+                             receive-bytes))
+      (assoc state ::specs/send-buf send-buf))
+    ;; XXX: incorporate selective acknowledgments --DJB
     state))
 
 (s/fdef extract-message-from-parent
@@ -519,7 +527,7 @@ Line 608"
         D (help/read-ushort receive-buf)
         SF (bit-and D (bit-or normal-eof error-eof))
         D (- D SF)]
-    (when (and (<= D 1024)
+    (if (and (<= D 1024)
                ;; In the reference implementation,
                ;; len = 16 * (unsigned long long) messagelen[pos]
                ;; (assigned at line 443)
@@ -583,7 +591,12 @@ Line 608"
               ;;    child pipe.
               ;; I'm fairly certain this is what that for loop amounts to
               (update state ::receive-bytes + (min (- max-rcvd receive-bytes)
-                                                   (+ receive-bytes delta-k))))))))))
+                                                   (+ receive-bytes delta-k)))))))
+      (do
+        (log/warn (str "Gibberish Message packet from parent. D == " D))
+        ;; This needs to short-circuit.
+        ;; Q: is there a better way to accomplish that than just returning nil?
+        state))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
@@ -781,7 +794,7 @@ Line 608"
 
 (s/fdef handle-comprehensible-child-message
         :args (s/cat :state ::specs/state)
-        :ret ::specs/state)
+        :ret (s/nilable ::specs/state))
 (defn handle-comprehensible-child-message
   "handle this message if it's comprehensible: (DJB)
 
@@ -801,17 +814,19 @@ Line 608"
             ;; Q: Isn't there?
             acked-blocks (filter #(= ack-id (::message-id %))
                                  blocks)
-            state (-> (reduce flag-acked state acked-blocks)
-                      ;; That takes us down to line 544
-                      flag-acked-others!
-                      extract-message-from-parent
-                      (prep-send-ack msg-id))]
-        (send-ack! state)
-        state))))
+            flagged (-> (reduce flag-acked state acked-blocks)
+                          ;; That takes us down to line 544
+                          flag-acked-others!)
+            extracted (extract-message-from-parent flagged)]
+        (if extracted
+          (do
+            (send-ack! state)
+            (dissoc extracted ::specs/send-buf))
+          flagged)))))
 
 (s/fdef try-processing-message
         :args (s/cat :state ::specs/state)
-        :ret ::specs/state)
+        :ret (s/nilable ::specs/state))
 (defn try-processing-message
   "436-614: try processing a message: --DJB"
   [{:keys [::specs/->child-buffer
@@ -831,17 +846,8 @@ Line 608"
     ;; 440: sets maxblocklen=1024
     ;; Q: Why was it ever 512?
     ;; Guess: for initial Message part of Initiate packet
-
-    (let [state (assoc state ::max-byte-length K/k-1)]
-      ;; 610-614: counters/looping
-      (update
-       (handle-comprehensible-child-message state)
-       ::specs/->child-buffer
-       ;; Q: Do I need to convert the lazy seq this creates
-       ;; back to a vec?
-       ;; ByteBuf life cycle issues seem like they might lead
-       ;; to lots of problems later if I don't.
-       #(drop 1 %)))))
+    (let [state' (assoc state ::max-byte-length K/k-1)]
+      (handle-comprehensible-child-message state))))
 
 (defn forward-to-child
   "From the buffer that parent has filled
@@ -966,12 +972,13 @@ Line 608"
          ::specs/recent (System/nanoTime)))
 
 (defn trigger-io
-  [state]
+  [{:keys [::specs/->child]
+    :as state}]
   (-> state
       (assoc ::specs/recent (System/nanoTime))
       maybe-send-block!
       try-processing-message
-      forward-to-child
+      ->child
       ;; At the end, there's a block that closes the pipe
       ;; to the child if we're done.
       ;; I think the point is that we'll quit polling on
@@ -987,36 +994,67 @@ Line 608"
 
 (defn trigger-from-parent
   "Message block arrived from parent. We have work to do."
-  [state buf]
+  [{{:keys [::specs/->child]} ::specs/callbacks
+    :as state}
+   buf]
+  (when-not ->child
+    (throw (ex-info "Missing ->child"
+                    {::callbacks (::specs/callbacks state)})))
   ;; This is basically an iteration of the top-level
   ;; event-loop handler from main().
   ;; I can skip the pieces that only relate to reading
   ;; from the child, because I'm using an active callback
   ;; approach, and this was triggered by a block of
   ;; data coming from the parent.
-  (-> state
-      ;; Q: Are the next 2 lines worth their own functions?
-      (update ::specs/->child-buffer conj buf)
-      ;; This one really seems so, since I'm calling it
-      ;; in at least 3 different places now
-      (assoc ::specs/recent (System/nanoTime))
-      maybe-send-block!
-      ;; Next obvious piece is the "try receiving messages:"
-      ;; block.
-      ;; But I've already changed the order of operations by
-      ;; doing that up front in parent->, which is what called
-      ;; this.
-      ;; Now that I'm going back through the big-picture items,
-      ;; that decision seems less valid than it did when I was
-      ;; staring at each tree in the forest.
-      ;; It probably doesn't matter, but I've dealt with enough
-      ;; subtleties in the original code that I'm very nervous
-      ;; about that "probably"
-      ;; OTOH, this leaves everything that follows pleasingly
-      ;; duplicated (and ripe for refactoring) with trigger-from-timer
-      ;; and trigger-from-child
-      try-processing-message
-      forward-to-child))
+  (let [ready-to-ack (-> state
+                         ;; Q: Are the next 2 lines worth their own functions?
+                         (update ::specs/->child-buffer conj buf)
+                         ;; This one really seems so, since I'm calling it
+                         ;; in at least 3 different places now
+                         (assoc ::specs/recent (System/nanoTime))
+                         ;; This is about sending from the child to parent
+                         maybe-send-block!
+                         ;; Next obvious piece is the "try receiving messages:"
+                         ;; block.
+                         ;; But I've already changed the order of operations by
+                         ;; doing that up front in parent->, which is what called
+                         ;; this.
+                         ;; Now that I'm going back through the big-picture items,
+                         ;; that decision seems less valid than it did when I was
+                         ;; staring at each tree in the forest.
+                         ;; It probably doesn't matter, but I've dealt with enough
+                         ;; subtleties in the original code that I'm very nervous
+                         ;; about that "probably"
+                         ;; OTOH, this leaves everything that follows pleasingly
+                         ;; duplicated (and ripe for refactoring) with trigger-from-timer
+                         ;; and trigger-from-child
+                         )]
+    (if-let [primed (try-processing-message ready-to-ack)]
+      (try
+        (let [{:keys [::specs/->child-buffer]} primed
+              ^"[Lio.netty.buffer.ByteBuf;" args (into-array ByteBuf ->child-buffer)
+              response (Unpooled/copiedBuffer args)]
+          (->child primed response)
+          ;; 610-614: counters/looping
+          (assoc primed
+                  ::specs/->child-buffer
+                  []))
+        (catch RuntimeException ex
+          ;; Reference implementation specifically copes with
+          ;; EINTR, EWOULDBLOCK, and EAGAIN.
+          ;; Any other failure means just closing the child pipe.
+          primed))
+      (do
+        ;; The message from parent to child was garbage.
+        ;; Discard.
+        ;; Q: Does this make sense?
+        ;; It leaves our "global" state updated in a way that left us unable
+        ;; to send earlier. That isn't likely to get fixed the next time
+        ;; through the event loop.
+        ;; (I'm hitting this because I'm sending a gibberish message that
+        ;; needs to be discarded)
+        (throw (RuntimeException. "How does DJB really handle this discard?"))
+        ready-to-ack))))
 
 (defn trigger-from-child
   [state buf]
@@ -1083,7 +1121,6 @@ Line 608"
            ::specs/rtt-seen-recent-low false
            ::specs/rtt-timeout specs/sec->n-sec
            ::specs/send-acked 0
-           ::specs/send-buf (Unpooled/buffer send-byte-buf-size)
            ::specs/send-buf-size send-byte-buf-size
            ::specs/send-bytes 0
            ::specs/send-eof false
@@ -1092,8 +1129,8 @@ Line 608"
            ::specs/send-processed 0
            ::specs/total-blocks 0
            ::specs/total-block-transmissions 0
-           ::specs/callbacks {::specs/child child-callback
-                              ::specs/parent parent-callback}
+           ::specs/callbacks {::specs/->child child-callback
+                              ::specs/->parent parent-callback}
            ::specs/want-ping want-ping}))
   ([parent-callback child-callback]
    (initial-state parent-callback child-callback false)))

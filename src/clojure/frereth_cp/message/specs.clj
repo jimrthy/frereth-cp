@@ -119,9 +119,7 @@
 (s/def ::->parent ::callback)
 (s/def ::parent-> ::callback)
 (s/def ::callbacks (s/keys :req [::->child
-                                 ::child->
-                                 ::->parent
-                                 ::parent->]))
+                                 ::->parent]))
 
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
@@ -183,7 +181,7 @@
                              ::rtt-seen-recent-low
                              ::rtt-timeout
                              ::send-acked
-                             ::send-buf
+                             ;; Q: Does this field make any sense at all?
                              ::send-buf-size
                              ::send-bytes
                              ::send-eof
@@ -196,4 +194,5 @@
                        :opt [::callbacks
                              ::current-block-cursor
                              ;; Q: Do I want anything to do with this?
-                             ::receive-buf]))
+                             ::receive-buf
+                             ::send-buf]))
