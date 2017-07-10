@@ -71,7 +71,7 @@
   [n]
   (byte (- (bit-and n 0xff) 128)))
 
-(defn possibly-2s-complement
+(defn possibly-2s-complement-8
   "It seems ridiculous to need to do this
 Q: Is this valid? It seems overly simplistic.
 
@@ -105,11 +105,32 @@ OTOH, I'm only using it for coping with the nonce.
       (println "Failed to convert " n)
       (throw ex))))
 
-(defn possibly-2s-uncomplement
-  [n]
+(defn possibly-2s-uncomplement-n
+  "Note that this is specifically for a single byte"
+  [n maximum]
   (if (<= 0 n)
     n
-    (+ n 256)))
+    (+ n maximum)))
+
+(defn possibly-2s-uncomplement-8
+  "Note that this is specifically for a single byte"
+  [n]
+  (possibly-2s-uncomplement-n n 256))
+
+(defn possibly-2s-uncomplement-16
+  "Note that this is specifically for a single byte"
+  [n]
+  (possibly-2s-uncomplement-n n 65536))
+
+(defn possibly-2s-uncomplement-32
+  "Note that this is specifically for a single byte"
+  [n]
+  (possibly-2s-uncomplement-n n 4294967296))
+
+(defn possibly-2s-uncomplement-64
+  "Note that this is specifically for a single byte"
+  [n]
+  (possibly-2s-uncomplement-n n 18446744073709552000N))
 
 (defn uint16-pack!
   "Sets 4 bytes in dst (starting at offset n) to x"
@@ -119,7 +140,7 @@ OTOH, I'm only using it for coping with the nonce.
        (aset-byte dst i (-> x
                             (unsigned-bit-shift-right bits-to-shift)
                             (bit-and 0xff)
-                            possibly-2s-complement)))))
+                            possibly-2s-complement-8)))))
 
 (defn uint32-pack!
   "Sets 4 bytes in dst (starting at offset n) to x"
@@ -129,7 +150,7 @@ OTOH, I'm only using it for coping with the nonce.
        (aset-byte dst i (-> x
                             (unsigned-bit-shift-right bits-to-shift)
                             (bit-and 0xff)
-                            possibly-2s-complement)))))
+                            possibly-2s-complement-8)))))
 
 (defn uint64-pack!
   "Sets 8 bytes in dst (starting at offset n) to x
@@ -151,7 +172,7 @@ So stick with this translation.
        (aset-byte dst i (-> x
                             (unsigned-bit-shift-right bits-to-shift)
                             (bit-and 0xff)
-                            possibly-2s-complement)))))
+                            possibly-2s-complement-8)))))
   ([x]
    (let [dst (byte-array 8)]
      (uint64-pack! dst 0 x)
@@ -170,7 +191,7 @@ So stick with this translation.
                 (bit-shift-left Byte/SIZE)
                 (bit-or (->> n
                              (aget src)
-                             possibly-2s-uncomplement
+                             possibly-2s-uncomplement-8
                              ;; This next line should be redundant
                              (bit-and 0xff)))))
           0

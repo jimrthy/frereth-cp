@@ -169,9 +169,16 @@ Line 608"
         len (.readableBytes msg)]
     (when (and (>= len K/min-msg-len)
                (<= len K/max-msg-len))
+      (let [])
       ;; The problem with this idea is that it makes flag-acked-others
-      ;; noticeably messier
-      (throw (RuntimeException. "Just decompose the message here and now"))
+      ;; noticeably messier.
+      ;; And there's no way to know the length of the message block vs. the padding
+      ;; until we've read the length field.
+      ;; So, it's doable. But I'd really need to add something like function handling
+      ;; to fields to update the template after a field's been processed.
+      ;; That's actually very tempting, but it isn't going to happen tonight.
+      ;; TODO: Think about this some more.
+      (comment (throw (RuntimeException. "Just decompose the message here and now")))
       (let [msg-id (help/read-uint msg) ;; won't need this (until later?), but need to update read-index anyway
             ack-id (help/read-uint msg)
             ;; Note that there's something terribly wrong if we

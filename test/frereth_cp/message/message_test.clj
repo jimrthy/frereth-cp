@@ -49,9 +49,16 @@
                 (is (not outcome) "What else do we have here?"))
               (is (realized? wrote))
               (when (realized? wrote)
-                (let [outcome @wrote]
-                  ;; Pretty sure that returns the new state
-                  (is (not outcome) "What should we have here?")))))))
+                (let [outcome-agent @wrote]
+                  (is (not (agent-error outcome-agent)))
+                  (when-not (agent-error outcome-agent)
+                    ;; Fun detail:
+                    ;; wrote is a promise.
+                    ;; When I deref that, there's an agent
+                    ;; that I need to deref again to get
+                    ;; the actual end-state
+                    (let [outcome @outcome-agent]
+                      (is (not outcome) "What should we have here?")))))))))
       (finally
         (message/halt! state)))))
 

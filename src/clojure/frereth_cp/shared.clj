@@ -21,6 +21,10 @@
 ;;; Magic constants
 ;;; TODO: Pretty much all of these should move into constants
 
+;; TODO: Uncomment this...most of the pieces in here are fairly
+;; performance-sensitive
+(comment (set! *warn-on-reflection* true))
+
 (def hello-header (.getBytes (str K/client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def hello-packet-length 224)
@@ -125,14 +129,15 @@
 TODO: Think about a way to do this using specs instead.
 
 Needing to declare these things twice is annoying."
-  [tmplt fields dst k]
+  [tmplt fields ^ByteBuf dst k]
   (let [dscr (k tmplt)
         cnvrtr (::K/type dscr)
         v (k fields)]
     (try
       (case cnvrtr
-        ::K/bytes (let [n (::K/length dscr)
-                        beg (.readableBytes dst)]
+        ::K/bytes (let [^Long n (::K/length dscr)
+                        beg (.readableBytes dst)
+                        ]
                     (try
                       (log/debug (str "Getting ready to write "
                                       n
@@ -210,9 +215,9 @@ Needing to declare these things twice is annoying."
 Really belongs in crypto.
 
 But it depends on compose, which would set up circular dependencies"
-  [tmplt src dst key-pair nonce-prefix nonce-suffix]
+  [tmplt src ^ByteBuf dst key-pair nonce-prefix nonce-suffix]
   {:pre [dst]}
-  (let [buffer (Unpooled/wrappedBuffer dst)]
+  (let [^ByteBuf buffer (Unpooled/wrappedBuffer dst)]
     (.writerIndex buffer 0)
     (compose tmplt src buffer)
     (let [n (.readableBytes buffer)
@@ -239,7 +244,7 @@ But it depends on compose, which would set up circular dependencies"
 
   TODO: Clean this up and move it (and compose, and helpers) into their
   own ns"
-  [tmplt src]
+  [tmplt ^ByteBuf src]
   (reduce
    (fn
      [acc k]
@@ -253,8 +258,12 @@ But it depends on compose, which would set up circular dependencies"
                       ;; .readBytes does not produce a derived buffer.
                       ;; The buffer that gets created here will need to be
                       ;; released separately
-                      ::K/bytes (.readBytes src (::K/length dscr))
+                      ::K/bytes (let [^Long len (::K/length dscr)]
+                                  (.readBytes src len))
                       ::K/int-64 (.readLong src)
+                      ::K/uint-64 (b-t/possibly-2s-uncomplement-64 (.readLong src))
+                      ::K/int-32 (.readInt src)
+                      ::K/int-16 (.readShort src)
                       ::K/zeroes (.readSlice src (::K/length dscr))
                       (throw (ex-info "Missing case clause"
                                       {::failure cnvrtr
@@ -291,7 +300,8 @@ But it depends on compose, which would set up circular dependencies"
   "Be sure to call this when you're done with something
 allocated using default-packet-manager"
   [p-m]
-  (-> p-m ::packet .release))
+  (let [^ByteBuf packet (::packet p-m)]
+    (.release packet)))
 
 (s/fdef default-work-area
         :args (s/cat)

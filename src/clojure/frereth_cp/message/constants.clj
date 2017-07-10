@@ -1,5 +1,6 @@
 (ns frereth-cp.message.constants
-  (:require [frereth-cp.message.specs :as specs]))
+  (:require [frereth-cp.message.specs :as specs]
+            [frereth-cp.shared.constants :as K]))
 
 (def stream-length-limit
   "How many bytes can the stream send before we've exhausted the address space?
@@ -102,3 +103,27 @@ with the ring buffer semantics, but there may be a deeper motivation."
 
 (def max-block-length
   k-div2)
+
+(def message-packet-dscr
+  (array-map ::message-id {::K/type ::K/bytes
+                           ::K/length 4}
+             ::acked-message {::K/type ::K/bytes
+                              ::K/length 4}
+             ::ack-length-1 {::K/type ::K/uint-64}
+             ::ack-gap-1->2 {::K/type ::K/uint-32}
+             ::ack-length-2 {::K/type ::K/uint-16}
+             ::ack-gap-2->3 {::K/type ::K/uint-16}
+             ::ack-length-3 {::K/type ::K/uint-16}
+             ::ack-gap-3->4 {::K/type ::K/uint-16}
+             ::ack-length-4 {::K/type ::K/uint-16}
+             ::ack-gap-4->5 {::K/type ::K/uint-16}
+             ::ack-length-5 {::K/type ::K/uint-16}
+             ::ack-gap-5->6 {::K/type ::K/uint-16}
+             ::ack-length-6 {::K/type ::K/uint-16}
+             ::size-and-flags {::K/type ::K/uint-16}
+             ::start-byte {::K/type ::K/uint-64}
+             ;; These next two make this approach problematic.
+             ;; We really can't know the size of either until
+             ;; we've read the size-and-flags field.
+             ::zero-padding {::K/type ::K/zeroes ::K/length '?zero-padding-length}
+             ::data-block {::K/type ::K/bytes ::K/length '?data-block-length}))
