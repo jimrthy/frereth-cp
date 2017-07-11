@@ -87,8 +87,10 @@ a circular buffer and uses bitwise ands for quick/cheap
 modulo arithmetic."
   k-128)
 
+(def header-length 48)
 (def min-msg-len 48)
 (def max-msg-len 1088)
+(def min-padding-length 16)
 
 (def max-outgoing-blocks
   "How many outgoing, non-ACK'd blocks will we buffer?

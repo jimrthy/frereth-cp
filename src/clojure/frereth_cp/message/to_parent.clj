@@ -9,6 +9,25 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+(defn calculate-padded-size
+  [{:keys [::specs/length] :as block}]
+  ;; constraints: u multiple of 16; u >= 16; u <= 1088; u >= 48 + blocklen[pos]
+  ;; (-- DJB)
+  ;; Set the number of bytes we're going to send for this block
+  ;; Q: Why the extra 16?
+  ;; Current guess: Allows at least 16 bytes of padding.
+  ;; Then we'll round up to an arbitrary length.
+  (condp >= (+ K/header-length K/min-padding-length length)
+    ;; Stair-step the number of bytes that will get sent for this block
+    ;; Suspect that this has something to do with traffic-shaping
+    ;; analysis
+    ;; Q: Would named constants be useful here at all?
+    192 192
+    320 320
+    576 576
+    1088 1088
+    (throw (AssertionError. "block too big"))))
+
 (s/fdef calculate-message-data-block-length
         :args ::specs/block
         :ret (s/and nat-int?
@@ -20,13 +39,121 @@
                     ;; aren't covered by the spec
                     #(< (+ K/k-1 K/error-eof) %)))
 (defn calculate-message-data-block-length-flags
-  [block]
-  (let [len (::specs/length block)]
-    (bit-or len
-            (case (::specs/send-eof block)
-              false 0
-              ::specs/normal K/normal-eof
-              ::specs/error K/error-eof))))
+  [{:keys [::specs/length] :as block}
+   u]
+  (bit-or u
+          (case (::specs/send-eof block)
+            false 0
+            ::specs/normal K/normal-eof
+            ::specs/error K/error-eof)))
+
+(defn build-message-block
+  ^ByteBuf [^Integer next-message-id
+            {^Long start-pos ::specs/start-pos
+             ^ByteBuf buf ::specs/buf
+             :keys [::specs/length]
+             :as block-to-send}]
+  ;;; Lines 387-402
+  ;;; Q: make this thread-safe?
+
+  ;; It's tempting to use a direct buffer here, but that temptation
+  ;; would again be wrong.
+  ;; Since this has to be converted to a ByteArray so it can be
+  ;; encrypted.
+  ;; Note that we also need padding
+  (let [u (calculate-padded-size block-to-send)
+        ;; Q: Why does this happen after calculating u?
+        _ (when (or (neg? length)
+                    (< K/k-1 length))
+            (throw (AssertionError. (str "illegal block length: " length))))
+        ;; ByteBuf instances default to BIG_ENDIAN, but that breaks the spec
+        send-buf (.order (Unpooled/buffer u) java.nio.ByteOrder/LITTLE_ENDIAN)]
+    (.writeInt send-buf next-message-id)
+    ;; XXX: include any acknowledgments that have piled up (--DJB)
+    (.writeBytes send-buf #^bytes shared/all-zeros 0 34)  ; all the ACK fields
+    ;; SUCC/FAIL flag | data block size
+    (.writeShort send-buf (calculate-message-data-block-length-flags block-to-send u))
+    ;; stream position of the first byte in the data block being sent
+    ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
+    ;; i.e. the total number of bytes in the stream.
+    (.writeLong send-buf start-pos)
+    (let [
+          padding-bytes (- u length)
+          writer-index (.writerIndex send-buf)]
+      ;; This is the approach taken by the reference implementation
+      ;; Note that he's just skipping the padding bytes rather than
+      ;; filling them with zeros
+      (comment
+        (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
+                                                                                  (dec send-buf-size))))
+      (.writerIndex send-buf padding-bytes))
+    ;; Need to save the initial read-index because we aren't ready
+    ;; to discard the buffer until it's been ACK'd.
+    ;; This is a fairly hefty departure from the reference implementation,
+    ;; which is all based around the circular buffer concept.
+    ;; I keep telling myself that a ByteBuffer will surely be fast
+    ;; enough.
+    (.markReaderIndex buf)
+    (.writeBytes send-buf buf)
+    (.resetReaderIndex buf)
+    send-buf))
+
+(defn pre-calculate-state-after-send
+  "This is mostly setting up the buffer to do the send from child to parent
+
+  Starts with line 380 sendblock:
+  Resending old block will goto this
+
+  It's in the middle of a do {} while(0) loop"
+  [{:keys [::specs/current-block-cursor
+           ::specs/next-message-id
+           ::specs/recent
+           ::specs/send-buf-size]
+    :as state}]
+;;;      382-404:  Build the message packet
+;;;                N.B.: Ignores most of the ACK bits
+;;;                And really does not seem to match the spec
+;;;                This puts the data block size at pos 46
+;;;                And the data block's first byte  position
+;;;                goes in position 48.
+;;;                The trick happens in line 404: he starts
+;;;                the write to FD9 at offset +7, which is the
+;;;                len/16 byte.
+;;;                So everything else is shifted right by 8 bytes
+  (let [next-message-id (let [n' (inc next-message-id)]
+                          ;; Stupid unsigned math
+                          (if (> n' K/MAX_32_UINT)
+                            1 n'))
+        cursor (vec (concat [::specs/blocks] current-block-cursor))
+        state'
+        (-> state
+            (update-in (conj cursor ::specs/transmissions) inc)
+            (update-in (conj cursor ::specs/time) (constantly recent))
+            (assoc-in (conj cursor ::specs/message-id) next-message-id)
+            (assoc ::next-message-id next-message-id))
+        block-to-send (get-in state' cursor)]
+    ;; TODO: Use compose for this next part?
+
+    ;; We need a prefix byte that tells the other end (/ length 16)
+    ;; I'm fairly certain that this extra up-front padding
+    ;; (writing it as a word) is to set
+    ;; up word alignment boundaries so the actual byte copies can proceed
+    ;; quickly.
+    ;; This extra length byte is a key part of the reference
+    ;; interface.
+    ;; Q: Does it make any sense in this context?
+    ;; A: Absolutely not.
+    (comment
+      (.writeLong buf (quot u 16)))
+
+    (let [buf (build-message-block next-message-id block-to-send)]
+        ;; Reference implementation waits until after the actual write before setting any of
+        ;; the next pieces. But it's a single-threaded process that's going to block at the write,
+        ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
+      (assoc state'
+             ::specs/last-block-time recent
+             ::specs/send-buf buf
+             ::specs/want-ping 0))))
 
 (s/fdef check-for-previous-block-to-resend
         :args ::specs/state
@@ -154,101 +281,6 @@
                   ;; There's goto-fun overlap with resending
                   ;; a previous block -- JRG
       (check-for-new-block-to-send state)))
-
-(defn pre-calculate-state-after-send
-  "This is mostly setting up the buffer to do the send from child to parent
-
-  Starts with line 380 sendblock:
-  Resending old block will goto this
-
-  It's in the middle of a do {} while(0) loop"
-  [{:keys [::specs/block-to-send
-           ::specs/next-message-id
-           ::specs/recent
-           ::specs/send-buf-size]
-    ^ByteBuf buf ::specs/buf
-    :as state}]
-;;;      382-406:  Build (and send) the message packet
-;;;                N.B.: Ignores most of the ACK bits
-;;;                And really does not seem to match the spec
-;;;                This puts the data block size at pos 46
-;;;                And the data block's first byte  position
-;;;                goes in position 48.
-;;;                The trick happens in line 404: he starts
-;;;                the write to FD9 at offset +7, which is the
-;;;                len/16 byte.
-;;;                So everything else is shifted right by 8 bytes
-
-  (let [next-message-id (let [n' (inc next-message-id)]
-                          ;; Stupid unsigned math
-                          (if (> n' K/MAX_32_UINT)
-                            1 n'))
-        cursor (vec (concat [::specs/blocks] (::specs/current-block-cursor state)))
-        state'
-        (-> state
-            (update-in (conj cursor ::specs/transmissions) inc)
-            (update-in (conj cursor ::specs/time) (constantly recent))
-            (assoc-in (conj cursor ::message-id) next-message-id)
-            (assoc ::next-message-id next-message-id))
-        block-to-send (get-in state' cursor)
-        block-length (::length block-to-send)
-        ;; constraints: u multiple of 16; u >= 16; u <= 1088; u >= 48 + blocklen[pos]
-        ;; (-- DJB)
-        ;; Set the number of bytes we're going to send for this block?
-        u (condp <= (+ 64 block-length)
-            ;; Stair-step the number of bytes that will get sent for this block
-            ;; Suspect that this has something to do with traffic-shaping
-            ;; analysis
-            ;; Q: Would named constants be useful here at all?
-            192 192
-            320 320
-            576 576
-            1088 1088
-            (throw (AssertionError. "block too big")))]
-    (when (or (neg? block-length)
-              (> K/k-1 block-length))
-      (throw (AssertionError. "illegal block length")))
-    ;; TODO: Use compose for this next part?
-
-    ;; We need a prefix byte that tells the other end (/ length 16)
-    ;; I'm fairly certain that this extra up-front padding
-    ;; (writing it as a word) is to set
-    ;; up word alignment boundaries so the actual byte copies can proceed
-    ;; quickly.
-    ;; This extra length byte is a key part of the reference
-    ;; interface.
-    ;; Q: Does it make any sense in this context?
-    (.writeLong buf (quot u 16))
-    (.writeInt buf next-message-id)
-    ;; XXX: include any acknowledgments that have piled up (--DJB)
-    (.writeBytes buf #^bytes shared/all-zeros 0 36)  ; all the ACK fields
-    ;; SUCC/FAIL flag | data block size
-    (.writeShort buf (calculate-message-data-block-length-flags block-to-send))
-    ;; stream position of the first byte in the data block being sent
-    (.writeLong buf (::start-pos block-to-send))
-    ;; Copy bytes to the send-buf
-    ;; TODO: make this thread-safe.
-    ;; Need to save the initial read-index because we aren't ready
-    ;; to discard the buffer until it's been ACK'd.
-    ;; This is a fairly hefty departure from the reference implementation,
-    ;; which is all based around the circular buffer concept.
-    ;; I keep telling myself that a ByteBuffer will surely be fast
-    ;; enough.
-    (.markReaderIndex buf)
-    (let [send-buf (Unpooled/buffer (.readableBytes buf))]
-      (.writeBytes send-buf buf)
-      (.resetReaderIndex buf)
-      ;; This is the approach taken by the reference implementation
-      (comment
-        (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
-                                                                                    (dec send-buf-size))))
-      ;; Reference implementation waits until after the actual write before setting any of
-      ;; the next pieces. But it's a single-threaded process that's going to block at the write,
-      ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
-      (assoc state'
-             ::specs/last-block-time recent
-             ::specs/send-buf send-buf
-             ::specs/want-ping 0))))
 
 (defn block->parent!
   "Actually send the message block to the parent

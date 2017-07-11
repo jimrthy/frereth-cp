@@ -6,7 +6,8 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.test-helpers :as test-helpers])
+            [frereth-cp.message.test-helpers :as test-helpers]
+            [frereth-cp.message.to-parent :as to-parent])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest basic-echo
@@ -32,13 +33,18 @@
         initialized (message/initial-state parent-cb child-cb)
         state (message/start! initialized)]
     (try
-      (let [src (Unpooled/buffer K/k-1)
-            ;; TODO: Need to start with something like the
-            ;; ByteBuf (and pending un-ACK'd packets) generated
-            ;; by  build-ack-flag-message-portion
-            packet (byte-array (range K/max-msg-len))]
+      (let [src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
+            msg-len (- K/max-msg-len K/header-length K/min-padding-length)
+            packet (byte-array (range msg-len))
+            ;; Just pick an arbitrary number
+            message-id 25792]
         (.writeBytes src packet)
-        (let [wrote (future (message/parent-> state src))
+        (let [src (to-parent/build-message-block message-id {::specs/buf src
+                                                             ::specs/length msg-len
+                                                             ::specs/send-eof false
+                                                             ::specs/start-pos 0})
+              ;; TODO: Add a test that sends a gibberish message
+              wrote (future (message/parent-> state src))
               outcome (deref response 1000 ::timeout)]
           (if-let [err (agent-error state)]
             (is (not err))

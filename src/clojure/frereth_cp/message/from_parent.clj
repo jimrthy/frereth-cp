@@ -169,7 +169,6 @@ Line 608"
         len (.readableBytes msg)]
     (when (and (>= len K/min-msg-len)
                (<= len K/max-msg-len))
-      (let [])
       ;; The problem with this idea is that it makes flag-acked-others
       ;; noticeably messier.
       ;; And there's no way to know the length of the message block vs. the padding
@@ -178,6 +177,9 @@ Line 608"
       ;; to fields to update the template after a field's been processed.
       ;; That's actually very tempting, but it isn't going to happen tonight.
       ;; TODO: Think about this some more.
+      ;; I don't think gloss would actually help.
+      ;; But the clojurewerkz buffy the byte slayer might
+      (comment (throw (RuntimeException. "Look at gloss (et al) again")))
       (comment (throw (RuntimeException. "Just decompose the message here and now")))
       (let [msg-id (help/read-uint msg) ;; won't need this (until later?), but need to update read-index anyway
             ack-id (help/read-uint msg)
