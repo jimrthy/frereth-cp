@@ -4,7 +4,8 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs])
+            [frereth-cp.message.specs :as specs]
+            [frereth-cp.shared :as shared])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -25,6 +26,21 @@
            ::specs/->child-buffer]
     :as state}]
   ;; 562-574: calculate start/stop bytes
+
+  ;; The read portions of this have moved into deserialize
+  (throw (RuntimeException. "Get this updated also"))
+  ;; Note that the logic portion has not:
+  ;; If we've already received bytes...well, the reference
+  ;; implementation just discards them.
+  ;; It would be safer to verify that the overlapping bits
+  ;; match, since that sort of thing is an important attack
+  ;; vector.
+  ;; Then again, we've already authenticated the message and
+  ;; verified its signature. If an attacker can break that,
+  ;; doing extra work here isn't going to protect anything.
+  ;; We're back to the "DJB thought it was safe" appeal to
+  ;; authority.
+  ;; So stick with the current approach for now.
   (let [^ByteBuf receive-buf (last ->child-buffer)
         starting-point (.readerIndex receive-buf)
         D (help/read-ushort receive-buf)
@@ -109,6 +125,42 @@
         ;; Q: is there a better way to accomplish that than just returning nil?
         state))))
 
+(s/fdef deserialize
+        :args (s/cat :block ::specs/block)
+        :ret ::specs/packet)
+(defn deserialize
+  "Convert a raw message block into a message structure
+
+  Important: there may still be overlap with previously read bytes!"
+  [{^ByteBuf buf ::specs/buf
+    :as block}]
+  (let [header (shared/decompose K/message-header-dscr buf)
+        D (::specs/size-and-flags header)
+        D' D
+        SF (bit-and D (bit-or K/normal-eof K/error-eof))
+        D (- D SF)
+        zero-padding-count (- (.readableBytes buf)
+                              D')]
+    (when (nat-int? zero-padding-count)
+      (when (pos? zero-padding-count)
+        (.skipBytes buf zero-padding-count))
+      ;; 2 approaches seem to make sense here:
+      ;; 1. Create a copy of buf and release the original,
+      ;; trying to be memory efficient.
+      (comment
+        (let [result (assoc header ::specs/data-block (.copy buf))]
+          (.release buf)
+          result))
+      ;; 2. Avoid the time overhead of making the copy.
+      ;; If we don't release this very quickly, something
+      ;; bigger/more important is drastically wrong.
+      ;; Going with option 2 for now
+      ;; TODO: Try out this potential compromise:
+      (comment
+        (.discardReadBytes buf)
+        (.capacity buf D'))
+      (assoc header ::specs/data-block buf))))
+
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
@@ -116,6 +168,8 @@
   "Lines 544-560"
   [{:keys [::specs/->child-buffer]
     :as state}]
+  ;; TODO: Call deserialize before we get here
+  (throw (RuntimeException. "Start back here"))
   (let [receive-buf (last ->child-buffer)]
     (assert receive-buf (str "Missing receive-buf among\n" (keys state)))
     (let [indexes (map (fn [[startfn stopfn]]

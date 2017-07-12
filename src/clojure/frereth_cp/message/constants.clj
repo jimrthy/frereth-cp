@@ -43,7 +43,8 @@
   131072)
 
 ;; (dec (pow 2 32))
-(def MAX_32_UINT 4294967295)
+;; TODO: Eliminate this duplication
+(def max-32-uint K/max-32-uint)
 
 (def ms-5
   "5 milliseconds, in nanoseconds
@@ -106,26 +107,35 @@ with the ring buffer semantics, but there may be a deeper motivation."
 (def max-block-length
   k-div2)
 
-(def message-packet-dscr
-  (array-map ::message-id {::K/type ::K/bytes
-                           ::K/length 4}
-             ::acked-message {::K/type ::K/bytes
-                              ::K/length 4}
-             ::ack-length-1 {::K/type ::K/uint-64}
-             ::ack-gap-1->2 {::K/type ::K/uint-32}
-             ::ack-length-2 {::K/type ::K/uint-16}
-             ::ack-gap-2->3 {::K/type ::K/uint-16}
-             ::ack-length-3 {::K/type ::K/uint-16}
-             ::ack-gap-3->4 {::K/type ::K/uint-16}
-             ::ack-length-4 {::K/type ::K/uint-16}
-             ::ack-gap-4->5 {::K/type ::K/uint-16}
-             ::ack-length-5 {::K/type ::K/uint-16}
-             ::ack-gap-5->6 {::K/type ::K/uint-16}
-             ::ack-length-6 {::K/type ::K/uint-16}
-             ::size-and-flags {::K/type ::K/uint-16}
-             ::start-byte {::K/type ::K/uint-64}
-             ;; These next two make this approach problematic.
-             ;; We really can't know the size of either until
-             ;; we've read the size-and-flags field.
-             ::zero-padding {::K/type ::K/zeroes ::K/length '?zero-padding-length}
-             ::data-block {::K/type ::K/bytes ::K/length '?data-block-length}))
+(def message-header-dscr
+  "This is the first, metadata portion of the message
+
+  It's mainly a set of ACK'd address ranges, with some fields
+  for addresses, IDs, sizes, and flags that signal the
+  end of the stream."
+  (array-map ::specs/message-id {::K/type ::K/bytes
+                                 ::K/length 4}
+             ::specs/acked-message {::K/type ::K/bytes
+                                    ::K/length 4}
+             ::specs/ack-length-1 {::K/type ::K/uint-64}
+             ::specs/ack-gap-1->2 {::K/type ::K/uint-32}
+             ::specs/ack-length-2 {::K/type ::K/uint-16}
+             ::specs/ack-gap-2->3 {::K/type ::K/uint-16}
+             ::specs/ack-length-3 {::K/type ::K/uint-16}
+             ::specs/ack-gap-3->4 {::K/type ::K/uint-16}
+             ::specs/ack-length-4 {::K/type ::K/uint-16}
+             ::specs/ack-gap-4->5 {::K/type ::K/uint-16}
+             ::specs/ack-length-5 {::K/type ::K/uint-16}
+             ::specs/ack-gap-5->6 {::K/type ::K/uint-16}
+             ::specs/ack-length-6 {::K/type ::K/uint-16}
+             ::specs/size-and-flags {::K/type ::K/uint-16}
+             ::specs/start-byte {::K/type ::K/uint-64}))
+
+(def message-payload-dscr
+  "This is the 'important' part of the message packet
+
+  Decomposing this is probably more trouble than just
+  skipping the zero padding (et al) and reading the
+  data bytes directly. But it seemed worth documenting."
+  (array-map ::zero-padding {::K/type ::K/zeroes ::K/length '?zero-padding-length}
+             ::specs/buf {::K/type ::K/bytes ::K/length '?data-block-length}))

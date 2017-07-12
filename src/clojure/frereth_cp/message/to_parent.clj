@@ -3,7 +3,8 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared :as shared])
+            [frereth-cp.shared :as shared]
+            [frereth-cp.shared.constants :as shared-K])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -123,7 +124,7 @@
 ;;;                So everything else is shifted right by 8 bytes
   (let [next-message-id (let [n' (inc next-message-id)]
                           ;; Stupid unsigned math
-                          (if (> n' K/MAX_32_UINT)
+                          (if (> n' shared-K/max-32-uint)
                             1 n'))
         cursor (vec (concat [::specs/blocks] current-block-cursor))
         state'

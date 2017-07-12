@@ -1,6 +1,8 @@
 (ns frereth-cp.message.specs
   "Common specs that are shared among message namespaces"
   (:require [clojure.spec.alpha :as s]
+            [frereth-cp.message.constants :as K]
+            [frereth-cp.shared.constants :as K-shared]
             [frereth-cp.util :as util])
   (:import clojure.lang.BigInt
            io.netty.buffer.ByteBuf))
@@ -73,8 +75,48 @@
 ;; when ::buf changes?
 (s/def ::blocks (s/and (s/coll-of ::block)
                        #(= (rem (count %) 2) 0)))
+;; How to find the current ::block inside a ::state
 (s/def ::current-block-cursor (s/coll-of (s/or :vec-index nat-int?
                                                :map-key keyword?)))
+
+(s/def ::acked-message ::message-id)
+;; This is really an 8-byte unsigned int
+;; So this spec might be completely broken
+;; (due to "negative" numbers wrapping out to a bigint)
+(s/def ::unsigned-long (s/and nat-int?
+                              #(<= % K-shared/max-64-uint)))
+(s/def ::ack-length-1 ::unsigned-long)
+(s/def ::ack-gap-1->2 (s/and nat-int?
+                             #(<= % K-shared/max-32-uint)))
+(s/def ::unsigned-short (s/and nat-int?
+                               #(<= % K-shared/max-16-uint)))
+(s/def ::ack-length-2 ::unsigned-short)
+(s/def ::ack-gap-2->3 ::unsigned-short)
+(s/def ::ack-length-3 ::unsigned-short)
+(s/def ::ack-gap-3->4 ::unsigned-short)
+(s/def ::ack-length-4 ::unsigned-short)
+(s/def ::ack-gap-4->5 ::unsigned-short)
+(s/def ::ack-length-5 ::unsigned-short)
+(s/def ::ack-gap-5->6 ::unsigned-short)
+(s/def ::ack-length-6 ::unsigned-short)
+(s/def ::size-and-flags ::unsigned-short)
+(s/def ::start-byte ::unsigned-long)
+(s/def ::packet (s/keys :req [::message-id
+                              ::acked-message
+                              ::ack-length-1
+                              ::ack-gap-1->2
+                              ::ack-length-2
+                              ::ack-gap-2->3
+                              ::ack-length-3
+                              ::ack-gap-3->4
+                              ::ack-length-4
+                              ::ack-gap-4->5
+                              ::ack-length-5
+                              ::ack-gap-5->6
+                              ::ack-length-6
+                              ::size-and-flags
+                              ::start-byte
+                              ::buf]))
 
 ;; If nonzero: minimum of active ::time values
 ;; Corresponds to earliestblocktime in original
@@ -201,6 +243,7 @@
                              ::want-ping]
                        :opt [::callbacks
                              ::current-block-cursor
+                             ::packet
                              ;; Q: Do I want anything to do with this?
                              ::receive-buf
                              ::send-buf]))
