@@ -55,6 +55,14 @@
 (s/def ::transmissions int?)
 
 (s/def ::block (s/keys :req [::buf
+                             ;; We already have length in ::buf, under .getReadableBytes.
+                             ;; It would save space and be less error prone to just use
+                             ;; that.
+                             ;; By the same token, it would almost definitely be more efficient
+                             ;; to swittch ::buf to a ByteArray.
+                             ;; So keeping this here helps loosen the coupling and makes
+                             ;; things more flexible if/when someone does decide to make that
+                             ;; switch.
                              ::length
                              ::message-id
                              ::send-eof

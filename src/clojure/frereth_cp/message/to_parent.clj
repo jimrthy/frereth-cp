@@ -39,9 +39,8 @@
                     ;; aren't covered by the spec
                     #(< (+ K/k-1 K/error-eof) %)))
 (defn calculate-message-data-block-length-flags
-  [{:keys [::specs/length] :as block}
-   u]
-  (bit-or u
+  [{:keys [::specs/length] :as block}]
+  (bit-or length
           (case (::specs/send-eof block)
             false 0
             ::specs/normal K/normal-eof
@@ -70,9 +69,11 @@
         send-buf (.order (Unpooled/buffer u) java.nio.ByteOrder/LITTLE_ENDIAN)]
     (.writeInt send-buf next-message-id)
     ;; XXX: include any acknowledgments that have piled up (--DJB)
+    ;; Reference implementation doesn't zero anything out. It just skips these
+    ;; bytes. Which seems like it can't possibly be correct.
     (.writeBytes send-buf #^bytes shared/all-zeros 0 34)  ; all the ACK fields
     ;; SUCC/FAIL flag | data block size
-    (.writeShort send-buf (calculate-message-data-block-length-flags block-to-send u))
+    (.writeShort send-buf (calculate-message-data-block-length-flags block-to-send))
     ;; stream position of the first byte in the data block being sent
     ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
     ;; i.e. the total number of bytes in the stream.

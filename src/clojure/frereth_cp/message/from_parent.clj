@@ -30,19 +30,23 @@
         D (help/read-ushort receive-buf)
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
-        D (- D SF)]
+        D (- D SF)
+        len (.readableBytes receive-buf)]
     (println (str "Initial read from position " starting-point)
              ":\n" D')
-    (if (and (<= D 1024)
-               ;; In the reference implementation,
-               ;; len = 16 * (unsigned long long) messagelen[pos]
-               ;; (assigned at line 443)
-               ;; This next check looks like it really
-               ;; amounts to "have we read all the bytes
-               ;; in this block from the parent pipe?"
-               ;; It doesn't make a lot of sense in this
-               ;; approach
-               #_(> (+ 48 D) len))
+    (if (and (<= D K/k-1)
+             ;; In the reference implementation,
+             ;; len = 16 * (unsigned long long) messagelen[pos]
+             ;; (assigned at line 443)
+             ;; This next check looks like it really
+             ;; amounts to "have we read all the bytes
+             ;; in this block from the parent pipe?"
+             ;; It doesn't make a lot of sense in this
+             ;; approach
+             ;; Except that it's a sanity check: the header's
+             ;; 48 bytes, plus some(?) zero padding. That needs
+             ;; to match
+             (<= (+ 48 D) len))
       (let [start-byte (help/read-ulong receive-buf)
             stop-byte (+ D start-byte)]
         ;; of course, flow control would avoid this case -- DJB
@@ -99,7 +103,8 @@
               (update state ::receive-bytes + (min (- max-rcvd receive-bytes)
                                                    (+ receive-bytes delta-k)))))))
       (do
-        (log/warn (str "Gibberish Message packet from parent. D == " D))
+        (log/warn (str "Gibberish Message packet from parent. D == " D
+                       "\nRemaining readable bytes: " len))
         ;; This needs to short-circuit.
         ;; Q: is there a better way to accomplish that than just returning nil?
         state))))
