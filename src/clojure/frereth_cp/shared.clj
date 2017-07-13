@@ -261,9 +261,11 @@ But it depends on compose, which would set up circular dependencies"
                       ::K/bytes (let [^Long len (::K/length dscr)]
                                   (.readBytes src len))
                       ::K/int-64 (.readLong src)
-                      ::K/uint-64 (b-t/possibly-2s-uncomplement-64 (.readLong src))
                       ::K/int-32 (.readInt src)
                       ::K/int-16 (.readShort src)
+                      ::K/uint-64 (b-t/possibly-2s-uncomplement-64 (.readLong src))
+                      ::K/uint-32 (b-t/possibly-2s-uncomplement-32 (.readInt src))
+                      ::K/uint-16 (b-t/possibly-2s-uncomplement-16 (.readInt src))
                       ::K/zeroes (.readSlice src (::K/length dscr))
                       (throw (ex-info "Missing case clause"
                                       {::failure cnvrtr

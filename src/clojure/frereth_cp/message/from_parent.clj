@@ -6,7 +6,8 @@
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared])
-  (:import [io.netty.buffer ByteBuf Unpooled]))
+  (:import [io.netty.buffer ByteBuf Unpooled]
+           java.nio.ByteOrder))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
@@ -17,19 +18,23 @@
 ;;; Internal Helpers
 
 (s/fdef extract-message
-        :args (:state ::specs/state)
+        :args (s/cat :state ::specs/state
+                     :receive-buf ::specs/buf)
         :ret ::specs/state)
 (defn extract-message
   "Lines 562-593"
   [{:keys [::specs/receive-bytes
-           ::specs/receive-written
-           ::specs/->child-buffer]
-    :as state}]
+           ::specs/receive-written]
+    :as state}
+   {^ByteBuf receive-buf ::specs/buf
+    D ::specs/size-and-flags
+    start-byte ::start-byte
+    :as packet}]
   ;; 562-574: calculate start/stop bytes
 
   ;; The read portions of this have moved into deserialize
-  (throw (RuntimeException. "Get this updated also"))
   ;; Note that the logic portion has not:
+  (throw (RuntimeException. "Get that updated also"))
   ;; If we've already received bytes...well, the reference
   ;; implementation just discards them.
   ;; It would be safer to verify that the overlapping bits
@@ -41,13 +46,22 @@
   ;; We're back to the "DJB thought it was safe" appeal to
   ;; authority.
   ;; So stick with the current approach for now.
-  (let [^ByteBuf receive-buf (last ->child-buffer)
+  (let [;; ^ByteBuf receive-buf (last ->child-buffer)
+        ;; Note the discrepancy between the way this was originally
+        ;; written vs. the way I started extracting in
+        ;; handle-comprehensible-message below.
+        ;; That started with (first ->child-buffer).
+        ;; flag-acked-others! also used (last) to get
+        ;; the current buffer.
+        ;; This bug wasn't drastic, but it would have been
+        ;; tricky to sort out.
+        ;; This is further validation for taking a different
+        ;; approach.
         starting-point (.readerIndex receive-buf)
-        D (help/read-ushort receive-buf)
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
         D (- D SF)
-        len (.readableBytes receive-buf)]
+        padded-length (.readableBytes receive-buf)]
     (println (str "Initial read from position " starting-point)
              ":\n" D')
     (if (and (<= D K/k-1)
@@ -62,9 +76,8 @@
              ;; Except that it's a sanity check: the header's
              ;; 48 bytes, plus some(?) zero padding. That needs
              ;; to match
-             (<= (+ 48 D) len))
-      (let [start-byte (help/read-ulong receive-buf)
-            stop-byte (+ D start-byte)]
+             (<= (+ 48 D) padded-length))
+      (let [stop-byte (+ D start-byte)]
         ;; of course, flow control would avoid this case -- DJB
         ;; Q: What does that mean? --JRG
         (when (<= stop-byte (+ receive-written (.writableBytes receive-buf)))
@@ -120,21 +133,22 @@
                                                    (+ receive-bytes delta-k)))))))
       (do
         (log/warn (str "Gibberish Message packet from parent. D == " D
-                       "\nRemaining readable bytes: " len))
+                       "\nRemaining readable bytes: " padded-length))
         ;; This needs to short-circuit.
         ;; Q: is there a better way to accomplish that than just returning nil?
         state))))
 
 (s/fdef deserialize
-        :args (s/cat :block ::specs/block)
+        :args (s/cat :buf ::specs/buf)
         :ret ::specs/packet)
 (defn deserialize
-  "Convert a raw message block into a message structure
-
-  Important: there may still be overlap with previously read bytes!"
-  [{^ByteBuf buf ::specs/buf
-    :as block}]
-  (let [header (shared/decompose K/message-header-dscr buf)
+  "Convert a raw message block into a message structure"
+  ;; Important: there may still be overlap with previously read bytes!
+  ;; (but that's a problem for downstream)
+  [^ByteBuf buf]
+  {:pre [buf]}
+  (let [buf (.order buf ByteOrder/LITTLE_ENDIAN)
+        header (shared/decompose K/message-header-dscr buf)
         D (::specs/size-and-flags header)
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
@@ -156,6 +170,7 @@
       ;; bigger/more important is drastically wrong.
       ;; Going with option 2 for now
       ;; TODO: Try out this potential compromise:
+      ;; (preliminary testing suggests that it should work)
       (comment
         (.discardReadBytes buf)
         (.capacity buf D'))
@@ -167,35 +182,32 @@
 (defn flag-acked-others!
   "Lines 544-560"
   [{:keys [::specs/->child-buffer]
-    :as state}]
-  ;; TODO: Call deserialize before we get here
-  (throw (RuntimeException. "Start back here"))
-  (let [receive-buf (last ->child-buffer)]
-    (assert receive-buf (str "Missing receive-buf among\n" (keys state)))
-    (let [indexes (map (fn [[startfn stopfn]]
-                         [(startfn receive-buf) (stopfn receive-buf)])
-                       [[(constantly 0) help/read-ulong]   ;  0-8
-                        [help/read-uint help/read-ushort]       ; 16-20
-                        [help/read-ushort help/read-ushort]     ; 22-24
-                        [help/read-ushort help/read-ushort]     ; 26-28
-                        [help/read-ushort help/read-ushort]     ; 30-32
-                        [help/read-ushort help/read-ushort]])]   ; 34-36
-      (dissoc
-       (reduce (fn [{:keys [::stop-byte]
-                     :as state}
-                    [start stop]]
-                 ;; This can't be right. Needs to be based on absolute
-                 ;; stream addresses.
-                 ;; Q: Doesn't it?
-                 ;; A: Yes, definitely
-                 (let [start-byte (+ stop-byte start)
-                       stop-byte (+ start-byte stop)]
-                   (assoc
-                    (help/mark-acknowledged! state start-byte stop-byte)
-                    ::stop-byte stop-byte)))
-               (assoc state ::stop-byte 0)
-               indexes)
-       ::start-byte))))
+    :as state}
+   packet]
+  (let [indexes (map (fn [[startfn stopfn]]
+                       [(startfn packet) (stopfn packet)])
+                     [[(constantly 0) ::specs/ack-length-1]            ;  0-8
+                      [::specs/ack-gap-1->2 ::specs/ack-length-2]      ; 16-20
+                      [::specs/ack-gap-2->3 ::specs/ack-length-3]      ; 22-24
+                      [::specs/ack-gap-3->4 ::specs/ack-length-4]      ; 26-28
+                      [::specs/ack-gap-4->5 ::specs/ack-length-5]      ; 30-32
+                      [::specs/ack-gap-5->6 ::specs/ack-length-6]])]   ; 34-36
+    (dissoc
+     (reduce (fn [{:keys [::stop-byte]
+                   :as state}
+                  [start stop]]
+               ;; This can't be right. Needs to be based on absolute
+               ;; stream addresses.
+               ;; Q: Doesn't it?
+               ;; A: Yes, definitely
+               (let [start-byte (+ stop-byte start)
+                     stop-byte (+ start-byte stop)]
+                 (assoc
+                  (help/mark-acknowledged! state start-byte stop-byte)
+                  ::stop-byte stop-byte)))
+             (assoc state ::stop-byte 0)
+             indexes)
+     ::start-byte)))
 
 (defn send-ack!
   "Write ACK buffer back to parent
@@ -224,36 +236,33 @@ Line 608"
   [{:keys [::specs/blocks
            ::specs/->child-buffer]
     :as state}]
+  ;; Q: Do I want the first message here or the last?
+  ;; Top A: There should be only one entry in child-buffer
   (let [^ByteBuf msg (first ->child-buffer)
         len (.readableBytes msg)]
+    (when (< 1 (count ->child-buffer))
+      ;; TODO: Keep this from happening.
+      (log/warn "Multiple entries in child-buffer. This seems wrong."))
     (when (and (>= len K/min-msg-len)
                (<= len K/max-msg-len))
-      ;; The problem with this idea is that it makes flag-acked-others
-      ;; noticeably messier.
-      ;; And there's no way to know the length of the message block vs. the padding
-      ;; until we've read the length field.
-      ;; So, it's doable. But I'd really need to add something like function handling
-      ;; to fields to update the template after a field's been processed.
-      ;; That's actually very tempting, but it isn't going to happen tonight.
-      ;; TODO: Think about this some more.
-      ;; I don't think gloss would actually help.
-      ;; But the clojurewerkz buffy the byte slayer might
-      (comment (throw (RuntimeException. "Look at gloss (et al) again")))
-      (comment (throw (RuntimeException. "Just decompose the message here and now")))
-      (let [msg-id (help/read-uint msg) ;; won't need this (until later?), but need to update read-index anyway
-            ack-id (help/read-uint msg)
+      (let [packet (deserialize msg)
+            ack-id (::specs/acked-message packet)
             ;; Note that there's something terribly wrong if we
             ;; have multiple blocks with the same message ID.
             ;; Q: Isn't there?
-            acked-blocks (filter #(= ack-id (::message-id %))
+            acked-blocks (filter #(= ack-id (::specs/message-id %))
                                  blocks)
             flagged (-> (reduce flow-control/update-statistics state acked-blocks)
-                          ;; That takes us down to line 544
-                          flag-acked-others!)
-            extracted (extract-message flagged)]
+                        ;; That takes us down to line 544
+                        (partial flag-acked-others! packet))
+            ;; TODO: Combine these calls using either some version of comp
+            ;; or ->>
+            extracted (extract-message flagged packet)]
         (if extracted
           (do
             (send-ack! state)
+            ;; Q: Shouldn't that be:
+            (comment (send-ack! extracted))  ; ?
             (dissoc extracted ::specs/send-buf))
           flagged)))))
 

@@ -5,6 +5,21 @@
             [frereth-cp.message.test-utilities :as test-helpers])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
+(deftest verify-block-collapse
+  ;; TODO: This is screaming for generative testing
+  (let [^ByteBuf buf (Unpooled/buffer 128)]
+    (try
+      (.writeBytes buf (byte-array (range 100)))
+      (let [half (byte-array 50)]
+        (.readBytes buf half)
+        (is (= (vec half) (range 50)))
+        (.discardReadBytes buf)
+        (.capacity buf 50)
+        (.readBytes buf half)
+        (is (= (vec half) (range 50 100))))
+      (finally
+        (.release buf)))))
+
 (deftest check-flacked-others
   (let [start-state (test-helpers/build-ack-flag-message-portion)]
     (let [{:keys [::specs/blocks
