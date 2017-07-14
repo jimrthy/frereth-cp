@@ -86,22 +86,24 @@
             (try
               (is (= message-id arbitrary-id) "message ID")
               (is (= #_acked-id 0 acked-message) "We don't ACK")
-              (is (= length size-and-flags) "length flag")
-              (is (= magical-start-byte start-byte) "start index")
               ;; Q: Huh?
               (is (= 0 (::specs/ack-length-4 packet)) "length-4")
+              (is (= length size-and-flags) "length flag")
+              (is (= magical-start-byte start-byte) "start index")
               (comment
                 ;; We aren't shrinking buf yet,
                 ;; so this is still the full 240
                 (is (= length (.capacity buf))))
-              (comment
-                (is (.hasArray buf))
-                (if (.hasArray buf)
-                  (let [bs (.array buf)]
-                    ;; This check isn't going to work without shrinkage
-                    ;; (assuming that works properly)
-                    (is (= (vec bs) (range length)) "shrinkage"))
-                  (throw (RuntimeException. "Guess I have to cope with this"))))
+              (comment)
+              (is (.hasArray buf))
+              (if (.hasArray buf)
+                (let [bs (byte-array (.readableBytes buf))]
+                  (is (= (count bs) length) "shrinkage")
+                  (.readBytes buf bs)
+                  ;; This check isn't going to work without shrinkage
+                  ;; (assuming that works properly)
+                  (is (= (range length) (vec bs)) "message contents"))
+                (throw (RuntimeException. "Guess I have to cope with this")))
               (finally
                 ;; The one that we wound up with
                 (.release buf)))))
