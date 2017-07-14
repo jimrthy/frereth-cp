@@ -162,7 +162,7 @@
       ;; 1. Create a copy of buf and release the original,
       ;; trying to be memory efficient.
       (comment
-        (let [result (assoc header ::specs/data-block (.copy buf))]
+        (let [result (assoc header ::specs/buf (.copy buf))]
           (.release buf)
           result))
       ;; 2. Avoid the time overhead of making the copy.
@@ -174,7 +174,7 @@
       (comment
         (.discardReadBytes buf)
         (.capacity buf D'))
-      (assoc header ::specs/data-block buf))))
+      (assoc header ::specs/buf buf))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)

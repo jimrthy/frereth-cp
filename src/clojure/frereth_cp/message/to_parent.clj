@@ -60,14 +60,20 @@
   ;; would again be wrong.
   ;; Since this has to be converted to a ByteArray so it can be
   ;; encrypted.
-  ;; Note that we also need padding
+  ;; OTOH, there's Norman Mauer's "Best Practices" that include
+  ;; the points about "Use pooled direct buffers" and "Write
+  ;; direct buffers...always."
+
+  ;; Back to regularly scheduled actual implementation comments:
+  ;; Note that we also need padding.
   (let [u (calculate-padded-size block-to-send)
         ;; Q: Why does this happen after calculating u?
         _ (when (or (neg? length)
                     (< K/k-1 length))
             (throw (AssertionError. (str "illegal block length: " length))))
         ;; ByteBuf instances default to BIG_ENDIAN, but that breaks the spec
-        send-buf (.order (Unpooled/buffer u) java.nio.ByteOrder/LITTLE_ENDIAN)]
+        send-buf (.order (Unpooled/buffer (+ u K/header-length)) java.nio.ByteOrder/LITTLE_ENDIAN)]
+    ;; Q: Is this worth switching to shared/compose?
     (.writeInt send-buf next-message-id)
     ;; XXX: include any acknowledgments that have piled up (--DJB)
     ;; Reference implementation doesn't zero anything out. It just skips these
@@ -79,16 +85,20 @@
     ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
     ;; i.e. the total number of bytes in the stream.
     (.writeLong send-buf start-pos)
-    (let [
-          padding-bytes (- u length)
+    (let [padding-bytes (- u length)
+          data-start (+ padding-bytes K/header-length)
           writer-index (.writerIndex send-buf)]
       ;; This is the approach taken by the reference implementation
       ;; Note that he's just skipping the padding bytes rather than
       ;; filling them with zeros
       (comment
         (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
-                                                                                  (dec send-buf-size))))
-      (.writerIndex send-buf padding-bytes))
+                                                                                    (dec send-buf-size))))
+      (println "Advancing write index from"
+               writer-index
+               "to"
+               data-start)
+      (.writerIndex send-buf data-start))
     ;; Need to save the initial read-index because we aren't ready
     ;; to discard the buffer until it's been ACK'd.
     ;; This is a fairly hefty departure from the reference implementation,

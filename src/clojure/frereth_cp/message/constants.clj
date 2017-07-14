@@ -88,10 +88,10 @@ a circular buffer and uses bitwise ands for quick/cheap
 modulo arithmetic."
   k-128)
 
-(def header-length 48)
-(def min-msg-len 48)
-(def max-msg-len 1088)
-(def min-padding-length 16)
+(def ^:const header-length 48)
+(def ^:const min-msg-len 48)
+(def ^:const max-msg-len 1088)
+(def ^:const min-padding-length 16)
 
 (def max-outgoing-blocks
   "How many outgoing, non-ACK'd blocks will we buffer?
@@ -113,10 +113,8 @@ with the ring buffer semantics, but there may be a deeper motivation."
   It's mainly a set of ACK'd address ranges, with some fields
   for addresses, IDs, sizes, and flags that signal the
   end of the stream."
-  (array-map ::specs/message-id {::K/type ::K/bytes
-                                 ::K/length 4}
-             ::specs/acked-message {::K/type ::K/bytes
-                                    ::K/length 4}
+  (array-map ::specs/message-id {::K/type ::K/uint-32}
+             ::specs/acked-message {::K/type ::K/uint-32}
              ::specs/ack-length-1 {::K/type ::K/uint-64}
              ::specs/ack-gap-1->2 {::K/type ::K/uint-32}
              ::specs/ack-length-2 {::K/type ::K/uint-16}
