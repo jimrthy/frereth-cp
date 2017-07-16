@@ -94,10 +94,6 @@
       (comment
         (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
                                                                                     (dec send-buf-size))))
-      (println "Advancing write index from"
-               writer-index
-               "to"
-               data-start)
       (.writerIndex send-buf data-start))
     ;; Need to save the initial read-index because we aren't ready
     ;; to discard the buffer until it's been ACK'd.

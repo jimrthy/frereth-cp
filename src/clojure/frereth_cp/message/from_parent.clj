@@ -15,128 +15,7 @@
 (set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal Helpers
-
-(s/fdef extract-message
-        :args (s/cat :state ::specs/state
-                     :receive-buf ::specs/buf)
-        :ret ::specs/state)
-(defn extract-message
-  "Lines 562-593"
-  [{:keys [::specs/receive-bytes
-           ::specs/receive-written]
-    :as state}
-   {^ByteBuf receive-buf ::specs/buf
-    D ::specs/size-and-flags
-    start-byte ::start-byte
-    :as packet}]
-  ;; 562-574: calculate start/stop bytes
-
-  ;; The read portions of this have moved into deserialize
-  ;; Note that the logic portion has not:
-  (throw (RuntimeException. "Get that updated also"))
-  ;; If we've already received bytes...well, the reference
-  ;; implementation just discards them.
-  ;; It would be safer to verify that the overlapping bits
-  ;; match, since that sort of thing is an important attack
-  ;; vector.
-  ;; Then again, we've already authenticated the message and
-  ;; verified its signature. If an attacker can break that,
-  ;; doing extra work here isn't going to protect anything.
-  ;; We're back to the "DJB thought it was safe" appeal to
-  ;; authority.
-  ;; So stick with the current approach for now.
-  (let [;; ^ByteBuf receive-buf (last ->child-buffer)
-        ;; Note the discrepancy between the way this was originally
-        ;; written vs. the way I started extracting in
-        ;; handle-comprehensible-message below.
-        ;; That started with (first ->child-buffer).
-        ;; flag-acked-others! also used (last) to get
-        ;; the current buffer.
-        ;; This bug wasn't drastic, but it would have been
-        ;; tricky to sort out.
-        ;; This is further validation for taking a different
-        ;; approach.
-        starting-point (.readerIndex receive-buf)
-        D' D
-        SF (bit-and D (bit-or K/normal-eof K/error-eof))
-        D (- D SF)
-        padded-length (.readableBytes receive-buf)]
-    (println (str "Initial read from position " starting-point)
-             ":\n" D')
-    (if (and (<= D K/k-1)
-             ;; In the reference implementation,
-             ;; len = 16 * (unsigned long long) messagelen[pos]
-             ;; (assigned at line 443)
-             ;; This next check looks like it really
-             ;; amounts to "have we read all the bytes
-             ;; in this block from the parent pipe?"
-             ;; It doesn't make a lot of sense in this
-             ;; approach
-             ;; Except that it's a sanity check: the header's
-             ;; 48 bytes, plus some(?) zero padding. That needs
-             ;; to match
-             (<= (+ 48 D) padded-length))
-      (let [stop-byte (+ D start-byte)]
-        ;; of course, flow control would avoid this case -- DJB
-        ;; Q: What does that mean? --JRG
-        (when (<= stop-byte (+ receive-written (.writableBytes receive-buf)))
-          ;; 576-579: SF (StopFlag? deals w/ EOF)
-          (let [receive-eof (case SF
-                              0 false
-                              normal-eof ::specs/normal
-                              error-eof ::specs/error)
-                receive-total-bytes (if (not= SF 0)
-                                      stop-byte)
-                ;; It's tempting to use a Pooled buffer here instead.
-                ;; That temptation is wrong.
-                ;; There's no good reason for this to be direct memory,
-                ;; and "the JVM garbage collector...works OK for heap buffers,
-                ;; but not direct buffers" (according to netty.io's wiki entry
-                ;; about using it as a generic performance library).
-                ;; It *is* tempting to retain the original direct
-                ;; memory in which it arrived as long as possible. That approach
-                ;; would probably make a lot more sense if I were using a JNI
-                ;; layer for encryption.
-                ;; As it stands, we've already stomped all over the source
-                ;; memory long before it got here.
-                output-buf (Unpooled/buffer D)]
-            ;; 581-588: copy incoming into receivebuf
-            (let [min-k (min 0 (- receive-written start-byte))  ; drop bytes we've already written
-                  ;; Address at the limit of our buffer size
-                  max-rcvd (+ receive-written K/recv-byte-buf-size)
-                  ^Long max-k (min D (- max-rcvd start-byte))
-                  delta-k (- max-k min-k)]
-              (assert (<= 0 max-k))
-              (assert (<= 0 delta-k))
-              ;; There are at least a couple of curve balls in the air right here:
-              ;; 1. Only write bytes at stream addresses(?)
-              ;;    (< receive-written where (+ receive-written receive-buf-size))
-              (.skipBytes receive-buf min-k)
-              (.readBytes receive-buf output-buf max-k)
-              ;; Q: Do I just want to release it, since I'm done with it?
-              ;; Bigger Q: Shouldn't I just discard it completely?
-              ;; And I've totally dropped the ball with output-buf.
-              ;; The longer I look at this function, the fishier it smells.
-              (.discardSomeReadBytes receive-buf)
-              ;;          set the receivevalid flags
-              ;; 2. Update the receive-valid flag associated with each byte as we go
-              ;;    The receivevalid array is declared with this comment:
-              ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
-
-              ;; 3. The array of receivevalid flags is used in the loop between lines
-              ;;    589-593 to decide how much to increment receive-bytes.
-              ;;    It's cleared on line 630, after we've written the bytes to the
-              ;;    child pipe.
-              ;; I'm fairly certain this is what that for loop amounts to
-              (update state ::receive-bytes + (min (- max-rcvd receive-bytes)
-                                                   (+ receive-bytes delta-k)))))))
-      (do
-        (log/warn (str "Gibberish Message packet from parent. D == " D
-                       "\nRemaining readable bytes: " padded-length))
-        ;; This needs to short-circuit.
-        ;; Q: is there a better way to accomplish that than just returning nil?
-        state))))
+;;; Internal Implementation
 
 (s/fdef deserialize
         :args (s/cat :buf ::specs/buf)
@@ -176,6 +55,168 @@
         (.capacity buf D'))
       (assoc header ::specs/buf buf))))
 
+(defn calculate-start-stop-bytes
+  "calculate start/stop bytes (lines 562-574)"
+  [{:keys [::specs/receive-bytes
+           ::specs/receive-written]
+    :as state}
+   {^ByteBuf receive-buf ::specs/buf
+    D ::specs/size-and-flags
+    start-byte ::start-byte
+    :as packet}]
+  ;; If we've already received bytes...well, the reference
+  ;; implementation just discards them.
+  ;; It would be safer to verify that the overlapping bits
+  ;; match, since that sort of thing is an important attack
+  ;; vector.
+  ;; Then again, we've already authenticated the message and
+  ;; verified its signature. If an attacker can break that,
+  ;; doing extra work here isn't going to protect anything.
+  ;; We're back to the "DJB thought it was safe" appeal to
+  ;; authority.
+  ;; So stick with the current approach for now.
+  (let [starting-point (.readerIndex receive-buf)
+        D' D
+        SF (bit-and D (bit-or K/normal-eof K/error-eof))
+        D (- D SF)
+        message-length (.readableBytes receive-buf)]
+    (log/debug (str "Initial read from position " starting-point)
+               ":\n" D')
+    (if (and (<= D K/k-1)
+             ;; In the reference implementation,
+             ;; len = 16 * (unsigned long long) messagelen[pos]
+             ;; (assigned at line 443)
+             ;; This next check looks like it really
+             ;; amounts to "have we read all the bytes
+             ;; in this block from the parent pipe?"
+             ;; It doesn't make a lot of sense in this
+             ;; approach
+             ;; Except that it's a sanity check on the
+             ;; extraction code.
+             (= D message-length))
+      ;; start-byte and stop-byte are really addresses in the
+      ;; message stream
+      (let [stop-byte (+ D start-byte)]
+        ;; of course, flow control would avoid this case -- DJB
+        ;; Q: What does that mean? --JRG
+        ;; Q: Why are we writing to receive-buf?
+        ;; A: receive-buf is a circular buffer of bytes past the
+        ;; receive-bytes counter which holds bytes that have not yet
+        ;; been forwarded along to the child.
+        (when (<= stop-byte (+ receive-written (.writableBytes receive-buf)))
+          ;; 576-579: SF (StopFlag? deals w/ EOF)
+          (let [receive-eof (case SF
+                              0 false
+                              normal-eof ::specs/normal
+                              error-eof ::specs/error)
+                receive-total-bytes (if (not= SF 0)
+                                      stop-byte)]
+            ;; 581-588: copy incoming into receivebuf
+            (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
+                  ;; Address at the limit of our buffer size
+                  max-rcvd (+ receive-written K/recv-byte-buf-size)
+                  ^Long max-k (min D (- max-rcvd start-byte))
+                  delta-k (- max-k min-k)]
+              (assert (<= 0 max-k))
+              (assert (<= 0 delta-k))
+
+              {::min-k min-k
+               ::max-k max-k
+               ::delta-k delta-k
+               ::max-rcvd max-rcvd}))))
+      (do
+        (log/warn (str "Gibberish Message packet from parent. D == " D
+                       "\nRemaining readable bytes: " message-length))
+        ;; This needs to short-circuit.
+        ;; Q: is there a better way to accomplish that?
+        nil))))
+
+(s/fdef extract-message
+        :args (s/cat :state ::specs/state
+                     :receive-buf ::specs/buf)
+        :ret ::specs/state)
+(defn extract-message
+  "Lines 562-593"
+  [{:keys [::specs/receive-bytes]
+    :as state}
+   {^ByteBuf receive-buf ::specs/buf
+    D ::specs/size-and-flags
+    start-byte ::start-byte
+    :as packet}]
+  (when-let [{:keys [::delta-k
+                     ::max-rcvd
+                     ::min-k]
+              ^Long max-k ::max-k} (calculate-start-stop-bytes state packet)]
+    (let [;; It's tempting to use a Pooled buffer here instead.
+          ;; That temptation is wrong.
+          ;; There's no good reason for this to be direct memory,
+          ;; and "the JVM garbage collector...works OK for heap buffers,
+          ;; but not direct buffers" (according to netty.io's wiki entry
+          ;; about using it as a generic performance library).
+          ;; It *is* tempting to retain the original direct
+          ;; memory in which it arrived as long as possible. That approach
+          ;; would probably make a lot more sense if I were using a JNI
+          ;; layer for encryption.
+          ;; As it stands, we've already stomped all over the source
+          ;; memory long before it got here.
+
+          ;; Except that there's still Norman Mauer's advice
+          ;; about the best practice to just always use a
+          ;; Direct Pooled buffer.
+
+          ;; Stack overflow answer directly from the man himself:
+          ;; "using heap-buffers may make sense if you need to act
+          ;; directly on the backing array. This is for example true
+          ;; when you use deflater/inflater as it only acts on byte[].
+          ;; For all other cases a direct buffer is prefered."
+
+          ;; So, it's back to the "get it working correctly, then
+          ;; profile" approach.
+
+          ;; Be that as it may, this almost definitely needs to come
+          ;; from a Pooled implementation.
+          ;; OTOH, this is what we hand over to the child (at least
+          ;; in theory).
+          ;; For the sake of API ease, it should probably be a vector
+          ;; of bytes.
+          ;; Or, at worst, a Byte Array.
+          output-buf (Unpooled/buffer D)]
+      ;;; There are at least a couple of curve balls in the air right here:
+      ;; 1. Only write bytes at stream addresses(?)
+      ;;    (< receive-written where (+ receive-written receive-buf-size))
+
+      (when (pos? min-k)
+        (.skipBytes receive-buf min-k))
+      (.readBytes receive-buf output-buf max-k)
+      ;; Q: Do I just want to release it, since I'm done with it?
+      ;; Except that I may not be. If this read would have overflowed
+      ;; the buffer, max-k would have kept us from reading.
+      ;; Next Q: Is trying to limit that buffer here worth the
+      ;; added complexity?
+      ;; We're talking about 1-k max.
+      ;; (assuming previous code did a sanity check for our buffer max)
+      ;; Bigger Q: Shouldn't I just discard it completely?
+      ;; A: Well, it depends.
+      ;; Honestly, we should should just be making a slice or
+      ;; duplicate to avoid copying.
+      (.discardSomeReadBytes receive-buf)
+      ;; TODO: Something with output-buf
+
+      ;;          set the receivevalid flags
+      ;; 2. Update the receive-valid flag associated with each byte as we go
+      ;;    The receivevalid array is declared with this comment:
+      ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
+
+      ;; 3. The array of receivevalid flags is used in the loop between lines
+      ;;    589-593 to decide how much to increment receive-bytes.
+      ;;    It's cleared on line 630, after we've written the bytes to the
+      ;;    child pipe.
+      ;; I'm fairly certain this is what that for loop amounts to
+
+      (throw (RuntimeException. "Q: What is to-child expecting in terms of output-buffer?"))
+      (update state ::receive-bytes + (min (- max-rcvd receive-bytes)
+                                           (+ receive-bytes delta-k))))))
+
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
@@ -208,6 +249,44 @@
              (assoc state ::stop-byte 0)
              indexes)
      ::start-byte)))
+
+(defn prep-send-ack
+  ;; Q: What should be calling this?
+  ;; A: Right after extract-message, assuming there's
+  ;; a message to ACK
+  "Build a ByteBuf to ACK the message we just received
+
+  Lines 595-606"
+  [{:keys [::specs/current-block-cursor
+           ::specs/receive-bytes
+           ::specs/receive-eof
+           ::specs/receive-total-bytes]
+    ^ByteBuf buf ::specs/send-buf
+    :as state}
+   message-id]
+  (when-not receive-bytes
+    (throw (ex-info "Missing receive-bytes"
+                    {::among (keys state)})))
+  ;; never acknowledge a pure acknowledgment --DJB
+  ;; I've seen at least one email pointing out that the
+  ;; author (Matthew Dempsky...he's the only person I've
+  ;; run across who's published any notes about
+  ;; the messaging protocol) has a scenario where the
+  ;; child just hangs, waiting for an ACK to the ACKs
+  ;; it sends 4 times a second.
+  (if (not= message-id 0)
+    (let [send-buf (Unpooled/buffer K/send-byte-buf-size)
+          u 192]
+      ;; XXX: delay acknowledgments  --DJB
+      (.writeLong send-buf (quot u 16))
+      (.writeInt send-buf message-id)
+      (.writeLong send-buf (if (and receive-eof
+                                    (= receive-bytes receive-total-bytes))
+                             (inc receive-bytes)
+                             receive-bytes))
+      (assoc state ::specs/send-buf send-buf))
+    ;; XXX: incorporate selective acknowledgments --DJB
+    state))
 
 (defn send-ack!
   "Write ACK buffer back to parent
@@ -259,47 +338,17 @@ Line 608"
             ;; or ->>
             extracted (extract-message flagged packet)]
         (if extracted
-          (do
-            (send-ack! state)
-            ;; Q: Shouldn't that be:
-            (comment (send-ack! extracted))  ; ?
-            (dissoc extracted ::specs/send-buf))
+          (let [msg-id (get-in extracted [::packet ::message-id])]
+            ;; Important detail that I haven't seen documented
+            ;; anywhere: message ID 0 is not legal.
+            (if (not= 0 msg-id)
+              (if-let [ack-prepped (prep-send-ack extracted)]
+                (do
+                  (send-ack! ack-prepped)
+                  (dissoc ack-prepped ::specs/send-buf))
+                extracted)
+              extracted))
           flagged)))))
-
-(defn prep-send-ack
-  "Build a ByteBuf to ACK the message we just received
-
-  Lines 595-606"
-  [{:keys [::specs/current-block-cursor
-           ::specs/receive-bytes
-           ::specs/receive-eof
-           ::specs/receive-total-bytes]
-    ^ByteBuf buf ::specs/send-buf
-    :as state}
-   message-id]
-  (when-not receive-bytes
-    (throw (ex-info "Missing receive-bytes"
-                    {::among (keys state)})))
-  ;; never acknowledge a pure acknowledgment --DJB
-  ;; I've seen at least one email pointing out that the
-  ;; author (Matthew Dempsky...he's the only person I've
-  ;; run across who's published any notes about
-  ;; the messaging protocol) has a scenario where the
-  ;; child just hangs, waiting for an ACK to the ACKs
-  ;; it sends 4 times a second.
-  (if (not= message-id 0)
-    (let [send-buf (Unpooled/buffer K/send-byte-buf-size)
-          u 192]
-      ;; XXX: delay acknowledgments  --DJB
-      (.writeLong send-buf (quot u 16))
-      (.writeInt send-buf message-id)
-      (.writeLong send-buf (if (and receive-eof
-                                    (= receive-bytes receive-total-bytes))
-                             (inc receive-bytes)
-                             receive-bytes))
-      (assoc state ::specs/send-buf send-buf))
-    ;; XXX: incorporate selective acknowledgments --DJB
-    state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -313,7 +362,12 @@ Line 608"
            ::specs/receive-bytes
            ::specs/receive-written]
     :as state}]
-  (if-not (or (= 0 (count ->child-buffer))  ; any incoming messages to process?
+  (let [child-buffer-count (count ->child-buffer)]
+    (log/debug "from-parent/try-processing-message"
+               "\nchild-buffer-count:" child-buffer-count
+               "\nreceive-written:" receive-written
+               "\nreceive-bytes:" receive-bytes)
+    (if-not (or (= 0 child-buffer-count)  ; any incoming messages to process?
                 ;; This next check includes an &&
                 ;; to verify that tochild is > 0 (I'm
                 ;; pretty sure that's just verifying that
@@ -323,9 +377,10 @@ Line 608"
                 ;; If we have pending bytes from the parent that have not
                 ;; been written to the child, don't add more.
                 (< receive-written receive-bytes))
-    ;; 440: sets maxblocklen=1024
-    ;; Q: Why was it ever 512?
-    ;; Guess: for initial Message part of Initiate packet
-    (let [state' (assoc state ::max-byte-length K/k-1)]
-      (handle-comprehensible-message state))
-    state))
+      ;; 440: sets maxblocklen=1024
+      ;; Q: Why was it ever 512?
+      ;; Guess: for initial Message part of Initiate packet
+      (let [state' (assoc state ::max-byte-length K/k-1)]
+        (log/debug "Handling incoming message, if it's comprehensible")
+        (handle-comprehensible-message state))
+      state)))

@@ -28,6 +28,8 @@
 
 (deftest check-message-builder
   ;; FIXME: This is screaming for generative testing
+  ;; TODO: At the very least, do a copy/paste to come
+  ;; up with variations that check more interesting numbers
   (testing "16 bytes"
     (let [length 16
           buf (Unpooled/buffer length)]

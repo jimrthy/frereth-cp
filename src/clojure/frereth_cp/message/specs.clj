@@ -200,7 +200,16 @@
 ;; That seems to be begging for trouble, although
 ;; nothing but ::blocks should involve much memory usage.
 ;; Then again, remember the lesson about conj'ing
-;; hundreds of seqs
+;; hundreds of seqs.
+
+;; Note that there are at least 3 completely different
+;; pieces of state here:
+;; 1. Buffers of bytes that we received from the child
+;;    but the parent has not yet ACK'd
+;; 2. Buffers of bytes from the parent that we have not
+;;    yet managed to write to the child
+;; 3. Traffic shaping
+
 ;; TODO: These really need a better namespace
 (s/def ::state (s/keys :req [::blocks
                              ::earliest-time
