@@ -63,8 +63,11 @@
     :as state}
    {^ByteBuf receive-buf ::specs/buf
     D ::specs/size-and-flags
-    start-byte ::start-byte
+    start-byte ::specs/start-byte
     :as packet}]
+  (when-not D
+    (throw (RuntimeException. (str "Missing ::specs/size-and-flags among\n" (keys packet)))))
+  (log/debug "D ==" D)
   ;; If we've already received bytes...well, the reference
   ;; implementation just discards them.
   ;; It would be safer to verify that the overlapping bits
@@ -81,8 +84,8 @@
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
         D (- D SF)
         message-length (.readableBytes receive-buf)]
-    (log/debug (str "Initial read from position " starting-point)
-               ":\n" D')
+    (log/debug (str "Setting up initial read from position " starting-point)
+               ": " D' " bytes")
     (if (and (<= D K/k-1)
              ;; In the reference implementation,
              ;; len = 16 * (unsigned long long) messagelen[pos]
@@ -98,12 +101,20 @@
       ;; start-byte and stop-byte are really addresses in the
       ;; message stream
       (let [stop-byte (+ D start-byte)]
+        (log/debug "Starting with ACK from" start-byte stop-byte)
         ;; of course, flow control would avoid this case -- DJB
         ;; Q: What does that mean? --JRG
         ;; Q: Why are we writing to receive-buf?
         ;; A: receive-buf is a circular buffer of bytes past the
         ;; receive-bytes counter which holds bytes that have not yet
         ;; been forwarded along to the child.
+        (log/debug "receive-written:" receive-written
+                   "\nstop-byte:" stop-byte
+                   ;; Have 48 writable bytes here.
+                   ;; I think I've managed to tangle up receive-buf.
+                   "\nreceive-buf length:" (.writableBytes receive-buf))
+        ;; That tears it. I need to split up the to/from buffer management.
+        (throw (RuntimeException. "Start here by splitting concerns"))
         (when (<= stop-byte (+ receive-written (.writableBytes receive-buf)))
           ;; 576-579: SF (StopFlag? deals w/ EOF)
           (let [receive-eof (case SF
@@ -253,9 +264,6 @@
      ::start-byte)))
 
 (defn prep-send-ack
-  ;; Q: What should be calling this?
-  ;; A: Right after extract-message, assuming there's
-  ;; a message to ACK
   "Build a ByteBuf to ACK the message we just received
 
   Lines 595-606"
@@ -335,7 +343,7 @@ Line 608"
                                  blocks)
             flagged (-> (reduce flow-control/update-statistics state acked-blocks)
                         ;; That takes us down to line 544
-                        (partial flag-acked-others! packet))
+                        (flag-acked-others! packet))
             ;; TODO: Combine these calls using either some version of comp
             ;; or ->>
             extracted (extract-message flagged packet)]

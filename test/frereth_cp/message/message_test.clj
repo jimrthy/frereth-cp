@@ -7,7 +7,8 @@
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.message.test-utilities :as test-helpers]
-            [frereth-cp.message.to-parent :as to-parent])
+            [frereth-cp.message.to-parent :as to-parent]
+            [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest basic-echo
@@ -50,7 +51,10 @@
           (let [wrote (future (message/parent-> state buf))
                 outcome (deref response 1000 ::timeout)]
             (if-let [err (agent-error state)]
-              (is (not err))
+              (do
+                (is (not err))
+                ;; I'm getting a NPE with no stack trace
+                (println (utils/get-stack-trace err)))
               (do
                 (is (not= outcome ::timeout))
                 (when-not (= outcome ::timeout)

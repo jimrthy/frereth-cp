@@ -90,8 +90,7 @@
     ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
     ;; i.e. the total number of bytes in the stream.
     (.writeLong send-buf start-pos)
-    (let [padding-bytes (- u length)
-          data-start (+ padding-bytes #_K/header-length)
+    (let [data-start (- u length)
           writer-index (.writerIndex send-buf)]
 
       ;; This is the approach taken by the reference implementation
@@ -100,9 +99,7 @@
       (comment
         (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
                                                                                     (dec send-buf-size))))
-      (log/debug "Moving writer index from" writer-index "to" data-start)
-      (.writerIndex send-buf data-start)
-      (log/debug "Write index after move:" (.writerIndex send-buf)))
+      (.writerIndex send-buf data-start))
 
     ;; Need to save the initial read-index because we aren't ready
     ;; to discard the buffer until it's been ACK'd.
