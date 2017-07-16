@@ -6,7 +6,7 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.test-helpers :as test-helpers]
+            [frereth-cp.message.test-utilities :as test-helpers]
             [frereth-cp.message.to-parent :as to-parent])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 

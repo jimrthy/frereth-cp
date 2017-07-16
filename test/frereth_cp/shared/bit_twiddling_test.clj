@@ -4,21 +4,21 @@
 
 (deftest complement-2s
   (testing "positives"
-    (is (= 0 (b-t/possibly-2s-complement 0)))
-    (is (= 1 (b-t/possibly-2s-complement 1)))
-    (is (= 127 (b-t/possibly-2s-complement 0x7f))))
+    (is (= 0 (b-t/possibly-2s-complement-8 0)))
+    (is (= 1 (b-t/possibly-2s-complement-8 1)))
+    (is (= 127 (b-t/possibly-2s-complement-8 0x7f))))
   (testing "negatives"
-    (is (= -1 (b-t/possibly-2s-complement 0xff)))
-    (is (= -128 (b-t/possibly-2s-complement 0x80)))))
+    (is (= -1 (b-t/possibly-2s-complement-8 0xff)))
+    (is (= -128 (b-t/possibly-2s-complement-8 0x80)))))
 
 (deftest uncomplement-2s
   (testing "positives"
-    (is (= 0 (b-t/possibly-2s-uncomplement 0)))
-    (is (= 1 (b-t/possibly-2s-uncomplement 1)))
-    (is (= 127 (b-t/possibly-2s-uncomplement 127))))
+    (is (= 0 (b-t/possibly-2s-uncomplement-8 0)))
+    (is (= 1 (b-t/possibly-2s-uncomplement-8 1)))
+    (is (= 127 (b-t/possibly-2s-uncomplement-8 127))))
   (testing "negatives"
-    (is (= 0xff (b-t/possibly-2s-uncomplement -1)))
-    (is (= 0x80 (b-t/possibly-2s-uncomplement -128)))))
+    (is (= 0xff (b-t/possibly-2s-uncomplement-8 -1)))
+    (is (= 0x80 (b-t/possibly-2s-uncomplement-8 -128)))))
 
 (deftest known-uint64-pack-unpack
   (testing "This number has specifically caused problems"

@@ -275,7 +275,7 @@
            ::specs/last-speed-adjustment 0
            ::specs/max-block-length K/k-div2
            ;; Seems vital, albeit undocumented
-           ::specs/n-sec-per-block specs/sec->n-sec
+           ::specs/n-sec-per-block K/sec->n-sec
            ::specs/receive-bytes 0
            ::specs/receive-eof false
            ::specs/receive-total-bytes 0
@@ -291,7 +291,7 @@
            ::specs/rtt-seen-older-low false
            ::specs/rtt-seen-recent-high false
            ::specs/rtt-seen-recent-low false
-           ::specs/rtt-timeout specs/sec->n-sec
+           ::specs/rtt-timeout K/sec->n-sec
            ::specs/send-acked 0
            ::specs/send-buf-size K/send-byte-buf-size
            ::specs/send-bytes 0

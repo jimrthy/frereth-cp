@@ -4,6 +4,7 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.helpers :as help]
+            [frereth-cp.message.marshall :as marshall]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared])
   (:import [io.netty.buffer ByteBuf Unpooled]
@@ -27,7 +28,7 @@
   [^ByteBuf buf]
   {:pre [buf]}
   (let [buf (.order buf ByteOrder/LITTLE_ENDIAN)
-        header (shared/decompose K/message-header-dscr buf)
+        header (shared/decompose marshall/message-header-dscr buf)
         D (::specs/size-and-flags header)
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
