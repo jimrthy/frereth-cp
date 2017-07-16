@@ -38,29 +38,25 @@
 (defn child-consumer
   "Accepts buffers of bytes from the child.
 
-  Lines 319-337
+  Lines 319-337"
+  ;; The obvious approach is just to feed ByteBuffers
+  ;; from this callback to the parent's callback.
 
-The obvious approach is just to feed ByteBuffers
-from this callback to the parent's callback.
-
-That obvious approach completely misses the point that
-this ns is a buffer. We need to hang onto those buffers
-here until they've been ACK'd.
-
-This approach was really designed as an event that
-would be triggered when an event arrives on a stream.
-Or maybe as part of an event loop that polls various
-streams for available events.
-
-It really should just be a plain function call.
-I think this is really what I have planned for
-the ::child-> key under state.
-
-TODO: Untangle the strands and get this usable.
-"
+  ;; That obvious approach completely misses the point that
+  ;; this ns is a buffer. We need to hang onto those buffers
+  ;; here until they've been ACK'd.
   [{:keys [::specs/send-acked
            ::specs/send-bytes]
     :as state}
+   ;; TODO: Eliminate the ByteBuf arg.
+   ;; Child should neither know nor care that netty is involved.
+   ;; Much better to just just accept a byte array.
+   ;; A clojure vector of bytes would generally be better than that.
+   ;; A clojure object that we could just serialize to either
+   ;; EDN, transit, or Fressian seems
+   ;; like it would be best.
+   ;; Of course, we should allow the byte array for apps that
+   ;; want/need to do their own serialization.
    ^ByteBuf buf]
   ;; Q: Need to apply back-pressure if we
   ;; already have ~124K pending?

@@ -49,8 +49,7 @@
                                                     ::specs/length length
                                                     ::specs/send-eof false
                                                     ::specs/start-pos magical-start-byte})]
-          (is (= 240 (.readableBytes block)))
-          (comment)
+          (is (= 192 (.readableBytes block)))
           (let [bs (.array block)
                 v (vec bs)
                 sh [0 0]]
@@ -73,10 +72,9 @@
             (is (= sh (subvec v 36 38)) "Bytes in 6th ACK")
             (is (= [16 0] (subvec v 38 40)) "D + Flags")
             (is (= [45 0 0 0 0 0 0 0] (subvec v 40 48)) "Stream index")
-            (let [padding-bytes (- 192 length)]
+            (let [padding-bytes (- 192 length 48)]
               (is (= (repeat padding-bytes 0) (subvec v 48 (+ 48 padding-bytes))))
-              (is (= (range length) (subvec v (+ 48 padding-bytes) 240)))))
-          (comment)
+              (is (= (range length) (subvec v (+ 48 padding-bytes) 192)))))
           (let [{:keys [::specs/message-id
                         ::specs/acked-message
                         ::specs/size-and-flags
@@ -87,8 +85,8 @@
               (is (not packet)))
             (try
               (is (= message-id arbitrary-id) "message ID")
-              (is (= #_acked-id 0 acked-message) "We don't ACK")
-              ;; Q: Huh?
+              (is (= 0 acked-message) "ACKs go by themselves")
+              ;; Spot check a length that was breaking things at one point
               (is (= 0 (::specs/ack-length-4 packet)) "length-4")
               (is (= length size-and-flags) "length flag")
               (is (= magical-start-byte start-byte) "start index")
@@ -96,7 +94,6 @@
                 ;; We aren't shrinking buf yet,
                 ;; so this is still the full 240
                 (is (= length (.capacity buf))))
-              (comment)
               (is (.hasArray buf))
               (if (.hasArray buf)
                 (let [bs (byte-array (.readableBytes buf))]

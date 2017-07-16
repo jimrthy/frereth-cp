@@ -218,6 +218,8 @@
                          ;; duplicated (and ripe for refactoring) with trigger-from-timer
                          ;; and trigger-from-child
                          )]
+    (log/info "Getting ready to start trying to process the message we just received from parent:\n"
+               ready-to-ack)
     (if-let [primed (from-parent/try-processing-message ready-to-ack)]
       (try
         (let [{:keys [::specs/->child-buffer]} primed

@@ -1,5 +1,6 @@
 (ns frereth-cp.message.to-parent
   (:require [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
@@ -29,7 +30,7 @@
     1088 1088
     (throw (AssertionError. "block too big"))))
 
-(s/fdef calculate-message-data-block-length
+(s/fdef calculate-message-data-packet-length-flags
         :args ::specs/block
         :ret (s/and nat-int?
                     ;; max possible:
@@ -39,7 +40,7 @@
                     ;; the implementation details, but those
                     ;; aren't covered by the spec
                     #(< (+ K/k-1 K/error-eof) %)))
-(defn calculate-message-data-block-length-flags
+(defn calculate-message-data-packet-length-flags
   [{:keys [::specs/length] :as block}]
   (bit-or length
           (case (::specs/send-eof block)
@@ -50,6 +51,8 @@
 (defn build-message-block
   ^ByteBuf [^Integer next-message-id
             {^Long start-pos ::specs/start-pos
+             ;; TODO: Switch this to either a bytes or a clojure
+             ;; vector of bytes.
              ^ByteBuf buf ::specs/buf
              :keys [::specs/length]
              :as block-to-send}]
@@ -71,8 +74,10 @@
         _ (when (or (neg? length)
                     (< K/k-1 length))
             (throw (AssertionError. (str "illegal block length: " length))))
-        ;; ByteBuf instances default to BIG_ENDIAN, but that breaks the spec
-        send-buf (.order (Unpooled/buffer (+ u K/header-length)) java.nio.ByteOrder/LITTLE_ENDIAN)]
+        ;; ByteBuf instances default to BIG_ENDIAN, which is not what CurveCP uses
+        ;; TODO: Switch to a Pooled allocator
+        send-buf (.order (Unpooled/buffer (+ u K/header-length))
+                         java.nio.ByteOrder/LITTLE_ENDIAN)]
     ;; Q: Is this worth switching to shared/compose?
     (.writeInt send-buf next-message-id)
     ;; XXX: include any acknowledgments that have piled up (--DJB)
@@ -80,21 +85,25 @@
     ;; bytes. Which seems like it can't possibly be correct.
     (.writeBytes send-buf #^bytes shared/all-zeros 0 34)  ; all the ACK fields
     ;; SUCC/FAIL flag | data block size
-    (.writeShort send-buf (calculate-message-data-block-length-flags block-to-send))
+    (.writeShort send-buf (calculate-message-data-packet-length-flags block-to-send))
     ;; stream position of the first byte in the data block being sent
     ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
     ;; i.e. the total number of bytes in the stream.
     (.writeLong send-buf start-pos)
     (let [padding-bytes (- u length)
-          data-start (+ padding-bytes K/header-length)
+          data-start (+ padding-bytes #_K/header-length)
           writer-index (.writerIndex send-buf)]
+
       ;; This is the approach taken by the reference implementation
       ;; Note that he's just skipping the padding bytes rather than
       ;; filling them with zeros
       (comment
         (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
                                                                                     (dec send-buf-size))))
-      (.writerIndex send-buf data-start))
+      (log/debug "Moving writer index from" writer-index "to" data-start)
+      (.writerIndex send-buf data-start)
+      (log/debug "Write index after move:" (.writerIndex send-buf)))
+
     ;; Need to save the initial read-index because we aren't ready
     ;; to discard the buffer until it's been ACK'd.
     ;; This is a fairly hefty departure from the reference implementation,

@@ -214,6 +214,7 @@
       ;;    child pipe.
       ;; I'm fairly certain this is what that for loop amounts to
 
+      ;; The answer to this question is "it looks like that part hasn't been written/translated yet"
       (throw (RuntimeException. "Q: What is to-child expecting in terms of output-buffer?"))
       (update state ::receive-bytes + (min (- max-rcvd receive-bytes)
                                            (+ receive-bytes delta-k))))))
@@ -323,7 +324,7 @@ Line 608"
     (when (< 1 (count ->child-buffer))
       ;; TODO: Keep this from happening.
       (log/warn "Multiple entries in child-buffer. This seems wrong."))
-    (when (and (>= len K/min-msg-len)
+    (if (and (>= len K/min-msg-len)
                (<= len K/max-msg-len))
       (let [packet (deserialize msg)
             ack-id (::specs/acked-message packet)
@@ -338,6 +339,7 @@ Line 608"
             ;; TODO: Combine these calls using either some version of comp
             ;; or ->>
             extracted (extract-message flagged packet)]
+        (log/debug "extracted:" extracted)
         (if extracted
           (let [msg-id (get-in extracted [::packet ::message-id])]
             ;; Important detail that I haven't seen documented
@@ -349,7 +351,10 @@ Line 608"
                   (dissoc ack-prepped ::specs/send-buf))
                 extracted)
               extracted))
-          flagged)))))
+          flagged)))
+    (do
+      (log/warn "Illegal incoming message length:" len)
+      nil)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

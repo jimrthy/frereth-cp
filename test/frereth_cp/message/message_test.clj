@@ -35,36 +35,39 @@
     (try
       (let [src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
             msg-len (- K/max-msg-len K/header-length K/min-padding-length)
-            packet (byte-array (range msg-len))
+            message-body (byte-array (range msg-len))
             ;; Just pick an arbitrary number
             message-id 25792]
-        (.writeBytes src packet)
-        (let [src (to-parent/build-message-block message-id {::specs/buf src
+        (is (= msg-len 1024))
+        (.writeBytes src message-body)
+        (let [buf (to-parent/build-message-block message-id {::specs/buf src
                                                              ::specs/length msg-len
                                                              ::specs/send-eof false
-                                                             ::specs/start-pos 0})
-              ;; TODO: Add a test that sends a gibberish message
-              wrote (future (message/parent-> state src))
-              outcome (deref response 1000 ::timeout)]
-          (if-let [err (agent-error state)]
-            (is (not err))
-            (do
-              (is (not= outcome ::timeout))
-              (when-not (= outcome ::timeout)
-                (is (= @parent-state 2))
-                (is (not outcome) "What else do we have here?"))
-              (is (realized? wrote))
-              (when (realized? wrote)
-                (let [outcome-agent @wrote]
-                  (is (not (agent-error outcome-agent)))
-                  (when-not (agent-error outcome-agent)
-                    ;; Fun detail:
-                    ;; wrote is a promise.
-                    ;; When I deref that, there's an agent
-                    ;; that I need to deref again to get
-                    ;; the actual end-state
-                    (let [outcome @outcome-agent]
-                      (is (not outcome) "What should we have here?")))))))))
+                                                             ::specs/start-pos 0})]
+          (is (= msg-len K/k-1))
+          (is (= 1088 (.readableBytes buf)))
+          ;; TODO: Add a test that sends a gibberish message
+          (let [wrote (future (message/parent-> state buf))
+                outcome (deref response 1000 ::timeout)]
+            (if-let [err (agent-error state)]
+              (is (not err))
+              (do
+                (is (not= outcome ::timeout))
+                (when-not (= outcome ::timeout)
+                  (is (= @parent-state 2))
+                  (is (not outcome) "What else do we have here?"))
+                (is (realized? wrote))
+                (when (realized? wrote)
+                  (let [outcome-agent @wrote]
+                    (is (not (agent-error outcome-agent)))
+                    (when-not (agent-error outcome-agent)
+                      ;; Fun detail:
+                      ;; wrote is a promise.
+                      ;; When I deref that, there's an agent
+                      ;; that I need to deref again to get
+                      ;; the actual end-state
+                      (let [outcome @outcome-agent]
+                        (is (not outcome) "What should we have here?"))))))))))
       (finally
         (message/halt! state)))))
 
