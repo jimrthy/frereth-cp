@@ -80,11 +80,11 @@
                          ::specs/length 32
                          ::specs/time (- now 7)
                          ::specs/transmissions 7}]]   ; block 6
-      {::specs/blocks start-blocks
-       ::specs/earliest-time 0
-       ::specs/receive-buf buf
-       ::specs/send-acked 0
-       ::specs/send-bytes 1000   ; Something bigger than what's getting acked
-       ::specs/send-processed (* 2 bytes-acked)  ; 786
-       ::specs/total-block-transmissions 0
-       ::specs/total-blocks 0})))
+      {::packet buf
+       ::specs/outgoing {::specs/blocks start-blocks
+                         ::specs/earliest-time 0
+                         ::specs/send-acked 0
+                         ::specs/send-bytes 1000   ; Something bigger than what's getting acked
+                         ::specs/send-processed (* 2 bytes-acked)  ; 786
+                         ::specs/total-block-transmissions 0
+                         ::specs/total-blocks 0}})))

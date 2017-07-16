@@ -21,35 +21,38 @@
         (.release buf)))))
 
 (deftest check-flacked-others
-  (let [start-state (test-helpers/build-ack-flag-message-portion)]
-    (let [{:keys [::specs/blocks
-                  ::specs/send-acked
-                  ::specs/send-bytes
-                  ::specs/send-processed
-                  ::specs/total-blocks
-                  ::specs/total-block-transmissions]
-           :as flagged} (from-parent/flag-acked-others! start-state)
-          expected-remaining-blocks (drop 2 (::specs/blocks start-state))]
+  (let [start-state (test-helpers/build-ack-flag-message-portion)
+        packet (::test-helpers/packet start-state)
+        start-state (dissoc ::test-helpers/packet)]
+    (let [{{:keys [::specs/blocks
+                   ::specs/send-acked
+                   ::specs/send-bytes
+                   ::specs/send-processed
+                   ::specs/total-blocks
+                   ::specs/total-block-transmissions]} ::specs/outgoing
+           :as flagged} (from-parent/flag-acked-others! start-state packet)
+          expected-remaining-blocks (drop 2 (get-in start-state [::specs/outgoing ::specs/blocks]))]
       (try
         (let [dropped-block-length (reduce + 0
                                            (->> start-state
+                                                ::specs/outgoing
                                                 ::specs/blocks
                                                 (take 2)
                                                 (map ::specs/length)))]
           (is (= 5 total-blocks) "Total blocks ACK'd")
-          (is (= (+ (get-in start-state [::specs/blocks 0 ::specs/length])
-                    (get-in start-state [::specs/blocks 1 ::specs/length]))
+          (is (= (+ (get-in start-state [::specs/outgoing ::specs/blocks 0 ::specs/length])
+                    (get-in start-state [::specs/outgoing ::specs/blocks 1 ::specs/length]))
                  send-acked) "Bytes that have been dropped")
-          (is (= (- (::specs/send-bytes start-state)
+          (is (= (- (get-in start-state [::specs/outgoing ::specs/send-bytes])
                     dropped-block-length)
                  send-bytes) "Bytess that have not been sent but not dropped")
-          (is (= (- (::specs/send-processed start-state) dropped-block-length)
+          (is (= (- (get-in start-state [::specs/outgoing ::specs/send-processed]) dropped-block-length)
                  send-processed) "Sent bytes that have been absorbed into blocks")
           (is (= 20 total-block-transmissions))
           (is (= (map #(dissoc % ::specs/time) expected-remaining-blocks)
                  (map #(dissoc % ::specs/time) blocks))))
         (finally
-          (doseq [b (::specs/blocks flagged)]
+          (doseq [b (get-in flagged [::specs/outgoing ::specs/blocks])]
             (.release (::specs/buf b))))))))
 
 (deftest check-big-flacked-others

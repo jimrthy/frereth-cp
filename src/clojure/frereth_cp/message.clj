@@ -161,7 +161,7 @@
          ::specs/recent (System/nanoTime)))
 
 (defn trigger-io
-  [{:keys [::specs/->child]
+  [{{:keys [::specs/->child]} ::specs/incoming
     :as state}]
   (-> state
       (assoc ::specs/recent (System/nanoTime))
@@ -183,7 +183,7 @@
 
 (defn trigger-from-parent
   "Message block arrived from parent. We have work to do."
-  [{{:keys [::specs/->child]} ::specs/callbacks
+  [{{:keys [::specs/->child]} ::specs/incoming
     :as state}
    buf]
   (when-not ->child
@@ -197,7 +197,7 @@
   ;; data coming from the parent.
   (let [ready-to-ack (-> state
                          ;; Q: Are the next 2 lines worth their own functions?
-                         (update ::specs/->child-buffer conj buf)
+                         (update-in [::specs/incoming ::specs/->child-buffer] conj buf)
                          ;; This one really seems so, since I'm calling it
                          ;; in at least 3 different places now
                          (assoc ::specs/recent (System/nanoTime))
@@ -222,14 +222,24 @@
                ready-to-ack)
     (if-let [primed (from-parent/try-processing-message ready-to-ack)]
       (try
-        (let [{:keys [::specs/->child-buffer]} primed
+        ;; lines 615-632  cover what's supposed to happen next.
+        ;; Major piece of the puzzle that I'm currently missing:
+        ;; line 617 will generally update receive-written.
+        ;; TODO: Move what little I have here into to-child and
+        ;; expand it to include the pieces I haven't translated yet
+        ;; (such as sending some signal, like a nil, to indicate that
+        ;; we've hit EOF).
+        (let [{{:keys [::specs/->child-buffer]} ::specs/incoming} primed
+              ;; FIXME: I really don't think a ByteBuf makes a lot of sense here.
+              ;; Although there's always the whole "reduce GC by pooling byte arrays" idea.
+              ;; So maybe it does.
               ^"[Lio.netty.buffer.ByteBuf;" args (into-array ByteBuf ->child-buffer)
               response (Unpooled/copiedBuffer args)]
           (->child primed response)
           ;; 610-614: counters/looping
-          (assoc primed
-                  ::specs/->child-buffer
-                  []))
+          (assoc-in primed
+                    [::specs/incoming ::specs/->child-buffer]
+                    []))
         (catch RuntimeException ex
           ;; Reference implementation specifically copes with
           ;; EINTR, EWOULDBLOCK, and EAGAIN.
@@ -269,43 +279,66 @@
   ([parent-callback
     child-callback
     want-ping]
-   (agent {::specs/->child-buffer []
-           ::specs/blocks []
-           ::specs/earliest-time 0
-           ::specs/last-doubling 0
-           ::specs/last-edge 0
-           ::specs/last-speed-adjustment 0
-           ::specs/max-block-length K/k-div2
-           ;; Seems vital, albeit undocumented
-           ::specs/n-sec-per-block K/sec->n-sec
-           ::specs/receive-bytes 0
-           ::specs/receive-eof false
-           ::specs/receive-total-bytes 0
-           ::specs/receive-written 0
+   (agent {::specs/flow-control {::specs/last-doubling 0
+                                 ::specs/last-edge 0
+                                 ::specs/last-speed-adjustment 0
+                                 ;; Seems vital, albeit undocumented
+                                 ::specs/n-sec-per-block K/sec->n-sec
+                                 ::specs/rtt 0
+                                 ::specs/rtt-average 0
+                                 ::specs/rtt-deviation 0
+                                 ::specs/rtt-highwater 0
+                                 ::specs/rtt-lowwater 0
+                                 ::specs/rtt-phase false
+                                 ::specs/rtt-seen-older-high false
+                                 ::specs/rtt-seen-older-low false
+                                 ::specs/rtt-seen-recent-high false
+                                 ::specs/rtt-seen-recent-low false
+                                 ::specs/rtt-timeout K/sec->n-sec}
+           ::specs/incoming {::specs/->child child-callback
+                             ::specs/->child-buffer []
+                             ::specs/receive-bytes 0
+                             ::specs/receive-eof false
+                             ::specs/receive-total-bytes 0
+                             ::specs/receive-written 0
+                             }
+           ::specs/outgoing {::specs/blocks []
+                             ::specs/earliest-time 0
+                             ::specs/last-block-time 0
+                             ::specs/last-panic 0
+                             ;; Peers started as servers start out
+                             ;; with standard-max-block-length instead.
+                             ;; TODO: Account for that
+                             ::specs/max-block-length K/initial-max-block-length
+                             ::specs/next-message-id 1
+                             ::specs/->parent parent-callback
+                             ::specs/send-acked 0
+                             ;; Q: Does this make any sense at all?
+                             ;; It isn't ever going to change, so I might
+                             ;; as well just use the hard-coded value
+                             ;; in constants and not waste the extra time/space
+                             ;; sticking it in here.
+                             ;; That almost seems like premature optimization,
+                             ;; but this approach seems like serious YAGNI.
+                             ::specs/send-buf-size K/send-byte-buf-size
+                             ::specs/send-bytes 0
+                             ::specs/send-eof false
+                             ::specs/send-eof-acked false
+                             ::specs/send-eof-processed false
+                             ::specs/send-processed 0
+                             ::specs/total-blocks 0
+                             ::specs/total-block-transmissions 0
+                             ::specs/want-ping want-ping}
+
            ;; In the original, this is a local in main rather than a global
            ;; Q: Is there any difference that might matter to me, other
            ;; than being allocated on the stack instead of the heap?
            ;; (Assuming globals go on the heap. TODO: Look that up)
-           ::specs/recent 0
-           ::specs/rtt 0
-           ::specs/rtt-phase false
-           ::specs/rtt-seen-older-high false
-           ::specs/rtt-seen-older-low false
-           ::specs/rtt-seen-recent-high false
-           ::specs/rtt-seen-recent-low false
-           ::specs/rtt-timeout K/sec->n-sec
-           ::specs/send-acked 0
-           ::specs/send-buf-size K/send-byte-buf-size
-           ::specs/send-bytes 0
-           ::specs/send-eof false
-           ::specs/send-eof-processed false
-           ::specs/send-eof-acked false
-           ::specs/send-processed 0
-           ::specs/total-blocks 0
-           ::specs/total-block-transmissions 0
-           ::specs/callbacks {::specs/->child child-callback
-                              ::specs/->parent parent-callback}
-           ::specs/want-ping want-ping}))
+           ;; Ironically, this may be one of the few pieces that counts
+           ;; as "global", since it really is involved whether we're
+           ;; talking about incoming/outgoing buffer management or
+           ;; flow control.
+           ::specs/recent 0}))
   ([parent-callback child-callback]
    (initial-state parent-callback child-callback false)))
 
@@ -408,7 +441,7 @@ Prior to that, it was limited to 4K.
     ;; mutually exclusive.
     ;; trigger-from-parent is expecting to have a ::->child-buffer key
     ;; that's really a vector that we can just conj onto.
-    (let [{:keys [::specs/->child-buffer]} @state-agent]
+    (let [{{:keys [::specs/->child-buffer]} ::specs/incoming} @state-agent]
       (if (< (count ->child-buffer) max-child-buffer-size)
         (let [previously-buffered-message-bytes (reduce + 0
                                                     (map (fn [^ByteBuf buf]

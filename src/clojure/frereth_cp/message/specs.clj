@@ -67,8 +67,8 @@
                              ::start-pos
                              ::time
                              ::transmissions]))
-;; Q: If I try to convert this to a set, what happens
-;; when ::buf changes?
+;; I'd prefer to implement this as a set instead of a vector.
+;; Q: what then happens when ::buf changes?
 (s/def ::blocks (s/and (s/coll-of ::block)
                        #(= (rem (count %) 2) 0)))
 ;; How to find the current ::block inside a ::state
@@ -126,6 +126,8 @@
 ;; Starts out at 512, then switches to 1024 as soon as
 ;; we can start processing a message that goes to the
 ;; child.
+;; I think I got this tangled up and am actually doing
+;; that little dance with some other field.
 (s/def ::max-block-length nat-int?)
 
 ;; circular queue beyond receivewritten; size must be power of 2 --DJB
@@ -164,8 +166,6 @@
 (s/def ::child-> ::callback)
 (s/def ::->parent ::callback)
 (s/def ::parent-> ::callback)
-(s/def ::callbacks (s/keys :req [::->child
-                                 ::->parent]))
 
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
@@ -200,55 +200,62 @@
 
 ;; Note that there are at least 3 completely different
 ;; pieces of state here:
-;; 1. Buffers of bytes that we received from the child
-;;    but the parent has not yet ACK'd
+;; 1. Traffic shaping
+(s/def ::flow-control (s/keys :req [::last-doubling
+                                    ::last-edge
+                                    ::last-speed-adjustment
+                                    ::n-sec-per-block
+                                    ::rtt
+                                    ::rtt-average
+                                    ;; Q: Does rtt-delta belong in here?
+                                    ::rtt-deviation
+                                    ::rtt-highwater
+                                    ::rtt-lowwater
+                                    ::rtt-phase
+                                    ::rtt-seen-older-high
+                                    ::rtt-seen-older-low
+                                    ::rtt-seen-recent-high
+                                    ::rtt-seen-recent-low
+                                    ::rtt-timeout]))
+
 ;; 2. Buffers of bytes from the parent that we have not
 ;;    yet managed to write to the child
-;; 3. Traffic shaping
+(s/def ::incoming (s/keys :req [::->child
+                                ::->child-buffer
+                                ::receive-bytes
+                                ::receive-eof
+                                ::receive-total-bytes
+                                ::receive-written]))
+
+;; 3. Buffers of bytes that we received from the child
+;;    but the parent has not yet ACK'd
+(s/def ::outgoing (s/keys :req [::blocks
+                                ::earliest-time
+                                ::last-block-time
+                                ::last-panic
+                                ::max-block-length
+                                ::next-message-id
+                                ::->parent
+                                ::send-acked
+                                ;; Q: Does this field make any sense at all?
+                                ;; (It's a hard-coded constant that doesn't
+                                ;; seem likely to ever change)
+                                ::send-buf-size
+                                ::send-bytes
+                                ::send-eof
+                                ::send-eof-acked
+                                ::send-eof-processed
+                                ::send-processed
+                                ::total-blocks
+                                ::total-block-transmissions
+                                ::want-ping]
+                          :opt [::current-block-cursor
+                                ::send-buf]))
 
 ;; TODO: These really need a better namespace
-(s/def ::state (s/keys :req [::blocks
-                             ::earliest-time
-                             ::last-block-time
-                             ::last-doubling
-                             ::last-edge
-                             ::last-panic
-                             ::last-speed-adjustment
-                             ::max-block-length
-                             ::n-sec-per-block
-                             ::next-message-id
-                             ::->child-buffer
-                             ::receive-bytes
-                             ::receive-eof
-                             ::receive-total-bytes
-                             ::receive-written
-                             ::recent
-                             ::rtt
-                             ::rtt-average
-                             ;; Q: Does rtt-delta belong in here?
-                             ::rtt-deviation
-                             ::rtt-highwater
-                             ::rtt-lowwater
-                             ::rtt-phase
-                             ::rtt-seen-older-high
-                             ::rtt-seen-older-low
-                             ::rtt-seen-recent-high
-                             ::rtt-seen-recent-low
-                             ::rtt-timeout
-                             ::send-acked
-                             ;; Q: Does this field make any sense at all?
-                             ::send-buf-size
-                             ::send-bytes
-                             ::send-eof
-                             ::send-eof-processed
-                             ::send-eof-acked
-                             ::send-processed
-                             ::total-blocks
-                             ::total-block-transmissions
-                             ::want-ping]
-                       :opt [::callbacks
-                             ::current-block-cursor
-                             ::packet
-                             ;; Q: Do I want anything to do with this?
-                             ::receive-buf
-                             ::send-buf]))
+(s/def ::state (s/keys :req [::flow-control
+                             ::incoming
+                             ::outgoing
+
+                             ;; Q: Does this make more sense anywhere else?
+                             ::recent]))

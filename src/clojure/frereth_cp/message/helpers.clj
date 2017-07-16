@@ -36,9 +36,12 @@
            (+ start-pos (::specs/length block))
            stop)
      (-> acc
-         (assoc-in [::specs/blocks n ::specs/time] 0)
-         (update ::specs/total-blocks inc)
-         (update ::specs/total-block-transmissions + transmissions))
+         (update ::specs/outgoing
+                 (fn [cur]
+                   (-> cur
+                       (assoc-in [::specs/blocks n ::specs/time] 0)
+                       (update ::specs/total-blocks inc)
+                       (update ::specs/total-block-transmissions + transmissions)))))
      acc)
    ::n inc))
 
@@ -73,14 +76,9 @@ Based on earliestblocktime_compute, in lines 138-153
   "Mark blocks between positions start and stop as ACK'd
 
 Based [cleverly] on acknowledged(), running from lines 155-185"
-  [{:keys [::specs/blocks
-           ::specs/send-acked
-           ::specs/send-bytes
-           ::specs/send-processed
-           ::specs/send-eof
-           ::specs/send-eof-acked
-           ::specs/total-block-transmissions
-           ::specs/total-blocks]
+  [{{:keys [::specs/blocks
+            ::specs/send-eof
+            ::specs/send-eof-acked]} ::specs/outgoing
     :as state}
    start
    stop]
@@ -110,23 +108,26 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
             dropped-block-lengths (apply + (map ::specs/length to-drop))
             ;; TODO: Drop reliance on these
             state (-> acked
-                      (update ::specs/send-acked + dropped-block-lengths)
-                      (update ::specs/send-bytes - dropped-block-lengths)
-                      (update ::specs/send-processed - dropped-block-lengths)
-                      (assoc ::specs/blocks (vec to-keep)))
+                      (update ::specs/outgoing
+                              (fn [cur]
+                                (-> cur
+                                    (update ::specs/send-acked + dropped-block-lengths))))
+                      (update-in [::specs/outgoing ::specs/send-bytes] - dropped-block-lengths)
+                      (update-in [::specs/outgoing ::specs/send-processed] - dropped-block-lengths)
+                      (assoc-in [::specs/outgoing ::specs/blocks] (vec to-keep)))
 ;;;           177-182: Possibly set sendeofacked flag
             state (if (and send-eof
                            (= start 0)
-                           (> stop (+ (::specs/send-acked state)
-                                      (::specs/send-bytes state)))
+                           (> stop (+ (get-in state [::specs/outgoing ::specs/send-acked])
+                                      (get-in state [::specs/outgoing ::specs/send-bytes])))
                            (not send-eof-acked))
-                    (update state ::specs/send-eof-acked true)
+                    (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
                     state)]
 ;;;           183: earliestblocktime_compute()
         (doseq [block to-drop]
           (println "Releasing the buf associated with" block)
           (.release (::specs/buf block)))
-        (assoc state ::specs/earliest-time (earliest-block-time blocks))))
+        (assoc-in state [::specs/outgoing ::specs/earliest-time] (earliest-block-time blocks))))
     ;;; No change
     state))
 

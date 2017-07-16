@@ -19,7 +19,7 @@
 
 (defn room-for-child-bytes?
   "Does send-buf have enough space left for a message from child?"
-  [{:keys [::specs/send-bytes]
+  [{{:keys [::specs/send-bytes]} ::specs/outgoing
     :as state}]
   ;; Line 322: This also needs to account for send-acked
   ;; For whatever reason, DJB picked this as the end-point to refuse to read
@@ -45,8 +45,8 @@
   ;; That obvious approach completely misses the point that
   ;; this ns is a buffer. We need to hang onto those buffers
   ;; here until they've been ACK'd.
-  [{:keys [::specs/send-acked
-           ::specs/send-bytes]
+  [{{:keys [::specs/send-acked
+            ::specs/send-bytes]} ::specs/outgoing
     :as state}
    ;; TODO: Eliminate the ByteBuf arg.
    ;; Child should neither know nor care that netty is involved.
@@ -69,14 +69,14 @@
         available-buffer-space (- K/send-byte-buf-size pos)
         bytes-to-read (min available-buffer-space (.readableBytes buf))
         send-bytes (+ send-bytes bytes-to-read)
-        block {::buf buf
-               ::transmissions 0}]
+        block {::specs/buf buf
+               ::specs/transmissions 0}]
     (when (>= send-bytes K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.
       (throw (AssertionError. "End of stream")))
     (-> state
-        (update ::blocks conj block)
-        (assoc ::send-bytes send-bytes
+        (update-in [::specs/outgoing ::specs/blocks] conj block)
+        (update-in [::specs/outgoing ::specs/send-bytes] send-bytes)
 ;;;  337: update recent
-               ::recent (System/nanoTime)))))
+        (assoc ::specs/recent (System/nanoTime)))))

@@ -14,17 +14,23 @@
         :ret ::specs/state)
 (defn recalc-rtt-average
   "Lines 460-466"
-  [{:keys [::specs/rtt-average]
+  [{{:keys [::specs/rtt-average]} ::specs/flow-control
+    :keys [::specs/recent]
     :as state}
-   rtt]
-  (if (not= 0 rtt-average)
-    (assoc state
-           ::specs/n-sec-per-block rtt
-           ::specs/rtt-average rtt
-           ::specs/rtt-deviation (quot rtt 2)
-           ::specs/rtt-highwater rtt
-           ::specs/rtt-lowwater rtt)
-    state))
+   acked-time]
+  (let [rtt (- recent acked-time)]
+    (if (not= 0 rtt-average)
+      (update state
+              ::specs/flow-control
+              (fn [s]
+                (assoc s
+                       ::specs/n-sec-per-block rtt
+                       ::specs/rtt rtt
+                       ::specs/rtt-average rtt
+                       ::specs/rtt-deviation (quot rtt 2)
+                       ::specs/rtt-highwater rtt
+                       ::specs/rtt-lowwater rtt)))
+      state)))
 
 (s/fdef jacobson-adjust-block-time
         :args (s/cat :n-sec-per-block ::specs/n-sec-per-block)
@@ -53,22 +59,23 @@
         :ret ::specs/state)
 (defn adjust-rtt-phase
   "Lines 511-521"
-  [{:keys [::specs/n-sec-per-block
-           ::specs/recent
-           ::specs/rtt-phase
-           ::specs/rtt-seen-older-high
-           ::specs/rtt-seen-older-low]
+  [{:keys [::specs/recent]
+    {:keys [::specs/n-sec-per-block
+            ::specs/rtt-phase
+            ::specs/rtt-seen-older-high
+            ::specs/rtt-seen-older-low]} ::specs/flow-control
     :as state}]
   (if (not rtt-phase)
     (if rtt-seen-older-high
-      (assoc state
-             ::specs/rtt-phase true
-             ::specs/last-edge recent
-             ::specs/n-sec-per-block (+ n-sec-per-block
-                                        (crypto/random-mod (quot n-sec-per-block 4))))
+      (update state (fn [s]
+                      (assoc s
+                             ::specs/rtt-phase true
+                             ::specs/last-edge recent
+                             ::specs/n-sec-per-block (+ n-sec-per-block
+                                                        (crypto/random-mod (quot n-sec-per-block 4))))))
       state)
     (if rtt-seen-older-low
-      (assoc state ::specs/rtt-phase false)
+      (assoc-in state [::specs/flow-control ::specs/rtt-phase] false)
       state)))
 
 (defn jacobson's-retransmission-timeout
@@ -77,19 +84,19 @@
   I'm lumping lines 467-527 into here, even though I haven't
   seen the actual paper describing the algorithm. This is the
   basic algorithm that TCP uses pretty much everywhere. -- JRG"
-  [{:keys [::specs/last-doubling
-           ::specs/last-edge
-           ::specs/last-speed-adjustment
-           ::specs/n-sec-per-block
-           ::specs/recent
-           ::specs/rtt
-           ::specs/rtt-average
-           ::specs/rtt-deviation
-           ::specs/rtt-highwater
-           ::specs/rtt-lowwater
-           ::specs/rtt-seen-recent-high
-           ::specs/rtt-seen-recent-low
-           ::specs/rtt-timeout]
+  [{:keys [::specs/recent]
+    {:keys [::specs/last-doubling
+            ::specs/last-edge
+            ::specs/last-speed-adjustment
+            ::specs/n-sec-per-block
+            ::specs/rtt
+            ::specs/rtt-average
+            ::specs/rtt-deviation
+            ::specs/rtt-highwater
+            ::specs/rtt-lowwater
+            ::specs/rtt-seen-recent-high
+            ::specs/rtt-seen-recent-low
+            ::specs/rtt-timeout]} ::specs/flow-control
     :as state}]
   (let [rtt-delta (- rtt-average rtt)
         rtt-average (+ rtt-average (/ rtt-delta 8))
@@ -110,6 +117,7 @@
                         (if (> rtt-delta 0)
                           (/ rtt-delta K/k-8)
                           (/ rtt-delta K/k-div4)))
+        ;; Q: Are these actually used anywhere else?
         rtt-seen-recent-high (> rtt-average (+ rtt-highwater K/ms-5))
         rtt-seen-recent-low (and (not rtt-seen-recent-high)
                                  (< rtt-average rtt-lowwater))]
@@ -118,25 +126,33 @@
                               (+ K/secs-1 (crypto/random-mod (quot n-sec-per-block 8)))
                               n-sec-per-block)
             n-sec-per-block (jacobson-adjust-block-time n-sec-per-block)
-            state (assoc state ::specs/n-sec-per-block n-sec-per-block)
-            {:keys [::specs/rtt-seen-recent-high ::specs/rtt-seen-recent-low]
+            state (assoc-in state [::specs/flow-control ::specs/n-sec-per-block] n-sec-per-block)
+            ;; adjust-rtt-phase does not modify rtt-seen-recent-high/low.
+            ;; Q: Is it supposed to?
+            {{:keys [::specs/rtt-seen-recent-high ::specs/rtt-seen-recent-low]} ::specs/flow-control
              :as state} (adjust-rtt-phase state)
-            state (assoc state
-                         ::specs/last-speed-adjustment recent
-                         ::specs/n-sec-per-block n-sec-per-block
+            state (update state
+                          ::specs/flow-control
+                          (fn [s]
+                            (assoc s
+                                   ::specs/last-speed-adjustment recent
+                                   ::specs/n-sec-per-block n-sec-per-block
+                                   ::specs/rtt-average rtt-average
 
-                         ::specs/rtt-average rtt-average
-                         ::specs/rtt-deviation rtt-deviation
-                         ::specs/rtt-highwater rtt-highwater
-                         ::specs/rtt-lowwater rtt-lowwater
-                         ::specs/rtt-timeout rtt-timeout
-
-                         ::specs/seen-older-high rtt-seen-recent-high
-                         ::specs/seen-older-low rtt-seen-recent-low
-                         ::specs/seen-recent-high false
-                         ::specs/seen-recent-low false)
+                                   ::specs/rtt-deviation rtt-deviation
+                                   ::specs/rtt-highwater rtt-highwater
+                                   ::specs/rtt-lowwater rtt-lowwater
+                                   ::specs/rtt-timeout rtt-timeout
+                                   ::specs/seen-older-high rtt-seen-recent-high
+                                   ::specs/seen-older-low rtt-seen-recent-low
+                                   ;; We're throwing away the values we just calculated.
+                                   ;; Well, except that they got moved into seen-older-*
+                                   ;; Saving these booleans seems pointless.
+                                   ::specs/seen-recent-high false
+                                   ::specs/seen-recent-low false)))
             been-a-minute? (- recent last-edge K/minute-1)]
         (cond
+          ;; Note that we generally don't need to make any changes
           (and been-a-minute?
                (< recent (+ last-doubling
                             (* 4 n-sec-per-block)
@@ -146,10 +162,11 @@
                (< recent (+ last-doubling
                             (* 4 n-sec-per-block)
                             (* 2 rtt-timeout)))) state
+          ;; Q: Really? A: Yep. This is line 535
           (<= (dec K/k-64) n-sec-per-block) state
-          :else (assoc state {::specs/n-sec-per-block (quot n-sec-per-block 2)
-                              ::specs/last-doubling recent
-                              ::specs/last-edge (if (not= 0 last-edge) recent last-edge)}))))))
+          :else (assoc-in (assoc state {::specs/last-edge (if (not= 0 last-edge) recent last-edge)})
+                          [::specs/flow-control ::specs/last-doubling
+                           ::specs/n-sec-per-block (quot n-sec-per-block 2)] recent))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -165,8 +182,7 @@
   Lines 458-541"
   [{:keys [::specs/recent]
     :as state}
-   {:keys [::specs/time]
+   {acked-time ::specs/time
     :as acked-block}]
-  (let [rtt (- recent time)
-        state (recalc-rtt-average state rtt)]
+  (let [state (recalc-rtt-average state acked-time)]
     (jacobson's-retransmission-timeout state)))

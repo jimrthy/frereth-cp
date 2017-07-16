@@ -16,6 +16,18 @@
 (set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
+(s/def ::delta-k nat-int?)
+(s/def ::max-k nat-int?)
+(s/def ::min-k nat-int?)
+(s/def ::max-rcvd nat-int?)
+(s/def ::start-stop-details (s/keys :req [::min-k
+                                          ::max-k
+                                          ::delta-k
+                                          ::max-rcvd]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Implementation
 
 (s/fdef deserialize
@@ -56,10 +68,14 @@
         (.capacity buf D'))
       (assoc header ::specs/buf buf))))
 
+(s/fdef calculate-start-stop-bytes
+        :args (s/cat :state ::specs/state
+                     :packet ::specs/packet)
+        :ret ::start-stop-details)
 (defn calculate-start-stop-bytes
   "calculate start/stop bytes (lines 562-574)"
-  [{:keys [::specs/receive-bytes
-           ::specs/receive-written]
+  [{{:keys [::specs/receive-bytes
+            ::specs/receive-written]} ::specs/incoming
     :as state}
    {^ByteBuf receive-buf ::specs/buf
     D ::specs/size-and-flags
@@ -121,8 +137,9 @@
                               0 false
                               normal-eof ::specs/normal
                               error-eof ::specs/error)
-                receive-total-bytes (if (not= SF 0)
-                                      stop-byte)]
+                ;; Note that this needs to update the "global state" because
+                ;; we've reached the end of the stream.
+                receive-total-bytes (when receive-eof stop-byte)]
             ;; 581-588: copy incoming into receivebuf
             (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
                   ;; Address at the limit of our buffer size
@@ -135,7 +152,11 @@
               {::min-k min-k
                ::max-k max-k
                ::delta-k delta-k
-               ::max-rcvd max-rcvd}))))
+               ::max-rcvd max-rcvd
+               ;; Yes, this might well be nil if there's no reason to "change"
+               ;; the "global state".
+               ;; This feels pretty hackish.
+               ::receive-total-bytes receive-total-bytes}))))
       (do
         (log/warn (str "Gibberish Message packet from parent. D == " D
                        "\nRemaining readable bytes: " message-length))
@@ -149,7 +170,7 @@
         :ret ::specs/state)
 (defn extract-message
   "Lines 562-593"
-  [{:keys [::specs/receive-bytes]
+  [{{:keys [::specs/receive-bytes]} ::specs/incoming
     :as state}
    {^ByteBuf receive-buf ::specs/buf
     D ::specs/size-and-flags
@@ -157,7 +178,8 @@
     :as packet}]
   (when-let [{:keys [::delta-k
                      ::max-rcvd
-                     ::min-k]
+                     ::min-k
+                     ::receive-total-bytes]
               ^Long max-k ::max-k} (calculate-start-stop-bytes state packet)]
     (let [;; It's tempting to use a Pooled buffer here instead.
           ;; That temptation is wrong.
@@ -227,15 +249,21 @@
 
       ;; The answer to this question is "it looks like that part hasn't been written/translated yet"
       (throw (RuntimeException. "Q: What is to-child expecting in terms of output-buffer?"))
-      (update state ::receive-bytes + (min (- max-rcvd receive-bytes)
-                                           (+ receive-bytes delta-k))))))
+      (-> state
+          (update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
+                                                                     (+ receive-bytes delta-k)))
+          (update-in [::specs/incoming ::specs/receive-total-bytes]
+                     (fn [cur]
+                       ;; calculate-start-stop-bytes might have an override for this
+                       (or receive-total-bytes
+                           cur)))))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn flag-acked-others!
   "Lines 544-560"
-  [{:keys [::specs/->child-buffer]
+  [{{:keys [::specs/->child-buffer]} ::specs/incoming
     :as state}
    packet]
   (let [indexes (map (fn [[startfn stopfn]]
@@ -263,17 +291,21 @@
              indexes)
      ::start-byte)))
 
+(s/fdef prep-send-ack
+        :args (s/cat :state ::state
+                     :msg-id (s/and int?
+                                    pos?))
+        :ret ::specs/buf)
 (defn prep-send-ack
   "Build a ByteBuf to ACK the message we just received
 
   Lines 595-606"
-  [{:keys [::specs/current-block-cursor
-           ::specs/receive-bytes
-           ::specs/receive-eof
-           ::specs/receive-total-bytes]
-    ^ByteBuf buf ::specs/send-buf
+  [{{:keys [::specs/receive-bytes
+            ::specs/receive-eof
+            ::specs/receive-total-bytes]} ::specs/incoming
     :as state}
    message-id]
+  ;; XXX: incorporate selective acknowledgments --DJB
   (when-not receive-bytes
     (throw (ex-info "Missing receive-bytes"
                     {::among (keys state)})))
@@ -284,7 +316,12 @@
   ;; the messaging protocol) has a scenario where the
   ;; child just hangs, waiting for an ACK to the ACKs
   ;; it sends 4 times a second.
-  (if (not= message-id 0)
+  (when (not= message-id 0)
+    ;; I think I've really mangled this up.
+    ;; Although DJB might have done this by mostly just
+    ;; mirroring back whatever we just received.
+
+    (throw (RuntimeException. "Either way, the way I'm overloading the sendbuf label here is wrong"))
     (let [send-buf (Unpooled/buffer K/send-byte-buf-size)
           u 192]
       ;; XXX: delay acknowledgments  --DJB
@@ -294,17 +331,15 @@
                                     (= receive-bytes receive-total-bytes))
                              (inc receive-bytes)
                              receive-bytes))
-      (assoc state ::specs/send-buf send-buf))
-    ;; XXX: incorporate selective acknowledgments --DJB
-    state))
+      send-buf)))
 
 (defn send-ack!
   "Write ACK buffer back to parent
 
 Line 608"
-  [{{:keys [::specs/->parent]} ::specs/callbacks
-    ^ByteBuf send-buf ::specs/send-buf
-    :as state}]
+  [{{:keys [::specs/->parent]} ::specs/outgoing
+    :as state}
+   ^ByteBuf send-buf]
   (if send-buf
     (do
       (when-not ->parent
@@ -322,8 +357,11 @@ Line 608"
 
   This seems like the interesting part.
   lines 444-609"
-  [{:keys [::specs/blocks
-           ::specs/->child-buffer]
+  [{{:keys [::specs/->child-buffer]} ::specs/incoming
+    ;; There's something drastically wrong here.
+    ;; Surely we aren't using the same 'blocks' area
+    ;; for both incoming and outgoing...are we?!
+    {:keys [::specs/blocks]} ::specs/outgoing
     :as state}]
   ;; Q: Do I want the first message here or the last?
   ;; Top A: There should be only one entry in child-buffer
@@ -349,16 +387,14 @@ Line 608"
             extracted (extract-message flagged packet)]
         (log/debug "extracted:" extracted)
         (if extracted
-          (let [msg-id (get-in extracted [::packet ::message-id])]
-            ;; Important detail that I haven't seen documented
-            ;; anywhere: message ID 0 is not legal.
-            (if (not= 0 msg-id)
-              (if-let [ack-prepped (prep-send-ack extracted)]
-                (do
-                  (send-ack! ack-prepped)
-                  (dissoc ack-prepped ::specs/send-buf))
-                extracted)
-              extracted))
+          (or
+           (let [msg-id (get-in extracted [::packet ::message-id])]
+             (when-let [ack-msg (prep-send-ack extracted msg-id)]
+               (send-ack! extracted ack-msg)
+               ;; since that's called for side-effects, ignore the
+               ;; return value.
+               extracted))
+           extracted)
           flagged)))
     (do
       (log/warn "Illegal incoming message length:" len)
@@ -371,10 +407,10 @@ Line 608"
         :args (s/cat :state ::specs/state)
         :ret (s/nilable ::specs/state))
 (defn try-processing-message
-  "436-614: try processing a message: --DJB"
-  [{:keys [::specs/->child-buffer
-           ::specs/receive-bytes
-           ::specs/receive-written]
+  "436-613: try processing a message: --DJB"
+  [{{:keys [::specs/->child-buffer
+            ::specs/receive-bytes
+            ::specs/receive-written]} ::specs/incoming
     :as state}]
   (let [child-buffer-count (count ->child-buffer)]
     (log/debug "from-parent/try-processing-message"
@@ -394,7 +430,7 @@ Line 608"
       ;; 440: sets maxblocklen=1024
       ;; Q: Why was it ever 512?
       ;; Guess: for initial Message part of Initiate packet
-      (let [state' (assoc state ::max-byte-length K/k-1)]
+      (let [state' (assoc-in state [::specs/incoming ::specs/max-byte-length] K/k-1)]
         (log/debug "Handling incoming message, if it's comprehensible")
         (handle-comprehensible-message state))
       state)))

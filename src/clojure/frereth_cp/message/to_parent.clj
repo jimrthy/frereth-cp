@@ -60,7 +60,7 @@
   ;;; Q: make this thread-safe?
 
   ;; It's tempting to use a direct buffer here, but that temptation
-  ;; would again be wrong.
+  ;; would probably be wrong.
   ;; Since this has to be converted to a ByteArray so it can be
   ;; encrypted.
   ;; OTOH, there's Norman Mauer's "Best Practices" that include
@@ -119,10 +119,10 @@
   Resending old block will goto this
 
   It's in the middle of a do {} while(0) loop"
-  [{:keys [::specs/current-block-cursor
-           ::specs/next-message-id
-           ::specs/recent
-           ::specs/send-buf-size]
+  [{:keys [::specs/recent]
+    {:keys [::specs/current-block-cursor
+            ::specs/next-message-id
+            ::specs/send-buf-size]} ::specs/outgoing
     :as state}]
 ;;;      382-404:  Build the message packet
 ;;;                N.B.: Ignores most of the ACK bits
@@ -144,30 +144,20 @@
             (update-in (conj cursor ::specs/transmissions) inc)
             (update-in (conj cursor ::specs/time) (constantly recent))
             (assoc-in (conj cursor ::specs/message-id) next-message-id)
-            (assoc ::next-message-id next-message-id))
-        block-to-send (get-in state' cursor)]
-    ;; TODO: Use compose for this next part?
+            (assoc-in [::specs/outgoing ::specs/next-message-id] next-message-id))
+        block-to-send (get-in state' cursor)
+        buf (build-message-block next-message-id block-to-send)]
 
-    ;; We need a prefix byte that tells the other end (/ length 16)
-    ;; I'm fairly certain that this extra up-front padding
-    ;; (writing it as a word) is to set
-    ;; up word alignment boundaries so the actual byte copies can proceed
-    ;; quickly.
-    ;; This extra length byte is a key part of the reference
-    ;; interface.
-    ;; Q: Does it make any sense in this context?
-    ;; A: Absolutely not.
-    (comment
-      (.writeLong buf (quot u 16)))
-
-    (let [buf (build-message-block next-message-id block-to-send)]
-        ;; Reference implementation waits until after the actual write before setting any of
-        ;; the next pieces. But it's a single-threaded process that's going to block at the write,
-        ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
-      (assoc state'
-             ::specs/last-block-time recent
-             ::specs/send-buf buf
-             ::specs/want-ping 0))))
+    ;; Reference implementation waits until after the actual write before setting any of
+    ;; the next pieces. But it's a single-threaded process that's going to block at the write,
+    ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
+    (update state'
+            ::specs/outgoing
+            (fn [cur]
+              (assoc cur
+                     ::specs/last-block-time recent
+                     ::specs/send-buf buf
+                     ::specs/want-ping 0)))))
 
 (s/fdef check-for-previous-block-to-resend
         :args ::specs/state
@@ -182,13 +172,13 @@
 ;;;           goto sendblock
 
 "
-  [{:keys [::specs/blocks
-           ::specs/earliest-time
-           ::specs/last-edge
-           ::specs/last-panic
-           ::specs/n-sec-per-block
-           ::specs/recent
-           ::specs/rtt-timeout]
+  [{:keys [::specs/recent]
+    {:keys [::specs/blocks
+            ::specs/earliest-time
+            ::specs/last-panic]} ::specs/outgoing
+    {:keys [::specs/last-edge
+            ::specs/n-sec-per-block
+            ::specs/rtt-timeout]} ::specs/flow-control
     :as state}]
   (assert (and earliest-time
                n-sec-per-block
@@ -202,20 +192,28 @@
     ;; It's going to re-send that block (it *does* exist...right?)
     ;; TODO: Need to verify that nothing fell through the cracks
     ;; But first, it might adjust some of the globals.
-    (reduce (fn [{:keys [::specs/current-block-cursor]
+    (reduce (fn [{{:keys [::specs/current-block-cursor]} ::specs/outgoing
                   :as acc}
                  block]
               (if (= earliest-time (::specs/time block))
+                ;; We found the block that interests up.
                 (reduced
                  (assoc
                   (if (> recent (+ last-panic (* 4 rtt-timeout)))
-                    (assoc state
-                           ::specs/n-sec-per-block (* n-sec-per-block 2)
-                           ::specs/last-panic recent
-                           ::specs/last-edge recent))))
-                (update-in acc [::specs/current-block-cursor 0] inc)))
-            (assoc state
-                   ::specs/current-block-cursor [0])
+                    ;; Need to update some of the related flow-control fields
+                    (-> state
+                        (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
+                        (assoc-in [::specs/outgoing ::specs/last-panic] recent)
+                        (assoc-in [::specs/flow-control ::specs/last-edge] recent))
+                    ;; We haven't had another timeout since the last-panic.
+                    ;; Don't adjust those dials.
+                    state)))
+                ;; We still haven't found what we're looking for.
+                ;; Proceed to the next block
+                (update-in acc [::specs/outgoing ::specs/current-block-cursor 0] inc)))
+            (assoc-in state
+                      [::specs/outgoing ::specs/current-block-cursor]
+                      [0])
             blocks)))
 
 (defn check-for-new-block-to-send
@@ -223,16 +221,18 @@
 
   357-378:  Sets up a new block to send
   Along w/ related data flags in parallel arrays"
-  [{:keys [::specs/blocks
-           ::specs/earliest-time
-           ::specs/n-sec-per-block
-           ::specs/recent
-           ::specs/send-acked
-           ::specs/send-bytes
-           ::specs/send-eof
-           ::specs/send-eof-processed
-           ::specs/send-processed
-           ::specs/want-ping]
+  [{:keys [::specs/recent]
+    {:keys [::specs/blocks
+            ::specs/earliest-time
+            ::specs/max-block-length
+            ::specs/send-acked
+            ::specs/send-bytes
+            ::specs/send-eof
+            ::specs/send-eof-processed
+            ::specs/send-processed
+            ::specs/want-ping]
+     :as outgoing} ::specs/outgoing
+    {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
   (when (and (>= recent (+ earliest-time n-sec-per-block))
              (< (count blocks) K/max-outgoing-blocks)
@@ -251,7 +251,7 @@
     ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
     (let [start-pos (+ send-acked send-processed)
           block-length (max (- send-bytes send-processed)
-                            K/max-block-length)
+                            max-block-length)
           ;; This next construct seems pretty ridiculous.
           ;; It's just assuring that (<= send-byte-buf-size (+ start-pos block-length))
           ;; The bitwise-and is a shortcut for module that used to be faster,
@@ -267,7 +267,7 @@
                 send-eof
                 false)
           ;; TODO: Use Pooled buffers instead!  <---
-          block {::specs/buf (Unpooled/buffer 1024)  ;; Q: How big should this be?
+          block {::specs/buf (Unpooled/buffer K/k-1)  ;; Q: How big should this be?
                  ::specs/length block-length
                  ::specs/send-eof eof
                  ::specs/start-pos start-pos
@@ -279,14 +279,18 @@
           ;; We're going to append this block to the end.
           ;; So we want don't want (dec length) here the
           ;; way you might expect.
-          cursor [(count (::specs/blocks state))]]
+          cursor [(count blocks)]]
       (-> state
-          (update ::specs/blocks conj block)
-          (update ::specs/send-processed + block-length)
-          (assoc ::specs/send-eof-processed (and (= send-processed send-bytes)
-                                                 send-eof
-                                                 true)
-                 ::specs/current-block-cursor cursor)))))
+          ;; TODO: Just update inside specs/outgoing and merge that back in
+          ;; over what we currently have
+          (update ::specs/outgoing
+                  (fn [cur]
+                    (-> cur
+                        (update ::specs/blocks conj block)
+                        (update ::specs/send-processed + block-length)
+                        (assoc ::specs/send-eof-processed (and (= send-processed send-bytes)
+                                                               send-eof)))))
+          (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))))
 
 (defn pick-next-block-to-send
   [state]
@@ -300,12 +304,12 @@
   "Actually send the message block to the parent
 
   Corresponds to line 404 under the sendblock: label"
-  [{{:keys [::specs/->parent]} ::specs/callbacks
-    ^ByteBuf send-buf ::specs/send-buf
+  [{{:keys [:specs/->parent]
+     ^ByteBuf send-buf ::specs/send-buf} ::specs/outgoing
     :as state}]
-  ;; Don't forget the special offset+7
-  ;; Although it probably doesn't make a lot of
-  ;; sense after switching to ByteBuf
+  ;; Note that I've ditched the special offset+7
+  ;; That kind of length calculation is just built
+  ;; into everything on the JVM.
   (when send-buf
     (->parent send-buf)))
 
@@ -321,12 +325,14 @@
   There's a lot going on in here."
   [state]
   (if-let [state' (pick-next-block-to-send state)]
-    (let [state'' (pre-calculate-state-after-send state')]
-      (block->parent! state'')
+    (let [state'' (pre-calculate-state-after-send state')
+          buf (build-message-block state'')]
+      (block->parent! buf)
 ;;;      408: earliestblocktime_compute()
       ;; TODO: Honestly, we could probably shave some time/effort by
       ;; just tracking the earliest block here instead of searching for
       ;; it in check-for-previous-block-to-resend
-      (dissoc (assoc state'' ::earliest-time (help/earliest-block-time (::blocks state'')))
-              ::specs/send-buf))
+      (assoc-in state''
+                [::specs/outgoing ::specs/earliest-time]
+                (help/earliest-block-time (get-in state'' [::specs/outgoing ::specs/blocks]))))
     state))
