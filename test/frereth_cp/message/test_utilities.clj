@@ -8,12 +8,16 @@
   incoming message buffer to ACK most of its pending
   sent blocks."
   []
-  (let [^ByteBuf buf (Unpooled/buffer 48)]
+  (let [^ByteBuf buf (Unpooled/buffer 48)
+        msg-id 161053530
+        ack-id 1798373271]
     ;; There are no .writeUnsigned??? methods
     ;; This seems problematic.
     ;; For this implementation, where we never bother
     ;; ACKing anything except the first block (immediately),
     ;; it probably doesn't matter.
+    (.writeInt buf msg-id)
+    (.writeInt buf ack-id)
     (.writeLong buf 56)   ; bytes in range #1
     (.writeInt buf 4)     ; bytes between ranges 1-2
     (.writeShort buf 256) ; bytes in range #1
@@ -25,6 +29,8 @@
     (.writeShort buf 16)  ; bytes in range #5
     (.writeShort buf 24)  ; bytes between ranges 5-6
     (.writeShort buf 32)  ; bytes in range #6
+    (.writeShort buf 0)   ; (bit-or D SUCC FAIL)
+    (.writeLong buf 0)    ; stream position of first byte in this message
     (let [bytes-acked (+ 56 256 25 8 16 32)
           now #_(System/nanoTime) 1234
           ;; To be safe, any test that uses these needs
@@ -80,6 +86,14 @@
                          ::specs/length 32
                          ::specs/time (- now 7)
                          ::specs/transmissions 7}]]   ; block 6
+      ;; I expect packet to decode to something along these lines:
+       {::specs/buf buf
+                 ;; Just picked something random
+                 ;; TODO: Also use something that would overflow
+                 ;; the 32-bit signed limit
+                 ::specs/message-id msg-id
+                 ::acked-message ack-id
+                 ::ack-length-1 56}
       {::packet buf
        ::specs/outgoing {::specs/blocks start-blocks
                          ::specs/earliest-time 0

@@ -1,5 +1,6 @@
 (ns frereth-cp.message.from-parent-test
   (:require [clojure.test :refer (deftest is testing)]
+            [clojure.tools.logging :as log]
             [frereth-cp.message.from-parent :as from-parent]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.message.test-utilities :as test-helpers])
@@ -22,15 +23,17 @@
 
 (deftest check-flacked-others
   (let [start-state (test-helpers/build-ack-flag-message-portion)
-        packet (::test-helpers/packet start-state)
+        raw-buffer (::test-helpers/packet start-state)
         start-state (dissoc ::test-helpers/packet)]
-    (let [{{:keys [::specs/blocks
+    (let [decoded-packet (from-parent/deserialize raw-buffer)
+          {{:keys [::specs/blocks
                    ::specs/send-acked
                    ::specs/send-bytes
                    ::specs/send-processed
                    ::specs/total-blocks
                    ::specs/total-block-transmissions]} ::specs/outgoing
-           :as flagged} (from-parent/flag-acked-others! start-state packet)
+           :as flagged} (from-parent/flag-acked-others! start-state decoded-packet)
+          ;; The ACKs specified in the incoming packet should drop the first two blocks
           expected-remaining-blocks (drop 2 (get-in start-state [::specs/outgoing ::specs/blocks]))]
       (try
         (let [dropped-block-length (reduce + 0
@@ -54,6 +57,9 @@
         (finally
           (doseq [b (get-in flagged [::specs/outgoing ::specs/blocks])]
             (.release (::specs/buf b))))))))
+(comment
+  (check-flacked-others)
+  )
 
 (deftest check-big-flacked-others
   ;; This needs to be expanded to match the behavior in check-flacked-others

@@ -47,7 +47,7 @@
                                                              ::specs/start-pos 0})]
           (is (= msg-len K/k-1))
           (is (= 1088 (.readableBytes buf)))
-          ;; TODO: Add a test that sends a gibberish message
+          ;; TODO: Add test that send a variety of gibberish message
           (let [wrote (future (message/parent-> state buf))
                 outcome (deref response 1000 ::timeout)]
             (if-let [err (agent-error state)]

@@ -259,37 +259,40 @@
                            cur)))))))
 
 (s/fdef flag-acked-others!
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :state ::specs/state
+                     :packet ::specs/packet)
         :ret ::specs/state)
 (defn flag-acked-others!
   "Lines 544-560"
   [{{:keys [::specs/->child-buffer]} ::specs/incoming
     :as state}
    packet]
-  (let [indexes (map (fn [[startfn stopfn]]
-                       [(startfn packet) (stopfn packet)])
-                     [[(constantly 0) ::specs/ack-length-1]            ;  0-8
-                      [::specs/ack-gap-1->2 ::specs/ack-length-2]      ; 16-20
-                      [::specs/ack-gap-2->3 ::specs/ack-length-3]      ; 22-24
-                      [::specs/ack-gap-3->4 ::specs/ack-length-4]      ; 26-28
-                      [::specs/ack-gap-4->5 ::specs/ack-length-5]      ; 30-32
-                      [::specs/ack-gap-5->6 ::specs/ack-length-6]])]   ; 34-36
-    (dissoc
+  (log/info "Top of flag-acked-others!" packet)
+  (let [gaps (map (fn [[startfn stopfn]]
+                    [(startfn packet) (stopfn packet)])
+                  [[(constantly 0) ::specs/ack-length-1] ;  0-8
+                   [::specs/ack-gap-1->2 ::specs/ack-length-2] ; 16-20
+                   [::specs/ack-gap-2->3 ::specs/ack-length-3] ; 22-24
+                   [::specs/ack-gap-3->4 ::specs/ack-length-4] ; 26-28
+                   [::specs/ack-gap-4->5 ::specs/ack-length-5] ; 30-32
+                   [::specs/ack-gap-5->6 ::specs/ack-length-6]])] ; 34-36
+    (log/info "Gaps:" gaps "\nState:" state)
+    (->
      (reduce (fn [{:keys [::stop-byte]
                    :as state}
                   [start stop]]
-               ;; This can't be right. Needs to be based on absolute
-               ;; stream addresses.
-               ;; Q: Doesn't it?
-               ;; A: Yes, definitely
+               (log/info "Next range:" start "to" stop)
+               ;; Note that this is based on absolute stream addresses
                (let [start-byte (+ stop-byte start)
                      stop-byte (+ start-byte stop)]
                  (assoc
+                  (log/debug "Marking bytes ack'd from" start-byte "to" stop-byte)
                   (help/mark-acknowledged! state start-byte stop-byte)
                   ::stop-byte stop-byte)))
              (assoc state ::stop-byte 0)
-             indexes)
-     ::start-byte)))
+             gaps)
+     ;; Ditch the temp key we used to track the stop point
+     (dissoc ::stop-byte))))
 
 (s/fdef prep-send-ack
         :args (s/cat :state ::state
@@ -432,5 +435,5 @@ Line 608"
       ;; Guess: for initial Message part of Initiate packet
       (let [state' (assoc-in state [::specs/incoming ::specs/max-byte-length] K/k-1)]
         (log/debug "Handling incoming message, if it's comprehensible")
-        (handle-comprehensible-message state))
+        (handle-comprehensible-message state'))
       state)))
