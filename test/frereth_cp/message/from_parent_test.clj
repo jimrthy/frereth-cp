@@ -22,11 +22,18 @@
         (.release buf)))))
 
 (deftest check-flacked-others
+  ;; This test is [still] failing with logic errors.
+  ;; I think this is probably because I botched up the starting
+  ;; conditions.
   (let [start-state (test-helpers/build-ack-flag-message-portion)
         raw-buffer (::test-helpers/packet start-state)
-        start-state (dissoc ::test-helpers/packet)]
-    (let [decoded-packet (from-parent/deserialize raw-buffer)
-          {{:keys [::specs/blocks
+        start-state (dissoc start-state ::test-helpers/packet)
+        decoded-packet (from-parent/deserialize raw-buffer)]
+    (log/debug "Calling failing flag-acked with\n"
+               start-state
+               "\nand\n"
+               decoded-packet)
+    (let [{{:keys [::specs/blocks
                    ::specs/send-acked
                    ::specs/send-bytes
                    ::specs/send-processed
