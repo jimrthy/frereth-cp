@@ -281,12 +281,9 @@
      (reduce (fn [{:keys [::stop-byte]
                    :as state}
                   [start stop]]
-               (log/info "Next range:" start "to" stop)
                ;; Note that this is based on absolute stream addresses
                (let [start-byte (+ stop-byte start)
                      stop-byte (+ start-byte stop)]
-                 (comment
-                   (log/debug "Marking bytes ack'd from" start-byte "to" stop-byte))
                  (assoc (help/mark-acknowledged! state start-byte stop-byte)
                               ::stop-byte
                               stop-byte)))

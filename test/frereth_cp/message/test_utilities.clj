@@ -8,7 +8,7 @@
   incoming message buffer to ACK most of its pending
   sent blocks."
   []
-  (let [^ByteBuf buf (Unpooled/buffer 48)
+  (let [^ByteBuf buf (.order (Unpooled/buffer 48) java.nio.ByteOrder/LITTLE_ENDIAN)
         msg-id 161053530
         ack-id 1798373271]
     ;; There are no .writeUnsigned??? methods
@@ -20,7 +20,7 @@
     (.writeInt buf ack-id)
     (.writeLong buf 56)   ; bytes in range #1
     (.writeInt buf 4)     ; bytes between ranges 1-2
-    (.writeShort buf 256) ; bytes in range #1
+    (.writeShort buf 256) ; bytes in range #2
     (.writeShort buf 7)   ; bytes between ranges 2-3
     (.writeShort buf 25)  ; bytes in range #3
     (.writeShort buf 32)  ; bytes between ranges 3-4

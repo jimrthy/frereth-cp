@@ -1,6 +1,7 @@
 (ns frereth-cp.message.helpers
   "Top-level message helpers"
   (:require [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
             [frereth-cp.message.specs :as specs])
   (:import io.netty.buffer.ByteBuf))
 
@@ -82,7 +83,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     :as state}
    start
    stop]
-  (println "Setting ACK flags on a" (class blocks))
+  (log/debug "Setting ACK flags on blocks with addresses from" start "to" stop)
   (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
@@ -90,7 +91,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     (let [acked (reduce (partial flag-acked-blocks start stop)
                         (assoc state ::n 0)
                         blocks)]
-      (println "Done w/ initial flag reduce:\n" acked)
+      (log/debug "Done w/ initial flag reduce:\n" acked)
       ;; To match the next block, the main point is to discard
       ;; the first sequence of blocks that have been ACK'd
       ;; drop-while seems obvious
@@ -103,8 +104,8 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                        sendbytes
 ;;;                        sendprocessed
 ;;;                        blockfirst
-      (let [[to-drop to-keep] (split-with #(= 0 (::specs/time %)) (::specs/blocks acked))
-            _ (println "Keeping:\n" to-keep "\n\n")
+      (let [[to-drop to-keep] (split-with #(= 0 (::specs/time %)) (get-in acked [::specs/outgoing ::specs/blocks]))
+            _ (log/debug "Keeping:\n" to-keep "\n\n")
             dropped-block-lengths (apply + (map ::specs/length to-drop))
             ;; TODO: Drop reliance on these
             state (-> acked
@@ -125,7 +126,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                     state)]
 ;;;           183: earliestblocktime_compute()
         (doseq [block to-drop]
-          (println "Releasing the buf associated with" block)
+          (log/debug "Releasing the buf associated with" block)
           (.release (::specs/buf block)))
         (assoc-in state [::specs/outgoing ::specs/earliest-time] (earliest-block-time blocks))))
     ;;; No change

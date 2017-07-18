@@ -3,7 +3,8 @@
             [clojure.tools.logging :as log]
             [frereth-cp.message.from-parent :as from-parent]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.test-utilities :as test-helpers])
+            [frereth-cp.message.test-utilities :as test-helpers]
+            [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest verify-block-collapse
@@ -30,9 +31,9 @@
         start-state (dissoc start-state ::test-helpers/packet)
         decoded-packet (from-parent/deserialize raw-buffer)]
     (log/debug "Calling failing flag-acked with\n"
-               start-state
+               (utils/pretty start-state)
                "\nand\n"
-               decoded-packet)
+               (utils/pretty decoded-packet))
     (let [{{:keys [::specs/blocks
                    ::specs/send-acked
                    ::specs/send-bytes
