@@ -74,17 +74,24 @@
         :ret ::start-stop-details)
 (defn calculate-start-stop-bytes
   "calculate start/stop bytes (lines 562-574)"
-  [{{:keys [::specs/receive-bytes
-            ::specs/receive-written]} ::specs/incoming
+  [{{:keys [;; We don't have a receive-buf in here.
+            ;; We *do* have :->child-buffer with state:
+            ;; ridx: 64, widx:1088, cap:1136
+            ;; That's actually the source buffer that
+            ;; we'll be reading from.
+            ;; ::specs/receive-buf
+            ::specs/receive-bytes
+            ::specs/receive-written]
+     :as incoming} ::specs/incoming
     :as state}
-   {^ByteBuf receive-buf ::specs/buf
+   {^ByteBuf incoming-buf ::specs/buf
     D ::specs/size-and-flags
     start-byte ::specs/start-byte
     :as packet}]
   (when-not D
     (throw (RuntimeException. (str "Missing ::specs/size-and-flags among\n" (keys packet)))))
-  (log/debug "D ==" D)
-  ;; If we've already received bytes...well, the reference
+  (log/debug "D ==" D "\nIncoming State:\n" incoming)
+  ;; If we're re-receiving bytes...well, the reference
   ;; implementation just discards them.
   ;; It would be safer to verify that the overlapping bits
   ;; match, since that sort of thing is an important attack
@@ -95,11 +102,11 @@
   ;; We're back to the "DJB thought it was safe" appeal to
   ;; authority.
   ;; So stick with the current approach for now.
-  (let [starting-point (.readerIndex receive-buf)
+  (let [starting-point (.readerIndex incoming-buf)
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
         D (- D SF)
-        message-length (.readableBytes receive-buf)]
+        message-length (.readableBytes incoming-buf)]
     (log/debug (str "Setting up initial read from position " starting-point)
                ": " D' " bytes")
     (if (and (<= D K/k-1)
@@ -117,21 +124,30 @@
       ;; start-byte and stop-byte are really addresses in the
       ;; message stream
       (let [stop-byte (+ D start-byte)]
-        (log/debug "Starting with ACK from" start-byte stop-byte)
-        ;; of course, flow control would avoid this case -- DJB
-        ;; Q: What does that mean? --JRG
+        (log/debug "Starting with ACK from" start-byte "to" stop-byte)
         ;; Q: Why are we writing to receive-buf?
         ;; A: receive-buf is a circular buffer of bytes past the
         ;; receive-bytes counter which holds bytes that have not yet
         ;; been forwarded along to the child.
+        ;; At least, that's the case in the reference implementation.
+        ;; In this scenario where I've ditched that circular buffer,
+        ;; it simply does not apply.
         (log/debug "receive-written:" receive-written
                    "\nstop-byte:" stop-byte
-                   ;; Have 48 writable bytes here.
-                   ;; I think I've managed to tangle up receive-buf.
-                   "\nreceive-buf length:" (.writableBytes receive-buf))
-        ;; That tears it. I need to split up the to/from buffer management.
-        (throw (RuntimeException. "Start here by splitting concerns"))
-        (when (<= stop-byte (+ receive-written (.writableBytes receive-buf)))
+                   ;; We aren't using this.
+                   ;; Big Q: Should we?
+                   ;; A: Maybe. It would save some GC.
+                   ;; "\nreceive-buf writable length:" (.writableBytes receive-buf)
+                   )
+
+        ;; of course, flow control would avoid this case -- DJB
+        ;; Q: What does that mean? --JRG
+        ;; Whatever it means:
+        ;; Note that both stop-byte and receive-written are absolute
+        ;; stream addresses. So we're just tossing messages for addresses
+        ;; that are too far past the last portion of that stream that
+        ;; we've passed along to the child.
+        (when (<= stop-byte (+ receive-written K/recv-byte-buf-size))
           ;; 576-579: SF (StopFlag? deals w/ EOF)
           (let [receive-eof (case SF
                               0 false
@@ -172,7 +188,7 @@
   "Lines 562-593"
   [{{:keys [::specs/receive-bytes]} ::specs/incoming
     :as state}
-   {^ByteBuf receive-buf ::specs/buf
+   {^ByteBuf incoming-buf ::specs/buf
     D ::specs/size-and-flags
     start-byte ::start-byte
     :as packet}]
@@ -220,8 +236,8 @@
       ;;    (< receive-written where (+ receive-written receive-buf-size))
 
       (when (pos? min-k)
-        (.skipBytes receive-buf min-k))
-      (.readBytes receive-buf output-buf max-k)
+        (.skipBytes incoming-buf min-k))
+      (.readBytes incoming-buf output-buf max-k)
       ;; Q: Do I just want to release it, since I'm done with it?
       ;; Except that I may not be. If this read would have overflowed
       ;; the buffer, max-k would have kept us from reading.
@@ -233,7 +249,7 @@
       ;; A: Well, it depends.
       ;; Honestly, we should should just be making a slice or
       ;; duplicate to avoid copying.
-      (.discardSomeReadBytes receive-buf)
+      (.discardSomeReadBytes incoming-buf)
       ;; TODO: Something with output-buf
 
       ;;          set the receivevalid flags
@@ -248,7 +264,8 @@
       ;; I'm fairly certain this is what that for loop amounts to
 
       ;; The answer to this question is "it looks like that part hasn't been written/translated yet"
-      (throw (RuntimeException. "Q: What is to-child expecting in terms of output-buffer?"))
+      ;; I'm still muddling concerns
+      (throw (RuntimeException. "Go look at the comments re: ::incoming in specs"))
       (-> state
           (update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
                                                                      (+ receive-bytes delta-k)))
@@ -264,8 +281,7 @@
         :ret ::specs/state)
 (defn flag-acked-others!
   "Lines 544-560"
-  [{{:keys [::specs/->child-buffer]} ::specs/incoming
-    :as state}
+  [state
    packet]
   (log/info "Top of flag-acked-others!" packet)
   (let [gaps (map (fn [[startfn stopfn]]
@@ -284,6 +300,10 @@
                ;; Note that this is based on absolute stream addresses
                (let [start-byte (+ stop-byte start)
                      stop-byte (+ start-byte stop)]
+                 ;; This seems like an awkward way to get state modified to
+                 ;; adjust the return value.
+                 ;; It actually fits perfectly, but it isn't as obvious as
+                 ;; I'd like.
                  (assoc (help/mark-acknowledged! state start-byte stop-byte)
                               ::stop-byte
                               stop-byte)))
@@ -359,15 +379,16 @@ Line 608"
   This seems like the interesting part.
   lines 444-609"
   [{{:keys [::specs/->child-buffer]} ::specs/incoming
-    ;; There's something drastically wrong here.
-    ;; Surely we aren't using the same 'blocks' area
-    ;; for both incoming and outgoing...are we?!
+    ;; It seems really strange to have anything that involves
+    ;; the outgoing blocks in here.
+    ;; But there's an excellent chance that the incoming message
+    ;; is going to ACK some or all of what we have pending in here.
     {:keys [::specs/blocks]} ::specs/outgoing
     :as state}]
   ;; Q: Do I want the first message here or the last?
   ;; Top A: There should be only one entry in child-buffer
-  (let [^ByteBuf msg (first ->child-buffer)
-        len (.readableBytes msg)]
+  (let [^bytes msg (first ->child-buffer)
+        len (count msg)]
     (when (< 1 (count ->child-buffer))
       ;; TODO: Keep this from happening.
       (log/warn "Multiple entries in child-buffer. This seems wrong."))

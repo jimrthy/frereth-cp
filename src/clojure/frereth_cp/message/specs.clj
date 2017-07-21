@@ -97,6 +97,7 @@
 (s/def ::ack-length-6 ::unsigned-short)
 (s/def ::size-and-flags ::unsigned-short)
 (s/def ::start-byte ::unsigned-long)
+;; This represents an actual message
 (s/def ::packet (s/keys :req [::message-id
                               ::acked-message
                               ::ack-length-1
@@ -131,7 +132,17 @@
 (s/def ::max-block-length nat-int?)
 
 ;; circular queue beyond receivewritten; size must be power of 2 --DJB
+;; This doesn't really make sense in a clojure/netty world --JRG
 (s/def ::receive-buf ::buf)
+;; These arrive over the wire. So should be
+;; ByteBuf instances.
+;; But we've had to decrypt them, which meant converting to
+;; byte arrays.
+;; So it's wasteful to temporarily convert them back, since
+;; they really need to proceed to the child as either byte
+;; arrays or possibly clojure vectors of bytes.
+;; (I'm still torn about that detail)
+(s/def ::->child-buffer (s/coll-of bytes?))
 ;; number of initial bytes fully received --DJB
 (s/def ::receive-bytes nat-int?)
 ;; total number of bytes in stream, if receiveeof --DJB
@@ -221,11 +232,25 @@
 ;; 2. Buffers of bytes from the parent that we have not
 ;;    yet managed to write to the child
 (s/def ::incoming (s/keys :req [::->child
+                                ;; I'm still mingling concerns, really.
+                                ;; We honestly have a pair of buffers here.
+                                ;; There's the ->child-buffer, which is
+                                ;; a vector of byte arrays that are ready
+                                ;; to be written to the child.
+                                ;; Then there should be something like
+                                ;; a parent->buffer that holds the raw
+                                ;; incoming bytes that have arrived
+                                ;; from the parent.
+                                ;; That byte array needs to be converted
+                                ;; into ::packet (which is currently only
+                                ;; set up to cope with ByteBuf) and then
+                                ;; processed onto ->child-buffer.
                                 ::->child-buffer
                                 ::receive-bytes
                                 ::receive-eof
                                 ::receive-total-bytes
-                                ::receive-written]))
+                                ::receive-written]
+                          :opt [::packet]))
 
 ;; 3. Buffers of bytes that we received from the child
 ;;    but the parent has not yet ACK'd

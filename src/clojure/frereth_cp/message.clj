@@ -185,7 +185,7 @@
   "Message block arrived from parent. We have work to do."
   [{{:keys [::specs/->child]} ::specs/incoming
     :as state}
-   buf]
+   ^bytes buf]
   (when-not ->child
     (throw (ex-info "Missing ->child"
                     {::callbacks (::specs/callbacks state)})))
@@ -202,6 +202,9 @@
                          ;; in at least 3 different places now
                          (assoc ::specs/recent (System/nanoTime))
                          ;; This is about sending from the child to parent
+                         ;; (No, that isn't why we're here, but it doesn't
+                         ;; hurt to check whether another block is
+                         ;; sendable)
                          to-parent/maybe-send-block!
                          ;; Next obvious piece is the "try receiving messages:"
                          ;; block.
@@ -416,11 +419,11 @@ Prior to that, it was limited to 4K.
   set off the main() event loop. Need to account for
   that fundamental strategic change"
   [state-agent
-   ^ByteBuf buf]
+   ^bytes buf]
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
 ;;;                    Copies bytes from incoming message buffer to message[][]
-  (let [incoming-size (.readableBytes buf)]
+  (let [incoming-size (count buf)]
     (when (= 0 incoming-size)
       ;; This is supposed to kill the entire process
       ;; TODO: Be more graceful
@@ -444,8 +447,8 @@ Prior to that, it was limited to 4K.
     (let [{{:keys [::specs/->child-buffer]} ::specs/incoming} @state-agent]
       (if (< (count ->child-buffer) max-child-buffer-size)
         (let [previously-buffered-message-bytes (reduce + 0
-                                                    (map (fn [^ByteBuf buf]
-                                                           (.readableBytes buf))
+                                                    (map (fn [^bytes buf]
+                                                           (count buf))
                                                          ->child-buffer))]
           ;; Probably need to do something with previously-buffered-message-bytes.
           ;; Definitely need to check the number of bytes that have not

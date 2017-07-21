@@ -14,10 +14,8 @@
 (deftest basic-echo
   (let [response (promise)
         parent-state (atom 0)
-        parent-cb (fn [_ rsp]
-                    (let [dst (byte-array (.readableBytes rsp))
-                          response-state @parent-state]
-                      (.getBytes rsp 0 dst)
+        parent-cb (fn [_ dst]
+                    (let [response-state @parent-state]
                       ;; Should get 2 callbacks here:
                       ;; 1. The ACK
                       ;; 2. The actual response
@@ -28,9 +26,9 @@
                       (when (= response-state 1)
                         (deliver response dst))
                       (swap! parent-state inc)))
-        child-cb (fn [state byte-buf]
+        child-cb (fn [state byte-array]
                    ;; Just echo it directly back
-                   (message/child-> state byte-buf))
+                   (message/child-> state byte-array))
         initialized (message/initial-state parent-cb child-cb)
         state (message/start! initialized)]
     (try
@@ -40,6 +38,7 @@
             ;; Just pick an arbitrary number
             message-id 25792]
         (is (= msg-len 1024))
+        ;; TODO: Switch to just passing along the byte array
         (.writeBytes src message-body)
         (let [buf (to-parent/build-message-block message-id {::specs/buf src
                                                              ::specs/length msg-len
