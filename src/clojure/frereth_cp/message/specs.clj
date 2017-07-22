@@ -133,8 +133,14 @@
 
 ;; circular queue beyond receivewritten; size must be power of 2 --DJB
 ;; This doesn't really make sense in a clojure/netty world --JRG
+;; Q: Can I just make it go away?
 (s/def ::receive-buf ::buf)
-;; These arrive over the wire. So should be
+;; Seq of byte arrays that are ready to write to the child.
+(s/def ::->child-buffer (s/coll-of bytes?))
+;; Raw byte array that just arrived from the parent.
+;; Needs to be parsed into a ::packet so the bytes in
+;; the message stream can be moved to ::->child-buffer
+;; This arrived over the wire. So should be
 ;; ByteBuf instances.
 ;; But we've had to decrypt them, which meant converting to
 ;; byte arrays.
@@ -142,7 +148,7 @@
 ;; they really need to proceed to the child as either byte
 ;; arrays or possibly clojure vectors of bytes.
 ;; (I'm still torn about that detail)
-(s/def ::->child-buffer (s/coll-of bytes?))
+(s/def ::parent->buffer bytes?)
 ;; number of initial bytes fully received --DJB
 (s/def ::receive-bytes nat-int?)
 ;; total number of bytes in stream, if receiveeof --DJB
@@ -231,7 +237,7 @@
 
 ;; 2. Buffers of bytes from the parent that we have not
 ;;    yet managed to write to the child
-(s/def ::incoming (s/keys :req [::->child
+(s/def ::incoming (s/keys :req [::->child  ; callback
                                 ;; I'm still mingling concerns, really.
                                 ;; We honestly have a pair of buffers here.
                                 ;; There's the ->child-buffer, which is
@@ -250,7 +256,8 @@
                                 ::receive-eof
                                 ::receive-total-bytes
                                 ::receive-written]
-                          :opt [::packet]))
+                          :opt [::packet
+                                ::parent->buffer]))
 
 ;; 3. Buffers of bytes that we received from the child
 ;;    but the parent has not yet ACK'd

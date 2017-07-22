@@ -31,15 +31,21 @@
 ;;; Internal Implementation
 
 (s/fdef deserialize
-        :args (s/cat :buf ::specs/buf)
+        :args (s/cat :buf bytes?)
         :ret ::specs/packet)
 (defn deserialize
   "Convert a raw message block into a message structure"
   ;; Important: there may still be overlap with previously read bytes!
   ;; (but that's a problem for downstream)
-  [^ByteBuf buf]
+  [^bytes buf]
   {:pre [buf]}
-  (let [buf (.order buf ByteOrder/LITTLE_ENDIAN)
+  (let [;; Q: How much of a performance hit do I take by
+        ;; wrapping this?
+        ;; Using decompose is nice and convenient here, but
+        ;; I can definitely see it cause problems.
+        ;; TODO: Benchmark!
+        buf (.order (Unpooled/wrappedBuffer buf)
+                    ByteOrder/LITTLE_ENDIAN)
         header (shared/decompose marshall/message-header-dscr buf)
         D (::specs/size-and-flags header)
         D' D
@@ -230,14 +236,14 @@
           ;; For the sake of API ease, it should probably be a vector
           ;; of bytes.
           ;; Or, at worst, a Byte Array.
-          output-buf (Unpooled/buffer D)]
+          output-buf (byte-array D)]
       ;;; There are at least a couple of curve balls in the air right here:
       ;; 1. Only write bytes at stream addresses(?)
       ;;    (< receive-written where (+ receive-written receive-buf-size))
 
       (when (pos? min-k)
         (.skipBytes incoming-buf min-k))
-      (.readBytes incoming-buf output-buf max-k)
+      (.readBytes incoming-buf output-buf 0 max-k)
       ;; Q: Do I just want to release it, since I'm done with it?
       ;; Except that I may not be. If this read would have overflowed
       ;; the buffer, max-k would have kept us from reading.
@@ -263,9 +269,6 @@
       ;;    child pipe.
       ;; I'm fairly certain this is what that for loop amounts to
 
-      ;; The answer to this question is "it looks like that part hasn't been written/translated yet"
-      ;; I'm still muddling concerns
-      (throw (RuntimeException. "Go look at the comments re: ::incoming in specs"))
       (-> state
           (update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
                                                                      (+ receive-bytes delta-k)))
@@ -273,7 +276,8 @@
                      (fn [cur]
                        ;; calculate-start-stop-bytes might have an override for this
                        (or receive-total-bytes
-                           cur)))))))
+                           cur)))
+          (update ::specs/->child-buffer conj output-buf)))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state
@@ -378,7 +382,7 @@ Line 608"
 
   This seems like the interesting part.
   lines 444-609"
-  [{{:keys [::specs/->child-buffer]} ::specs/incoming
+  [{{^bytes parent->buffer ::specs/parent->buffer} ::specs/incoming
     ;; It seems really strange to have anything that involves
     ;; the outgoing blocks in here.
     ;; But there's an excellent chance that the incoming message
@@ -387,21 +391,23 @@ Line 608"
     :as state}]
   ;; Q: Do I want the first message here or the last?
   ;; Top A: There should be only one entry in child-buffer
-  (let [^bytes msg (first ->child-buffer)
-        len (count msg)]
-    (when (< 1 (count ->child-buffer))
-      ;; TODO: Keep this from happening.
-      (log/warn "Multiple entries in child-buffer. This seems wrong."))
+  (let [len (count parent->buffer)]
     (if (and (>= len K/min-msg-len)
                (<= len K/max-msg-len))
-      (let [packet (deserialize msg)
+      (let [packet (deserialize parent->buffer)
             ack-id (::specs/acked-message packet)
             ;; Note that there's something terribly wrong if we
             ;; have multiple blocks with the same message ID.
             ;; Q: Isn't there?
             acked-blocks (filter #(= ack-id (::specs/message-id %))
                                  blocks)
-            flagged (-> (reduce flow-control/update-statistics state acked-blocks)
+            flagged (-> (reduce flow-control/update-statistics
+                                ;; Remove parent->buffer.
+                                ;; It's been parsed into packet
+                                (update state ::specs/incoming
+                                        dissoc
+                                       ::specs/parent->buffer)
+                                acked-blocks)
                         ;; That takes us down to line 544
                         (flag-acked-others! packet))
             ;; TODO: Combine these calls using either some version of comp
@@ -415,7 +421,10 @@ Line 608"
                (send-ack! extracted ack-msg)
                ;; since that's called for side-effects, ignore the
                ;; return value.
-               extracted))
+               (update extracted
+                          [::specs/incoming]
+                          dissoc
+                          ::specs/packet)))
            extracted)
           flagged)))
     (do
@@ -430,29 +439,41 @@ Line 608"
         :ret (s/nilable ::specs/state))
 (defn try-processing-message
   "436-613: try processing a message: --DJB"
+  ;; Q: Why is this in the public section?
   [{{:keys [::specs/->child-buffer
+            ::specs/parent->buffer
             ::specs/receive-bytes
             ::specs/receive-written]} ::specs/incoming
     :as state}]
   (let [child-buffer-count (count ->child-buffer)]
     (log/debug "from-parent/try-processing-message"
                "\nchild-buffer-count:" child-buffer-count
+               "\nparent->buffer count:" (count parent->buffer)
                "\nreceive-written:" receive-written
                "\nreceive-bytes:" receive-bytes)
-    (if-not (or (= 0 child-buffer-count)  ; any incoming messages to process?
-                ;; This next check includes an &&
-                ;; to verify that tochild is > 0 (I'm
-                ;; pretty sure that's just verifying that
-                ;; it's open)
-                ;; I think the point of this next check
-                ;; is back-pressure:
-                ;; If we have pending bytes from the parent that have not
-                ;; been written to the child, don't add more.
-                (< receive-written receive-bytes))
+    (if (or parent->buffer  ; new incoming message?
+            ;; any previously buffered incoming messages to finish
+            ;; processing?
+            (not= 0 child-buffer-count)
+            ;; This next check includes an &&
+            ;; to verify that tochild is > 0 (I'm
+            ;; pretty sure that's just verifying that
+            ;; the pipe is open)
+            ;; I think the point of this next check
+            ;; is back-pressure:
+            ;; If we have pending bytes from the parent that have not
+            ;; been written to the child, don't add more.
+            ;; Note that there's really an && close connected
+            ;; to this check: it quits mattering once the tochild
+            ;; pipe has been closed.
+            (>= receive-written receive-bytes))
       ;; 440: sets maxblocklen=1024
       ;; Q: Why was it ever 512?
       ;; Guess: for initial Message part of Initiate packet
       (let [state' (assoc-in state [::specs/incoming ::specs/max-byte-length] K/k-1)]
         (log/debug "Handling incoming message, if it's comprehensible")
         (handle-comprehensible-message state'))
-      state)))
+      (do
+        ;; Nothing to do.
+        (log/debug "False alarm. Nothing to be done")
+        state))))

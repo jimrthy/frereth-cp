@@ -182,7 +182,9 @@
   (trigger-io state))
 
 (defn trigger-from-parent
-  "Message block arrived from parent. We have work to do."
+  "Message block arrived from parent. We have work to do.
+
+  TODO: Move all of this into from-parent"
   [{{:keys [::specs/->child]} ::specs/incoming
     :as state}
    ^bytes buf]
@@ -197,7 +199,7 @@
   ;; data coming from the parent.
   (let [ready-to-ack (-> state
                          ;; Q: Are the next 2 lines worth their own functions?
-                         (update-in [::specs/incoming ::specs/->child-buffer] conj buf)
+                         (assoc-in [::specs/incoming ::specs/parent->buffer] buf)
                          ;; This one really seems so, since I'm calling it
                          ;; in at least 3 different places now
                          (assoc ::specs/recent (System/nanoTime))
@@ -404,10 +406,10 @@ Prior to that, it was limited to 4K.
 
 (s/fdef parent->
         :args (s/cat :state ::state-agent
-                     :buf ::specs/buf)
+                     :buf bytes?)
         :ret ::state-agent)
 (defn parent->
-  "Receive a ByteBuf from parent
+  "Receive a byte array from parent
 
   411-435: try receiving messages: (DJB)
 

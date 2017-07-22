@@ -43,16 +43,18 @@
         (let [buf (to-parent/build-message-block message-id {::specs/buf src
                                                              ::specs/length msg-len
                                                              ::specs/send-eof false
-                                                             ::specs/start-pos 0})]
+                                                             ::specs/start-pos 0})
+              packet-length (.readableBytes buf)
+              incoming (byte-array packet-length)]
           (is (= msg-len K/k-1))
-          (is (= 1088 (.readableBytes buf)))
+          (is (= 1088 packet-length))
+          (.readBytes buf incoming)
           ;; TODO: Add test that send a variety of gibberish message
-          (let [wrote (future (message/parent-> state buf))
+          (let [wrote (future (message/parent-> state incoming))
                 outcome (deref response 1000 ::timeout)]
             (if-let [err (agent-error state)]
               (do
                 (is (not err))
-                ;; I'm getting a NPE with no stack trace
                 (println (utils/get-stack-trace err)))
               (do
                 (is (not= outcome ::timeout))
