@@ -49,6 +49,7 @@
             ::specs/error K/error-eof)))
 
 (defn build-message-block
+  ;; TODO: Convert this to return a byte array
   ^ByteBuf [^Integer next-message-id
             {^Long start-pos ::specs/start-pos
              ;; TODO: Switch this to either a bytes or a clojure

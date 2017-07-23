@@ -177,7 +177,7 @@
 (s/def ::total-blocks int?)
 (s/def ::total-block-transmissions int?)
 
-(s/def ::callback (s/fspec :args (s/cat :buf ::buf)
+(s/def ::callback (s/fspec :args (s/cat :buf bytes?)
                            :ret boolean?))
 (s/def ::->child ::callback)
 (s/def ::child-> ::callback)

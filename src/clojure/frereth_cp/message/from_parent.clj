@@ -80,13 +80,7 @@
         :ret ::start-stop-details)
 (defn calculate-start-stop-bytes
   "calculate start/stop bytes (lines 562-574)"
-  [{{:keys [;; We don't have a receive-buf in here.
-            ;; We *do* have :->child-buffer with state:
-            ;; ridx: 64, widx:1088, cap:1136
-            ;; That's actually the source buffer that
-            ;; we'll be reading from.
-            ;; ::specs/receive-buf
-            ::specs/receive-bytes
+  [{{:keys [::specs/receive-bytes
             ::specs/receive-written]
      :as incoming} ::specs/incoming
     :as state}
@@ -163,6 +157,15 @@
                 ;; we've reached the end of the stream.
                 receive-total-bytes (when receive-eof stop-byte)]
             ;; 581-588: copy incoming into receivebuf
+
+            ;; This is broken:
+            ;; If (> start-byte receive-written), we have a gap.
+            ;; We really have to hang onto this packet until that
+            ;; gap is filled.
+            ;; TODO: Verify that I didn't just lose this in the translation.
+            ;; Or that it hasn't already been appropriately dealt with.
+            ;; Surely the reference implementation didn't make a mistake this epic.
+            (throw (RuntimeException. "Get back to this"))
             (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
                   ;; Address at the limit of our buffer size
                   max-rcvd (+ receive-written K/recv-byte-buf-size)
@@ -256,8 +259,6 @@
       ;; Honestly, we should should just be making a slice or
       ;; duplicate to avoid copying.
       (.discardSomeReadBytes incoming-buf)
-      ;; TODO: Something with output-buf
-
       ;;          set the receivevalid flags
       ;; 2. Update the receive-valid flag associated with each byte as we go
       ;;    The receivevalid array is declared with this comment:
@@ -277,6 +278,7 @@
                        ;; calculate-start-stop-bytes might have an override for this
                        (or receive-total-bytes
                            cur)))
+          ;;
           (update ::specs/->child-buffer conj output-buf)))))
 
 (s/fdef flag-acked-others!
@@ -320,7 +322,7 @@
         :args (s/cat :state ::state
                      :msg-id (s/and int?
                                     pos?))
-        :ret ::specs/buf)
+        :ret (s/nilable ::specs/buf))
 (defn prep-send-ack
   "Build a ByteBuf to ACK the message we just received
 
@@ -330,10 +332,11 @@
             ::specs/receive-total-bytes]} ::specs/incoming
     :as state}
    message-id]
+  {:pre [receive-bytes
+         (some? receive-eof)
+         receive-total-bytes
+         message-id]}
   ;; XXX: incorporate selective acknowledgments --DJB
-  (when-not receive-bytes
-    (throw (ex-info "Missing receive-bytes"
-                    {::among (keys state)})))
   ;; never acknowledge a pure acknowledgment --DJB
   ;; I've seen at least one email pointing out that the
   ;; author (Matthew Dempsky...he's the only person I've
@@ -342,15 +345,25 @@
   ;; child just hangs, waiting for an ACK to the ACKs
   ;; it sends 4 times a second.
   (when (not= message-id 0)
-    ;; I think I've really mangled this up.
-    ;; Although DJB might have done this by mostly just
-    ;; mirroring back whatever we just received.
-
-    (throw (RuntimeException. "Either way, the way I'm overloading the sendbuf label here is wrong"))
-    (let [send-buf (Unpooled/buffer K/send-byte-buf-size)
-          u 192]
+    (log/debug "Building an ACK for message" message-id)
+    ;; I'm concerned that I'm sending back gibberish.
+    ;; DJB reuses the incoming message that we're preparing
+    ;; to ACK, locked to 192 bytes.
+    ;; It seems like it probably doesn't matter, since this
+    ;; is purely an ACK, but I strongly suspect that I should
+    ;; at least 0 it all out.
+    ;; TODO: Get this from a pool.
+    ;; TODO: Switch to using a byte array
+    (let [send-buf (Unpooled/buffer (+ K/header-length
+                                       192))]
       ;; XXX: delay acknowledgments  --DJB
-      (.writeLong send-buf (quot u 16))
+      ;; 0 ID for pure ACK
+      ;; Q: Would doing
+      #_(.writeInt send-buf 0)
+      ;; be slower?
+      ;; It seems like making it explicit would be
+      ;; more clear
+      (.writerIndex send-buf 4)
       (.writeInt send-buf message-id)
       (.writeLong send-buf (if (and receive-eof
                                     (= receive-bytes receive-total-bytes))
@@ -390,10 +403,11 @@ Line 608"
     {:keys [::specs/blocks]} ::specs/outgoing
     :as state}]
   ;; Q: Do I want the first message here or the last?
-  ;; Top A: There should be only one entry in child-buffer
+  ;; Top A: There should be only one entry.
+  ;; That isn't a realistic expectation, though.
   (let [len (count parent->buffer)]
     (if (and (>= len K/min-msg-len)
-               (<= len K/max-msg-len))
+             (<= len K/max-msg-len))
       (let [packet (deserialize parent->buffer)
             ack-id (::specs/acked-message packet)
             ;; Note that there's something terribly wrong if we
@@ -416,20 +430,26 @@ Line 608"
         (log/debug "extracted:" extracted)
         (if extracted
           (or
-           (let [msg-id (get-in extracted [::packet ::message-id])]
+           (let [msg-id (::specs/message-id packet)]
+             (when-not msg-id
+               ;; Note that 0 is legal: that's a pure ACK.
+               ;; We just have to have something.
+               (throw (ex-info "Missing the incoming message-id"
+                               extracted)))
              (when-let [ack-msg (prep-send-ack extracted msg-id)]
-               (send-ack! extracted ack-msg)
-               ;; since that's called for side-effects, ignore the
+               (log/debug "Have an ACK to send back")
+               ;; since this is called for side-effects, ignore the
                ;; return value.
+               (send-ack! extracted ack-msg)
                (update extracted
-                          [::specs/incoming]
-                          dissoc
-                          ::specs/packet)))
+                       ::specs/incoming
+                       dissoc
+                       ::specs/packet)))
            extracted)
-          flagged)))
-    (do
-      (log/warn "Illegal incoming message length:" len)
-      nil)))
+          flagged))
+      (do
+        (log/warn "Illegal incoming message length:" len)
+        nil))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
