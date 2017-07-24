@@ -140,7 +140,7 @@ OTOH, I'm only using it for coping with the nonce.
     (possibly-2s-uncomplement-n n k)))
 
 (defn uint16-pack!
-  "Sets 4 bytes in dst (starting at offset n) to x"
+  "Sets 2 bytes in dst (starting at offset n) to x"
   [^bytes dst ^Long n ^Short x]
   (doseq [i (range n (+ n Short/BYTES))]
      (let [bits-to-shift (* (- i n) Byte/SIZE)]

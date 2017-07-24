@@ -69,6 +69,22 @@
   (check-flacked-others)
   )
 
+(deftest check-start-stop-calculation
+  (let [receive-bytes 1024
+        receive-written 1024
+        start-state (test-helpers/build-packet-with-message)
+        raw-buffer (::test-helpers/packet start-state)
+        start-state (dissoc start-state ::test-helpers/packet)
+        decoded-packet (from-parent/deserialize raw-buffer)]
+    (is (get-in start-state [::specs/incoming ::specs/receive-written])
+        (str "Missing receive-written among" (keys (::specs/incoming start-state))))
+    (let [calculated (from-parent/calculate-start-stop-bytes start-state decoded-packet)]
+      (is (not calculated)))))
+(comment
+  (-> (test-helpers/build-packet-with-message) ::specs/incoming keys)
+  )
+
+
 (deftest check-big-flacked-others
   ;; This needs to be expanded to match the behavior in check-flacked-others
   (testing "Values for big message streams"

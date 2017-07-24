@@ -84,6 +84,7 @@
             ::specs/receive-written]
      :as incoming} ::specs/incoming
     :as state}
+   ;; Q: Isn't this a byte array now?
    {^ByteBuf incoming-buf ::specs/buf
     D ::specs/size-and-flags
     start-byte ::specs/start-byte
@@ -165,14 +166,21 @@
             ;; TODO: Verify that I didn't just lose this in the translation.
             ;; Or that it hasn't already been appropriately dealt with.
             ;; Surely the reference implementation didn't make a mistake this epic.
-            (throw (RuntimeException. "Get back to this"))
+            #_(throw (RuntimeException. "Get back to this"))
             (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
                   ;; Address at the limit of our buffer size
                   max-rcvd (+ receive-written K/recv-byte-buf-size)
                   ^Long max-k (min D (- max-rcvd start-byte))
                   delta-k (- max-k min-k)]
               (assert (<= 0 max-k))
-              (assert (<= 0 delta-k))
+              (when-not (<= 0 delta-k)
+                (throw (ex-info "stop-byte before start-byte"
+                                {::max-k max-k
+                                 ::min-k min-k
+                                 ::D D
+                                 ::max-rcvd max-rcvd
+                                 ::start-byte start-byte
+                                 ::receive-written receive-written})))
 
               {::min-k min-k
                ::max-k max-k

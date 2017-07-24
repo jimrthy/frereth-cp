@@ -1,6 +1,7 @@
 (ns frereth-cp.message.test-utilities
   "Utility functions shared among different tests"
-  (:require [frereth-cp.message.specs :as specs])
+  (:require [frereth-cp.message.specs :as specs]
+            [frereth-cp.shared.bit-twiddling :as b-t])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (defn build-ack-flag-message-portion
@@ -85,16 +86,18 @@
                          ::specs/start-pos 440
                          ::specs/length 32
                          ::specs/time (- now 7)
-                         ::specs/transmissions 7}]]   ; block 6
+                         ::specs/transmissions 7}]   ; block 6
+          actual-array (byte-array (.readableBytes buf))]
+      (.getBytes buf 0 actual-array)
       ;; I expect packet to decode to something along these lines:
-       {::specs/buf buf
-                 ;; Just picked something random
-                 ;; TODO: Also use something that would overflow
-                 ;; the 32-bit signed limit
-                 ::specs/message-id msg-id
-                 ::acked-message ack-id
-                 ::ack-length-1 56}
-      {::packet buf
+      #_{::specs/buf actual-array
+       ;; Just picked something random
+       ;; TODO: Also use something that would overflow
+       ;; the 32-bit signed limit
+       ::specs/message-id msg-id
+       ::acked-message ack-id
+       ::ack-length-1 56}
+      {::packet actual-array
        ::specs/outgoing {::specs/blocks start-blocks
                          ::specs/earliest-time 0
                          ::specs/send-acked 0
@@ -102,3 +105,23 @@
                          ::specs/send-processed (* 2 bytes-acked)  ; 786
                          ::specs/total-block-transmissions 0
                          ::specs/total-blocks 0}})))
+
+(defn build-packet-with-message
+  ([size]
+   (let [{just-headers ::packet
+          :as raw} (build-ack-flag-message-portion)
+         packet (byte-array size)
+         ;; Account for the header and 16 bytes of NULL-padding
+         message-length (- size 48 16)
+         current-stream-address 2048]
+     (b-t/uint16-pack! packet 38 message-length)
+     ;; Start at the same place as the last bytes written to the child
+     (b-t/uint16-pack! packet 40 current-stream-address)
+     ;; And then the actual message bytes
+     (doseq [n (range message-length)]
+       (aset packet (+ 64 n)
+             (b-t/possibly-2s-complement-8 (rem n 256))))
+     (assoc-in raw
+               [::specs/incoming ::specs/receive-written] current-stream-address)))
+  ([]
+   (build-packet-with-message 192)))
