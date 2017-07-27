@@ -1,9 +1,11 @@
 (ns frereth-cp.message.from-parent-test
   (:require [clojure.test :refer (deftest is testing)]
             [clojure.tools.logging :as log]
+            [frereth-cp.message.constants :as K]
             [frereth-cp.message.from-parent :as from-parent]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.message.test-utilities :as test-helpers]
+            [frereth-cp.message.to-parent :as to-parent]
             [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
@@ -70,16 +72,58 @@
   )
 
 (deftest check-start-stop-calculation
-  (let [receive-bytes 1024
-        receive-written 1024
-        start-state (test-helpers/build-packet-with-message)
-        raw-buffer (::test-helpers/packet start-state)
-        start-state (dissoc start-state ::test-helpers/packet)
-        decoded-packet (from-parent/deserialize raw-buffer)]
-    (is (get-in start-state [::specs/incoming ::specs/receive-written])
-        (str "Missing receive-written among" (keys (::specs/incoming start-state))))
-    (let [calculated (from-parent/calculate-start-stop-bytes start-state decoded-packet)]
-      (is (not calculated)))))
+  (testing "Happy Path"
+    (testing "Initial message"
+      (let [size K/k-1
+            buf (Unpooled/buffer size)
+            ;; Just pick something arbitrary that's easy to identify.
+            ;; Not that it matters for the purposes of this test.
+            src (byte-array (take K/k-1 (repeat 3)))]
+        (.writeBytes buf src)
+        (let [^bytes pkt (to-parent/build-message-block 1 {::specs/start-pos 0
+                                                           ::specs/buf buf
+                                                           ::specs/length size
+                                                           ::specs/send-eof false})
+              decoded-packet (from-parent/deserialize pkt)
+              ;; Rubber meets the road.
+              ;; receive-bytes is the "number of initial bytes fully received"
+              ;; receive-written is "within receivebytes, number of bytes given to child"
+              start-state {::specs/incoming {::specs/receive-bytes 0
+                                             ::specs/receive-written 0}}
+              calculated (from-parent/calculate-start-stop-bytes start-state decoded-packet)]
+          (is (= #:frereth-cp.message.from-parent {:min-k 0
+                                                   :max-k size
+                                                   :delta-k size
+                                                   :max-rcvd K/k-128
+                                                   ;; The value here depends on the
+                                                   ;; send-eof flag.
+                                                   :receive-total-bytes nil}
+                 calculated)))))
+    (testing "Second message"
+      (is false "Start here")))
+  (testing "with a gap"
+    ;; TODO: Add a function that lets me specify a packet's stream address.
+    ;; Add another that takes the guesswork out of setting up the system state
+    ;; for building the packet in the first place.
+    ;; (i.e. which parts of state am I really using?)
+    ;; That should really just be a wrapper around my existing packet-generator
+    ;; code.
+    ;; That's probably just a new spec and then something like select-in and/or
+    ;; rename-keys.
+    ;; It seems like it would make a lot of sense to switch to using that pretty
+    ;; much everywhere I'm calling the existing version
+
+    ;; Bigger TODO: Write a couple of exe's for sandwiching the reference message
+    ;; implementation. In something with fast startup time. cljs and ruby both
+    ;; seem likely choices.
+    ;; That comment doesn't belong in here, but this part's going to stand out
+    ;; in a git diff, for now. So this seems like my best chance to remember
+    ;; it the next time I get a chance to look at it
+
+    ;; TODO: Make sure I've correctly replicated whatever DJB is doing
+    ;; with receivevalid. That has to be the magic secret sauce for coping
+    ;; with gaps.
+    (is true "Add a variation with a gap between the last byte written and the first byte in our stream")))
 (comment
   (-> (test-helpers/build-packet-with-message) ::specs/incoming keys)
   )

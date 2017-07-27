@@ -49,14 +49,15 @@
             ::specs/error K/error-eof)))
 
 (defn build-message-block
-  ;; TODO: Convert this to return a byte array
-  ^ByteBuf [^Integer next-message-id
-            {^Long start-pos ::specs/start-pos
-             ;; TODO: Switch this to either a bytes or a clojure
-             ;; vector of bytes.
-             ^ByteBuf buf ::specs/buf
-             :keys [::specs/length]
-             :as block-to-send}]
+  ^bytes [^Integer next-message-id
+          {^Long start-pos ::specs/start-pos
+           ;; TODO: Switch this to either a bytes or a clojure
+           ;; vector of bytes.
+           ;; Then again...the bit about tracking the current
+           ;; read position seems pretty worthwhile.
+           ^ByteBuf buf ::specs/buf
+           :keys [::specs/length]
+           :as block-to-send}]
   ;;; Lines 387-402
   ;;; Q: make this thread-safe?
 
@@ -76,7 +77,14 @@
                     (< K/k-1 length))
             (throw (AssertionError. (str "illegal block length: " length))))
         ;; ByteBuf instances default to BIG_ENDIAN, which is not what CurveCP uses
-        ;; TODO: Switch to a Pooled allocator
+        ;; It seems like it would be better to switch to a Pooled allocator
+        ;; Or, better yet, just start with a byte-array.
+        ;; It's not like there are a lot of aset calls to make here.
+        ;; And I have the functions in bit-twiddling that should
+        ;; correspond to the proper little-endian packing.
+        ;; Then again...this is something that really deserves some
+        ;; hefty bookmarking.
+        ;; TODO: That.
         send-buf (.order (Unpooled/buffer (+ u K/header-length))
                          java.nio.ByteOrder/LITTLE_ENDIAN)]
     ;; Q: Is this worth switching to shared/compose?
@@ -111,7 +119,7 @@
     (.markReaderIndex buf)
     (.writeBytes send-buf buf)
     (.resetReaderIndex buf)
-    send-buf))
+    (.array send-buf)))
 
 (defn pre-calculate-state-after-send
   "This is mostly setting up the buffer to do the send from child to parent

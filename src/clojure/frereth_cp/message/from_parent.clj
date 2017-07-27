@@ -44,35 +44,39 @@
         ;; Using decompose is nice and convenient here, but
         ;; I can definitely see it cause problems.
         ;; TODO: Benchmark!
-        buf (.order (Unpooled/wrappedBuffer buf)
-                    ByteOrder/LITTLE_ENDIAN)
-        header (shared/decompose marshall/message-header-dscr buf)
+        buf' (.order (Unpooled/wrappedBuffer buf)
+                     ByteOrder/LITTLE_ENDIAN)
+        header (shared/decompose marshall/message-header-dscr buf')
         D (::specs/size-and-flags header)
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
         D (- D SF)
-        zero-padding-count (- (.readableBytes buf)
+        zero-padding-count (- (.readableBytes buf')
                               D')]
     (when (nat-int? zero-padding-count)
       (when (pos? zero-padding-count)
-        (.skipBytes buf zero-padding-count))
-      ;; 2 approaches seem to make sense here:
+        (.skipBytes buf' zero-padding-count))
+      ;; 3 approaches seem to make sense here:
       ;; 1. Create a copy of buf and release the original,
       ;; trying to be memory efficient.
       (comment
-        (let [result (assoc header ::specs/buf (.copy buf))]
-          (.release buf)
+        (let [result (assoc header ::specs/buf (.copy buf'))]
+          (.release buf')
           result))
       ;; 2. Avoid the time overhead of making the copy.
       ;; If we don't release this very quickly, something
       ;; bigger/more important is drastically wrong.
-      ;; Going with option 2 for now
       ;; TODO: Try out this potential compromise:
       ;; (preliminary testing suggests that it should work)
       (comment
-        (.discardReadBytes buf)
-        (.capacity buf D'))
-      (assoc header ::specs/buf buf))))
+        (.discardReadBytes buf')
+        (.capacity buf' D'))
+      ;; 3. Just do these manipulations on the incoming
+      ;; byte-array (vector?) and avoid the overhead (?)
+      ;; of adding a ByteBuf to the mix
+
+      ;; Going with option 2 for now
+      (assoc header ::specs/buf buf'))))
 
 (s/fdef calculate-start-stop-bytes
         :args (s/cat :state ::specs/state
