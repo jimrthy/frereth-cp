@@ -21,6 +21,7 @@
 (s/def ::delta-k nat-int?)
 (s/def ::max-k nat-int?)
 (s/def ::min-k nat-int?)
+;; Q: What is this, really?
 (s/def ::max-rcvd nat-int?)
 (s/def ::start-stop-details (s/keys :req [::min-k
                                           ::max-k
@@ -108,6 +109,11 @@
   ;; authority.
   ;; So stick with the current approach for now.
   (let [starting-point (.readerIndex incoming-buf)
+        ;; For from-parent-test/check-start-stop-calculation:
+        ;; This is starting at position 112.
+        ;; Then 113.
+        ;; Then 112 again.
+        ;; Q: What gives?
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
         D (- D SF)
@@ -137,6 +143,11 @@
         ;; At least, that's the case in the reference implementation.
         ;; In this scenario where I've ditched that circular buffer,
         ;; it simply does not apply.
+        (comment) (throw (RuntimeException. "And there's my bug"))
+        ;; i.e. I was planning on replacing that circular buffer with
+        ;; something like a vector of byte arrays, but I must have
+        ;; gotten interrupted in mid-though and haven't actually
+        ;; gotten around to it.
         (log/debug "receive-written:" receive-written
                    "\nstop-byte:" stop-byte
                    ;; We aren't using this.

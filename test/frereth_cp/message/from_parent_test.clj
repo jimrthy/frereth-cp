@@ -71,19 +71,43 @@
   (check-flacked-others)
   )
 
+(defn build-message-block-description
+  ([^bytes src start-pos send-eof]
+   (let [size (count src)
+         buf (Unpooled/buffer size)]
+     (.writeBytes buf src)
+     {::specs/start-pos start-pos
+      ::specs/buf buf
+      ::specs/length size
+      ::specs/send-eof send-eof}))
+  ([^bytes src start-pos]
+   (build-message-block-description src 0 false))
+  ([^bytes src]
+   (build-message-block-description src 0)))
+
+(deftest check-descr-creation
+  ;; It's probably a bad sign that I've written a test for a
+  ;; test-helper function
+  (let [size K/k-div2
+        src (byte-array (take size (repeat 40)))
+        {:keys [::specs/buf ::specs/length ::specs/send-eof ::specs/start-pos]
+         :as dscr}
+        (build-message-block-description src K/k-2)]
+    (is (= 0 start-pos))
+    (is (= 512 length))
+    (is (not send-eof))
+    (is (= 512 (.readableBytes buf)))
+    (is (= 0 (.writableBytes buf)))))
+
 (deftest check-start-stop-calculation
   (testing "Happy Path"
-    (testing "Initial message"
+    (testing "Message 1"
       (let [size K/k-1
-            buf (Unpooled/buffer size)
             ;; Just pick something arbitrary that's easy to identify.
             ;; Not that it matters for the purposes of this test.
-            src (byte-array (take K/k-1 (repeat 3)))]
-        (.writeBytes buf src)
-        (let [^bytes pkt (to-parent/build-message-block 1 {::specs/start-pos 0
-                                                           ::specs/buf buf
-                                                           ::specs/length size
-                                                           ::specs/send-eof false})
+            src (byte-array (take K/k-1 (repeat 3)))
+            dscr (build-message-block-description src)]
+        (let [^bytes pkt (to-parent/build-message-block 1 dscr)
               decoded-packet (from-parent/deserialize pkt)
               ;; Rubber meets the road.
               ;; receive-bytes is the "number of initial bytes fully received"
@@ -98,33 +122,53 @@
                                                    ;; The value here depends on the
                                                    ;; send-eof flag.
                                                    :receive-total-bytes nil}
-                 calculated)))))
-    (testing "Second message"
-      (is false "Start here")))
+                 calculated))
+          (testing " - 2"
+            (try
+              (let [size (dec K/k-1)
+                    src (byte-array (take size (repeat 49)))
+                    dscr (build-message-block-description src)
+                    ^bytes pkt (to-parent/build-message-block 2 dscr)
+                    decoded-packet (from-parent/deserialize pkt)
+                    state' (update-in start-state
+                                      [::specs/incoming
+                                       ::specs/receive-bytes]
+                                      +
+                                      (::from-parent/delta-k calculated))
+                    calculated' (from-parent/calculate-start-stop-bytes state' decoded-packet)]
+                (is (= #:frereth-cp.message.from-parent {:min-k 0
+                                                         :max-k size
+                                                         :delta-k size
+                                                         :max-rcvd K/k-128
+                                                         :receive-total-bytes nil}
+                       calculated')))
+              (catch NullPointerException ex
+                (is (not ex) "Setting up calculation")))))))))
+
+(deftest start-with-gap
   (testing "with a gap"
-    ;; TODO: Add a function that lets me specify a packet's stream address.
-    ;; Add another that takes the guesswork out of setting up the system state
-    ;; for building the packet in the first place.
-    ;; (i.e. which parts of state am I really using?)
-    ;; That should really just be a wrapper around my existing packet-generator
-    ;; code.
-    ;; That's probably just a new spec and then something like select-in and/or
-    ;; rename-keys.
-    ;; It seems like it would make a lot of sense to switch to using that pretty
-    ;; much everywhere I'm calling the existing version
-
-    ;; Bigger TODO: Write a couple of exe's for sandwiching the reference message
-    ;; implementation. In something with fast startup time. cljs and ruby both
-    ;; seem likely choices.
-    ;; That comment doesn't belong in here, but this part's going to stand out
-    ;; in a git diff, for now. So this seems like my best chance to remember
-    ;; it the next time I get a chance to look at it
-
-    ;; TODO: Make sure I've correctly replicated whatever DJB is doing
-    ;; with receivevalid. That has to be the magic secret sauce for coping
-    ;; with gaps.
-    (is true "Add a variation with a gap between the last byte written and the first byte in our stream")))
+    (let [size K/k-div2
+          src (byte-array (take size (repeat 40)))
+          dscr (build-message-block-description src K/k-2)
+          ^bytes pkt (to-parent/build-message-block 3 dscr)
+          decoded-packet (from-parent/deserialize pkt)
+          state {::specs/incoming {::specs/receive-bytes K/k-1
+                                   ::specs/receive-written K/k-div2}}
+          calculated (from-parent/calculate-start-stop-bytes state decoded-packet)]
+      (is (not decoded-packet))
+      ;; TODO: Make sure I've correctly replicated whatever DJB is doing
+      ;; with receivevalid. That has to be the magic secret sauce for coping
+      ;; with gaps.
+      ;; Hmm. This passes.
+      ;; But is it really what I want in this scenario?
+      (is (= #:frereth-cp.message.from-parent {:min-k size
+                                               :max-k size
+                                               :delta-k 0
+                                               :max-rcvd (+ K/k-128 size)
+                                               :receive-total-bytes nil}
+             calculated)))))
 (comment
+  (check-start-stop-calculation)
   (-> (test-helpers/build-packet-with-message) ::specs/incoming keys)
   )
 
