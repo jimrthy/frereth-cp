@@ -108,6 +108,7 @@
   ;; We're back to the "DJB thought it was safe" appeal to
   ;; authority.
   ;; So stick with the current approach for now.
+  (throw (RuntimeException. "What's up with starting-point?"))
   (let [starting-point (.readerIndex incoming-buf)
         ;; For from-parent-test/check-start-stop-calculation:
         ;; This is starting at position 112.
@@ -143,11 +144,31 @@
         ;; At least, that's the case in the reference implementation.
         ;; In this scenario where I've ditched that circular buffer,
         ;; it simply does not apply.
+        ;; That does not make the decision to do that ditching correct.
+        ;; However, I can probably move forward successfully with this
+        ;; approach using a sorted-map (or possibly sorted-map-by)
+        ;; in place of the priority queue that seems like it would
+        ;; make sense.
+        ;; Or the buddy queue that DJB recommended initially.
+        ;; The key to this approach would be
+        ;; 1) receive message from parent
+        ;; 2) reduce of the buffer of received messages
+        ;; 3) forwarding the completed stream blocks to the child
+        ;; 4) finding a balance between
+        ;;    a) calling that over and over
+        ;;    b) memory copy churn
+        ;; 5) Consolidating new incoming blocks
+        ;; There's actually plenty of ripe fruit to pluck here.
         (comment) (throw (RuntimeException. "And there's my bug"))
         ;; i.e. I was planning on replacing that circular buffer with
         ;; something like a vector of byte arrays, but I must have
         ;; gotten interrupted in mid-though and haven't actually
         ;; gotten around to it.
+        ;; Actually, *is* this the/a problem?
+        ;; I shouldn't be doing any buffering here. Just deciding
+        ;; how much to read now.
+        ;; I'm 99% positive the existing implementation is broken
+        ;; in this way, but I definitely need to double check.
         (log/debug "receive-written:" receive-written
                    "\nstop-byte:" stop-byte
                    ;; We aren't using this.
