@@ -94,8 +94,7 @@
     D ::specs/size-and-flags
     start-byte ::specs/start-byte
     :as packet}]
-  (when-not D
-    (throw (RuntimeException. (str "Missing ::specs/size-and-flags among\n" (keys packet)))))
+  (assert D (str "Missing ::specs/size-and-flags among\n" (keys packet)))
   (log/debug "D ==" D "\nIncoming State:\n" incoming)
   ;; If we're re-receiving bytes...well, the reference
   ;; implementation just discards them.
@@ -162,7 +161,7 @@
         (comment) (throw (RuntimeException. "And there's my bug"))
         ;; i.e. I was planning on replacing that circular buffer with
         ;; something like a vector of byte arrays, but I must have
-        ;; gotten interrupted in mid-though and haven't actually
+        ;; gotten interrupted in mid-thought and haven't actually
         ;; gotten around to it.
         ;; Actually, *is* this the/a problem?
         ;; I shouldn't be doing any buffering here. Just deciding
@@ -209,7 +208,7 @@
                   ^Long max-k (min D (- max-rcvd start-byte))
                   delta-k (- max-k min-k)]
               (assert (<= 0 max-k))
-              (when-not (<= 0 delta-k)
+              (when (neg? delta-k)
                 (throw (ex-info "stop-byte before start-byte"
                                 {::max-k max-k
                                  ::min-k min-k
@@ -227,7 +226,7 @@
                ;; This feels pretty hackish.
                ::receive-total-bytes receive-total-bytes}))))
       (do
-        (log/warn (str "Gibberish Message packet from parent. D == " D
+        (log/warn (str "Too long message packet from parent. D == " D
                        "\nRemaining readable bytes: " message-length))
         ;; This needs to short-circuit.
         ;; Q: is there a better way to accomplish that?
@@ -258,8 +257,7 @@
           ;; about using it as a generic performance library).
           ;; It *is* tempting to retain the original direct
           ;; memory in which it arrived as long as possible. That approach
-          ;; would probably make a lot more sense if I were using a JNI
-          ;; layer for encryption.
+          ;; might make sense if I were using a JNI layer for encryption.
           ;; As it stands, we've already stomped all over the source
           ;; memory long before it got here.
 
@@ -288,6 +286,9 @@
       ;; 1. Only write bytes at stream addresses(?)
       ;;    (< receive-written where (+ receive-written receive-buf-size))
 
+      ;; Q: Why haven't I converted incoming-buf to a vector of bytes?
+      ;; Or even a byte-array?
+      ;; Using a ByteBuf here doesn't make any sense.
       (when (pos? min-k)
         (.skipBytes incoming-buf min-k))
       (.readBytes incoming-buf output-buf 0 max-k)
@@ -300,8 +301,8 @@
       ;; (assuming previous code did a sanity check for our buffer max)
       ;; Bigger Q: Shouldn't I just discard it completely?
       ;; A: Well, it depends.
-      ;; Honestly, we should should just be making a slice or
-      ;; duplicate to avoid copying.
+      ;; Honestly, we should should just be making a slice
+      ;; to avoid copying.
       (.discardSomeReadBytes incoming-buf)
       ;;          set the receivevalid flags
       ;; 2. Update the receive-valid flag associated with each byte as we go
@@ -314,6 +315,7 @@
       ;;    child pipe.
       ;; I'm fairly certain this is what that for loop amounts to
 
+      (throw (RuntimeException. "Consolidation"))
       (-> state
           (update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
                                                                      (+ receive-bytes delta-k)))
@@ -322,7 +324,12 @@
                        ;; calculate-start-stop-bytes might have an override for this
                        (or receive-total-bytes
                            cur)))
-          ;;
+          (update-in [::specs/incoming ::specs/gap-buffer]
+                     assoc
+                     ;; This needs to be the absolute stream position of the values that are left
+                     [(+ start-byte min-k) (+ start-byte max-k)]
+                     incoming-buf)
+          ;; TODO: Need to consolidate buffer slices that just got filled
           (update ::specs/->child-buffer conj output-buf)))))
 
 (s/fdef flag-acked-others!

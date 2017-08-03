@@ -52,6 +52,7 @@
 ;;; Corresponds to blocktransmissions[]
 (s/def ::transmissions int?)
 
+;; This is really block from the child
 (s/def ::block (s/keys :req [::buf
                              ;; We already have length in ::buf, under .getReadableBytes.
                              ;; It would save space and be less error prone to just use
@@ -69,9 +70,12 @@
                              ::transmissions]))
 ;; I'd prefer to implement this as a set instead of a vector.
 ;; Q: what then happens when ::buf changes?
+;; Honestly, it should probably be a priority queue that's
+;; sorted by ::time.
 (s/def ::blocks (s/and (s/coll-of ::block)
                        #(= (rem (count %) 2) 0)))
 ;; How to find the current ::block inside a ::state
+;; Q: Do I want to be more specific about this?
 (s/def ::current-block-cursor (s/coll-of (s/or :vec-index nat-int?
                                                :map-key keyword?)))
 
@@ -97,7 +101,7 @@
 (s/def ::ack-length-6 ::unsigned-short)
 (s/def ::size-and-flags ::unsigned-short)
 (s/def ::start-byte ::unsigned-long)
-;; This represents an actual message
+;; This represents an actual message from the parent
 (s/def ::packet (s/keys :req [::message-id
                               ::acked-message
                               ::ack-length-1
@@ -150,11 +154,20 @@
 ;; (I'm still torn about that detail)
 (s/def ::parent->buffer bytes?)
 ;; number of initial bytes fully received --DJB
+;; I'm 90% certain this is the last address in the
+;; stream of contiguous bytes that have arrived from the
+;; parent.
+;; i.e. it stops at gaps which block forwarding to the child.
 (s/def ::receive-bytes nat-int?)
 ;; total number of bytes in stream, if receiveeof --DJB
 (s/def ::receive-total-bytes int?)
 ;; within receivebytes, number of bytes given to child -- DJB
 (s/def ::receive-written nat-int?)
+
+(s/def ::strm-strt-addr nat-int?)
+(s/def ::strm-stop-addr nat-int?)
+(s/def ::gap-buffer-key (s/tuple ::strm-strt-addr ::strm-stop-addr))
+(s/def ::gap-buffer (s/map-of ::gap-buffer-key ::buf))
 
 ;;; These next 5 really swirld around the sendbuf array/circular queue
 ;; Need something to act as the array that backs the circular buffer.
@@ -252,6 +265,7 @@
                                 ;; set up to cope with ByteBuf) and then
                                 ;; processed onto ->child-buffer.
                                 ::->child-buffer
+                                ::gap-buffer
                                 ::receive-bytes
                                 ::receive-eof
                                 ::receive-total-bytes
