@@ -159,15 +159,6 @@
         ;; 5) Consolidating new incoming blocks
         ;; There's actually plenty of ripe fruit to pluck here.
         (comment) (throw (RuntimeException. "And there's my bug"))
-        ;; i.e. I was planning on replacing that circular buffer with
-        ;; something like a vector of byte arrays, but I must have
-        ;; gotten interrupted in mid-thought and haven't actually
-        ;; gotten around to it.
-        ;; Actually, *is* this the/a problem?
-        ;; I shouldn't be doing any buffering here. Just deciding
-        ;; how much to read now.
-        ;; I'm 99% positive the existing implementation is broken
-        ;; in this way, but I definitely need to double check.
         (log/debug "receive-written:" receive-written
                    "\nstop-byte:" stop-byte
                    ;; We aren't using this.
@@ -194,14 +185,6 @@
                 receive-total-bytes (when receive-eof stop-byte)]
             ;; 581-588: copy incoming into receivebuf
 
-            ;; This is broken:
-            ;; If (> start-byte receive-written), we have a gap.
-            ;; We really have to hang onto this packet until that
-            ;; gap is filled.
-            ;; TODO: Verify that I didn't just lose this in the translation.
-            ;; Or that it hasn't already been appropriately dealt with.
-            ;; Surely the reference implementation didn't make a mistake this epic.
-            #_(throw (RuntimeException. "Get back to this"))
             (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
                   ;; Address at the limit of our buffer size
                   max-rcvd (+ receive-written K/recv-byte-buf-size)
@@ -232,11 +215,11 @@
         ;; Q: is there a better way to accomplish that?
         nil))))
 
-(s/fdef extract-message
+(s/fdef extract-message!
         :args (s/cat :state ::specs/state
                      :receive-buf ::specs/buf)
         :ret ::specs/state)
-(defn extract-message
+(defn extract-message!
   "Lines 562-593"
   [{{:keys [::specs/receive-bytes]} ::specs/incoming
     :as state}
@@ -314,8 +297,6 @@
       ;;    It's cleared on line 630, after we've written the bytes to the
       ;;    child pipe.
       ;; I'm fairly certain this is what that for loop amounts to
-
-      (throw (RuntimeException. "Consolidation"))
       (-> state
           (update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
                                                                      (+ receive-bytes delta-k)))
@@ -438,10 +419,10 @@ Line 608"
       (->parent send-buf))
     (log/debug "No bytes to send...presumably we just processed a pure ACK")))
 
-(s/fdef handle-comprehensible-message
+(s/fdef handle-comprehensible-message!
         :args (s/cat :state ::specs/state)
         :ret (s/nilable ::specs/state))
-(defn handle-comprehensible-message
+(defn handle-comprehensible-message!
   "handle this message if it's comprehensible: (DJB)
 
   This seems like the interesting part.
@@ -459,6 +440,8 @@ Line 608"
   (let [len (count parent->buffer)]
     (if (and (>= len K/min-msg-len)
              (<= len K/max-msg-len))
+      ;; TODO: Combine these calls using either some version of comp
+      ;; or as->
       (let [packet (deserialize parent->buffer)
             ack-id (::specs/acked-message packet)
             ;; Note that there's something terribly wrong if we
@@ -475,9 +458,7 @@ Line 608"
                                 acked-blocks)
                         ;; That takes us down to line 544
                         (flag-acked-others! packet))
-            ;; TODO: Combine these calls using either some version of comp
-            ;; or ->>
-            extracted (extract-message flagged packet)]
+            extracted (extract-message! flagged packet)]
         (log/debug "extracted:" extracted)
         (if extracted
           (or
@@ -485,6 +466,8 @@ Line 608"
              (when-not msg-id
                ;; Note that 0 is legal: that's a pure ACK.
                ;; We just have to have something.
+               ;; (This comment is because I have to keep remembering
+               ;; how truthiness works in C)
                (throw (ex-info "Missing the incoming message-id"
                                extracted)))
              (when-let [ack-msg (prep-send-ack extracted msg-id)]
@@ -505,10 +488,10 @@ Line 608"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(s/fdef try-processing-message
+(s/fdef try-processing-message!
         :args (s/cat :state ::specs/state)
         :ret (s/nilable ::specs/state))
-(defn try-processing-message
+(defn try-processing-message!
   "436-613: try processing a message: --DJB"
   ;; Q: Why is this in the public section?
   [{{:keys [::specs/->child-buffer
@@ -543,7 +526,7 @@ Line 608"
       ;; Guess: for initial Message part of Initiate packet
       (let [state' (assoc-in state [::specs/incoming ::specs/max-byte-length] K/k-1)]
         (log/debug "Handling incoming message, if it's comprehensible")
-        (handle-comprehensible-message state'))
+        (handle-comprehensible-message! state'))
       (do
         ;; Nothing to do.
         (log/debug "False alarm. Nothing to be done")
