@@ -18,6 +18,40 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+;; The caller needs to verify that the gap-buffer's start
+;; is < receive-bytes.
+;; Well, it does, because it can short-circuit a reduce
+;; if that's the case.
+;; It seems like it would be nice to be able to spec that
+;; here for the sake of generative testing.
+;; I think I can get away with s/and, though I'll probably
+;; be forced to get fancy with the generator
+;; TODO: Ask about how.
+(s/fdef consolidate-message-block
+        :args (s/cat :incoming ::specs/incoming
+                     :gap-buffer (s/tuple ::specs/gap-buffer-key ::specs/buf))
+        :ret ::specs/incoming)
+(defn consolidate-message-block
+  "Move the parts of the gap-buffer that are ready to write to child"
+  [{:keys [::specs/->child-buffer
+           ::specs/receive-bytes]
+    :as incoming}
+   [[[start stop]
+     :as gap-buffer-key]
+    buf]]
+  ;; For now, this top-level if check is redundant.
+  ;; I'd rather be safe and trust the JVM that remove it
+  ;; under the assumption that callers will be correct.
+  ;; Even though I'm the only caller at the moment, this
+  ;; is a detail I don't trust in myself.
+  (if (<= start receive-bytes)
+    ;; Q: Did a previous message overwrite this message block?
+    (if (<= stop receive-bytes)
+      ;; Skip this message block
+      (update incoming ::specs/gap-buffer (partial drop 1))
+      ;; Consolidate this message block
+      (throw (RuntimeException. "Write this")))))
+
 (s/fdef consolidate-gap-buffer
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
@@ -27,10 +61,22 @@
   ;; which seems like a better choice.
   [{:keys [::specs/incoming]
     :as state}]
-  (let [{:keys [::specs/->child-buffer
-                ::specs/gap-buffer
-                ::specs/receive-bytes]} incoming]
-    (throw (RuntimeException. "Write this"))))
+  ;; TODO: Needs unit tests!
+  ;; This seems to be begging for generative testing
+  (let [{:keys [::specs/gap-buffer]} incoming]
+    (assoc state
+           ::specs/incoming
+           (reduce (fn [{:keys [::specs/->child-buffer
+                                ::specs/receive-bytes]
+                         :as acc}
+                        [[[start stop] k] buf]]
+                     ;; Q: Have we filled an existing gap?
+                     (if (<= start receive-bytes)
+                       (consolidate-message-block acc buf)
+                       ;; There's another gap. Move on
+                       (reduced acc)))
+                   incoming
+                   gap-buffer))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
