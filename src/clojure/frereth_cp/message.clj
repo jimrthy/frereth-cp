@@ -283,6 +283,7 @@
                                  ::specs/rtt-timeout K/sec->n-sec}
            ::specs/incoming {::specs/->child child-callback
                              ::specs/->child-buffer []
+                             ::specs/gap-buffer (to-child/build-gap-buffer)
                              ::specs/receive-bytes 0
                              ::specs/receive-eof false
                              ::specs/receive-total-bytes 0

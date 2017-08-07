@@ -34,23 +34,30 @@
 (defn consolidate-message-block
   "Move the parts of the gap-buffer that are ready to write to child"
   [{:keys [::specs/->child-buffer
-           ::specs/receive-bytes]
+           ::specs/receive-bytes
+           ::specs/gap-buffer]
     :as incoming}
-   [[[start stop]
-     :as gap-buffer-key]
-    buf]]
-  ;; For now, this top-level if check is redundant.
-  ;; I'd rather be safe and trust the JVM that remove it
-  ;; under the assumption that callers will be correct.
-  ;; Even though I'm the only caller at the moment, this
-  ;; is a detail I don't trust in myself.
-  (if (<= start receive-bytes)
-    ;; Q: Did a previous message overwrite this message block?
-    (if (<= stop receive-bytes)
-      ;; Skip this message block
-      (update incoming ::specs/gap-buffer (partial drop 1))
-      ;; Consolidate this message block
-      (throw (RuntimeException. "Write this")))))
+   k-v-pair]
+  (let [[[start stop] buf] k-v-pair]
+    ;; For now, this top-level if check is redundant.
+    ;; I'd rather be safe and trust the JVM that remove it
+    ;; under the assumption that callers will be correct.
+    ;; Even though I'm the only caller at the moment, this
+    ;; is a detail I don't trust in myself.
+    (if (<= start receive-bytes)
+      ;; Q: Did a previous message overwrite this message block?
+      (if (<= stop receive-bytes)
+        ;; Skip this message block
+        (update incoming ::specs/gap-buffer (partial drop 1))
+        ;; Consolidate this message block
+        (let [bytes-to-skip (- receive-bytes start)]
+          (when (< 0 bytes-to-skip)
+            (.skipBytes buf bytes-to-skip))
+          (log/debug "Dropping first entry from " (::specs/gap-buffer incoming))
+          (-> incoming
+              (update ::specs/gap-buffer (partial drop 1))
+              (update ::specs/->child-buffer conj buf)
+              (update ::specs/receive-bytes (constantly stop))))))))
 
 (s/fdef consolidate-gap-buffer
         :args (s/cat :state ::specs/state)
@@ -66,8 +73,7 @@
   (let [{:keys [::specs/gap-buffer]} incoming]
     (assoc state
            ::specs/incoming
-           (reduce (fn [{:keys [::specs/->child-buffer
-                                ::specs/receive-bytes]
+           (reduce (fn [{:keys [::specs/receive-bytes]
                          :as acc}
                         [[[start stop] k] buf]]
                      ;; Q: Have we filled an existing gap?
@@ -80,6 +86,12 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(s/fdef build-gap-buffer
+        :ret ::specs/gap-buffer)
+(defn build-gap-buffer
+  []
+  (sorted-map))
 
 (s/fdef forward!
   :args (s/cat :->child ::specs/->child

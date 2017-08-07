@@ -264,6 +264,14 @@
                                 ;; into ::packet (which is currently only
                                 ;; set up to cope with ByteBuf) and then
                                 ;; processed onto ->child-buffer.
+                                ;; OTOH:
+                                ;; Q: Why not just maintain the gap-buffer
+                                ;; in the same spot?
+                                ;; When it's time to write to the child,
+                                ;; "consolidate" the gaps by writing
+                                ;; everything that's sequential and updating
+                                ;; ::receive-bytes.
+                                ;; That approach seems easy-peasy.
                                 ::->child-buffer
                                 ::gap-buffer
                                 ::receive-bytes
