@@ -32,7 +32,12 @@
                      :gap-buffer (s/tuple ::specs/gap-buffer-key ::specs/buf))
         :ret ::specs/incoming)
 (defn consolidate-message-block
-  "Move the parts of the gap-buffer that are ready to write to child"
+  "Move the parts of the gap-buffer that are ready to write to child
+
+  Really only meant as a helper refactored out of consolidate-gap-buffer"
+  ;; @param incoming: Really an accumulator inside a reduce
+  ;; @param k-v-pair:
+  ;; @return modified accumulator
   [{:keys [::specs/->child-buffer
            ::specs/receive-bytes
            ::specs/gap-buffer]
@@ -57,6 +62,7 @@
           (-> incoming
               (update ::specs/gap-buffer (partial drop 1))
               (update ::specs/->child-buffer conj buf)
+              ;; TODO: Compare performance w/ using assoc here
               (update ::specs/receive-bytes (constantly stop))))))))
 
 (s/fdef consolidate-gap-buffer
@@ -81,6 +87,7 @@
                        (consolidate-message-block acc buf)
                        ;; There's another gap. Move on
                        (reduced acc)))
+                   ;; TODO: Experiment with using a transient for this
                    incoming
                    gap-buffer))))
 
