@@ -52,7 +52,7 @@
         incoming (assoc-in incoming [::specs/gap-buffer g-b-key] contents)]
     (testing "Baseline"
       ;; The newly-arrived gap-buffer matches what we have in incoming.
-      ;; This feels backwords.
+      ;; This feels backwards.
       ;; The real problem, from that angle, is that this is testing
       ;; a fn I refactored out of a nested reduce.
       ;; incoming is the accumulator.
@@ -77,12 +77,8 @@
         (testing "Nothing new for child"
           (is (= 0 (count ->child-buffer))))
         (testing "receive-bytes didn't move"
-          ;; Actually, this *should* have gotten updated to 15.
-          ;; This probably points out a bug in the current implementation.
-          ;; Or, more likely, the test: having the gap-buffer start
-          ;; at receive-bytes should not be a legal start state.
-          (is (= 15 receive-bytes)))
-        (testing "Gap buffer still really should have consolidated"
+          (is (= 10 receive-bytes)))
+        (testing "Gap buffer didn't change"
           ;; The thing about this test is that it really should have
           ;; a1) Moved this buffer into ->child-buffer
           ;; b1) Updated receive-bytes

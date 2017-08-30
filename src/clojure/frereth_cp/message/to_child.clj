@@ -36,7 +36,7 @@
 
   Really only meant as a helper refactored out of consolidate-gap-buffer"
   ;; @param incoming: Really an accumulator inside a reduce
-  ;; @param k-v-pair:
+  ;; @param k-v-pair: Incoming message block. Tuple of (start-stop tuple) => bytes
   ;; @return modified accumulator
   [{:keys [::specs/->child-buffer
            ::specs/receive-bytes
@@ -44,6 +44,7 @@
     :as incoming}
    k-v-pair]
   (let [[[start stop] buf] k-v-pair]
+    (println "Does"  start "-" stop "bring us up to" gap-buffer "from" receive-bytes "?")
     ;; For now, this top-level if check is redundant.
     ;; I'd rather be safe and trust the JVM that remove it
     ;; under the assumption that callers will be correct.
@@ -52,8 +53,8 @@
     (if (<= start receive-bytes)
       ;; Q: Did a previous message overwrite this message block?
       (if (<= stop receive-bytes)
-        ;; Skip this message block
-        (update incoming ::specs/gap-buffer (partial drop 1))
+        ;; Previously consolidated block. Don't do anything.
+        incoming
         ;; Consolidate this message block
         (let [bytes-to-skip (- receive-bytes start)]
           (when (< 0 bytes-to-skip)
