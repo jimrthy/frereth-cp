@@ -136,7 +136,7 @@
         (is consolidated)
         (testing "big picture"
           (is (= 2 (count ->child-buffer)))
-          (is (= 5 receive-bytes))
+          (is (= 6 receive-bytes))
           (is (= 3 (count gap-buffer))))
         (testing "consolidated"
           (let [buf-2 (second ->child-buffer)]
@@ -146,11 +146,44 @@
             ;; I feel like this may indicate an
             ;; off-by-1 bug: it seems like this should
             ;; really leave me with bytes 4 and 5
-            (is (= 2 (.readerIndex buf-2)))
+            (is (= 3 (.readerIndex buf-2)))
             (is (= 2 (.readableBytes buf-2)))
-            (let [dst (byte-array 3)]
+            (let [dst (byte-array 2)]
               (.readBytes (.slice buf-2) dst)
               ;; reading those bytes shouldn't impact the original
               (is (= 2 (.readableBytes buf-2)))
-              (is (= 2 (aget dst 0)))
-              (is (= 3 (aget dst 1))))))))))
+              (is (= 3 (aget dst 0)))
+              (is (= 4 (aget dst 1))))))))
+    (testing "Consolidate multiples"
+      (let [state (update-in state
+                             [::specs/incoming ::specs/gap-buffer]
+                             (fn [current]
+                               (assoc current
+                                      [4 8] (seq->buf (take 5 src))
+                                      [8 12] (seq->buf (take 5 src))
+                                      [15 15] (seq->buf (take 1 src)))))
+            {{:keys [::specs/->child-buffer
+                     ::specs/gap-buffer
+                     ::specs/receive-bytes]} ::specs/incoming
+             :as consolidated} (x/consolidate-gap-buffer state)]
+        (testing "All but first"
+          ;; Nothing should have happened yet
+          (is (= 0 (count ->child-buffer)))
+          (is (= 0 receive-bytes))
+          (is (= 7 (count gap-buffer))))
+        (testing "all"
+          (let [state (update-in state
+                                 [::specs/incoming ::specs/gap-buffer]
+                                 assoc
+                                 [0 1] (seq->buf [255 1]))
+                {{:keys [::specs/->child-buffer
+                         ::specs/gap-buffer
+                         ::specs/receive-bytes]} ::specs/incoming
+                 :as consolidated} (x/consolidate-gap-buffer state)]
+            (is (= 8 (count ->child-buffer)))
+            (is (= 21 receive-bytes))
+            ;; I should probably verify that the reader-indexes got
+            ;; updated correctly.
+            ;; But that would make this test ridiculously more
+            ;; complicated.
+            (is (= 0 (count gap-buffer)))))))))

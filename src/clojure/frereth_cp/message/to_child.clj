@@ -52,22 +52,26 @@
     ;; is a detail I don't trust in myself.
     (if (<= start receive-bytes)
       ;; Q: Did a previous message overwrite this message block?
-      (if (<= stop receive-bytes)
-        ;; Previously consolidated block. Don't do anything.
-        ;; Q: Why wouldn't I drop this?
-        incoming
+      (if (< stop receive-bytes)
+        (do
+          (log/debug "Dropping previously consolidated block")
+          ;; Previously consolidated block. Just drop it.
+          (update incoming ::specs/gap-buffer (partial drop 1)))
         ;; Consolidate this message block
+        ;; I'm dubious about the logic for bytes-to-skip.
+        ;; The math behind it seems wrong...but it seems
+        ;; to work in practice.
+        ;; Except that it doesn't.
         (let [bytes-to-skip (- receive-bytes start)]
-          ;; This logic has an off-by-1 error.
-          ;; I think. I'm just not seeing it.
           (when (< 0 bytes-to-skip)
+            (log/debug "Skipping" bytes-to-skip "previously received bytes")
             (.skipBytes buf bytes-to-skip))
-          (log/debug "Dropping first entry from " (::specs/gap-buffer incoming))
+          (log/debug "Moving first entry from " (::specs/gap-buffer incoming))
           (-> incoming
               (update ::specs/gap-buffer (partial drop 1))
               (update ::specs/->child-buffer conj buf)
               ;; TODO: Compare performance w/ using assoc here
-              (update ::specs/receive-bytes (constantly stop)))))
+              (update ::specs/receive-bytes (constantly (inc stop))))))
       (reduced incoming))))
 
 (s/fdef consolidate-gap-buffer
@@ -77,33 +81,33 @@
   ;; I'm dubious that this belongs in here.
   ;; But this namespace is looking very skimpy compared to from-parent,
   ;; which seems like a better choice.
-  [{:keys [::specs/incoming]
+  [{{:keys [::specs/gap-buffer]
+     :as incoming} ::specs/incoming
     :as state}]
-  {:pre [incoming]}
-  (let [{:keys [::specs/gap-buffer]} incoming]
-    (assoc state
-           ::specs/incoming
-           (reduce (fn [{:keys [::specs/receive-bytes]
-                         :as acc}
-                        buffer-entry]
-                     {:pre [acc
-                            receive-bytes]}
-                     (comment (log/debug "Top of loop. Incoming state:" acc))
-                     (assert receive-bytes (str "Missing receive-bytes among: "
-                                                (keys acc)
-                                                "\nin:\n"
-                                                acc
-                                                "\na"
-                                                (class acc)))
-                     (let [[[start stop] buf] buffer-entry]
-                       ;; Q: Have we [possibly] filled an existing gap?
-                       (if (<= start receive-bytes)
-                         (consolidate-message-block acc buffer-entry)
-                         ;; There's another gap. Move on
-                         (reduced acc))))
-                   ;; TODO: Experiment with using a transient for this
-                   incoming
-                   gap-buffer))))
+  {:pre [gap-buffer]}
+  (assoc state
+         ::specs/incoming
+         (reduce (fn [{:keys [::specs/receive-bytes]
+                       :as acc}
+                      buffer-entry]
+                   {:pre [acc
+                          receive-bytes]}
+                   (comment (log/debug "Top of loop. Incoming state:" acc))
+                   (assert receive-bytes (str "Missing receive-bytes among: "
+                                              (keys acc)
+                                              "\nin:\n"
+                                              acc
+                                              "\na"
+                                              (class acc)))
+                   (let [[[start stop] buf] buffer-entry]
+                     ;; Q: Have we [possibly] filled an existing gap?
+                     (if (<= start receive-bytes)
+                       (consolidate-message-block acc buffer-entry)
+                       ;; There's another gap. Move on
+                       (reduced acc))))
+                 ;; TODO: Experiment with using a transient for this
+                 incoming
+                 gap-buffer)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

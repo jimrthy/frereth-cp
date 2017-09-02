@@ -154,10 +154,12 @@
 ;; (I'm still torn about that detail)
 (s/def ::parent->buffer bytes?)
 ;; number of initial bytes fully received --DJB
-;; I'm 90% certain this is the last address in the
-;; stream of contiguous bytes that have arrived from the
-;; parent.
-;; i.e. it stops at gaps which block forwarding to the child.
+;; This is actually the number of bytes that have been
+;; buffered up to forward along to the child.
+;; Which means that (after we've buffered the initial
+;; message) it's 1 greater than the stream address (which
+;; is 0-based)
+;; TODO: Rename this to high-water-mark
 (s/def ::receive-bytes nat-int?)
 ;; total number of bytes in stream, if receiveeof --DJB
 (s/def ::receive-total-bytes int?)
