@@ -1,9 +1,10 @@
 (ns frereth-cp.message.to-child-test
   (:require [clojure.test :refer (deftest is testing)]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.to-child :as x]))
+            [frereth-cp.message.to-child :as x])
+  (:import io.netty.buffer.Unpooled))
 
-(deftest check-gap-buffer
+(deftest build-gap-buffer
   (testing "obvious"
     (let [g-b (-> (x/build-gap-buffer)
                   (assoc [0 3] :a)
@@ -96,3 +97,60 @@
 (comment
   (msg-consolidation)
   )
+
+(defn seq->buf
+  [src]
+  (Unpooled/copiedBuffer (byte-array src)))
+
+(deftest gap-consolidation
+  ;; This seems to be begging for generative testing
+  (let [src (range)
+        msg-1 (seq->buf (take 5 src))
+        buf (-> (x/build-gap-buffer)
+                (assoc [1 5] msg-1)
+                (assoc [7 9] (seq->buf (take 3 src)))
+                (assoc [11 14] (seq->buf (take 4 src)))
+                (assoc [16 20] (seq->buf (take 5 src))))
+        state {::specs/incoming {::specs/gap-buffer buf
+                                 ::specs/receive-bytes 0
+                                 ::specs/->child-buffer []}}]
+    (testing "Destructuring"
+      ;; Implementation detail, but this is how consolidate-gap-buffer starts
+      (let [one (first buf)
+            [[start stop] theoretical-buffer] one]
+        (is (= 1 start))
+        (is (= 5 stop))
+        (is (= msg-1 theoretical-buffer))))
+    (testing "Do nothing"
+      (let [consolidated (x/consolidate-gap-buffer state)]
+        (is (= state consolidated))))
+    (testing "Fill initial gap"
+      (let [state (update-in state
+                             [::specs/incoming ::specs/gap-buffer]
+                             assoc
+                             [0 3] (seq->buf (take 3 src)))
+            {{:keys [::specs/->child-buffer
+                     ::specs/gap-buffer
+                     ::specs/receive-bytes]} ::specs/incoming
+             :as consolidated} (x/consolidate-gap-buffer state)]
+        (is consolidated)
+        (testing "big picture"
+          (is (= 2 (count ->child-buffer)))
+          (is (= 5 receive-bytes))
+          (is (= 3 (count gap-buffer))))
+        (testing "consolidated"
+          (let [buf-2 (second ->child-buffer)]
+            ;; This covers the addresses from 1-5.
+            ;; :filler accounts for bytes 0-3
+            ;; So this skips the first 2 bytes (1 and 2)
+            ;; I feel like this may indicate an
+            ;; off-by-1 bug: it seems like this should
+            ;; really leave me with bytes 4 and 5
+            (is (= 2 (.readerIndex buf-2)))
+            (is (= 2 (.readableBytes buf-2)))
+            (let [dst (byte-array 3)]
+              (.readBytes (.slice buf-2) dst)
+              ;; reading those bytes shouldn't impact the original
+              (is (= 2 (.readableBytes buf-2)))
+              (is (= 2 (aget dst 0)))
+              (is (= 3 (aget dst 1))))))))))

@@ -44,9 +44,9 @@
     :as incoming}
    k-v-pair]
   (let [[[start stop] buf] k-v-pair]
-    (println "Does"  start "-" stop "bring us up to" gap-buffer "from" receive-bytes "?")
+    (log/debug "Does"  start "-" stop "close a hole in" gap-buffer "from HWM" receive-bytes "?")
     ;; For now, this top-level if check is redundant.
-    ;; I'd rather be safe and trust the JVM that remove it
+    ;; I'd rather be safe and trust the JIT than remove it
     ;; under the assumption that callers will be correct.
     ;; Even though I'm the only caller at the moment, this
     ;; is a detail I don't trust in myself.
@@ -54,9 +54,12 @@
       ;; Q: Did a previous message overwrite this message block?
       (if (<= stop receive-bytes)
         ;; Previously consolidated block. Don't do anything.
+        ;; Q: Why wouldn't I drop this?
         incoming
         ;; Consolidate this message block
         (let [bytes-to-skip (- receive-bytes start)]
+          ;; This logic has an off-by-1 error.
+          ;; I think. I'm just not seeing it.
           (when (< 0 bytes-to-skip)
             (.skipBytes buf bytes-to-skip))
           (log/debug "Dropping first entry from " (::specs/gap-buffer incoming))
@@ -64,7 +67,8 @@
               (update ::specs/gap-buffer (partial drop 1))
               (update ::specs/->child-buffer conj buf)
               ;; TODO: Compare performance w/ using assoc here
-              (update ::specs/receive-bytes (constantly stop))))))))
+              (update ::specs/receive-bytes (constantly stop)))))
+      (reduced incoming))))
 
 (s/fdef consolidate-gap-buffer
         :args (s/cat :state ::specs/state)
@@ -75,19 +79,28 @@
   ;; which seems like a better choice.
   [{:keys [::specs/incoming]
     :as state}]
-  ;; TODO: Needs unit tests!
-  ;; This seems to be begging for generative testing
+  {:pre [incoming]}
   (let [{:keys [::specs/gap-buffer]} incoming]
     (assoc state
            ::specs/incoming
            (reduce (fn [{:keys [::specs/receive-bytes]
                          :as acc}
-                        [[[start stop] k] buf]]
-                     ;; Q: Have we filled an existing gap?
-                     (if (<= start receive-bytes)
-                       (consolidate-message-block acc buf)
-                       ;; There's another gap. Move on
-                       (reduced acc)))
+                        buffer-entry]
+                     {:pre [acc
+                            receive-bytes]}
+                     (comment (log/debug "Top of loop. Incoming state:" acc))
+                     (assert receive-bytes (str "Missing receive-bytes among: "
+                                                (keys acc)
+                                                "\nin:\n"
+                                                acc
+                                                "\na"
+                                                (class acc)))
+                     (let [[[start stop] buf] buffer-entry]
+                       ;; Q: Have we [possibly] filled an existing gap?
+                       (if (<= start receive-bytes)
+                         (consolidate-message-block acc buffer-entry)
+                         ;; There's another gap. Move on
+                         (reduced acc))))
                    ;; TODO: Experiment with using a transient for this
                    incoming
                    gap-buffer))))
@@ -106,14 +119,14 @@
                :primed ::specs/state)
   :ret ::specs/state)
 (defn forward!
-  "lines 615-632  cover what's supposed to happen next."
+  "Try sending data to child:"
+  ;; lines 615-632
   [->child
    {:keys [::specs/incoming]
     :as primed}]
   ;; Major piece of the puzzle that I'm currently missing:
   ;; line 617 will generally update receive-written.
-  ;; TODO: Move what little I have here into to-child and
-  ;; expand it to include the pieces I haven't translated yet
+  ;; TODO: expand it to include the pieces I haven't translated yet
   ;; (such as sending some signal, like a nil, to indicate that
   ;; we've hit EOF).
   (let [consolidated (consolidate-gap-buffer primed)
