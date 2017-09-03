@@ -189,21 +189,17 @@ Needing to declare these things twice is annoying."
  (with-out-str (b-s/print-bytes bs)))
 
 (defn compose
-  "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt
-
-  This should probably be named compose! and return nil
-
-  Better: Just create a new ByteBuf and return that.
-
-  Q: Why did I write it to update dst this way?"
+  "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt"
   [tmplt fields dst]
-  (comment (log/info (str "Putting\n" (util/pretty fields)
-                          fields "\ninto\n" dst
-                          "\nbased upon\n" (util/pretty tmplt))))
   ;; Q: How much do I gain by supplying dst?
-  ;; It does let callers reuse the buffer, which
+  ;; A: It does let callers reuse the buffer, which
   ;; will definitely help with GC pressure.
-
+  ;; Yes, it's premature optimization. And how
+  ;; often will this get used?
+  ;; Rename this to compose!
+  ;; Add a purely functional version of compose that
+  ;; creates the ByteBuf, calls compose! and
+  ;; returns dst.
   (run!
    (partial composition-reduction tmplt fields dst)
    (keys tmplt))
@@ -355,8 +351,6 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
               (aset-byte result @pos (byte c)))
             (swap! pos inc)))))
     result))
-(comment (let [encoded (encode-server-name "foo..bacon.com")]
-           (vec encoded)))
 
 (defn safe-nonce
   "Produce a nonce that's theoretically safe.

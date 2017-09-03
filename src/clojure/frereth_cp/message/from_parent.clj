@@ -107,7 +107,6 @@
   ;; We're back to the "DJB thought it was safe" appeal to
   ;; authority.
   ;; So stick with the current approach for now.
-  (comment (throw (RuntimeException. "What's up with starting-point?")))
   (let [starting-point (.readerIndex incoming-buf)
         ;; For from-parent-test/check-start-stop-calculation:
         ;; This is starting at position 112.
@@ -157,7 +156,6 @@
         ;;    b) memory copy churn
         ;; 5) Consolidating new incoming blocks
         ;; There's actually plenty of ripe fruit to pluck here.
-        (comment (throw (RuntimeException. "And there's my bug")))
         (log/debug "receive-written:" receive-written
                    "\nstop-byte:" stop-byte
                    ;; We aren't using this.
@@ -233,86 +231,44 @@
                   ::min-k
                   ::receive-total-bytes]
            ^Long max-k ::max-k} calculated]
-      (let [;; It's tempting to use a Pooled buffer here instead.
-            ;; That temptation is wrong.
-            ;; There's no good reason for this to be direct memory,
-            ;; and "the JVM garbage collector...works OK for heap buffers,
-            ;; but not direct buffers" (according to netty.io's wiki entry
-            ;; about using it as a generic performance library).
-            ;; It *is* tempting to retain the original direct
-            ;; memory in which it arrived as long as possible. That approach
-            ;; might make sense if I were using a JNI layer for encryption.
-            ;; As it stands, we've already stomped all over the source
-            ;; memory long before it got here.
+      ;; There are at least a couple of curve balls in the air right here:
+      ;; 1. Only write bytes at stream addresses(?)
+      ;;    (< receive-written where (+ receive-written receive-buf-size))
 
-            ;; Except that there's still Norman Mauer's advice
-            ;; about the best practice to just always use a
-            ;; Direct Pooled buffer.
+      ;; Q: Why haven't I converted incoming-buf to a vector of bytes?
+      ;; Or even a byte-array?
+      ;; A: Because I still need to slice and dice later, when I'm doing
+      ;; gap consolidation.
+      (when (pos? min-k)
+        (.skipBytes incoming-buf min-k))
 
-            ;; Stack overflow answer directly from the man himself:
-            ;; "using heap-buffers may make sense if you need to act
-            ;; directly on the backing array. This is for example true
-            ;; when you use deflater/inflater as it only acts on byte[].
-            ;; For all other cases a direct buffer is prefered."
+      ;;          set the receivevalid flags
+      ;; 2. Update the receive-valid flag associated with each byte as we go
+      ;;    The receivevalid array is declared with this comment:
+      ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
+      ;; This point is moot, considering the way I'm using a priority queue.
+      ;; Keeping the comment around as a reminder that the ring buffer is probably
+      ;; quite a bit more efficient, and that I should look into using a buddy structure.
 
-            ;; So, it's back to the "get it working correctly, then
-            ;; profile" approach.
+      ;; 3. The array of receivevalid flags is used in the loop between lines
+      ;;    589-593 to decide how much to increment receive-bytes.
+      ;;    It's cleared on line 630, after we've written the bytes to the
+      ;;    child pipe.
+      ;; I'm fairly certain this is what that for loop amounts to
 
-            ;; Be that as it may, this almost definitely needs to come
-            ;; from a Pooled implementation.
-            ;; OTOH, this is what we hand over to the child (at least
-            ;; in theory).
-            ;; For the sake of API ease, it should probably be a vector
-            ;; of bytes.
-            ;; Or, at worst, a Byte Array.
-            ;; Unfortunately for that plan, gap buffer consolidation
-            ;; is quite a bit easier if I just stick with the ByteBuf
-            #_[output-buf (byte-array D)] ]
-        ;; There are at least a couple of curve balls in the air right here:
-        ;; 1. Only write bytes at stream addresses(?)
-        ;;    (< receive-written where (+ receive-written receive-buf-size))
-
-        ;; Q: Why haven't I converted incoming-buf to a vector of bytes?
-        ;; Or even a byte-array?
-        ;; Using a ByteBuf here doesn't make any sense.
-        (when (pos? min-k)
-          (.skipBytes incoming-buf min-k))
-        (comment (.readBytes incoming-buf output-buf 0 max-k))
-        ;; Q: Do I just want to release it, since I'm done with it?
-        ;; Except that I may not be. If this read would have overflowed
-        ;; the buffer, max-k would have kept us from reading.
-        ;; Next Q: Is trying to limit that buffer here worth the
-        ;; added complexity?
-        ;; We're talking about 1-k max.
-        ;; (assuming previous code did a sanity check for our buffer max)
-        ;; Bigger Q: Shouldn't I just discard it completely?
-        ;; A: Well, it depends.
-        ;; Honestly, we should should just be making a slice
-        ;; to avoid copying.
-        (.discardSomeReadBytes incoming-buf)
-        ;;          set the receivevalid flags
-        ;; 2. Update the receive-valid flag associated with each byte as we go
-        ;;    The receivevalid array is declared with this comment:
-        ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
-
-        ;; 3. The array of receivevalid flags is used in the loop between lines
-        ;;    589-593 to decide how much to increment receive-bytes.
-        ;;    It's cleared on line 630, after we've written the bytes to the
-        ;;    child pipe.
-        ;; I'm fairly certain this is what that for loop amounts to
-        (-> state
-            (update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
-                                                                       (+ receive-bytes delta-k)))
-            (update-in [::specs/incoming ::specs/receive-total-bytes]
-                       (fn [cur]
-                         ;; calculate-start-stop-bytes might have an override for this
-                         (or receive-total-bytes
-                             cur)))
-            (update-in [::specs/incoming ::specs/gap-buffer]
-                       assoc
-                       ;; This needs to be the absolute stream position of the values that are left
-                       [(+ start-byte min-k) (+ start-byte max-k)]
-                       incoming-buf))))))
+      (-> state
+          (update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
+                                                                     (+ receive-bytes delta-k)))
+          (update-in [::specs/incoming ::specs/receive-total-bytes]
+                     (fn [cur]
+                       ;; calculate-start-stop-bytes might have an override for this
+                       (or receive-total-bytes
+                           cur)))
+          (update-in [::specs/incoming ::specs/gap-buffer]
+                     assoc
+                     ;; This needs to be the absolute stream position of the values that are left
+                     [(+ start-byte min-k) (+ start-byte max-k)]
+                     incoming-buf)))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state

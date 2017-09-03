@@ -44,9 +44,10 @@
 (defn box-after
   "Accept some plain text and turn it into cipher text"
   ([shared-key plain-text length nonce]
-   ;; TODO: More benchmarking to see how much difference it makes
+   ;; TODO: Benchmarking to see how much difference it makes
    ;; to have 2 separate implementations that allow this one to
-   ;; avoid an extra 0 addition.
+   ;; avoid an extra 0 addition. (As opposed to just having
+   ;; this version call the other with offset 0)
    ;; Since this has to touch every single byte that flows through
    ;; the system, it might be noticeable.
    (comment
@@ -158,11 +159,6 @@ which I'm really not qualified to touch."
                                                   ::length box-length
                                                   ::nonce (b-t/->string nonce)
                                                   ::shared-key (b-t/->string shared-key)})))
-          ;; The * 2 on the zero bytes is important.
-          ;; The encryption starts with 0's and prepends them.
-          ;; The decryption requires another bunch (of zeros?) in front of that.
-          ;; We have to strip them both to get back to the real plain text.
-          (comment (log/info "Decrypted" box-length "bytes into" n "starting with" (aget plain-text K/decrypt-box-zero-bytes)))
           ;; TODO: Compare the speed of doing this with allocating a new
           ;; byte array without the 0-prefix padding and copying it back over
           ;; Keep in mind that we're limited to 1088 bytes per message.

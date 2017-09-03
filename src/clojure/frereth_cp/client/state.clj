@@ -390,9 +390,9 @@ TODO: Need to ask around about that."
               this)))
     (finally
       (if message
-        ;; Can't do this until I really done with its contents.
-        ;; It acts as though readBytes into a ByteBuf just creates another
-        ;; reference without increasing the reference count.
+        ;; Can't do this until I'm really done with its contents.
+        ;; Doing a .readBytes into a ByteBuf seems to just creates
+        ;; another reference without increasing the reference count.
         ;; This seems incredibly brittle.
         (comment (.release message))
         (log/error "False-y message in\n"

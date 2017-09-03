@@ -92,7 +92,6 @@
                       buffer-entry]
                    {:pre [acc
                           receive-bytes]}
-                   (comment (log/debug "Top of loop. Incoming state:" acc))
                    (assert receive-bytes (str "Missing receive-bytes among: "
                                               (keys acc)
                                               "\nin:\n"
