@@ -67,9 +67,7 @@
         (finally
           (doseq [b (get-in flagged [::specs/outgoing ::specs/blocks])]
             (.release (::specs/buf b))))))))
-(comment
-  (check-flacked-others)
-  )
+(comment (check-flacked-others))
 
 (defn build-message-block-description
   ([^bytes src start-pos send-eof]

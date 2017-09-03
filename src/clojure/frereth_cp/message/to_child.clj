@@ -12,7 +12,8 @@
             [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs])
+            [frereth-cp.message.specs :as specs]
+            [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -133,7 +134,7 @@
   ;; (such as sending some signal, like a nil, to indicate that
   ;; we've hit EOF).
   (let [consolidated (consolidate-gap-buffer primed)
-        ->child-buffer (::specs/->child-buffer consolidated)]
+        ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])]
     (reduce (fn [state buf]
               ;; Forward buf
               (try

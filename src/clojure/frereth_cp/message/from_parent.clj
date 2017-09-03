@@ -257,7 +257,7 @@
       ;; I'm fairly certain this is what that for loop amounts to
 
       (-> state
-          (update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
+          #_(update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
                                                                      (+ receive-bytes delta-k)))
           (update-in [::specs/incoming ::specs/receive-total-bytes]
                      (fn [cur]

@@ -27,9 +27,18 @@
                       (when (= response-state 1)
                         (deliver response dst))
                       (swap! parent-state inc)))
+        _ (throw (RuntimeException. "Start back here"))
         child-cb (fn [array-o-bytes]
-                   ;; Just echo it directly back
-                   (message/child-> array-o-bytes))
+                   ;; Sadly, this doesn't work.
+                   (declare state)
+                   ;; Just echo it directly back.
+                   ;; Oh. This is nasty.
+                   ;; I have a circular dependency between
+                   ;; this and initialized.
+                   ;; The truly obnoxious part of this is that
+                   ;; I think that managing the state using
+                   ;; an agent probably wasn't a great idea.
+                   (message/child-> state array-o-bytes))
         initialized (message/initial-state parent-cb child-cb)
         state (message/start! initialized)]
     (try
