@@ -11,17 +11,26 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+(s/fdef calculate-padded-size
+        :args (s/cat :block ::specs/block)
+        ;; constraints: u multiple of 16; u >= 16; u <= 1088; u >= 48 + blocklen[pos]
+        ;; (-- DJB, line 387)
+        :fn (fn [{:keys [:args :ret]}]
+              (let [{:keys [::specs/length] :as block} (:block args)]
+                (>= ret (+ 48 length))))
+        :ret (s/and nat-int?
+                    #(= 0 (mod % 16))
+                    #(<= 16 %)
+                    #(<= 1088 %)))
 (defn calculate-padded-size
   [{:keys [::specs/length] :as block}]
-  ;; constraints: u multiple of 16; u >= 16; u <= 1088; u >= 48 + blocklen[pos]
-  ;; (-- DJB)
   ;; Set the number of bytes we're going to send for this block
   ;; Q: Why the extra 16?
   ;; Current guess: Allows at least 16 bytes of padding.
   ;; Then we'll round up to an arbitrary length.
   (condp >= (+ K/header-length K/min-padding-length length)
     ;; Stair-step the number of bytes that will get sent for this block
-    ;; Suspect that this has something to do with traffic-shaping
+    ;; This probably has something to do with traffic-shaping
     ;; analysis
     ;; Q: Would named constants be useful here at all?
     192 192
@@ -48,6 +57,10 @@
             ::specs/normal K/normal-eof
             ::specs/error K/error-eof)))
 
+(s/fdef build-message-block
+        :args (s/cat :next-message-id nat-int?
+                     :block-to-send ::specs/block)
+        :ret bytes?)
 (defn build-message-block
   ^bytes [^Integer next-message-id
           {^Long start-pos ::specs/start-pos
@@ -69,6 +82,7 @@
   ;; the points about "Use pooled direct buffers" and "Write
   ;; direct buffers...always."
 
+  ;; For now, that concern is premature optimization
   ;; Back to regularly scheduled actual implementation comments:
   ;; Note that we also need padding.
   (let [u (calculate-padded-size block-to-send)
@@ -85,7 +99,7 @@
         ;; Then again...this is something that really deserves some
         ;; hefty bookmarking.
         ;; TODO: That.
-        send-buf (.order (Unpooled/buffer (+ u K/header-length))
+        send-buf (.order (Unpooled/buffer u)
                          java.nio.ByteOrder/LITTLE_ENDIAN)]
     ;; Q: Is this worth switching to shared/compose?
     (.writeInt send-buf next-message-id)
@@ -99,10 +113,11 @@
     ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
     ;; i.e. the total number of bytes in the stream.
     (.writeLong send-buf start-pos)
+    ;; Note that we're a fairly arbitrary amount of padding
     (let [data-start (- u length)
           writer-index (.writerIndex send-buf)]
 
-      ;; This is the approach taken by the reference implementation
+      ;; This is the copy approach taken by the reference implementation
       ;; Note that he's just skipping the padding bytes rather than
       ;; filling them with zeros
       (comment
@@ -110,7 +125,7 @@
                                                                                     (dec send-buf-size))))
       (.writerIndex send-buf data-start))
 
-    ;; Need to save the initial read-index because we aren't ready
+    ;; Need to save buf's initial read-index because we aren't ready
     ;; to discard the buffer until it's been ACK'd.
     ;; This is a fairly hefty departure from the reference implementation,
     ;; which is all based around the circular buffer concept.
@@ -121,6 +136,9 @@
     (.resetReaderIndex buf)
     (.array send-buf)))
 
+(s/fdef pre-calculate-state-after-send
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
 (defn pre-calculate-state-after-send
   "This is mostly setting up the buffer to do the send from child to parent
 

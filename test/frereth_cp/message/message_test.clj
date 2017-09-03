@@ -2,6 +2,7 @@
   (:require [clojure.data]
             [clojure.pprint :refer (pprint)]
             [clojure.test :refer (deftest is testing)]
+            [clojure.tools.logging :as log]
             [frereth-cp.message :as message]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
@@ -37,24 +38,20 @@
             message-body (byte-array (range msg-len))
             ;; Just pick an arbitrary number
             message-id 25792]
-        (is (= msg-len 1024))
+        (is (= msg-len K/k-1))
         (.writeBytes src message-body)
-        (let [buf (to-parent/build-message-block message-id {::specs/buf src
-                                                             ::specs/length msg-len
-                                                             ::specs/send-eof false
-                                                             ::specs/start-pos 0})
-              packet-length (.readableBytes buf)
-              incoming (byte-array packet-length)]
-          (is (= msg-len K/k-1))
-          (is (= 1088 packet-length))
-          (.readBytes buf incoming)
-          ;; TODO: Add test that send a variety of gibberish message
+        (let [incoming (to-parent/build-message-block message-id {::specs/buf src
+                                                                  ::specs/length msg-len
+                                                                  ::specs/send-eof false
+                                                                  ::specs/start-pos 0})]
+          (is (= K/max-msg-len (count incoming)))
+          ;; TODO: Add tests that send a variety of gibberish messages
           (let [wrote (future (message/parent-> state incoming))
                 outcome (deref response 1000 ::timeout)]
             (if-let [err (agent-error state)]
               (do
                 (is (not err))
-                (println (utils/get-stack-trace err)))
+                (log/error (utils/get-stack-trace err)))
               (do
                 (is (not= outcome ::timeout))
                 (when-not (= outcome ::timeout)
