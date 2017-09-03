@@ -77,6 +77,6 @@
       (throw (AssertionError. "End of stream")))
     (-> state
         (update-in [::specs/outgoing ::specs/blocks] conj block)
-        (update-in [::specs/outgoing ::specs/send-bytes] send-bytes)
+        (assoc-in [::specs/outgoing ::specs/send-bytes] send-bytes)
 ;;;  337: update recent
         (assoc ::specs/recent (System/nanoTime)))))

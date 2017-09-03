@@ -54,15 +54,6 @@
   5000)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
-
-(s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
-                            #(s/valid? ::specs/state (deref %))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal Helpers
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal API
 
 ;;;; Q: what else is in the reference implementation?
@@ -202,6 +193,7 @@
   ;; from the child, because I'm using an active callback
   ;; approach, and this was triggered by a block of
   ;; data coming from the parent.
+
   (let [ready-to-ack (-> state
                          ;; Q: Are the next 2 lines worth their own functions?
                          (assoc-in [::specs/incoming ::specs/parent->buffer] buf)
@@ -229,7 +221,7 @@
                          ;; and trigger-from-child
                          )]
     (log/info "Getting ready to start trying to process the message we just received from parent:\n"
-               ready-to-ack)
+              ready-to-ack)
     (if-let [primed (from-parent/try-processing-message! ready-to-ack)]
       (do
         (log/debug "Message processed. Forwarding to child")
@@ -259,7 +251,7 @@
                      ;; Q: What's the difference to spec that this
                      ;; argument is optional?
                      :want-ping ::specs/want-ping)
-        :ret ::state-agent)
+        :ret ::specs/state-agent)
 (defn initial-state
   "Put together an initial state that's ready to start!"
   ([parent-callback
@@ -330,8 +322,8 @@
    (initial-state parent-callback child-callback false)))
 
 (s/fdef start!
-        :args (s/cat :state ::state-agent)
-        :ret ::state-agent)
+        :args (s/cat :state ::specs/state-agent)
+        :ret ::specs/state-agent)
 (defn start!
   ([state-agent timeout]
    (send state-agent start-event-loops!)
@@ -348,9 +340,9 @@
   state)
 
 (s/fdef child->
-        :args (s/cat :state-agent ::state-agent
+        :args (s/cat :state-agent ::specs/state-agent
                      :buf ::specs/buf)
-        :ret ::state-agent)
+        :ret ::specs/state-agent)
 (defn child->
   "Read bytes from a child buffer...if we have room
 
@@ -387,9 +379,9 @@ Prior to that, it was limited to 4K.
   (send state-agent trigger-from-child buf))
 
 (s/fdef parent->
-        :args (s/cat :state ::state-agent
+        :args (s/cat :state ::specs/state-agent
                      :buf bytes?)
-        :ret ::state-agent)
+        :ret ::specs/state-agent)
 (defn parent->
   "Receive a byte array from parent
 
@@ -428,7 +420,7 @@ Prior to that, it was limited to 4K.
     ;; mutually exclusive.
     ;; trigger-from-parent is expecting to have a ::->child-buffer key
     ;; that's really a vector that we can just conj onto.
-    (let [{{:keys [::specs/->child-buffer]} ::specs/incoming} @state-agent]
+    (let [{{:keys [::specs/->child-buffer]} ::specs/incoming} state-agent]
       (if (< (count ->child-buffer) max-child-buffer-size)
         (let [previously-buffered-message-bytes (reduce + 0
                                                     (map (fn [^bytes buf]

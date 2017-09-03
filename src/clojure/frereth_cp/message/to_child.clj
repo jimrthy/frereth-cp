@@ -119,8 +119,8 @@
   (sorted-map))
 
 (s/fdef forward!
-  :args (s/cat :->child ::specs/->child
-               :primed ::specs/state)
+        :args (s/cat :->child ::specs/->child
+                     :primed ::specs/state)
   :ret ::specs/state)
 (defn forward!
   "Try sending data to child:"

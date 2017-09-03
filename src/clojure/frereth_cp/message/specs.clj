@@ -315,3 +315,6 @@
 
                              ;; Q: Does this make more sense anywhere else?
                              ::recent]))
+
+(s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
+                            #(s/valid? ::state (deref %))))
