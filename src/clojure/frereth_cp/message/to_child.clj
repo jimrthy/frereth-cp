@@ -64,7 +64,7 @@
         ;; Except that it doesn't.
         (let [bytes-to-skip (- receive-bytes start)]
           (when (< 0 bytes-to-skip)
-            (log/debug "Skipping" bytes-to-skip "previously received bytes")
+            (log/info "Skipping" bytes-to-skip "previously received bytes in" buf)
             (.skipBytes buf bytes-to-skip))
           (log/debug "Moving first entry from " (::specs/gap-buffer incoming))
           (-> incoming
@@ -134,7 +134,7 @@
   ;; (such as sending some signal, like a nil, to indicate that
   ;; we've hit EOF).
   (let [consolidated (consolidate-gap-buffer primed)
-        ->child-buffer (get-in consolidated ::specs/->child-buffer)]
+        ->child-buffer (::specs/->child-buffer consolidated)]
     (reduce (fn [state buf]
               ;; Forward buf
               (try
