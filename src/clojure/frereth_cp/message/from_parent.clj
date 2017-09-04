@@ -458,6 +458,9 @@ Line 608"
             ::specs/receive-written]} ::specs/incoming
     :as state}]
   (let [child-buffer-count (count ->child-buffer)]
+    ;; We seem to be getting here twice.
+    ;; Q: How?
+    (throw (RuntimeException. "This don't make no sense"))
     (log/debug "from-parent/try-processing-message"
                "\nchild-buffer-count:" child-buffer-count
                "\nparent->buffer count:" (count parent->buffer)

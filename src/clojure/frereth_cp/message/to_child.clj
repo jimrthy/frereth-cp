@@ -138,11 +138,15 @@
     (reduce (fn [state buf]
               ;; Forward the byte-array inside the buffer
               (try
-                (->child (if (.hasArray buf)
-                           (.array buf)
-                           (let [bs (byte-array (.readableBytes buf))]
-                             (.readBytes buf bs)
-                             bs)))
+                ;; It's tempting to special-case this to avoid the
+                ;; copy, if we have a buffer that's backed by a byte-array.
+                ;; But that winds up sending along extra data that we don't
+                ;; want, like the header and pieces that we should have
+                ;; skipped due to gap buffering
+                (let [bs (byte-array (.readableBytes buf))]
+                  (.readBytes buf bs)
+                  (log/info "Calling back to the child")
+                  (->child bs))
                 ;; And drop it
                 (update state
                         ::specs/->child-buffer

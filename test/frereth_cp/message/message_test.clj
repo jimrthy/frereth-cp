@@ -43,32 +43,39 @@
         child-message-counter (atom 0)
         strm-address (atom 0)
         child-cb (fn [array-o-bytes]
-                   (is (bytes? array-o-bytes))
+                   (is (bytes? array-o-bytes) (str "Expected a byte-array. Got a " (class array-o-bytes)))
+                   (assert array-o-bytes)
                    (let [msg-len (count array-o-bytes)]
                      (log/debug "Incoming message:"
                                 msg-len
                                 "bytes")
+                     (when (not= K/k-1 msg-len)
+                       (log/warn "Incoming message doesn't match length we sent"
+                                 {::expected K/k-1
+                                  ::actual msg-len
+                                  ::details (vec array-o-bytes)}))
                      ;; Just echo it directly back.
                      (let [response (to-parent/build-message-block @child-message-counter
                                                                    {::specs/buf (Unpooled/wrappedBuffer array-o-bytes)
                                                                     ::specs/length msg-len
                                                                     ::specs/send-eof false
-                                                                    ::specs/start-pos strm-address})
+                                                                    ::specs/start-pos @strm-address})
                            state-agent @state-agent-atom]
                        (swap! child-message-counter inc)
                        (swap! strm-address + msg-len)
                        (is state-agent)
-                       (message/child-> state-agent array-o-bytes))))
+                       (message/child-> state-agent response))))
         initialized (message/initial-state parent-cb child-cb)
         state (message/start! initialized)]
     (reset! state-agent-atom state)
     (try
       (let [src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
             msg-len (- K/max-msg-len K/header-length K/min-padding-length)
+            _ (is (= msg-len K/k-1))
+            ;; Note that this is what the child sender should be supplying
             message-body (byte-array (range msg-len))
-            ;; Just pick an arbitrary number
+            ;; Just pick an arbitrary number, for now
             message-id 25792]
-        (is (= msg-len K/k-1))
         (.writeBytes src message-body)
         (let [incoming (to-parent/build-message-block message-id {::specs/buf src
                                                                   ::specs/length msg-len

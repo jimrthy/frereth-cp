@@ -151,6 +151,9 @@
          ;; This covers line 260
          ::specs/recent (System/nanoTime)))
 
+(s/fdef trigger-io
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
 (defn trigger-io
   [{{:keys [::specs/->child]} ::specs/incoming
     :as state}]
@@ -168,11 +171,17 @@
       ;; produce the same effect?
       ))
 
+(s/fdef trigger-from-child
+        :args (s/cat :state ::specs/state
+                     :array-o-bytes bytes?)
+        :ret ::specs/state)
 (defn trigger-from-child
-  [state buf]
+  [state array-o-bytes]
   (trigger-io
    (if (from-child/room-for-child-bytes? state)
-     (from-child/child-consumer state buf)
+     (from-child/child-consumer state (Unpooled/wrappedBuffer array-o-bytes))
+     ;; trigger-io does some state management, even
+     ;; if we discard the buffer
      state)))
 
 (defn trigger-from-parent
@@ -224,7 +233,7 @@
               ready-to-ack)
     (if-let [primed (from-parent/try-processing-message! ready-to-ack)]
       (do
-        (log/debug "Message processed. Forwarding to child")
+        (log/debug "Message processed. Trying to forward to child")
         (to-child/forward! ->child primed))
       (do
         ;; The message from parent to child was garbage.
@@ -375,7 +384,8 @@ Prior to that, it was limited to 4K.
   ;; And I don't think there's anything here that
   ;; could block.
   ;; Except for those actual pesky sends to the
-  ;; child/parent.
+  ;; child/parent, which are specifically forbidden
+  ;; from blocking.
   (send state-agent trigger-from-child buf))
 
 (s/fdef parent->
