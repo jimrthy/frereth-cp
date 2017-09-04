@@ -28,7 +28,7 @@
   ;; Q: Why the extra 16?
   ;; Current guess: Allows at least 16 bytes of padding.
   ;; Then we'll round up to an arbitrary length.
-  (condp >= (+ K/header-length K/min-padding-length length)
+  (condp >= #_(+ K/header-length K/min-padding-length length) length
     ;; Stair-step the number of bytes that will get sent for this block
     ;; This probably has something to do with traffic-shaping
     ;; analysis
@@ -37,7 +37,8 @@
     320 320
     576 576
     1088 1088
-    (throw (AssertionError. "block too big"))))
+    ;; This is supposed to be fatal
+    (throw (AssertionError. (str length "-byte block too big")))))
 
 (s/fdef calculate-message-data-packet-length-flags
         :args ::specs/block

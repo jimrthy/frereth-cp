@@ -136,9 +136,13 @@
   (let [consolidated (consolidate-gap-buffer primed)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])]
     (reduce (fn [state buf]
-              ;; Forward buf
+              ;; Forward the byte-array inside the buffer
               (try
-                (->child buf)
+                (->child (if (.hasArray buf)
+                           (.array buf)
+                           (let [bs (byte-array (.readableBytes buf))]
+                             (.readBytes buf bs)
+                             bs)))
                 ;; And drop it
                 (update state
                         ::specs/->child-buffer
