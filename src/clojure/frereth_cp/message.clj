@@ -157,19 +157,53 @@
 (defn trigger-io
   [{{:keys [::specs/->child]} ::specs/incoming
     :as state}]
-  (-> state
-      (assoc ::specs/recent (System/nanoTime))
-      to-parent/maybe-send-block!
-      from-parent/try-processing-message!
-      ->child
-      ;; At the end, there's a block that closes the pipe
-      ;; to the child if we're done.
-      ;; I think the point is that we'll quit polling on
-      ;; that and start short-circuiting out of the blocks
-      ;; that might do the send, once we've hit EOF
-      ;; Q: is there anything sensible I can do here to
-      ;; produce the same effect?
-      ))
+  (log/debug "Triggering I/O")
+  ;; I think I've figured out the problem with my
+  ;; echo test:
+  ;; After we deliver a message to the child,
+  ;; we end up back here. It (presumably)
+  ;; sends a block to the parent and then
+  ;; tries to process another from-parent
+  ;; message.
+  ;; There's still a message in the child
+  ;; buffer (because apparently that didn't
+  ;; get cleaned out), but it there is no
+  ;; incoming message for it to handle.
+  ;; So we're calling (->child nil)
+
+  (let [state
+        (-> state
+            (assoc ::specs/recent (System/nanoTime))
+            to-parent/maybe-send-block!)
+        state (or (from-parent/try-processing-message! state)
+                  state)
+        blocks (get-in state [::specs/incoming ::specs/->child-buffer])]
+    ;; Each block is a ByteBuf that needs to be copied into a byte-array
+    ;; and .release'd.
+    ;; Open Q: Does this make more sense here, or back in to-child around
+    ;; line 78?
+    (doseq [block blocks]
+      ;; ->child should really be called ->child!
+      ;; We're absolutely calling it for side-effects and
+      ;; can't rely on its return value at all.
+      ;; It's an end-user-supplied event handler.
+      ;; Actually, to be safe, we can't even rely on it
+      ;; not throwing an Exception.
+      ;; For that matter, we can't really trust it
+      ;; not to block our i/o loop here...can we?
+      ;; TODO: Add protection against those potential
+      ;; problems.
+      (->child block))
+    state
+    ;; At the end of the main ioloop in the refernce
+    ;; implementation, there's a block that closes the pipe
+    ;; to the child if we're done.
+    ;; I think the point is that we'll quit polling on
+    ;; that and start short-circuiting out of the blocks
+    ;; that might do the send, once we've hit EOF
+    ;; Q: is there anything sensible I can do here to
+    ;; produce the same effect?
+    ))
 
 (s/fdef trigger-from-child
         :args (s/cat :state ::specs/state
@@ -177,9 +211,12 @@
         :ret ::specs/state)
 (defn trigger-from-child
   [state array-o-bytes]
+  (log/debug "Received a" (class array-o-bytes) "from child")
   (trigger-io
    (if (from-child/room-for-child-bytes? state)
-     (from-child/child-consumer state (Unpooled/wrappedBuffer array-o-bytes))
+     (do
+       (log/debug "There is room for another message")
+       (from-child/child-consumer state array-o-bytes))
      ;; trigger-io does some state management, even
      ;; if we discard the buffer
      state)))
@@ -445,7 +482,7 @@ Prior to that, it was limited to 4K.
           ;; CPU cycles calculating it.
           (if (<= K/max-msg-len incoming-size)
             ;; See comments in child-> re: send vs. send-off
-            (send state-agent  trigger-from-parent buf)
+            (send state-agent trigger-from-parent buf)
             (do
               (log/warn (str "Child buffer overflow\n"
                              "Incoming message is " incoming-size

@@ -17,6 +17,7 @@
         parent-state (atom 0)
         parent-cb (fn [dst]
                     (let [response-state @parent-state]
+                      (log/debug "parent-cb:" response-state)
                       ;; Should get 2 callbacks here:
                       ;; 1. The ACK
                       ;; 2. The actual response
@@ -43,7 +44,12 @@
         child-message-counter (atom 0)
         strm-address (atom 0)
         child-cb (fn [array-o-bytes]
-                   (is (bytes? array-o-bytes) (str "Expected a byte-array. Got a " (class array-o-bytes)))
+                   ;; TODO: Add another similar test that throws an
+                   ;; exception here, for the sake of hardening the
+                   ;; caller
+                   (is (bytes? array-o-bytes)
+                       (str "Expected a byte-array. Got a "
+                            (class array-o-bytes)))
                    (assert array-o-bytes)
                    (let [msg-len (count array-o-bytes)]
                      (log/debug "Incoming message:"
@@ -61,9 +67,9 @@
                                                                     ::specs/send-eof false
                                                                     ::specs/start-pos @strm-address})
                            state-agent @state-agent-atom]
+                       (is state-agent)
                        (swap! child-message-counter inc)
                        (swap! strm-address + msg-len)
-                       (is state-agent)
                        (message/child-> state-agent response))))
         initialized (message/initial-state parent-cb child-cb)
         state (message/start! initialized)]

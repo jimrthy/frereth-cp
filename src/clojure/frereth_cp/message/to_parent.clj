@@ -348,9 +348,7 @@
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn maybe-send-block!
-  "Possibly send a block from child to parent
-
-  There's a lot going on in here."
+  "Possibly send a block from child to parent"
   [state]
   (if-let [state' (pick-next-block-to-send state)]
     (let [state'' (pre-calculate-state-after-send state')

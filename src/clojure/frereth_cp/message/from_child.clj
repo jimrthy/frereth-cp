@@ -4,7 +4,7 @@
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs])
-  (:import [io.netty.buffer ByteBuf]))
+  (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -22,9 +22,14 @@
   [{{:keys [::specs/send-bytes]} ::specs/outgoing
     :as state}]
   ;; Line 322: This also needs to account for send-acked
-  ;; For whatever reason, DJB picked this as the end-point to refuse to read
+  ;; For whatever reason, DJB picked this (-4K) as the
+  ;; end-point to refuse to read
   ;; more child data before we hit send-byte-buf-size.
-  ;; Presumably that reason remains valid
+  ;; Presumably that reason remains valid.
+  ;; (Although it seems like it would make more sense to
+  ;; look at the actual message that we're considering...
+  ;; I'm just not quite ready to make that particular
+  ;; break with his implementation)
 
   ;; Q: Is that an important part of the algorithm, or is
   ;; it "just" dealing with the fact that we have a circular
@@ -48,8 +53,8 @@
   [{{:keys [::specs/send-acked
             ::specs/send-bytes]} ::specs/outgoing
     :as state}
-   ;; TODO: Eliminate the ByteBuf arg.
-   ;; Child should neither know nor care that netty is involved.
+   ;; Child should neither know nor care that netty is involved,
+   ;; so a ByteBuf really isn't appropriate here.
    ;; Much better to just just accept a byte array.
    ;; A clojure vector of bytes would generally be better than that.
    ;; A clojure object that we could just serialize to either
@@ -57,17 +62,25 @@
    ;; like it would be best.
    ;; Of course, we should allow the byte array for apps that
    ;; want/need to do their own serialization.
-   ^ByteBuf buf]
-  ;; Q: Need to apply back-pressure if we
-  ;; already have ~124K pending?
+   ;; And it's important to remember that, like TCP, this is meant
+   ;; to be a streaming protocol.
+   ;; So the higher-level options don't make sense at this level.
+   ;; Though it seems like it would be nice to generally be able
+   ;; to just hand the message to a serializer and have it handle
+   ;; the streaming.
+   ^bytes array-o-bytes]
+  ;; Note that back-pressure gets applied if we
+  ;; already have ~124K pending because caller started
+  ;; dropping packets)
   ;; (It doesn't seem like it should matter, except
-  ;; as an upstream signal that there's a network
-  ;; issue)
-  (let [;; In the original, this is the offset into the circular
+  ;; as an upstream signal that there's some kind of
+  ;; problem)
+  (let [buf (Unpooled/wrappedBuffer array-o-bytes)
+        ;; In the original, this is the offset into the circular
         ;; buf where we're going to start writing incoming bytes.
         pos (+ (rem send-acked K/send-byte-buf-size) send-bytes)
         available-buffer-space (- K/send-byte-buf-size pos)
-        bytes-to-read (min available-buffer-space (.readableBytes buf))
+        bytes-to-read (min available-buffer-space (count array-o-bytes))
         send-bytes (+ send-bytes bytes-to-read)
         block {::specs/buf buf
                ::specs/transmissions 0}]

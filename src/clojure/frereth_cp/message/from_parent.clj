@@ -95,7 +95,7 @@
     start-byte ::specs/start-byte
     :as packet}]
   (assert D (str "Missing ::specs/size-and-flags among\n" (keys packet)))
-  (log/debug "D ==" D "\nIncoming State:\n" incoming)
+  (log/debug "calculate-start-stop-bytes: D ==" D "\nIncoming State:\n" incoming)
   ;; If we're re-receiving bytes...well, the reference
   ;; implementation just discards them.
   ;; It would be safer to verify that the overlapping bits
@@ -433,6 +433,7 @@ Line 608"
                ;; since this is called for side-effects, ignore the
                ;; return value.
                (send-ack! extracted ack-msg)
+               (log/debug "ACK'd")
                (update extracted
                        ::specs/incoming
                        dissoc
@@ -440,7 +441,10 @@ Line 608"
            extracted)
           flagged))
       (do
-        (log/warn "Illegal incoming message length:" len)
+        (if (< 0 len)
+          (log/warn "Illegal incoming message length:" len)
+          ;; Nothing to see here. Move along.
+          (log/debug "i/o loop iteration w/out parent interaction"))
         nil))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -458,9 +462,6 @@ Line 608"
             ::specs/receive-written]} ::specs/incoming
     :as state}]
   (let [child-buffer-count (count ->child-buffer)]
-    ;; We seem to be getting here twice.
-    ;; Q: How?
-    (throw (RuntimeException. "This don't make no sense"))
     (log/debug "from-parent/try-processing-message"
                "\nchild-buffer-count:" child-buffer-count
                "\nparent->buffer count:" (count parent->buffer)

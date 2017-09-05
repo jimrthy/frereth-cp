@@ -56,13 +56,12 @@
       (if (< stop receive-bytes)
         (do
           (log/debug "Dropping previously consolidated block")
-          ;; Previously consolidated block. Just drop it.
+          (throw (RuntimeException. "Probably need to call .release"))
           (update incoming ::specs/gap-buffer (partial drop 1)))
         ;; Consolidate this message block
         ;; I'm dubious about the logic for bytes-to-skip.
         ;; The math behind it seems wrong...but it seems
         ;; to work in practice.
-        ;; Except that it doesn't.
         (let [bytes-to-skip (- receive-bytes start)]
           (when (< 0 bytes-to-skip)
             (log/info "Skipping" bytes-to-skip "previously received bytes in" buf)
@@ -70,6 +69,12 @@
           (log/debug "Moving first entry from " (::specs/gap-buffer incoming))
           (-> incoming
               (update ::specs/gap-buffer (partial drop 1))
+              ;; There doesn't seem to be any good reason to hang
+              ;; onto buf here. It's helpful for debugging,
+              ;; but I need byte-arrays downstream.
+              ;; There's an open question about where it makes
+              ;; sense to copy the bytes over
+              ;; (and release the buffer)
               (update ::specs/->child-buffer conj buf)
               ;; TODO: Compare performance w/ using assoc here
               (update ::specs/receive-bytes (constantly (inc stop))))))
@@ -145,9 +150,10 @@
                 ;; skipped due to gap buffering
                 (let [bs (byte-array (.readableBytes buf))]
                   (.readBytes buf bs)
-                  (log/info "Calling back to the child")
+                  (log/info "Calling back to the child:" bs)
                   (->child bs))
                 ;; And drop it
+                (log/debug "Dropping block from child buffer")
                 (update state
                         ::specs/->child-buffer
                         (comp vec rest))
