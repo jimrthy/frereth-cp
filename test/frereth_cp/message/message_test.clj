@@ -92,9 +92,7 @@
           (let [wrote (future (message/parent-> state incoming))
                 outcome (deref response 1000 ::timeout)]
             (if-let [err (agent-error state)]
-              (do
-                (is (not err))
-                (log/error (utils/get-stack-trace err)))
+              (is (not err))
               (do
                 (is (not= outcome ::timeout))
                 (when-not (= outcome ::timeout)
@@ -114,6 +112,9 @@
                         (is (not outcome) "What should we have here?"))))))))))
       (finally
         (message/halt! state)))))
+(comment
+  (basic-echo)
+  )
 
 (deftest parallel-parent-test
   (testing "parent-> should be thread-safe"

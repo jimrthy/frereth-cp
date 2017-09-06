@@ -158,7 +158,6 @@
                 (update state
                         ::specs/->child-buffer
                         (comp vec rest))
-                (.release buf)
                 (catch RuntimeException ex
                   ;; Reference implementation specifically copes with
                   ;; EINTR, EWOULDBLOCK, and EAGAIN.
