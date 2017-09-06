@@ -176,24 +176,8 @@
             (assoc ::specs/recent (System/nanoTime))
             to-parent/maybe-send-block!)
         state (or (from-parent/try-processing-message! state)
-                  state)
-        blocks (get-in state [::specs/incoming ::specs/->child-buffer])]
-    ;; Each block is a ByteBuf that needs to be copied into a byte-array
-    ;; and .release'd.
-    ;; Open Q: Does this make more sense here, or back in to-child around
-    ;; line 78?
-    (doseq [block blocks]
-      ;; ->child should really be called ->child!
-      ;; We're absolutely calling it for side-effects and
-      ;; can't rely on its return value at all.
-      ;; It's an end-user-supplied event handler.
-      ;; Actually, to be safe, we can't even rely on it
-      ;; not throwing an Exception.
-      ;; For that matter, we can't really trust it
-      ;; not to block our i/o loop here...can we?
-      ;; TODO: Add protection against those potential
-      ;; problems.
-      (->child block))
+                  state)]
+    (to-child/forward! ->child state)
     state
     ;; At the end of the main ioloop in the refernce
     ;; implementation, there's a block that closes the pipe

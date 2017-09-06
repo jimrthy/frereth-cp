@@ -59,7 +59,8 @@
           (throw (RuntimeException. "Probably need to call .release"))
           (update incoming ::specs/gap-buffer (partial drop 1)))
         ;; Consolidate this message block
-        ;; I'm dubious about the logic for bytes-to-skip.
+        ;; I'm dubious about the logic for bytes-to-skip
+        ;; and receive-bytes.
         ;; The math behind it seems wrong...but it seems
         ;; to work in practice.
         (let [bytes-to-skip (- receive-bytes start)]
@@ -157,6 +158,7 @@
                 (update state
                         ::specs/->child-buffer
                         (comp vec rest))
+                (.release buf)
                 (catch RuntimeException ex
                   ;; Reference implementation specifically copes with
                   ;; EINTR, EWOULDBLOCK, and EAGAIN.
