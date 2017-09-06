@@ -174,11 +174,11 @@
   (let [state
         (-> state
             (assoc ::specs/recent (System/nanoTime))
+            ;; This doesn't seem to be working
             to-parent/maybe-send-block!)
         state (or (from-parent/try-processing-message! state)
                   state)]
     (to-child/forward! ->child state)
-    state
     ;; At the end of the main ioloop in the refernce
     ;; implementation, there's a block that closes the pipe
     ;; to the child if we're done.
@@ -195,7 +195,7 @@
         :ret ::specs/state)
 (defn trigger-from-child
   [state array-o-bytes]
-  (log/debug "Received a" (class array-o-bytes) "from child")
+  (log/debug "trigger-from-child: Received a" (class array-o-bytes))
   (trigger-io
    (if (from-child/room-for-child-bytes? state)
      (do

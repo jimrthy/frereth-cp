@@ -400,7 +400,9 @@ Line 608"
       ;; TODO: Time this. See whether it's worth combining these calls
       ;;  using either some version of comp or as-> (or possibly
       ;; transducers?)
-      (let [packet (deserialize parent->buffer)
+      (let [_ (log/debug "Deserializing parent->buffer")
+            packet (deserialize parent->buffer)
+            _ (log/debug "deserialized")
             ack-id (::specs/acked-message packet)
             ;; Note that there's something terribly wrong if we
             ;; have multiple blocks with the same message ID.
@@ -445,6 +447,7 @@ Line 608"
           (log/warn "Illegal incoming message length:" len)
           ;; Nothing to see here. Move along.
           (log/debug "i/o loop iteration w/out parent interaction"))
+        ;; Be explicit about this
         nil))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

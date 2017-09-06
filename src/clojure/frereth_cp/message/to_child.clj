@@ -141,6 +141,7 @@
   ;; we've hit EOF).
   (let [consolidated (consolidate-gap-buffer primed)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])]
+    (log/debug "Have" (count ->child-buffer) "blocks ready to go to child")
     (reduce (fn [state buf]
               ;; Forward the byte-array inside the buffer
               (try
@@ -155,8 +156,9 @@
                   (->child bs))
                 ;; And drop it
                 (log/debug "Dropping block from child buffer")
-                (update state
-                        ::specs/->child-buffer
+                (.release buf)
+                (update-in state
+                           [::specs/incoming ::specs/->child-buffer]
                         (comp vec rest))
                 (catch RuntimeException ex
                   ;; Reference implementation specifically copes with
