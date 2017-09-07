@@ -197,9 +197,10 @@
                 this)
               (catch RuntimeException ex
                 (log/error "Unhandled low-level exception escaped handler" ex (.getStackTrace ex))
-                (comment this))
+                nil)
               (catch Exception ex
-                (log/error "Major problem escaped handler" ex (.getStackTrace ex))))
+                (log/error "Major problem escaped handler" ex (.getStackTrace ex))
+                nil))
             (do
               (log/debug "Server recv from" (:chan client-read-chan) ":" msg)
               (if (identical? msg ::drained)

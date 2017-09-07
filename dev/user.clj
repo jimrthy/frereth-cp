@@ -1,5 +1,6 @@
 (ns user
-  (:require [clojure.tools.namespace.repl :refer (refresh refresh-all)]))
+  (:require [clojure.repl :refer (apropos dir doc pst root-cause source)]
+   [clojure.tools.namespace.repl :refer (refresh refresh-all)]))
 
 ;; This is an old trick from Pedestal. When system.clj doesn't compile,
 ;; it can prevent the REPL from starting, which makes debugging very

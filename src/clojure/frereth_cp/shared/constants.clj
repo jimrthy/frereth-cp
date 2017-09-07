@@ -5,6 +5,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
 
+;; Q: How many of the rest of this could benefit enough by
+;; getting a ^:const metadata hint to justify it?
 (def client-nonce-prefix-length 16)
 (def client-nonce-suffix-length 8)
 (def extension-length 16)
@@ -29,6 +31,13 @@
   ;; (TODO: this should probably be dynamically customizable)
   2500)
 
+(def ^:const max-8-int 128)
+(def ^:const max-8-uint 255)
+(def ^:const max-16-int 32768)
+(def ^:const max-16-uint 65535)
+;; (dec (pow 2 32))
+(def ^:const max-32-uint 4294967295)
+(def ^:const max-64-uint 18446744073709551999N)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 

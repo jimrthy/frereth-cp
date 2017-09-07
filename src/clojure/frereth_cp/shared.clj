@@ -14,12 +14,16 @@
             [frereth-cp.util :as util])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
-           io.netty.buffer.Unpooled
+           [io.netty.buffer ByteBuf Unpooled]
            java.security.SecureRandom))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 ;;; TODO: Pretty much all of these should move into constants
+
+;; TODO: Uncomment this...most of the pieces in here are fairly
+;; performance-sensitive
+(comment (set! *warn-on-reflection* true))
 
 (def hello-header (.getBytes (str K/client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
@@ -125,14 +129,15 @@
 TODO: Think about a way to do this using specs instead.
 
 Needing to declare these things twice is annoying."
-  [tmplt fields dst k]
+  [tmplt fields ^ByteBuf dst k]
   (let [dscr (k tmplt)
         cnvrtr (::K/type dscr)
         v (k fields)]
     (try
       (case cnvrtr
-        ::K/bytes (let [n (::K/length dscr)
-                        beg (.readableBytes dst)]
+        ::K/bytes (let [^Long n (::K/length dscr)
+                        beg (.readableBytes dst)
+                        ]
                     (try
                       (log/debug (str "Getting ready to write "
                                       n
@@ -184,17 +189,17 @@ Needing to declare these things twice is annoying."
  (with-out-str (b-s/print-bytes bs)))
 
 (defn compose
-  "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt
-
-  This should probably be named compose! and return nil"
+  "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt"
   [tmplt fields dst]
-  (comment (log/info (str "Putting\n" (util/pretty fields)
-                          fields "\ninto\n" dst
-                          "\nbased upon\n" (util/pretty tmplt))))
   ;; Q: How much do I gain by supplying dst?
-  ;; It does let callers reuse the buffer, which
+  ;; A: It does let callers reuse the buffer, which
   ;; will definitely help with GC pressure.
-
+  ;; Yes, it's premature optimization. And how
+  ;; often will this get used?
+  ;; Rename this to compose!
+  ;; Add a purely functional version of compose that
+  ;; creates the ByteBuf, calls compose! and
+  ;; returns dst.
   (run!
    (partial composition-reduction tmplt fields dst)
    (keys tmplt))
@@ -206,9 +211,9 @@ Needing to declare these things twice is annoying."
 Really belongs in crypto.
 
 But it depends on compose, which would set up circular dependencies"
-  [tmplt src dst key-pair nonce-prefix nonce-suffix]
+  [tmplt src ^ByteBuf dst key-pair nonce-prefix nonce-suffix]
   {:pre [dst]}
-  (let [buffer (Unpooled/wrappedBuffer dst)]
+  (let [^ByteBuf buffer (Unpooled/wrappedBuffer dst)]
     (.writerIndex buffer 0)
     (compose tmplt src buffer)
     (let [n (.readableBytes buffer)
@@ -220,18 +225,22 @@ But it depends on compose, which would set up circular dependencies"
                       nonce-suffix)
       (crypto/box-after key-pair dst n nonce))))
 
-;; TODO: Needs spec
-;; This one seems interesting
+(s/fdef decompose
+        ;; TODO: tmplt needs a spec for the values
+        :args (s/cat :tmplt map?
+                     :src #(instance? ByteBuf %))
+        ;; TODO: Really should match each value in tmplt
+        ;; with the corresponding value in ret and clarify
+        ;; a type that way.
+        :fn #(= (-> % :ret keys)
+                (-> % :tmplt keys))
+        :ret map?)
 (defn decompose
   "Note that this very strongly assumes that I have a ByteBuf here.
 
-And that it's a victim of mid-stream refactoring.
-
-Some of the templates are defined here. Others have moved to constants.
-
-TODO: Clean this up and move it (and compose, and helpers) into their
-own ns"
-  [tmplt src]
+  TODO: Clean this up and move it (and compose, and helpers) into their
+  own ns"
+  [tmplt ^ByteBuf src]
   (reduce
    (fn
      [acc k]
@@ -245,8 +254,14 @@ own ns"
                       ;; .readBytes does not produce a derived buffer.
                       ;; The buffer that gets created here will need to be
                       ;; released separately
-                      ::K/bytes (.readBytes src (::K/length dscr))
+                      ::K/bytes (let [^Long len (::K/length dscr)]
+                                  (.readBytes src len))
                       ::K/int-64 (.readLong src)
+                      ::K/int-32 (.readInt src)
+                      ::K/int-16 (.readShort src)
+                      ::K/uint-64 (b-t/possibly-2s-uncomplement-64 (.readLong src))
+                      ::K/uint-32 (b-t/possibly-2s-uncomplement-32 (.readInt src))
+                      ::K/uint-16 (b-t/possibly-2s-uncomplement-16 (.readShort src))
                       ::K/zeroes (.readSlice src (::K/length dscr))
                       (throw (ex-info "Missing case clause"
                                       {::failure cnvrtr
@@ -283,7 +298,8 @@ own ns"
   "Be sure to call this when you're done with something
 allocated using default-packet-manager"
   [p-m]
-  (-> p-m ::packet .release))
+  (let [^ByteBuf packet (::packet p-m)]
+    (.release packet)))
 
 (s/fdef default-work-area
         :args (s/cat)
@@ -335,8 +351,6 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
               (aset-byte result @pos (byte c)))
             (swap! pos inc)))))
     result))
-(comment (let [encoded (encode-server-name "foo..bacon.com")]
-           (vec encoded)))
 
 (defn safe-nonce
   "Produce a nonce that's theoretically safe.
@@ -378,5 +392,16 @@ Or there's probably something similar in guava"
 
 (def all-zeros
   "To avoid creating this over and over.
-TODO: Refactor this to a function"
+
+Q: Refactor this to a function?
+(note that that makes like quite a bit more difficult for zero-out!)"
   (zero-bytes 128))
+
+(defn zero-out!
+  "Shove zeros into the byte-array at dst, from indexes start to end"
+  [dst start end]
+  (let [n (- end start)]
+    (when (<= (count all-zeros) n)
+      (alter-var-root all-zeros
+                      (fn [_] (zero-bytes n)))))
+  (b-t/byte-copy! dst start end all-zeros))

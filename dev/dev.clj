@@ -13,7 +13,8 @@ Although tools.namespace may work just fine for what actually happens here"
             [clojure.string :as string]
             [clojure.test :as test]
             [clojure.tools.logging :as log]
-            [clojure.tools.namespace.repl :refer (refresh refresh-all)]))
+            [clojure.tools.namespace.repl :refer (refresh refresh-all)]
+            [manifold.stream :as strm]))
 
 (def +frereth-component+
   "Just to help me track which REPL is which"

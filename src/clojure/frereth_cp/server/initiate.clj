@@ -119,7 +119,7 @@ To be fair, this layer *is* pretty special."
   ;;; Set it up to extract from the current minute key
 
   ;; Start with the initial 0-padding
-  (b-t/byte-copy! dst 0 K/box-zero-bytes shared/all-zeros)
+  (shared/zero-out! dst 0 K/box-zero-bytes)
   ;; Copy over the 80 bytes of crypto text from the initial cookie.
   ;; Note that this part is tricky:
   ;; The "real" initial cookie is 96 bytes long:
@@ -151,7 +151,7 @@ To be fair, this layer *is* pretty special."
       (catch ExceptionInfo _
         ;; Try again with the previous minute-key
         (log/debug "That failed. Try again with the previous minute-key")
-        (b-t/byte-copy! dst 0 K/box-zero-bytes shared/zero-bytes)
+        (shared/zero-out! dst 0 K/box-zero-bytes)
         (b-t/byte-copy! dst
                         K/box-zero-bytes
                         K/hello-crypto-box-length
