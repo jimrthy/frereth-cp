@@ -38,7 +38,13 @@
   ;; to -main, as opposed to what happens with `boot run`
   ;; TODO: Eliminate this discrepancy
   (let [dir (if (seq dir) dir #{"target"})]
-    (comp (aot) (pom) (uber) (jar) (target :dir dir))))
+    (comp (javac) (aot) (pom) (uber) (jar) (target :dir dir))))
+
+(deftask cider-repl
+  "Set up a REPL for connecting from CIDER"
+  []
+  ;; Just because I'm prone to forget one of the vital helper steps
+  (comp (cider) (javac) (repl)))
 
 (deftask run
   "Run the project."

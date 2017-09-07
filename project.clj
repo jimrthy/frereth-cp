@@ -1,4 +1,5 @@
 (defproject frereth-cp "0.0.1-SNAPSHOT"
+  ;; Deprecated: switch to using boot
   :description "Implement CurveCP in clojure"
   :url "http://example.com/FIXME"
   :license {:name "Eclipse Public License"
