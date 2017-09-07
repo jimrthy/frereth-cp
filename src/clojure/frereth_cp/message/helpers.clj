@@ -50,7 +50,7 @@
 ;;; Public
 
 (s/fdef earliest-block-time
-        :args (s/coll-of ::specs/block)
+        :args ::specs/blocks
         :ret nat-int?)
 (defn earliest-block-time
   "Calculate the earliest time
@@ -61,7 +61,14 @@ Based on earliestblocktime_compute, in lines 138-153
   ;;; Comment from DJB:
   ;;; XXX: use priority queue
   (let [un-acked-blocks (filter #(not= 0 (::specs/time %)) blocks)]
+    (log/debug "Calculating min-time across" un-acked-blocks)
     (if (< 0 (count un-acked-blocks))
+      ;; I'm winding up with a nil in here, because there's a block
+      ;; with no specs/time key.
+      ;; Actually, that entry doesn't really contain anything
+      ;; useful.
+      ;; And I should only have 1 block, based on my current test.
+      ;; Something is badly off-kilter here.
       (apply min (map ::specs/time
                       ;; Time 0 means it's been ACK'd and is ready to discard
                       un-acked-blocks))

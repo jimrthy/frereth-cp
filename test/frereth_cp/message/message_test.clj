@@ -61,16 +61,11 @@
                                   ::actual msg-len
                                   ::details (vec array-o-bytes)}))
                      ;; Just echo it directly back.
-                     (let [response (to-parent/build-message-block @child-message-counter
-                                                                   {::specs/buf (Unpooled/wrappedBuffer array-o-bytes)
-                                                                    ::specs/length msg-len
-                                                                    ::specs/send-eof false
-                                                                    ::specs/start-pos @strm-address})
-                           state-agent @state-agent-atom]
+                     (let [state-agent @state-agent-atom]
                        (is state-agent)
                        (swap! child-message-counter inc)
                        (swap! strm-address + msg-len)
-                       (message/child-> state-agent response))))
+                       (message/child-> state-agent array-o-bytes))))
         initialized (message/initial-state parent-cb child-cb)
         state (message/start! initialized)]
     (reset! state-agent-atom state)

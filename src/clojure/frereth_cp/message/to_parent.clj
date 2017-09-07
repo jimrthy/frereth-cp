@@ -5,7 +5,8 @@
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.constants :as shared-K])
+            [frereth-cp.shared.constants :as shared-K]
+            [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -166,7 +167,7 @@
                           ;; Stupid unsigned math
                           (if (> n' shared-K/max-32-uint)
                             1 n'))
-        cursor (vec (concat [::specs/blocks] current-block-cursor))
+        cursor (vec (concat [::specs/outgoing ::specs/blocks] current-block-cursor))
         state'
         (-> state
             (update-in (conj cursor ::specs/transmissions) inc)
@@ -174,6 +175,10 @@
             (assoc-in (conj cursor ::specs/message-id) next-message-id)
             (assoc-in [::specs/outgoing ::specs/next-message-id] next-message-id))
         block-to-send (get-in state' cursor)
+        _ (log/debug "Getting ready to build next message block for message "
+                     next-message-id
+                     "\nbased on:\n"
+                     (utils/pretty block-to-send))
         buf (build-message-block next-message-id block-to-send)]
 
     ;; Reference implementation waits until after the actual write before setting any of
@@ -277,9 +282,6 @@
                  ;; The actual check is negative in context, so
                  ;; it's really a not
                  ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
-                 ;; This is my best guess about how to translate that, but I
-                 ;; really need to build a little C program to verify the
-                 ;; syntax
                  (if send-eof
                    (not send-eof-processed)
                    (< send-processed send-bytes))))
@@ -289,8 +291,11 @@
                             max-block-length)
           ;; This next construct seems pretty ridiculous.
           ;; It's just assuring that (<= send-byte-buf-size (+ start-pos block-length))
-          ;; The bitwise-and is a shortcut for module that used to be faster,
-          ;; once upon a time (Q: does it make any difference at all these days?)
+          ;; The bitwise-and is a shortcut for modulo that used to be faster,
+          ;; once upon a time.
+          ;; Q: does it make any difference at all these days?
+          ;; A: According to stack overflow, the modulo will get optimized
+          ;; to bitwise logic by any decent compiler.
           ;; Then again, maybe it's a vital piece to the puzzle.
           ;; TODO: Get an opinion from a cryptographer.
           block-length (if (> (+ (bit-and start-pos (dec K/send-byte-buf-size))
@@ -302,7 +307,10 @@
                 send-eof
                 false)
           ;; TODO: Use Pooled buffers instead!  <---
-          block {::specs/buf (Unpooled/buffer K/k-1)  ;; Q: How big should this be?
+          ;; Bigger TODO: What happened to the actual buffer
+          ;; I'm trying to send?
+          buffer (Unpooled/buffer block-length)
+          block {::specs/buf buffer
                  ::specs/length block-length
                  ::specs/send-eof eof
                  ::specs/start-pos start-pos
@@ -367,7 +375,7 @@
   [state]
   (if-let [state' (pick-next-block-to-send state)]
     (let [state'' (pre-calculate-state-after-send state')
-          buf (build-message-block state'')]
+          buf (get-in state' [::specs/outgoing ::specs/send-buf])]
       (block->parent! buf)
 ;;;      408: earliestblocktime_compute()
       ;; TODO: Honestly, we could probably shave some time/effort by

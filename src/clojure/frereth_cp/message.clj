@@ -181,8 +181,6 @@
             to-parent/maybe-send-block!)
         state (or (from-parent/try-processing-message! state)
                   state)]
-    (comment
-      (throw (RuntimeException. "What's going wrong with maybe-send-block! ?")))
     (to-child/forward! ->child state)
     ;; At the end of the main ioloop in the refernce
     ;; implementation, there's a block that closes the pipe

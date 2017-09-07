@@ -75,15 +75,26 @@
   ;; (It doesn't seem like it should matter, except
   ;; as an upstream signal that there's some kind of
   ;; problem)
-  (let [buf (Unpooled/wrappedBuffer array-o-bytes)
+  (let [buf-size (count array-o-bytes)
+        buf (Unpooled/wrappedBuffer array-o-bytes)
         ;; In the original, this is the offset into the circular
         ;; buf where we're going to start writing incoming bytes.
         pos (+ (rem send-acked K/send-byte-buf-size) send-bytes)
         available-buffer-space (- K/send-byte-buf-size pos)
-        bytes-to-read (min available-buffer-space (count array-o-bytes))
+        ;; I'm pretty sure this concept throws a major
+        ;; wrench into my gears.
+        ;; I don't remember handling this sort of buffering
+        ;; at all.
+        bytes-to-read (min available-buffer-space buf-size)
         send-bytes (+ send-bytes bytes-to-read)
         block {::specs/buf buf
-               ::specs/transmissions 0}]
+               ::specs/transmissions 0
+               ::specs/time (System/nanoTime)
+               ::specs/length buf-size
+               ::specs/send-eof false
+               ;; Q: What should this actually be?
+               ::specs/start-pos 0}]
+    (.writerIndex buf buf-size)
     (when (>= send-bytes K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.
