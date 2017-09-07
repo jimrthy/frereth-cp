@@ -208,34 +208,41 @@
             ::specs/n-sec-per-block
             ::specs/rtt-timeout]} ::specs/flow-control
     :as state}]
-  (assert (and earliest-time
-               n-sec-per-block
-               recent
-               rtt-timeout))
-  (when (and (< recent (+ earliest-time n-sec-per-block))
-             (not= 0 earliest-time)
+  {:pre [earliest-time
+         n-sec-per-block
+         recent
+         rtt-timeout]}
+  (log/debug "Checking for a block to resend")
+  (when (and (not= 0 earliest-time)
+             (< recent (+ earliest-time n-sec-per-block))
              (>= recent (+ earliest-time rtt-timeout)))
+    (log/debug "It's been long enough to justify resending")
     ;; This gets us to line 344
     ;; It finds the first block that matches earliest-time
     ;; It's going to re-send that block (it *does* exist...right?)
+    ;; TODO: Seems like just keeping a sorted-map with timestamps
+    ;; for keys would be more efficient. But that probably depends
+    ;; on how big these queues get.
     ;; TODO: Need to verify that nothing fell through the cracks
     ;; But first, it might adjust some of the globals.
     (reduce (fn [{{:keys [::specs/current-block-cursor]} ::specs/outgoing
                   :as acc}
                  block]
               (if (= earliest-time (::specs/time block))
-                ;; We found the block that interests up.
-                (reduced
-                 (assoc
-                  (if (> recent (+ last-panic (* 4 rtt-timeout)))
-                    ;; Need to update some of the related flow-control fields
-                    (-> state
-                        (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
-                        (assoc-in [::specs/outgoing ::specs/last-panic] recent)
-                        (assoc-in [::specs/flow-control ::specs/last-edge] recent))
-                    ;; We haven't had another timeout since the last-panic.
-                    ;; Don't adjust those dials.
-                    state)))
+                (do
+                  (log/info "Found earliest old block to resend")
+                  ;; We found the block that interests up.
+                  (reduced
+                   (assoc
+                    (if (> recent (+ last-panic (* 4 rtt-timeout)))
+                      ;; Need to update some of the related flow-control fields
+                      (-> state
+                          (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
+                          (assoc-in [::specs/outgoing ::specs/last-panic] recent)
+                          (assoc-in [::specs/flow-control ::specs/last-edge] recent))
+                      ;; We haven't had another timeout since the last-panic.
+                      ;; Don't adjust those dials.
+                      state))))
                 ;; We still haven't found what we're looking for.
                 ;; Proceed to the next block
                 (update-in acc [::specs/outgoing ::specs/current-block-cursor 0] inc)))
@@ -262,7 +269,7 @@
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
-  (when (and (>= recent (+ earliest-time n-sec-per-block))
+  (if (and (>= recent (+ earliest-time n-sec-per-block))
              (< (count blocks) K/max-outgoing-blocks)
              (or want-ping
                  ;; This next style clause is used several times in
@@ -275,7 +282,7 @@
                  ;; syntax
                  (if send-eof
                    (not send-eof-processed)
-                   (< send-bytes send-processed))))
+                   (< send-processed send-bytes))))
     ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
     (let [start-pos (+ send-acked send-processed)
           block-length (max (- send-bytes send-processed)
@@ -308,6 +315,7 @@
           ;; So we want don't want (dec length) here the
           ;; way you might expect.
           cursor [(count blocks)]]
+      (log/debug "Conditions ripe for sending a new outgoing message")
       (-> state
           ;; TODO: Just update inside specs/outgoing and merge that back in
           ;; over what we currently have
@@ -318,7 +326,14 @@
                         (update ::specs/send-processed + block-length)
                         (assoc ::specs/send-eof-processed (and (= send-processed send-bytes)
                                                                send-eof)))))
-          (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))))
+          (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
+    (log/debug (str "Bad preconditions for sending a new block:\n"
+                    "recent: " recent " <? " (+ earliest-time n-sec-per-block)
+                    "\nBlock count: " (count blocks)
+                    "\nwant-ping: " want-ping
+                    "\nsend-eof: " send-eof
+                    "\n\tsend-eof-processed: " send-eof-processed
+                    "\n\tsend-processed: " send-processed "send-bytes: " send-bytes))))
 
 (defn pick-next-block-to-send
   [state]
