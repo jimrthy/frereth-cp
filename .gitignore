@@ -10,5 +10,6 @@ pom.xml.asc
 .lein-plugins/
 .lein-failures
 /lib/
+/.nrepl-history
 /.nrepl-port
 *~
