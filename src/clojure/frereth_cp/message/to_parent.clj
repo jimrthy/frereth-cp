@@ -151,7 +151,8 @@
   [{:keys [::specs/recent]
     {:keys [::specs/current-block-cursor
             ::specs/next-message-id
-            ::specs/send-buf-size]} ::specs/outgoing
+            ::specs/send-buf-size]
+     :as outgoing} ::specs/outgoing
     :as state}]
 ;;;      382-404:  Build the message packet
 ;;;                N.B.: Ignores most of the ACK bits
@@ -163,11 +164,21 @@
 ;;;                the write to FD9 at offset +7, which is the
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
+  (assert current-block-cursor
+          (str "No current-block-cursor to tell us what to send\nAvailable:\n"
+               (keys outgoing)))
   (let [next-message-id (let [n' (inc next-message-id)]
                           ;; Stupid unsigned math
                           (if (> n' shared-K/max-32-uint)
                             1 n'))
         cursor (vec (concat [::specs/outgoing ::specs/blocks] current-block-cursor))
+        _ (assert (get-in state (conj cursor ::specs/transmissions))
+                  (str "Missing ::transmissions under "
+                       cursor
+                       "\nbased on "
+                       current-block-cursor
+                       "\nHave:\n"
+                       (utils/pretty (get-in state cursor))))
         state'
         (-> state
             (update-in (conj cursor ::specs/transmissions) inc)
@@ -306,34 +317,24 @@
           eof (if (= send-processed send-bytes)
                 send-eof
                 false)
-          ;; TODO: Use Pooled buffers instead!  <---
-          ;; Bigger TODO: What happened to the actual buffer
-          ;; I'm trying to send?
-          buffer (Unpooled/buffer block-length)
-          block {::specs/buf buffer
-                 ::specs/length block-length
-                 ::specs/send-eof eof
-                 ::specs/start-pos start-pos
-                 ;; Q: What about ::specs/time?
-                 ::specs/transmissions 0}
           ;; XXX: or could have the full block in post-buffer space (DJB)
           ;; "absorb" this new block -- JRG
           send-processed (+ send-processed block-length)
-          ;; We're going to append this block to the end.
-          ;; So we want don't want (dec length) here the
-          ;; way you might expect.
-          cursor [(count blocks)]]
+          ;; Want to send a new block.
+          ;; In a single-threaded world, that will always be the last.
+          ;; Honestly, this should be the first block with a transmission
+          ;; count of 0.
+          cursor [(dec (count blocks))]]
       (log/debug "Conditions ripe for sending a new outgoing message")
       (-> state
-          ;; TODO: Just update inside specs/outgoing and merge that back in
-          ;; over what we currently have
-          (update ::specs/outgoing
+          #_(update ::specs/outgoing
                   (fn [cur]
                     (-> cur
                         (update ::specs/blocks conj block)
+                        ;; Updating this here seems premature
                         (update ::specs/send-processed + block-length)
-                        (assoc ::specs/send-eof-processed (and (= send-processed send-bytes)
-                                                               send-eof)))))
+                        (assoc ::specs/send-eof-processed (and send-eof
+                                                               (= send-processed send-bytes))))))
           (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
     (log/debug (str "Bad preconditions for sending a new block:\n"
                     "recent: " recent " <? " (+ earliest-time n-sec-per-block)
@@ -343,7 +344,11 @@
                     "\n\tsend-eof-processed: " send-eof-processed
                     "\n\tsend-processed: " send-processed "send-bytes: " send-bytes))))
 
+(s/fdef pick-next-block-to-send
+        :args (s/cat :state ::specs/state)
+        :ret (s/nilable ::specs/state))
 (defn pick-next-block-to-send
+  "Instead of returning nil on "
   [state]
   (or (check-for-previous-block-to-resend state)
 ;;;       357-410: Try sending a new block: (-- DJB)
@@ -351,18 +356,21 @@
                   ;; a previous block -- JRG
       (check-for-new-block-to-send state)))
 
+(s/fdef block->parent!
+        :args (s/cat :send-buf ::specs/buf)
+        :ret any?)
 (defn block->parent!
   "Actually send the message block to the parent
 
   Corresponds to line 404 under the sendblock: label"
-  [{{:keys [:specs/->parent]
-     ^ByteBuf send-buf ::specs/send-buf} ::specs/outgoing
-    :as state}]
+  [->parent send-buf]
+  {:pre [send-buf]}
   ;; Note that I've ditched the special offset+7
   ;; That kind of length calculation is just built
   ;; into everything on the JVM.
-  (when send-buf
-    (->parent send-buf)))
+
+  ;; Note that, really, I want to send a byte-array
+  (->parent send-buf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -373,15 +381,20 @@
 (defn maybe-send-block!
   "Possibly send a block from child to parent"
   [state]
+  ;; I *could*
   (if-let [state' (pick-next-block-to-send state)]
     (let [state'' (pre-calculate-state-after-send state')
-          buf (get-in state' [::specs/outgoing ::specs/send-buf])]
-      (block->parent! buf)
+          buf (get-in state'' [::specs/outgoing ::specs/send-buf])
+          ->parent (get-in state'' [::specs/outgoing ::specs/->parent])]
+      (log/debug "Sending" buf "to parent")
+      (block->parent! ->parent buf)
 ;;;      408: earliestblocktime_compute()
       ;; TODO: Honestly, we could probably shave some time/effort by
       ;; just tracking the earliest block here instead of searching for
       ;; it in check-for-previous-block-to-resend
-      (assoc-in state''
-                [::specs/outgoing ::specs/earliest-time]
-                (help/earliest-block-time (get-in state'' [::specs/outgoing ::specs/blocks]))))
+      (-> state''
+          (assoc-in
+           [::specs/outgoing ::specs/earliest-time]
+           (help/earliest-block-time (get-in state'' [::specs/outgoing ::specs/blocks])))
+          (update ::specs/outgoing dissoc ::specs/current-block-cursor)))
     state))

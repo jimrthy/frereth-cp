@@ -1,5 +1,6 @@
 (ns frereth-cp.message.from-child
   (:require [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.helpers :as help]
@@ -39,9 +40,9 @@
 
 (s/fdef child-consumer
         :args (s/cat :state ::specs/state
-                     :buf ::specs/buf))
+                     :array-o-bytes bytes?))
 (defn child-consumer
-  "Accepts buffers of bytes from the child.
+  "Accepts a byte-array from the child.
 
   Lines 319-337"
   ;; The obvious approach is just to feed ByteBuffers
@@ -69,13 +70,16 @@
    ;; to just hand the message to a serializer and have it handle
    ;; the streaming.
    ^bytes array-o-bytes]
+  ;; FIXME: Start back here. This seems suspicious
+  (log/debug "Adding another message block to" (get-in state [::specs/outgoing ::specs/blocks]))
   ;; Note that back-pressure gets applied if we
   ;; already have ~124K pending because caller started
-  ;; dropping packets)
+  ;; dropping packets.
   ;; (It doesn't seem like it should matter, except
   ;; as an upstream signal that there's some kind of
   ;; problem)
   (let [buf-size (count array-o-bytes)
+        ;; Q: Use Pooled direct buffers instead?
         buf (Unpooled/wrappedBuffer array-o-bytes)
         ;; In the original, this is the offset into the circular
         ;; buf where we're going to start writing incoming bytes.
@@ -88,19 +92,23 @@
         bytes-to-read (min available-buffer-space buf-size)
         send-bytes (+ send-bytes bytes-to-read)
         block {::specs/buf buf
+               ::specs/length buf-size
+               ;; TODO: Add a signal for marking this true
+               ::specs/send-eof false
                ::specs/transmissions 0
                ::specs/time (System/nanoTime)
-               ::specs/length buf-size
-               ::specs/send-eof false
-               ;; Q: What should this actually be?
-               ::specs/start-pos 0}]
+               ;; Q: What should these actually be?
+               ::specs/start-pos 0
+               }]
     (.writerIndex buf buf-size)
     (when (>= send-bytes K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.
       (throw (AssertionError. "End of stream")))
     (-> state
-        (update-in [::specs/outgoing ::specs/blocks] conj block)
-        (assoc-in [::specs/outgoing ::specs/send-bytes] send-bytes)
+        (update ::specs/outgoing (fn [cur]
+                                   (-> cur
+                                       (update ::specs/blocks conj block)
+                                       (assoc ::specs/send-bytes send-bytes))))
 ;;;  337: update recent
         (assoc ::specs/recent (System/nanoTime)))))
