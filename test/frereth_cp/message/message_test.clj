@@ -119,12 +119,12 @@
                         (is (= (::specs/send-processed outgoing) 0))
                         (is (not (::specs/send-eof outgoing)))
                         (is (= (::specs/send-bytes outgoing) msg-len))
+                        ;; Keeping around as a reminder for when the implementation changes
+                        ;; and I need to see what's really going on again
                         (comment (is (not outcome) "What should we have here?")))))))))))
       (finally
         (message/halt! state)))))
-(comment
-  (basic-echo)
-  )
+(comment (basic-echo))
 
 (deftest parallel-parent-test
   (testing "parent-> should be thread-safe"

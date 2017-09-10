@@ -2,10 +2,13 @@
   (:require [clojure.tools.logging :as log]
             [frereth-cp.client.state :as state]
             [frereth-cp.shared.constants :as K]
-            [manifold.stream :as strm]))
+            [manifold.stream :as strm])
+  (:import io.netty.buffer.ByteBuf))
+
+(set! *warn-on-reflection* true)
 
 (defn pull-initial-message-bytes
-  [wrapper msg-byte-buf]
+  [wrapper ^ByteBuf msg-byte-buf]
   (when msg-byte-buf
     (log/info "pull-initial-message-bytes ByteBuf:" msg-byte-buf)
     (let [bytes-available (K/initiate-message-length-filter (.readableBytes msg-byte-buf))]

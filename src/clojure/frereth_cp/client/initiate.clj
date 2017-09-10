@@ -6,7 +6,10 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K])
-  (:import io.netty.buffer.ByteBuf))
+  (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
+           io.netty.buffer.ByteBuf))
+
+(set! *warn-on-reflection* true)
 
 (defn build-initiate-interior
   "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
@@ -19,7 +22,8 @@
         server-name (get-in this [::shared/my-keys ::K/server-name])
         _ (assert server-name)
         inner-nonce-suffix (::state/inner-i-nonce this)
-        src {::K/client-long-term-key (.getPublicKey (get-in this [::shared/my-keys ::shared/long-pair]))
+        ^TweetNaclFast$Box$KeyPair long-pair (get-in this [::shared/my-keys ::shared/long-pair])
+        src {::K/client-long-term-key (.getPublicKey long-pair)
              ::K/inner-i-nonce inner-nonce-suffix
              ::K/inner-vouch (::state/vouch this)
              ::K/server-name server-name
@@ -60,10 +64,11 @@
                    "which is " (count crypto-box) " bytes long\n"
                    "into the initiate packet"))
     (let [dscr (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (count msg))
+          ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
           fields #::K{:prefix K/initiate-header
                       :srvr-xtn (::state/server-extension this)
                       :clnt-xtn (::shared/extension this)
-                      :clnt-short-pk (.getPublicKey (get-in this [::shared/my-keys ::shared/short-pair]))
+                      :clnt-short-pk (.getPublicKey short-pair)
                       :cookie (get-in this [::state/server-security ::state/server-cookie])
                       :outer-i-nonce nonce-suffix
                       :vouch-wrapper crypto-box}]

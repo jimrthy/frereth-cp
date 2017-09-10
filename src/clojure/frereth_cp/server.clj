@@ -16,7 +16,10 @@
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream])
-  (:import clojure.lang.ExceptionInfo))
+  (:import clojure.lang.ExceptionInfo
+           io.netty.buffer.ByteBuf))
+
+(set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -56,7 +59,7 @@
         :ret boolean?)
 (defn check-packet-length
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
-  [packet]
+  [^ByteBuf packet]
   ;; So far, for unit tests, I'm getting the [B I expect
   (log/debug (str "Incoming: " packet ", a " (class packet)))
   ;; For now, retain the name r for compatibility/historical reasons
@@ -84,7 +87,7 @@
                        ;; Q: Does that reason go away when you factor in the hoops I
                        ;; have to jump through to jump between bitwise and logical
                        ;; operations?
-                       (bit-and (if (b-t/bytes= (.getBytes K/client-header-prefix)
+                       (bit-and (if (b-t/bytes= K/client-header-prefix
                                                 rcvd-prfx)
                                   -1 0)
                                 (if (b-t/bytes= extension
@@ -92,7 +95,7 @@
                                   -1 0)))
         ;; TODO: Revisit the original and decide whether it's worth the trouble.
         ;; ALT: Compare the prefix as a vector. See how much of a performance hit we take
-        verified (and (b-t/bytes= (.getBytes K/client-header-prefix)
+        verified (and (b-t/bytes= K/client-header-prefix
                                   rcvd-prfx)
                       (b-t/bytes= extension
                                   rcvd-xtn))]
@@ -115,9 +118,9 @@
 (defn handle-incoming!
   "Packet arrived from client. Do something with it."
   [state
-   {:keys [host
-           message
-           port]
+   {:keys [:host
+           :port]
+    ^ByteBuf message :message
     :as packet}]
   (log/debug "Incoming")
   (if (check-packet-length message)

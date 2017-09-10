@@ -12,23 +12,25 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
 
+(set! *warn-on-reflection* true)
+
 (def send-timeout 50)
 
 (defn prepare-cookie!
   [{:keys [::state/client-short<->server-long
-           ::state/client-short-pk
            ::state/minute-key
            ;; Q: What is/was this for?
            ::clear-text
-           ::shared/text
-           ::shared/working-nonce]}]
+           ::shared/working-nonce]
+    ^bytes client-short-pk ::state/client-short-pk
+    ^bytes text ::shared/text}]
   "Called purely for side-effects.
 
 The most important is that it encrypts clear-text
 and puts the crypto-text into the byte-array in text.
 
 Except that it doesn't seem to do that at all."
-  (let [keys (crypto/random-key-pair)
+  (let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair keys (crypto/random-key-pair)
         ;; This is just going to get thrown away, leading
         ;; to potential GC issues.
         ;; Probably need another static buffer for building
@@ -86,7 +88,7 @@ Except that it doesn't seem to do that at all."
         (.release buffer)))))
 
 (defn build-cookie-packet
-  [packet client-extension server-extension working-nonce crypto-cookie]
+  [packet client-extension server-extension ^bytes working-nonce crypto-cookie]
   (let [composed (shared/compose K/cookie-frame {::K/header K/cookie-header
                                                  ::K/client-extension client-extension
                                                  ::K/server-extension server-extension

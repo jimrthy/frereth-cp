@@ -13,10 +13,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
-  (:import clojure.lang.ExceptionInfo))
+  (:import clojure.lang.ExceptionInfo
+           com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
+           io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
+
+(set! *warn-on-reflection* true)
 
 (def default-timeout 2500)
 
@@ -170,13 +174,13 @@ TODO: Need to ask around about that."
     :as this}
    {:keys [::K/header
            ::K/client-extension
-           ::K/server-extension
-           ::K/client-nonce-suffix
-           ::K/cookie]
+           ::K/server-extension]
+    ^ByteBuf client-nonce-suffix ::K/client-nonce-suffix
+    ^ByteBuf cookie ::K/cookie
     :as rcvd}]
   (log/info "Getting ready to try to extract cookie from" cookie)
-  (let [{:keys [::shared/working-nonce
-                ::shared/text]} work-area]
+  (let [{^bytes text ::shared/text
+         ^bytes working-nonce ::shared/working-nonce} work-area]
     (when-not working-nonce
       (log/error (str "Missing nonce buffer amongst\n"
                       (keys work-area)
@@ -194,7 +198,8 @@ TODO: Need to ask around about that."
                 K/server-nonce-suffix-length)
 
     (log/info "Copying encrypted cookie into " text "from" (keys this))
-    (.readBytes cookie text 0 144)
+    ;; Q: What's up with the 144?
+    (.readBytes cookie text 0 K/cookie-frame-length)
     (let [shared (::client-short<->server-long shared-secrets)]
       (log/info (str "Trying to decrypt\n"
                       (with-out-str (b-s/print-bytes text))
@@ -213,7 +218,8 @@ TODO: Need to ask around about that."
                                      ::server-short-term-pk
                                      server-short-term-pk,
                                      ::server-cookie server-cookie)
-              {:keys [::K/s' ::K/black-box]} extracted]
+              {^ByteBuf s' ::K/s'
+               ^ByteBuf black-box ::K/black-box} extracted]
           (.readBytes s' server-short-term-pk)
           (.readBytes black-box server-cookie)
           (assoc this ::server-security server-security))
@@ -226,7 +232,7 @@ TODO: Need to ask around about that."
            ::shared/packet-management
            ::server-extension]
     :as this}]
-  (let [packet (::shared/packet packet-management)]
+  (let [^ByteBuf packet (::shared/packet packet-management)]
     ;; Q: How does packet length actually work?
     ;; A: We used to have the full length of the byte array here
     ;; Now that we don't, what's the next step?
@@ -242,7 +248,10 @@ TODO: Need to ask around about that."
     (let [rcvd (shared/decompose K/cookie-frame packet)
           hdr (byte-array K/header-length)
           xtnsn (byte-array K/extension-length)
-          srvr-xtnsn (byte-array K/extension-length)]
+          srvr-xtnsn (byte-array K/extension-length)
+          ^ByteBuf received-header (::K/header rcvd)
+          ^ByteBuf client-extension (::K/client-extension rcvd)
+          ^ByteBuf server-extension (::K/server-extension rcvd)]
       ;; Reference implementation starts by comparing the
       ;; server IP and port vs. what we received.
       ;; Which we don't have here.
@@ -265,9 +274,9 @@ TODO: Need to ask around about that."
       ;; Well, the proof *is* in the pudding.
       ;; The most important point is whether the other side sent
       ;; us a cookie we can decrypt using our shared key.
-      (.readBytes (::K/header rcvd) hdr)
-      (.readBytes (::K/client-extension rcvd) xtnsn)
-      (.readBytes (::K/server-extension rcvd) srvr-xtnsn)
+      (.readBytes received-header hdr)
+      (.readBytes client-extension xtnsn)
+      (.readBytes server-extension srvr-xtnsn)
       (log/info (str "Verifying that "
                      hdr
                      " looks like it belongs to a Cookie packet"))
@@ -295,7 +304,7 @@ TODO: Need to ask around about that."
                         K/server-nonce-prefix-length
                         K/server-nonce-suffix-length nonce-suffix)
 
-        (let [short-pair (::shared/short-pair my-keys)]
+        (let [^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
           (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
         (let [shared-secret (::client-long<->server-long shared-secrets)
               ;; This is the inner-most secret that the inner vouch hides.
@@ -329,14 +338,15 @@ TODO: Need to ask around about that."
 
   Handling an agent (send), which means `this` is already dereferenced"
   [this
-   {:keys [host port message]
+   {:keys [:host :port]
+    ^ByteBuf message :message
     :as cookie-packet}]
   (log/info (str "Getting ready to convert cookie\n"
                  (with-out-str (b-s/print-bytes message))
                  "into a Vouch"))
   (try
     (try
-      (let [packet (get-in this
+      (let [^ByteBuf packet (get-in this
                            [::shared/packet-management
                             ::shared/packet])]
         (assert packet)
@@ -363,11 +373,12 @@ TODO: Need to ask around about that."
                                   ::server-short-term-pk])]
         (log/debug "Managed to decrypt the cookie")
         (if server-short
-          (let [this (assoc-in this
+          (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
+                this (assoc-in this
                                [::shared-secrets ::client-short<->server-short]
                                (crypto/box-prepare
                                 server-short
-                                (.getSecretKey (::shared/short-pair my-keys))))]
+                                (.getSecretKey my-short-pair)))]
             (log/debug "Prepared shared short-term secret")
             ;; Note that this supplies new state
             ;; Though whether it should is debatable.
@@ -428,8 +439,8 @@ TODO: Need to ask around about that."
                            (keys server-security))
                       {::this this}))))
   (let [server-long-term-pk (::server-long-term-pk server-security)
-        long-pair (::shared/long-pair my-keys)
-        short-pair (::shared/short-pair my-keys)
+        ^TweetNaclFast$Box$KeyPair long-pair (::shared/long-pair my-keys)
+        ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)
         long-shared  (crypto/box-prepare
                       server-long-term-pk
                       (.getSecretKey long-pair))]

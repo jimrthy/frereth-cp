@@ -32,7 +32,7 @@
             ;; aleph. And, really, what alternatives
             ;; are available?
             ;; (agents and core.async seem to be the
-            ;; best)
+            ;; most likely)
             [manifold.stream :as strm])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 

@@ -193,7 +193,7 @@
     #_(crypto/random-bytes! (-> this :child-buffer ::msg))
     (crypto/random-bytes! (::shared/working-nonce work-area))
     (crypto/random-bytes! (::shared/text work-area)))
-  (when-let [short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
+  (when-let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
     (crypto/random-bytes! (.getPublicKey short-term-keys))
     (crypto/random-bytes! (.getSecretKey short-term-keys)))
   ;; Clear the shared secrets in the current client
@@ -240,7 +240,7 @@
         (assoc state ::timeout timeout)))
     (catch Exception ex
       (log/error "Rotation failed:" ex "\nStack trace:")
-      (.printtStackTrace ex)
+      (.printStackTrace ex)
       state)))
 
 (defn randomized-cookie-cutter

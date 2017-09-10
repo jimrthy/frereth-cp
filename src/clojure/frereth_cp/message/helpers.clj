@@ -134,7 +134,8 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;           183: earliestblocktime_compute()
         (doseq [block to-drop]
           (log/debug "Releasing the buf associated with" block)
-          (.release (::specs/buf block)))
+          (let [^ByteBuf buffer (::specs/buf block)]
+            (.release buffer)))
         (assoc-in state [::specs/outgoing ::specs/earliest-time] (earliest-block-time blocks))))
     ;;; No change
     state))

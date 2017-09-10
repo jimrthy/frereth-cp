@@ -12,7 +12,10 @@
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
+           com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            [io.netty.buffer ByteBuf Unpooled]))
+
+(set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Named Constants
@@ -182,7 +185,7 @@ To be fair, this layer *is* pretty special."
         :ret boolean?)
 (defn verify-client-pk-in-vouch
   [initiate hidden-pk]
-  (let [expected-buffer (::K/clnt-short-pk initiate)
+  (let [^ByteBuf expected-buffer (::K/clnt-short-pk initiate)
         expected (byte-array K/key-length)]
     (.getBytes expected-buffer 0 expected)
     (log/debug "Cookie extraction succeeded. Q: Do the contents match?"
@@ -218,7 +221,7 @@ To be fair, this layer *is* pretty special."
   ;; just silently discards the packet.
   ;; Although that approach is undeniably faster than throwing
   ;; an exception and logging the problem
-  (let [hello-cookie-buffer (::K/cookie initiate)
+  (let [^ByteBuf hello-cookie-buffer (::K/cookie initiate)
         hello-cookie (byte-array K/server-cookie-length)]
     (.getBytes hello-cookie-buffer 0 hello-cookie)
     (let [inner-vouch-bytes (byte-array K/server-cookie-length)]
@@ -246,8 +249,8 @@ To be fair, this layer *is* pretty special."
                      :current-client ::client-state)
         :ret ::K/initiate-client-vouch-wrapper)
 (defn open-client-crypto-box
-  [{:keys [::K/outer-i-nonce
-           ::K/vouch-wrapper]
+  [{:keys [::K/outer-i-nonce]
+    ^ByteBuf vouch-wrapper ::K/vouch-wrapper
     :as initiate}
    current-client]
 
@@ -274,7 +277,7 @@ To be fair, this layer *is* pretty special."
         :ret boolean?)
 (defn validate-server-name
   [state inner-client-box]
-  (let [rcvd-name-buffer (::K/server-name inner-client-box)
+  (let [^ByteBuf rcvd-name-buffer (::K/server-name inner-client-box)
         rcvd-name (byte-array (.readableBytes rcvd-name-buffer))]
     (.readBytes rcvd-name-buffer rcvd-name)
     (let [my-name (get-in state [::shared/my-keys ::K/server-name])
@@ -318,12 +321,14 @@ Note that that includes TODOs re:
   [state
    short-pk
    client-message-box]
-  (let [client-long-buffer (::K/long-term-public-key client-message-box)
+  (let [^ByteBuf client-long-buffer (::K/long-term-public-key client-message-box)
         client-long-key (byte-array K/key-length)]
     (.getBytes client-long-buffer 0 client-long-key)
-    (let [my-long-secret (.getSecretKey (get-in state [::shared/my-keys ::shared/long-pair]))
+    (let [^TweetNaclFast$Box$KeyPair long-pair (get-in state [::shared/my-keys ::shared/long-pair])
+          my-long-secret (.getSecretKey long-pair)
           shared-secret (crypto/box-prepare client-long-key
-                                            my-long-secret)]
+                                            my-long-secret)
+          ^TweetNaclFast$Box$KeyPair long-pair (get-in state [::shared/my-keys ::shared/long-pair])]
       (log/info (str "Getting ready to decrypt the inner-most hidden public key\n"
                      "Supplied client long-term key:\n"
                      (b-t/->string client-long-key)
@@ -332,7 +337,7 @@ Note that that includes TODOs re:
                      "\nMy long-term secret key:\n"
                      (b-t/->string my-long-secret)
                      "My long-term public key:\n"
-                     (b-t/->string (.getPublicKey (get-in state [::shared/my-keys ::shared/long-pair])))
+                     (b-t/->string (.getPublicKey long-pair))
                      "Shared:\n"
                      (b-t/->string shared-secret)))
       (when-let [^ByteBuf inner-pk-buf (crypto/open-crypto-box
@@ -352,7 +357,8 @@ Note that that includes TODOs re:
                      :packet ::shared/network-packet))
 (defn handle!
   [state
-   {:keys [:host :message :port]
+   {:keys [:host :port]
+    ^ByteBuf message :message
     :as packet}]
   (log/info "Handling incoming initiate packet: " packet)
   (or
@@ -368,7 +374,7 @@ Note that that includes TODOs re:
                               +
                               (- n packet-header-length))
              initiate (shared/decompose tmplt message)
-             client-short-key-buf (::K/clnt-short-pk initiate)
+             ^ByteBuf client-short-key-buf (::K/clnt-short-pk initiate)
              client-short-pk (byte-array K/key-length)]
          (.getBytes client-short-key-buf 0 client-short-pk)
          (if-not (possibly-re-initiate-existing-client-connection! state initiate)
@@ -377,7 +383,7 @@ Note that that includes TODOs re:
                                              initiate)]
                (do
                  (log/info (str "Succssfully extracted cookie"))
-                 (let [server-short-sk-buffer (::K/srvr-short-sk cookie)
+                 (let [^ByteBuf server-short-sk-buffer (::K/srvr-short-sk cookie)
                        server-short-sk (byte-array K/key-length)]
                    (.getBytes server-short-sk-buffer 0 server-short-sk)
                    (let [active-client (state/configure-shared-secrets active-client
@@ -393,7 +399,7 @@ Note that that includes TODOs re:
                      ;; This corresponds to line 373 in the reference implementation.
                      (try
                        (when-let [client-message-box (open-client-crypto-box initiate active-client)]
-                         (let [client-long-pk (::K/long-term-public-key client-message-box)]
+                         (let [^ByteBuf client-long-pk (::K/long-term-public-key client-message-box)]
                            (try
                              (log/info (str "Extracted message box from client's Initiate packet.\n"
                                             "Keys:\n"
@@ -411,7 +417,7 @@ Note that that includes TODOs re:
                              (if (validate-server-name state client-message-box)
                                ;; This takes us down to line 381
                                (when (verify-client-public-key-triad state client-short-pk client-message-box)
-                                 (let [rcvd-nonce-buffer (::K/outer-i-nonce initiate)
+                                 (let [^ByteBuf rcvd-nonce-buffer (::K/outer-i-nonce initiate)
                                        rcvd-nonce-array (byte-array K/client-nonce-suffix-length)
                                        _ (.getBytes rcvd-nonce-buffer 0 rcvd-nonce-array)
                                        _ (.release rcvd-nonce-buffer)

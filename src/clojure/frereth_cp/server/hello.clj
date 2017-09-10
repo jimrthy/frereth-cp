@@ -11,7 +11,11 @@
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
-            [manifold.stream :as stream]))
+            [manifold.stream :as stream])
+  (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
+           io.netty.buffer.ByteBuf))
+
+(set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -19,14 +23,14 @@
 (defn open-hello-crypto-box
   [{:keys [::client-short-pk
            ::state/cookie-cutter
-           ::nonce-suffix
            ::shared/my-keys
            ::shared/working-area]
+    ^ByteBuf nonce-suffix ::nonce-suffix
     :as state}
    message
-   crypto-box]
+   ^ByteBuf crypto-box]
   (log/warn "Deprecated. Use crypto/open-crypto-box instead")
-  (let [long-keys (::shared/long-pair my-keys)]
+  (let [^TweetNaclFast$Box$KeyPair long-keys (::shared/long-pair my-keys)]
     (when-not long-keys
       ;; Log whichever was missing and throw
       (if my-keys
@@ -42,7 +46,8 @@
           ;; (that fails spec validation)
           ;; Better Q: Would that a good idea, if it worked?
           ;; (Pretty sure this is/was the main thrust behind a plumatic library)
-          {:keys [::shared/text ::shared/working-nonce]} working-area]
+          {^bytes working-nonce ::shared/working-nonce
+           ^bytes text ::shared/text} working-area]
       (log/debug (str "Incoming HELLO\n"
                       "Client short-term PK:\n"
                       (with-out-str (b-s/print-bytes client-short-pk))
@@ -51,7 +56,7 @@
       (b-t/byte-copy! working-nonce
                       shared/hello-nonce-prefix)
       (.readBytes nonce-suffix working-nonce K/client-nonce-prefix-length K/client-nonce-suffix-length)
-      (.readBytes crypto-box text #_K/decrypt-box-zero-bytes 0 K/hello-crypto-box-length)
+      (.readBytes crypto-box text 0 K/hello-crypto-box-length)
       (let [msg (str "Trying to open "
                      K/hello-crypto-box-length
                      " bytes of\n"
@@ -77,7 +82,8 @@
 (defn handle!
   [{:keys [::shared/working-area]
     :as state}
-   {:keys [host message port]
+   {:keys [:host :port]
+    ^ByteBuf message :message
     :as packet}]
   (log/debug "Have what looks like a HELLO packet")
   (if (= (.readableBytes message) shared/hello-packet-length)
@@ -85,10 +91,10 @@
       (log/info "This is the correct size")
       (let [;; Q: Is the convenience here worth the performance hit of using decompose?
             {:keys [::K/clnt-xtn
-                    ::K/clnt-short-pk
                     ::K/crypto-box
                     ::K/client-nonce-suffix
                     ::K/srvr-xtn]
+             ^ByteBuf clnt-short-pk ::K/clnt-short-pk
              :as decomposed} (shared/decompose K/hello-packet-dscr message)
             ;; We're keeping a ByteArray around for storing the key received by the current message.
             ;; The reference implementation just stores it in a global.
@@ -98,7 +104,7 @@
             ;; TODO: Get benchmarks both ways.
             ;; I'm very skeptical that this is worth the wonkiness, but I'm also
             ;; very skeptical about messing around with the reference implementation.
-            client-short-pk (get-in state [::state/current-client ::state/client-security ::shared/short-pk])]
+            ^bytes client-short-pk (get-in state [::state/current-client ::state/client-security ::shared/short-pk])]
         (when (not client-short-pk)
               (if-let [current-client (::state/current-client state)]
                 (if-let [sec (::state/client-security current-client)]
@@ -152,7 +158,7 @@
                 ;; And it does save a malloc/GC.
                 ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
                 (.clear message)
-                (let [response
+                (let [^ByteBuf response
                       (cookie/build-cookie-packet message clnt-xtn srvr-xtn working-nonce crypto-box)]
                   (log/info (str "Cookie packet built. Returning it."))
                   (try

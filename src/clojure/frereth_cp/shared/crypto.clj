@@ -11,6 +11,8 @@
             TweetNaclFast$Box]
            [io.netty.buffer ByteBuf Unpooled]))
 
+(set! *warn-on-reflection* true)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -133,7 +135,7 @@ array destination that could just be reused without GC.
 
 That looks like it would get into the gory implementation details
 which I'm really not qualified to touch."
-  [box box-offset box-length nonce shared-key]
+  [^bytes box box-offset box-length nonce shared-key]
   {:pre [(bytes? shared-key)]}
   (if (and (not (nil? box))
            (>= (count box) (+ box-offset box-length))
@@ -167,7 +169,7 @@ which I'm really not qualified to touch."
                        (subvec K/decrypt-box-zero-bytes)))
           (Unpooled/wrappedBuffer plain-text
                                   K/decrypt-box-zero-bytes
-                                  (- box-length K/box-zero-bytes)))))
+                                  ^Long (- box-length K/box-zero-bytes)))))
     (throw (ex-info "Box too small" {::box box
                                      ::offset box-offset
                                      ::length box-length
@@ -184,7 +186,7 @@ which I'm really not qualified to touch."
         :ret (s/nilable #(instance? ByteBuf %)))
 (defn open-crypto-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
-  [prefix-bytes suffix-buffer crypto-buffer shared-key]
+  [prefix-bytes ^ByteBuf suffix-buffer ^ByteBuf crypto-buffer shared-key]
   (let [nonce (byte-array K/nonce-length)
         crypto-length (.readableBytes crypto-buffer)
         crypto-text (byte-array crypto-length)]
@@ -194,7 +196,7 @@ which I'm really not qualified to touch."
                  0
                  nonce
                  prefix-length
-                 (- K/nonce-length prefix-length)))
+                 ^Long (- K/nonce-length prefix-length)))
     (.getBytes crypto-buffer 0 crypto-text)
     (try
       (open-after crypto-text 0 crypto-length nonce shared-key)
@@ -205,7 +207,7 @@ which I'm really not qualified to touch."
 
 (defn random-array
   "Returns an array of n random bytes"
-  [^Long n]
+  ^bytes [^Long n]
   (TweetNaclFast/randombytes n))
 
 (defn random-bytes!
@@ -235,7 +237,7 @@ which I'm really not qualified to touch."
         :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
 (defn random-key-pair
   "Generates a pair of random keys"
-  []
+  ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair []
   (TweetNaclFast$Box/keyPair))
 
 (defn random-mod

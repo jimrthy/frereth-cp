@@ -7,23 +7,26 @@
 
 ;; Q: How many of the rest of this could benefit enough by
 ;; getting a ^:const metadata hint to justify it?
-(def client-nonce-prefix-length 16)
-(def client-nonce-suffix-length 8)
+(def ^Integer client-nonce-prefix-length 16)
+(def ^Integer client-nonce-suffix-length 8)
 (def extension-length 16)
 (def header-length 8)
 
 (def box-zero-bytes 16)
-(def decrypt-box-zero-bytes 32)
-(def key-length 32)
+(def ^Integer decrypt-box-zero-bytes 32)
+(def ^Integer key-length 32)
 (def max-random-nonce (long (Math/pow 2 48)))
 (def message-len 1104)
 (def nonce-length 24)
-(def server-nonce-prefix-length 8)
-(def server-nonce-suffix-length 16)
+(def ^Integer server-nonce-prefix-length 8)
+(def ^Integer server-nonce-suffix-length 16)
 (def server-name-length 256)
 (def shared-key-length key-length)
 
-(def client-header-prefix "QvnQ5Xl")
+;; Using an ordinary ^bytes type-hint here caused an
+;; IllegalArgumentException at compile-time elsewhere
+;; with the message "Unable to resolve classname: clojure.core$bytes@4efdc044"
+(def ^{:tag 'bytes} client-header-prefix (.getBytes "QvnQ5Xl"))
 
 (def send-child-message-timeout
   "in milliseconds"
@@ -55,7 +58,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Hello packets
 
-(def hello-crypto-box-length 80)
+(def ^Integer hello-crypto-box-length 80)
 (def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length header-length}
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-xtn {::type ::bytes ::length extension-length}
@@ -75,11 +78,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Cookie packets
 
+(def ^Integer ^:const cookie-frame-length 144)
 (def cookie-header (.getBytes "RL3aNMXK"))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
-(def server-cookie-length 96)
-(def cookie-packet-length 200)
+(def ^Integer server-cookie-length 96)
+(def ^Integer cookie-packet-length 200)
 
 (def cookie-frame
   "The boiler plate around a cookie"
@@ -94,7 +98,7 @@
              ::client-nonce-suffix {::type ::bytes
                                     ::length server-nonce-suffix-length}
              ::cookie {::type ::bytes
-                       ::length 144}))
+                       ::length cookie-frame-length}))
 
 (def black-box-dscr (array-map ::padding {::type ::zeroes ::length decrypt-box-zero-bytes}
                                ::clnt-short-pk {::type ::bytes ::length key-length}

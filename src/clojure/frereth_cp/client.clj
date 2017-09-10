@@ -29,10 +29,13 @@
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
+           com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
+
+(set! *warn-on-reflection* true)
 
 (def heartbeat-interval (* 15 shared/millis-in-second))
 
@@ -100,12 +103,12 @@
   "Pretty much blindly translated from the CurveCP reference
 implementation. This is code that I don't understand yet"
   [this buffer]
-  (let [reducer (fn [{:keys [buf
-                             buf-len
-                             msg
-                             msg-len
-                             i
-                             this]
+  (let [reducer (fn [{:keys [:buf-len
+                             :msg-len
+                             :i
+                             :this]
+                      ^bytes buf :buf
+                      ^bytes msg :msg
                       :as acc}
                      b]
                   (when (or (< msg-len 0)
@@ -154,7 +157,8 @@ implementation. This is code that I don't understand yet"
                         ;; both logical branches here.
                         ;; And maybe there's a really good reason for doing so.
                         ;; But this function feels far too complex as it is.
-                        (let [r (dec msg-len)]
+                        (let [r (dec msg-len)
+                              ^TweetNaclFast$Box$KeyPair my-long-pair (::shared/long-pair my-keys)]
                           (when (or (< r 16)
                                     (> r 640))
                             (throw (ex-info "done" {})))
@@ -168,7 +172,7 @@ implementation. This is code that I don't understand yet"
                           ;; way the underlying library works.
                           (b-t/byte-copy! text K/decrypt-box-zero-bytes
                                           K/key-length
-                                          (.getPublicKey (::shared/long-pair my-keys)))
+                                          (.getPublicKey my-long-pair))
                           (b-t/byte-copy! text 64 64 vouch)
                           (b-t/byte-copy! text
                                           128
@@ -198,9 +202,10 @@ implementation. This is code that I don't understand yet"
                             (let [offset (+ offset K/extension-length)]
                               (b-t/byte-copy! packet offset
                                               K/extension-length extension)
-                              (let [offset (+ offset K/extension-length)]
+                              (let [offset (+ offset K/extension-length)
+                                    ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)]
                                 (b-t/byte-copy! packet offset K/key-length
-                                                (.getPublicKey (::shared/short-pair my-keys)))
+                                                (.getPublicKey my-short-pair))
                                 (let [offset (+ offset K/key-length)]
                                   (b-t/byte-copy! packet
                                                   offset

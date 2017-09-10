@@ -7,7 +7,10 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.util :as util]))
+            [frereth-cp.util :as util])
+  (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair))
+
+(set! *warn-on-reflection* true)
 
 (defn build-raw-hello
   [{:keys [::state/server-extension
@@ -23,13 +26,13 @@
         ;; Note that this definitely inserts the 16-byte prefix for me
         boxed (crypto/box-after my-short<->their-long
                                 shared/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes) working-nonce)
+        ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
         msg (str "Hello crypo-box:\n"
                  (b-t/->string boxed)
                  "\nencrypted with nonce\n"
                  (b-t/->string working-nonce)
                  "\nfrom\n"
-                 (-> my-keys
-                     ::shared/short-pair
+                 (-> my-short-pair
                      .getPublicKey
                      b-t/->string)
                  "\nto\n"
@@ -41,7 +44,7 @@
     {::K/prefix shared/hello-header
      ::K/srvr-xtn server-extension
      ::K/clnt-xtn extension
-     ::K/clnt-short-pk (.getPublicKey (::shared/short-pair my-keys))
+     ::K/clnt-short-pk (.getPublicKey my-short-pair)
      ::K/zeros nil
      ::K/client-nonce-suffix (b-t/sub-byte-array working-nonce K/client-nonce-prefix-length)
      ::K/crypto-box boxed}))

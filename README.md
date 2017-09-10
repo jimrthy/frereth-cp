@@ -16,21 +16,29 @@ security for the Internet").
 ## Status
 
 Not even pre-alpha. I have most of the handshake translated,
-but I'm just starting to get to the really interesting parts.
+and I've been able to round-trip a single echo message without
+encryption or network access, but there's still a lot to be done.
 
 In retrospect, this probably wasn't a great
-idea. A pure java implementation would seem like a much
-wiser choice.
+idea. A pure java implementation seems like it would have been
+a much wiser choice.
 
 But, hey, I've taken it this far.
 
 ## Usage
 
-lein install
+boot install
 
 Although you probably don't want to actually use it.
 
 ## Notes
+
+Having the tweetnacl java source just copy/pasted in the middle
+breaks every linter I've tried to use. It seems like that part
+really needs to be published somewhere as its own library.
+
+Then again, maybe not. Maybe that violates the entire point
+behind using tweetnacl.
 
 ## License
 

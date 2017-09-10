@@ -7,6 +7,8 @@
             [clojure.tools.logging :as log])
   (:import clojure.lang.ExceptionInfo))
 
+(set! *warn-on-reflection* true)
+
 (defn seconds [] 1000)  ; avoid collision w/ built-in second
 (defn minute [] (* 60 (seconds)))
 
@@ -28,9 +30,9 @@ Falling back to standard")
         :args (s/cat :ex #(instance? Throwable %))
         :ret (s/coll-of str))
 (defn get-stack-trace
-  [ex]
+  [^Throwable ex]
   (reduce
-   (fn [acc frame]
+   (fn [acc ^StackTraceElement frame]
      (conj acc
            (str "\n" (.getClassName frame)
                 "::" (.getMethodName frame)
@@ -45,9 +47,9 @@ Falling back to standard")
   "Convert stack trace to a readable string
 Slow and inefficient, but you have bigger issues than
 performance if you're calling this"
-  [ex]
+  [^Throwable ex]
   (let [base (if (instance? ExceptionInfo ex)
-               (str ex "\n" (pretty (.getData ex)))
+               (str ex "\n" (pretty (.getData ^ExceptionInfo ex)))
                (str ex))]
     (reduce #(str %1 %2)
             base

@@ -44,7 +44,7 @@
            ::specs/gap-buffer]
     :as incoming}
    k-v-pair]
-  (let [[[start stop] buf] k-v-pair]
+  (let [[[start stop] ^ByteBuf buf] k-v-pair]
     (log/debug "Does"  start "-" stop "close a hole in" gap-buffer "from HWM" receive-bytes "?")
     ;; For now, this top-level if check is redundant.
     ;; I'd rather be safe and trust the JIT than remove it
@@ -142,7 +142,7 @@
   (let [consolidated (consolidate-gap-buffer primed)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])]
     (log/debug "Have" (count ->child-buffer) "blocks ready to go to child")
-    (reduce (fn [state buf]
+    (reduce (fn [state ^ByteBuf buf]
               ;; Forward the byte-array inside the buffer
               (try
                 ;; It's tempting to special-case this to avoid the

@@ -132,12 +132,11 @@ Needing to declare these things twice is annoying."
   [tmplt fields ^ByteBuf dst k]
   (let [dscr (k tmplt)
         cnvrtr (::K/type dscr)
-        v (k fields)]
+        ^bytes v (k fields)]
     (try
       (case cnvrtr
         ::K/bytes (let [^Long n (::K/length dscr)
-                        beg (.readableBytes dst)
-                        ]
+                        beg (.readableBytes dst)]
                     (try
                       (log/debug (str "Getting ready to write "
                                       n
@@ -190,7 +189,7 @@ Needing to declare these things twice is annoying."
 
 (defn compose
   "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt"
-  [tmplt fields dst]
+  ^ByteBuf [tmplt fields ^ByteBuf dst]
   ;; Q: How much do I gain by supplying dst?
   ;; A: It does let callers reuse the buffer, which
   ;; will definitely help with GC pressure.
@@ -390,7 +389,7 @@ Or there's probably something similar in guava"
   [n]
   (byte-array n (repeat 0)))
 
-(def all-zeros
+(def ^{:tag 'bytes} all-zeros
   "To avoid creating this over and over.
 
 Q: Refactor this to a function?
