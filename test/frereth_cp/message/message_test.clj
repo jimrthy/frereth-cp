@@ -126,6 +126,93 @@
         (message/halt! state)))))
 (comment (basic-echo))
 
+(deftest bigger-echo
+  ;; Flip-side of echo: I want to see what happens
+  ;; when the child sends bytes that don't fit into
+  ;; a single message packet.
+  (let [packet-count 8  ; trying to make life interesting
+        response (promise)
+        parent-state (atom {:count 0
+                            :buffer []})
+        parent-cb (fn [dst]
+                    (let [response-state @parent-state]
+                      (log/debug "parent-cb:" response-state)
+                      ;; Should get 8 callbacks here:
+                      ;; 1 for each kilobyte of message the child tries to send
+                      ;; Although, depending on timing, 3 or
+                      ;; more are possible
+                      ;; (If we don't end this quickly enough to
+                      ;; avoid a repeated send, for example)
+                      (when (= (:count response-state) (dec packet-count))
+                        (deliver (:buffer response-state) dst))
+                      (swap! parent-state
+                             (fn [cur]
+                               (-> cur
+                                   (update :count inc)
+                                   ;; Seems a little silly to include the ACKs.
+                                   ;; Should probably think this through more thoroughly
+                                   (update :buffer conj (vec dst)))))))
+        ;; I have a circular dependency between
+        ;; child-cb and initialized.
+        ;; child-cb is getting called inside an
+        ;; agent send handler,
+        ;; which means I have the agent state
+        ;; directly available, but not the actual
+        ;; agent.
+        ;; That's what it needs, because child->
+        ;; is going to trigger another send.
+        ;; Wrapping it inside an atom is obnoxious, but
+        ;; it works.
+        ;; Don't do anything like this for anything real.
+        state-agent-atom (atom nil)
+        child-message-counter (atom 0)
+        strm-address (atom 0)
+        child-cb (fn [_]
+                   (throw (RuntimeException. "This should never get called")))
+        initialized (message/initial-state parent-cb child-cb)
+        state (message/start! initialized)]
+    (reset! state-agent-atom state)
+    (try
+      (let [msg-len (* packet-count K/k-1)
+            ;; Note that this is what the child sender should be supplying
+            message-body (byte-array (range msg-len))]
+        (message/child-> state message-body)
+        ;; Q: Is any of this code worth trying to salvage?
+        (let [outcome (deref response 1000 ::timeout)]
+          (if-let [err (agent-error state)]
+            (is (not err))
+            (do
+              (is (not= outcome ::timeout))
+              (when-not (= outcome ::timeout)
+                (is (= (:count @parent-state) (dec packet-count)))
+                (is (= (count outcome) packet-count))
+                (doseq [packet outcome]
+                  (is (= (count packet) (+ K/k-1 K/header-length K/min-padding-length))))
+                (let [rcvd-strm
+                      (reduce (fn [acc with-header]
+                                (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
+                                                                       (vec with-header)))]
+                                  (conj acc without-header)))
+                              []
+                              outcome)]
+                  (is (b-t/bytes= rcvd-strm message-body))))
+              (let [state-agent @state-agent-atom
+                    outcome @state-agent
+                    outgoing (::specs/outgoing outcome)
+                    incoming (::specs/incoming outcome)]
+                (is (= (::specs/receive-bytes incoming) (inc msg-len)))
+                (is (= (::specs/next-message-id outgoing) 9))
+                ;; I'm not sending back any ACKs
+                (is (= (::specs/send-processed outgoing) 0))
+                ;; TODO: Need a test that does this
+                (is (not (::specs/send-eof outgoing)))
+                (is (= (::specs/send-bytes outgoing) msg-len))
+                ;; Keeping around as a reminder for when the implementation changes
+                ;; and I need to see what's really going on again
+                (comment (is (not outcome) "What should we have here?")))))))
+      (finally
+        (message/halt! state)))))
+
 (deftest parallel-parent-test
   (testing "parent-> should be thread-safe"
     (is false "Write this")))

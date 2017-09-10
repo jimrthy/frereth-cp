@@ -376,13 +376,27 @@
         :args (s/cat :state-agent ::specs/state-agent
                      :buf ::specs/buf)
         :ret ::specs/state-agent)
-;;; It seems to make a lot more sense to just
+;;; It seems like it might make more sense to just
 ;;; use an i/o stream, rather than byte arrays.
 ;;; Because, really, the child might send a
 ;;; million 40 byte messages in a single second.
 ;;; Or it might send 40M for a puppy pic.
-;;; TODO: Read up on those to see whether they
-;;; do.
+
+;;; It might make sense to switch to using a
+;;; PipedOutputStream in the state-agent to buffer
+;;; the incoming messages until to-parent can
+;;; pull them off by reading from the connected
+;;; PipedInputStream.
+
+;;; But the "obvious" OOP way there is to override
+;;; the PipedOutputStream to trigger whatever i/o
+;;; processing needs to happen when the child calls
+;;; .write, and that approach simply is not worth the
+;;; pain/suffering involved.
+
+;;; Or...this is spec'd to take a ByteBuf.
+;;; There doesn't seem to be any version of reality
+;;; where that makes sense.
 (defn child->
   "Read bytes from a child buffer...if we have room"
   ;; The only real question seems to be what happens
