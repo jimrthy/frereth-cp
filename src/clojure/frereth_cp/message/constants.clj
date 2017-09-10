@@ -33,6 +33,10 @@
   "aka 8k"
   8192)
 
+(def k-16
+  "aka 16k"
+  16384)
+
 (def k-64
   "aka 128k"
   65536)
@@ -76,19 +80,18 @@
   k-128)
 
 (def send-byte-buf-size
-  "How many child bytes will we buffer to send?
+  "How many child bytes will we buffer to send?"
+  ;; Don't want this too big, to avoid buffer bloat effects.
 
-Don't want this too big, to avoid buffer bloat effects.
+  ;; At the same time, it seems likely that the optimum will
+  ;; vary from one application to the next.
 
-At the same time, it seems likely that the optimum will
-vary from one application to the next.
+  ;; Start with the default.
 
-Start with the default.
-
-The reference implementation notes that this absolutely
-must be a power of 2. Pretty sure that's because it involves
-a circular buffer and uses bitwise ands for quick/cheap
-modulo arithmetic."
+  ;; The reference implementation notes that this absolutely
+  ;; must be a power of 2. Pretty sure that's because it involves
+  ;; a circular buffer and uses bitwise ands for quick/cheap
+  ;; modulo arithmetic.
   k-128)
 
 (def ^:const header-length 48)

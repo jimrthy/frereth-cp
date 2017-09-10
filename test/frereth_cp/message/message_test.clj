@@ -126,6 +126,81 @@
         (message/halt! state)))))
 (comment (basic-echo))
 
+(comment
+  (deftest piping-io
+    ;; This was an experiment that failed.
+    ;; Keeping it around as a reminder of why it didn't work.
+    (let [in-pipe (java.io.PipedInputStream. K/send-byte-buf-size)
+          out-pipe (java.io.PipedOutputStream. in-pipe)]
+      (testing "Basic lock-step"
+        (let [src (byte-array (range K/k-8))
+              dst (byte-array K/k-8)]
+          (is (= 0 (.available in-pipe)))
+          (.write out-pipe src)
+          (is (= K/k-8 (.available in-pipe)))
+          (.read in-pipe dst 0 K/k-8)
+          (is (b-t/bytes= src dst))))
+      (testing "Overflow"
+        (let [too-big (+ K/k-128 K/k-8)
+              src (byte-array (range too-big))
+              dst (byte-array (range too-big))]
+          (is (= 0 (.available in-pipe)))
+          (let [fut (future (.write out-pipe src)
+                            (println "Bytes written")
+                            ::written)]
+            (is (= K/k-128 (.available in-pipe)))
+            (is (= K/k-8 (.read in-pipe dst 0 K/k-8)))
+            (is (= (- K/k-128 K/k-8) (.available in-pipe)))
+            (is (= (- K/k-128 K/k-8) (.read in-pipe dst 0 K/k-128)))
+            (println "Read 128K")
+            ;; It looks like these extra 8K bytes just silently disappear.
+            ;; That's no good.
+            (Thread/sleep 0.5)
+            ;; Actually, they didn't disappear.
+            ;; I just don't have any good way to tell that they're
+            ;; available.
+            (is (not= K/k-8 (.available in-pipe)))
+            ;; Q: Is this a deal-killer?
+            ;; A: Yes.
+            (println "Trying to read 1K more")
+            (let [remaining-read (.read in-pipe dst 0 K/k-1)]
+              (println "Read" remaining-read "bytes")
+              (is (= K/k-1 remaining-read)))
+            (is (= (* 7 K/k-1) (.available in-pipe)))
+            (is (= (* 7 K/k-1) (.read in-pipe dst 0 K/k-16)))
+            (is (realized? fut))
+            (is (= ::written (deref fut 500 ::timed-out))))))
+      (testing "Blocking read"
+        (println "Top of checking read in background")
+        (let [src (byte-array (range K/k-8))
+              dst (byte-array K/k-1)
+              read-thread (future (loop [loop-count 0]
+                                    (println "Reading at" (/ (System/nanoTime) 1000000000.0))
+                                    (let [bytes-read (.read in-pipe dst 0 K/k-1)]
+                                      (if (< 0 bytes-read)
+                                        (do
+                                          (println "Read" bytes-read
+                                                   "bytes in a background thread at"
+                                                   (/ (System/nanoTime) 1000000000.0))
+                                          (is (= K/k-1 bytes-read))
+                                          (recur (inc loop-count)))
+                                        (do
+                                          ;; EOF signal
+                                          (is (= -1 bytes-read))
+                                          ;; Basic correctness check
+                                          (is (= loop-count 8))))))
+                                  (println "Read loop exiting")
+                                  ::done)]
+          ;; Give the read-thread a chance to start.
+          (Thread/sleep 1.0)
+          (println "Writing at" (/ (System/nanoTime) 1000000000.0))
+          (.write out-pipe src)
+          (.flush out-pipe)
+          (println "Closing the output pipe at" (/ (System/nanoTime) 1000000000.0))
+          (.close out-pipe)
+          (println "Checking read loop exit status at" (/ (System/nanoTime) 1000000000.0))
+          (is (= ::done (deref read-thread 500 ::timed-out))))))))
+
 (deftest bigger-echo
   ;; Flip-side of echo: I want to see what happens
   ;; when the child sends bytes that don't fit into

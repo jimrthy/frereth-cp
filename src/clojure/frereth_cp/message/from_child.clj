@@ -49,8 +49,8 @@
   ;; from this callback to the parent's callback.
 
   ;; That obvious approach completely misses the point that
-  ;; this ns is a buffer. We need to hang onto those buffers
-  ;; here until they've been ACK'd.
+  ;; this namespace is about buffering. We need to hang onto
+  ;; those buffers here until they've been ACK'd.
   [{{:keys [::specs/send-acked
             ::specs/send-bytes]} ::specs/outgoing
     :as state}
@@ -80,6 +80,14 @@
   ;; problem)
   (let [buf-size (count array-o-bytes)
         ;; Q: Use Pooled direct buffers instead?
+        ;; A: Direct buffers wouldn't make any sense.
+        ;; After we get done with all the slicing and
+        ;; dicing that needs to happen to get the bytes
+        ;; to the parent, they still need to be translated
+        ;; back into byte arrays so they can be encrypted.
+        ;; Pooled buffers might make sense, except that
+        ;; we're starting from a byte array. So it would
+        ;; be silly to copy it.
         buf (Unpooled/wrappedBuffer array-o-bytes)
         ;; In the original, this is the offset into the circular
         ;; buf where we're going to start writing incoming bytes.
