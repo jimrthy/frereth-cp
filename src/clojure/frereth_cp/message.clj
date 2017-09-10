@@ -289,7 +289,7 @@
   "Put together an initial state that's ready to start!"
   ([parent-callback
     child-callback
-    want-ping]
+    server?]
    (agent {::specs/flow-control {::specs/last-doubling 0
                                  ::specs/last-edge 0
                                  ::specs/last-speed-adjustment 0
@@ -321,7 +321,9 @@
                              ;; Peers started as servers start out
                              ;; with standard-max-block-length instead.
                              ;; TODO: Account for that
-                             ::specs/max-block-length K/initial-max-block-length
+                             ::specs/max-block-length (if server?
+                                                        K/standard-max-block-length
+                                                        K/initial-max-block-length)
                              ::specs/next-message-id 1
                              ::specs/->parent parent-callback
                              ::specs/send-acked 0
@@ -340,7 +342,7 @@
                              ::specs/send-processed 0
                              ::specs/total-blocks 0
                              ::specs/total-block-transmissions 0
-                             ::specs/want-ping want-ping}
+                             ::specs/want-ping server?}
 
            ;; In the original, this is a local in main rather than a global
            ;; Q: Is there any difference that might matter to me, other

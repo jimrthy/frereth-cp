@@ -38,7 +38,8 @@
     320 320
     576 576
     1088 1088
-    ;; This is supposed to be fatal
+    ;; This is supposed to be fatal, although that seems a little
+    ;; heavy-handed
     (throw (AssertionError. (str length "-byte block too big")))))
 
 (s/fdef calculate-message-data-packet-length-flags
@@ -142,18 +143,17 @@
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn pre-calculate-state-after-send
-  "This is mostly setting up the buffer to do the send from child to parent
-
-  Starts with line 380 sendblock:
-  Resending old block will goto this
-
-  It's in the middle of a do {} while(0) loop"
+  "This is mostly setting up the buffer to do the send from child to parent"
   [{:keys [::specs/recent]
     {:keys [::specs/current-block-cursor
             ::specs/send-buf-size]
      current-message-id ::specs/next-message-id
      :as outgoing} ::specs/outgoing
     :as state}]
+  ;; Starts with line 380 sendblock:
+  ;; Resending old block will goto this
+  ;; It's in the middle of a do {} while(0) loop
+
 ;;;      382-404:  Build the message packet
 ;;;                N.B.: Ignores most of the ACK bits
 ;;;                And really does not seem to match the spec
@@ -171,8 +171,8 @@
                           ;; Stupid unsigned math
                           ;; Actually, this seems problematic.
                           ;; Really shouldn't be reusing IDs.
-                          ;; Q: Does this matter?
-                          (if (> n' shared-K/max-32-uint)
+                          ;; Q: Does that matter?
+                          (if (and false (> n' shared-K/max-32-uint))
                             1 n'))
         cursor (vec (concat [::specs/outgoing ::specs/blocks] current-block-cursor))
         _ (assert (get-in state (conj cursor ::specs/transmissions))
@@ -270,6 +270,13 @@
                       [0])
             blocks)))
 
+(defn remove-unsent
+  "Get the blocks that have been put onto the wire"
+  [blocks]
+  (filter (fn [block]
+            (not= 0 (::specs/transmissions block)))
+          blocks))
+
 (defn check-for-new-block-to-send
   "Q: Is there a new block ready to send?
 
@@ -289,16 +296,27 @@
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
   (if (and (>= recent (+ earliest-time n-sec-per-block))
-             (< (count blocks) K/max-outgoing-blocks)
-             (or want-ping
-                 ;; This next style clause is used several times in
-                 ;; the reference implementation.
-                 ;; The actual check is negative in context, so
-                 ;; it's really a not
-                 ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
-                 (if send-eof
-                   (not send-eof-processed)
-                   (< send-processed send-bytes))))
+           ;; If we have too many outgoing blocks being
+           ;; tracked, don't put more in flight.
+           ;; There's obviously something going wrong
+           ;; somewhere.
+           ;; Reference implementation tracks them all.
+           ;; However: if the client dumps 256K worth of
+           ;; message on us in one fell swoop, this check
+           ;; would guarantee that none of them ever get sent.
+           ;; So only consider the ones that have already
+           ;; been put on the wire.
+           (< (count (remove-unsent blocks)) K/max-outgoing-blocks)
+           (or want-ping
+               ;; This next style clause is used several times in
+               ;; the reference implementation.
+               ;; The actual check is negative in context, so
+               ;; it's really a not
+               ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
+               ;; C programmers have assured me that it translates into
+               (if send-eof
+                 (not send-eof-processed)
+                 (< send-processed send-bytes))))
     ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
     (let [start-pos (+ send-acked send-processed)
           block-length (max (- send-bytes send-processed)
@@ -324,20 +342,18 @@
           ;; "absorb" this new block -- JRG
           send-processed (+ send-processed block-length)
           ;; Want to send a new block.
-          ;; In a single-threaded world, that will always be the last.
-          ;; Honestly, this should be the first block with a transmission
+          ;; In a single-threaded world where we're processing one
+          ;; message packet/block at a time, that will always be the last.
+          ;; In this scenario, it's really the first block with a transmission
           ;; count of 0.
-          cursor [(dec (count blocks))]]
+          cursor [(reduce (fn [acc block]
+                            (if (= 0 (::specs/transmissions block))
+                              (reduced acc)
+                              (inc acc)))
+                          0
+                          blocks)]]
       (log/debug "Conditions ripe for sending a new outgoing message")
       (-> state
-          #_(update ::specs/outgoing
-                  (fn [cur]
-                    (-> cur
-                        (update ::specs/blocks conj block)
-                        ;; Updating this here seems premature
-                        (update ::specs/send-processed + block-length)
-                        (assoc ::specs/send-eof-processed (and send-eof
-                                                               (= send-processed send-bytes))))))
           (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
     (log/debug (str "Bad preconditions for sending a new block:\n"
                     "recent: " recent " <? " (+ earliest-time n-sec-per-block)

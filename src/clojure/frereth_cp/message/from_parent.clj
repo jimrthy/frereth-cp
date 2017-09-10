@@ -458,7 +458,6 @@ Line 608"
         :ret (s/nilable ::specs/state))
 (defn try-processing-message!
   "436-613: try processing a message: --DJB"
-  ;; Q: Why is this in the public section?
   [{{:keys [::specs/->child-buffer
             ::specs/parent->buffer
             ::specs/receive-bytes
@@ -470,7 +469,7 @@ Line 608"
                "\nparent->buffer count:" (count parent->buffer)
                "\nreceive-written:" receive-written
                "\nreceive-bytes:" receive-bytes)
-    (if (or parent->buffer  ; new incoming message?
+    (if (or (< 0 (count parent->buffer))   ; new incoming message?
             ;; any previously buffered incoming messages to finish
             ;; processing?
             (not= 0 child-buffer-count)

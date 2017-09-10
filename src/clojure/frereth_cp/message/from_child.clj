@@ -15,12 +15,33 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+(defn build-block-descriptions
+  "For cases where a child sends a byte array that's too large"
+  [^ByteBuf buf max-block-length]
+  (let [cap (.capacity buf)
+        block-count (int (Math/ceil (/ cap max-block-length)))]
+    (map (fn [n]
+           (let [length (if (< n (dec block-count))
+                          max-block-length
+                          (rem cap max-block-length))]
+             {::specs/buf (.slice buf (* n max-block-length) length)
+              ;; Q: Is there any good justification for tracking this twice?
+              ::specs/length length
+              ;; TODO: Add a signal for marking this true
+              ::specs/send-eof false
+              ::specs/transmissions 0
+              ::specs/time (System/nanoTime)
+              ;; Q: What should these actually be?
+              ::specs/start-pos 0}))
+         (range block-count))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
 (defn room-for-child-bytes?
   "Does send-buf have enough space left for a message from child?"
-  [{{:keys [::specs/send-bytes]} ::specs/outgoing
+  [{{:keys [::specs/send-bytes
+            ::specs/max-block-length]} ::specs/outgoing
     :as state}]
   ;; Line 322: This also needs to account for send-acked
   ;; For whatever reason, DJB picked this (-4K) as the
@@ -51,7 +72,8 @@
   ;; That obvious approach completely misses the point that
   ;; this namespace is about buffering. We need to hang onto
   ;; those buffers here until they've been ACK'd.
-  [{{:keys [::specs/send-acked
+  [{{:keys [::specs/max-block-length
+            ::specs/send-acked
             ::specs/send-bytes]} ::specs/outgoing
     :as state}
    ;; Child should neither know nor care that netty is involved,
@@ -70,8 +92,8 @@
    ;; to just hand the message to a serializer and have it handle
    ;; the streaming.
    ^bytes array-o-bytes]
-  ;; FIXME: Start back here. This seems suspicious
-  (log/debug "Adding another message block to" (get-in state [::specs/outgoing ::specs/blocks]))
+  (log/debug "Adding another message block(s) to"
+             (get-in state [::specs/outgoing ::specs/blocks]))
   ;; Note that back-pressure gets applied if we
   ;; already have ~124K pending because caller started
   ;; dropping packets.
@@ -89,6 +111,9 @@
         ;; we're starting from a byte array. So it would
         ;; be silly to copy it.
         buf (Unpooled/wrappedBuffer array-o-bytes)
+        ;; This lets people downstream know that there are
+        ;; bytes available
+        _ (.writerIndex buf buf-size)
         ;; In the original, this is the offset into the circular
         ;; buf where we're going to start writing incoming bytes.
         pos (+ (rem send-acked K/send-byte-buf-size) send-bytes)
@@ -97,18 +122,14 @@
         ;; wrench into my gears.
         ;; I don't remember handling this sort of buffering
         ;; at all.
+        ;; Q: If I drop the extra bytes, how do I inform the
+        ;; client?
         bytes-to-read (min available-buffer-space buf-size)
+        ;; This no longer matches the reality where I'm basically
+        ;; ignoring buffer limits
         send-bytes (+ send-bytes bytes-to-read)
-        block {::specs/buf buf
-               ::specs/length buf-size
-               ;; TODO: Add a signal for marking this true
-               ::specs/send-eof false
-               ::specs/transmissions 0
-               ::specs/time (System/nanoTime)
-               ;; Q: What should these actually be?
-               ::specs/start-pos 0
-               }]
-    (.writerIndex buf buf-size)
+        blocks (build-block-descriptions buf max-block-length)]
+    (log/debug "Blocks to add:" (count blocks))
     (when (>= send-bytes K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.
@@ -116,7 +137,7 @@
     (-> state
         (update ::specs/outgoing (fn [cur]
                                    (-> cur
-                                       (update ::specs/blocks conj block)
+                                       (update ::specs/blocks (comp vec concat) blocks)
                                        (assoc ::specs/send-bytes send-bytes))))
 ;;;  337: update recent
         (assoc ::specs/recent (System/nanoTime)))))

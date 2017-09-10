@@ -96,6 +96,8 @@
 
 (def ^:const header-length 48)
 (def ^:const min-msg-len 48)
+;; Note that this is really the max message packet length
+;; The actual payload is limited to 1024 bytes
 (def ^:const max-msg-len 1088)
 (def ^:const min-padding-length 16)
 
