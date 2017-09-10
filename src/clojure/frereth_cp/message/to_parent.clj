@@ -150,8 +150,8 @@
   It's in the middle of a do {} while(0) loop"
   [{:keys [::specs/recent]
     {:keys [::specs/current-block-cursor
-            ::specs/next-message-id
             ::specs/send-buf-size]
+     current-message-id ::specs/next-message-id
      :as outgoing} ::specs/outgoing
     :as state}]
 ;;;      382-404:  Build the message packet
@@ -167,8 +167,11 @@
   (assert current-block-cursor
           (str "No current-block-cursor to tell us what to send\nAvailable:\n"
                (keys outgoing)))
-  (let [next-message-id (let [n' (inc next-message-id)]
+  (let [next-message-id (let [n' (inc current-message-id)]
                           ;; Stupid unsigned math
+                          ;; Actually, this seems problematic.
+                          ;; Really shouldn't be reusing IDs.
+                          ;; Q: Does this matter?
                           (if (> n' shared-K/max-32-uint)
                             1 n'))
         cursor (vec (concat [::specs/outgoing ::specs/blocks] current-block-cursor))
@@ -183,14 +186,14 @@
         (-> state
             (update-in (conj cursor ::specs/transmissions) inc)
             (update-in (conj cursor ::specs/time) (constantly recent))
-            (assoc-in (conj cursor ::specs/message-id) next-message-id)
+            (assoc-in (conj cursor ::specs/message-id) current-message-id)
             (assoc-in [::specs/outgoing ::specs/next-message-id] next-message-id))
         block-to-send (get-in state' cursor)
         _ (log/debug "Getting ready to build next message block for message "
                      next-message-id
                      "\nbased on:\n"
                      (utils/pretty block-to-send))
-        buf (build-message-block next-message-id block-to-send)]
+        buf (build-message-block current-message-id block-to-send)]
 
     ;; Reference implementation waits until after the actual write before setting any of
     ;; the next pieces. But it's a single-threaded process that's going to block at the write,

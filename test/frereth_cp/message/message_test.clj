@@ -9,6 +9,7 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.message.test-utilities :as test-helpers]
             [frereth-cp.message.to-parent :as to-parent]
+            [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
@@ -92,7 +93,14 @@
                 (is (not= outcome ::timeout))
                 (when-not (= outcome ::timeout)
                   (is (= @parent-state 2))
-                  (is (not outcome) "What else do we have here?"))
+                  ;; I'm getting the response message header here, which is
+                  ;; correct, even though it seems wrong.
+                  ;; In the real thing, these are the bytes I'm getting ready
+                  ;; to send over the wire
+                  (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
+                  (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
+                                                         (vec outcome)))]
+                    (is (b-t/bytes= message-body without-header))))
                 (is (realized? wrote))
                 (when (realized? wrote)
                   (let [outcome-agent @wrote]
@@ -103,8 +111,15 @@
                       ;; When I deref that, there's an agent
                       ;; that I need to deref again to get
                       ;; the actual end-state
-                      (let [outcome @outcome-agent]
-                        (is (not outcome) "What should we have here?"))))))))))
+                      (let [child-outcome @outcome-agent
+                            outgoing (::specs/outgoing child-outcome)
+                            incoming (::specs/incoming child-outcome)]
+                        (is (= (::specs/receive-bytes incoming) (inc msg-len)))
+                        (is (= (::specs/next-message-id outgoing) 2))
+                        (is (= (::specs/send-processed outgoing) 0))
+                        (is (not (::specs/send-eof outgoing)))
+                        (is (= (::specs/send-bytes outgoing) msg-len))
+                        (comment (is (not outcome) "What should we have here?")))))))))))
       (finally
         (message/halt! state)))))
 (comment

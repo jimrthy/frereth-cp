@@ -376,24 +376,29 @@
         :args (s/cat :state-agent ::specs/state-agent
                      :buf ::specs/buf)
         :ret ::specs/state-agent)
+;;; It seems to make a lot more sense to just
+;;; use an i/o stream, rather than byte arrays.
+;;; Because, really, the child might send a
+;;; million 40 byte messages in a single second.
+;;; Or it might send 40M for a puppy pic.
+;;; TODO: Read up on those to see whether they
+;;; do.
 (defn child->
-  "Read bytes from a child buffer...if we have room
+  "Read bytes from a child buffer...if we have room"
+  ;; The only real question seems to be what happens
+  ;; when that buffer overflows.
 
-The only real question seems to be what happens
-when that buffer overflows.
+  ;; In the original, that buffer is really just an
+  ;; anonymous pipe between the processes, so there
+  ;; should be quite a lot of room.
 
-In the original, that buffer is really just an
-anonymous pipe between the processes, so there
-should be quite a lot of room.
+  ;; According to the pipe(7) man page, linux provides
+  ;; 16 \"pages\" of buffer space. So 64K, if the page
+  ;; size is 4K. At least, it has since 2.6.11.
 
-According to the pipe(7) man page, linux provides
-16 \"pages\" of buffer space. So 64K, if the page
-size is 4K. At least, it has since 2.6.11.
-
-Prior to that, it was limited to 4K.
+  ;; Prior to that, it was limited to 4K.
 
 ;;;  319-336: Maybe read bytes from child
-"
   [state-agent
    buf]
   ;; I'm torn about send vs. send-off here.
