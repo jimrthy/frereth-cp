@@ -130,6 +130,9 @@
   ;; Flip-side of echo: I want to see what happens
   ;; when the child sends bytes that don't fit into
   ;; a single message packet.
+
+  ;; I'm hitting an NPE with no obvious context
+  (comment (throw (RuntimeException. "Try walking through this 1 line at a time")))
   (let [packet-count 8  ; trying to make life interesting
         response (promise)
         parent-state (atom {:count 0
@@ -155,7 +158,8 @@
                       ;; But, more importantly, I don't really have an
                       ;; i/o loop at this point. So the follow-up
                       ;; messages will never arrive.
-                      (deliver response (:buffer @parent-state))))
+                      (when (= 8 (:count @parent-state))
+                        (deliver response (:buffer @parent-state)))))
         ;; I have a circular dependency between
         ;; child-cb and initialized.
         ;; child-cb is getting called inside an
@@ -183,7 +187,7 @@
             message-body (byte-array (range msg-len))]
         (message/child-> state message-body)
         ;; Q: Is any of this code worth trying to salvage?
-        (let [outcome (deref response 1000 ::timeout)]
+        (let [outcome (deref response 5000 ::timeout)]
           (if-let [err (agent-error state)]
             (is (not err))
             (do

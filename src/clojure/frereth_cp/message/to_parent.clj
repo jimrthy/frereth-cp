@@ -172,7 +172,9 @@
                           ;; Actually, this seems problematic.
                           ;; Really shouldn't be reusing IDs.
                           ;; Q: Does that matter?
-                          (if (and false (> n' shared-K/max-32-uint))
+                          (if (> n' shared-K/max-32-uint)
+                            ;; TODO: Just roll with the negative IDs. The only
+                            ;; one that's special is 0
                             1 n'))
         cursor (vec (concat [::specs/outgoing ::specs/blocks] current-block-cursor))
         _ (assert (get-in state (conj cursor ::specs/transmissions))
@@ -181,7 +183,11 @@
                        "\nbased on "
                        current-block-cursor
                        "\nHave:\n"
-                       (utils/pretty (get-in state cursor))))
+                       (if-let [current-block (get-in state cursor)]
+                         (utils/pretty current-block)
+                         (str "Missing current block completely, but do have "
+                              (count (get-in state [::specs/outgoing ::specs/blocks]))
+                              " blocks we *could* have been looking at"))))
         state'
         (-> state
             (update-in (conj cursor ::specs/transmissions) inc)
@@ -190,7 +196,7 @@
             (assoc-in [::specs/outgoing ::specs/next-message-id] next-message-id))
         block-to-send (get-in state' cursor)
         _ (log/debug "Getting ready to build next message block for message "
-                     next-message-id
+                     current-message-id
                      "\nbased on:\n"
                      (utils/pretty block-to-send))
         buf (build-message-block current-message-id block-to-send)]
@@ -277,6 +283,9 @@
             (not= 0 (::specs/transmissions block)))
           blocks))
 
+(s/fdef check-for-new-block-to-send
+        :args (s/cat :state ::specs/state)
+        :ret (s/nilable ::specs/state))
 (defn check-for-new-block-to-send
   "Q: Is there a new block ready to send?
 
@@ -295,80 +304,84 @@
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
-  (if (and (>= recent (+ earliest-time n-sec-per-block))
-           ;; If we have too many outgoing blocks being
-           ;; tracked, don't put more in flight.
-           ;; There's obviously something going wrong
-           ;; somewhere.
-           ;; Reference implementation tracks them all.
-           ;; However: if the client dumps 256K worth of
-           ;; message on us in one fell swoop, this check
-           ;; would guarantee that none of them ever get sent.
-           ;; So only consider the ones that have already
-           ;; been put on the wire.
-           (< (count (remove-unsent blocks)) K/max-outgoing-blocks)
-           (or want-ping
-               ;; This next style clause is used several times in
-               ;; the reference implementation.
-               ;; The actual check is negative in context, so
-               ;; it's really a not
-               ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
-               ;; C programmers have assured me that it translates into
-               (if send-eof
-                 (not send-eof-processed)
-                 (< send-processed send-bytes))))
-    ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
-    (let [start-pos (+ send-acked send-processed)
-          block-length (max (- send-bytes send-processed)
-                            max-block-length)
-          ;; This next construct seems pretty ridiculous.
-          ;; It's just assuring that (<= send-byte-buf-size (+ start-pos block-length))
-          ;; The bitwise-and is a shortcut for modulo that used to be faster,
-          ;; once upon a time.
-          ;; Q: does it make any difference at all these days?
-          ;; A: According to stack overflow, the modulo will get optimized
-          ;; to bitwise logic by any decent compiler.
-          ;; Then again, maybe it's a vital piece to the puzzle.
-          ;; TODO: Get an opinion from a cryptographer.
-          block-length (if (> (+ (bit-and start-pos (dec K/send-byte-buf-size))
-                                 block-length)
-                              K/send-byte-buf-size)
-                         (- K/send-byte-buf-size (bit-and start-pos (dec K/send-byte-buf-size)))
-                         block-length)
-          eof (if (= send-processed send-bytes)
-                send-eof
-                false)
-          ;; XXX: or could have the full block in post-buffer space (DJB)
-          ;; "absorb" this new block -- JRG
-          send-processed (+ send-processed block-length)
-          ;; Want to send a new block.
-          ;; In a single-threaded world where we're processing one
-          ;; message packet/block at a time, that will always be the last.
-          ;; In this scenario, it's really the first block with a transmission
-          ;; count of 0.
-          cursor [(reduce (fn [acc block]
-                            (if (= 0 (::specs/transmissions block))
-                              (reduced acc)
-                              (inc acc)))
-                          0
-                          blocks)]]
-      (log/debug "Conditions ripe for sending a new outgoing message")
-      (-> state
-          (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
-    (log/debug (str "Bad preconditions for sending a new block:\n"
-                    "recent: " recent " <? " (+ earliest-time n-sec-per-block)
-                    "\nBlock count: " (count blocks)
-                    "\nwant-ping: " want-ping
-                    "\nsend-eof: " send-eof
-                    "\n\tsend-eof-processed: " send-eof-processed
-                    "\n\tsend-processed: " send-processed "send-bytes: " send-bytes))))
+  (when (< 0 (count blocks))
+    (if (and (>= recent (+ earliest-time n-sec-per-block))
+             ;; If we have too many outgoing blocks being
+             ;; tracked, don't put more in flight.
+             ;; There's obviously something going wrong
+             ;; somewhere.
+             ;; Reference implementation tracks them all.
+             ;; However: if the client dumps 256K worth of
+             ;; message on us in one fell swoop, this check
+             ;; would guarantee that none of them ever get sent.
+             ;; So only consider the ones that have already
+             ;; been put on the wire.
+             (< (count (remove-unsent blocks)) K/max-outgoing-blocks)
+             (or want-ping
+                 ;; This next style clause is used several times in
+                 ;; the reference implementation.
+                 ;; The actual check is negative in context, so
+                 ;; it's really a not
+                 ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
+                 ;; C programmers have assured me that it translates into
+                 (if send-eof
+                   (not send-eof-processed)
+                   (< send-processed send-bytes))))
+      ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
+      (let [start-pos (+ send-acked send-processed)
+            block-length (max (- send-bytes send-processed)
+                              max-block-length)
+            ;; This next construct seems pretty ridiculous.
+            ;; It's just assuring that (<= send-byte-buf-size (+ start-pos block-length))
+            ;; The bitwise-and is a shortcut for modulo that used to be faster,
+            ;; once upon a time.
+            ;; Q: does it make any difference at all these days?
+            ;; A: According to stack overflow, the modulo will get optimized
+            ;; to bitwise logic by any decent compiler.
+            ;; Then again, maybe it's a vital piece to the puzzle.
+            ;; TODO: Get an opinion from a cryptographer.
+            block-length (if (> (+ (bit-and start-pos (dec K/send-byte-buf-size))
+                                   block-length)
+                                K/send-byte-buf-size)
+                           (- K/send-byte-buf-size (bit-and start-pos (dec K/send-byte-buf-size)))
+                           block-length)
+            eof (if (= send-processed send-bytes)
+                  send-eof
+                  false)
+            ;; XXX: or could have the full block in post-buffer space (DJB)
+            ;; "absorb" this new block -- JRG
+            send-processed (+ send-processed block-length)
+            ;; Want to send a new block.
+            ;; In a single-threaded world where we're processing one
+            ;; message packet/block at a time, that will always be the last.
+            ;; In this scenario, it's really the first block with a transmission
+            ;; count of 0.
+            cursor [(reduce (fn [acc block]
+                              (if (= 0 (::specs/transmissions block))
+                                (reduced acc)
+                                (inc acc)))
+                            0
+                            blocks)]]
+        (log/debug "Conditions ripe for sending a new outgoing message")
+        (-> state
+            (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
+      (log/debug (str "Bad preconditions for sending a new block:\n"
+                      "recent: " recent " <? " (+ earliest-time n-sec-per-block)
+                      "\nBlock count: " (count blocks)
+                      "\nwant-ping: " want-ping
+                      "\nsend-eof: " send-eof
+                      "\n\tsend-eof-processed: " send-eof-processed
+                      "\n\tsend-processed: " send-processed
+                      "\nsend-bytes: " send-bytes)))))
 
 (s/fdef pick-next-block-to-send
         :args (s/cat :state ::specs/state)
         :ret (s/nilable ::specs/state))
 (defn pick-next-block-to-send
-  "Instead of returning nil on "
   [state]
+  ;; TODO: Instead of returning nil on nothing to do, just
+  ;; do something like setting a nil cursor.
+  ;; That should simplify the caller.
   (or (check-for-previous-block-to-resend state)
 ;;;       357-410: Try sending a new block: (-- DJB)
                   ;; There's goto-fun overlap with resending
@@ -400,7 +413,11 @@
 (defn maybe-send-block!
   "Possibly send a block from child to parent"
   [state]
-  ;; I *could*
+  ;; I could have pick-next-block-to-send just adjust the state
+  ;; to signal whether there *is* a next block to send, instead
+  ;; of having it return nil like this.
+  ;; That seems like a better API.
+  ;; TODO: Make that so.
   (if-let [state' (pick-next-block-to-send state)]
     (let [state'' (pre-calculate-state-after-send state')
           buf (get-in state'' [::specs/outgoing ::specs/send-buf])

@@ -124,7 +124,7 @@
     {:keys [::specs/->child-buffer
             ::specs/gap-buffer]} ::specs/incoming
     {:keys [::specs/blocks
-            ::specs/earliest-block-time
+            ::specs/earliest-time
             ::specs/last-block-time
             ::specs/send-bytes
             ::specs/send-eof
@@ -134,7 +134,9 @@
     :keys [::specs/recent]
     :as state}]
   (let [resend-time (+ last-block-time n-sec-per-block)
+        _ (log/debug "Minimum resend time:" resend-time)
         default-next (+ recent (utils/seconds->nanos 60))
+        _ (log/debug "Default +1 minute:" default-next)
         ;; Lines 286-289
         next-based-on-ping (if want-ping
                              ;; Go with the assumption that this matches wantping 1 in the original
@@ -144,20 +146,23 @@
                                (+ recent utils/seconds->nanos 1)
                                (min default-next resend-time))
                              default-next)
+        _ (log/debug "Based on ping settings, adjusted next time to:" next-based-on-ping)
         ;; Lines 290-292
         next-based-on-eof (if (and (< (count blocks) K/max-outgoing-blocks)
                                    (if send-eof
                                      (not send-eof-processed)
                                      (< send-processed send-bytes)))
-                            (min default-next resend-time)
+                            (min next-based-on-ping resend-time)
                             next-based-on-ping)
+        _ (log/debug "Due to EOF status:" next-based-on-eof)
         ;; Lines 293-296
-        rtt-resend-time (+ earliest-block-time rtt-timeout)
-        next-based-on-earliest-block-time (if (and (not= 0 earliest-block-time)
+        rtt-resend-time (+ earliest-time rtt-timeout)
+        next-based-on-earliest-block-time (if (and (not= 0 earliest-time)
                                                    (> rtt-resend-time
                                                       resend-time))
                                             (min next-based-on-eof rtt-resend-time)
                                             next-based-on-eof)
+        _ (log/debug "Adjusted for RTT:" next-based-on-earliest-block-time)
         ;; There's one last caveat, from 298-300:
         ;; It all swirls around watchtochild, which gets set up
         ;; between lines 276-279.
@@ -168,6 +173,7 @@
                                        (nil? watch-to-child))
                                 0
                                 next-based-on-earliest-block-time)
+        _ (log/debug "After adjusting for closed/ignored child watcher:" based-on-closed-child)
         ;; Lines 302-305
         actual-next (min based-on-closed-child recent)]
     actual-next))
@@ -176,7 +182,8 @@
   [{:keys [::specs/recent]
     {:keys [::specs/next-action
             ::specs/schedule-pool]} ::specs/flow-control
-    :as state}]
+    :as state}
+   state-agent]
   ;; It would be nice to have a way to check
   ;; whether this is what triggered us. If
   ;; so, there's no reason to stop it.
@@ -185,21 +192,29 @@
   (at-at/stop next-action)
 
   (let [actual-next (choose-next-scheduled-time state)
-        next-action (at-at/after (utils/nanos->millis (- actual-next recent))
-                                 trigger-from-timer
+        delta-nanos (max 0 (- actual-next recent))
+        delta (inc (utils/nanos->millis delta-nanos))
+        next-action (at-at/after delta
+                                 (fn []
+                                   (send-off state-agent (partial trigger-from-timer state-agent)))
                                  schedule-pool
                                  :desc "Periodic wakeup")]
+    (log/debug "Timer set to trigger in" delta "ms\n"
+               "Scheduled at" (utils/nanos->millis actual-next)
+               "from" (utils/nanos->millis recent))
     (-> state
         (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
 
 (s/fdef start-event-loops!
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :state-agent ::specs/state-agent
+                     :state ::specs/state)
         :ret ::specs/state)
 (defn start-event-loops!
   "This still needs to set up timers...which are going to be interesting.
 ;;;          205-259 fork child
 "
-  [state]
+  [state-agent
+   state]
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
   ;; That checks for input on:
@@ -208,17 +223,20 @@
   ;; fromchild[0] (from child)
   ;; and a timeout (based on the messaging state).
   (let [recent (System/nanoTime)]
+    (log/debug "A")
     (-> state
         (assoc
          ;; This covers line 260
          ::specs/recent recent)
-        (schedule-next-timeout!))))
+        (schedule-next-timeout! state-agent))))
 
 (s/fdef trigger-io
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :state-agent ::specs/state-agent
+                     :state ::specs/state)
         :ret ::specs/state)
 (defn trigger-io
-  [{{:keys [::specs/->child]} ::specs/incoming
+  [state-agent
+   {{:keys [::specs/->child]} ::specs/incoming
     {:keys [::next-action]} ::specs/flow-control
     :as state}]
   (log/debug "Triggering I/O")
@@ -226,6 +244,25 @@
         (as-> state state
             (assoc state ::specs/recent (System/nanoTime))
             (to-parent/maybe-send-block! state)
+            ;; If the message from the parent was garbage,
+            ;; just discard it.
+            ;; It seems like there's a lot of state set up
+            ;; to get to this point.
+            ;; TODO: Verify that it's truly safe to just
+            ;; run with what we have and not bother trying
+            ;; to clean up.
+            ;; It seems like it ought to be safe enough,
+            ;; but there's a lot of messiness involved.
+
+            ;; Earlier comment about this:
+            ;; The message from parent to child was garbage.
+            ;; Discard.
+            ;; Q: Does this make sense?
+            ;; It leaves our "global" state updated in a way that left us unable
+            ;; to send earlier. That isn't likely to get fixed the next time
+            ;; through the event loop.
+            ;; (I'm hitting this because I'm sending a gibberish message that
+            ;; needs to be discarded)
             (or (from-parent/try-processing-message! state)
                 state)
             (to-child/forward! ->child state))]
@@ -241,20 +278,26 @@
     ;; If the child sent a big batch of data to go out
     ;; all at once, don't waste time setting up a timeout
     ;; scheduler. The poll in the original would have
-    ;; returned immediately anyway
-    (let [unsent-blocks-from-child? (from-child/blocks-not-sent? state)]
-      (if unsent-blocks-from-child?
-        (recur state)
-        (schedule-next-timeout! state)))))
+    ;; returned immediately anyway.
+    ;; Except that n-sec-per-block puts a hard limit on how
+    ;; fast we can send.
+    (comment
+      (let [unsent-blocks-from-child? (from-child/blocks-not-sent? state)]
+        (if unsent-blocks-from-child?
+          (recur state)
+          (schedule-next-timeout! state))))
+    (schedule-next-timeout! state-agent state)))
 
 (s/fdef trigger-from-child
-        :args (s/cat :state ::specs/state
+        :args (s/cat :state-agent ::specs/state-agent
+                     :state ::specs/state
                      :array-o-bytes bytes?)
         :ret ::specs/state)
 (defn trigger-from-child
-  [state array-o-bytes]
+  [state-agent state array-o-bytes]
   (log/debug "trigger-from-child: Received a" (class array-o-bytes))
   (trigger-io
+   state-agent
    (if (from-child/room-for-child-bytes? state)
      (do
        (log/debug "There is room for another message")
@@ -269,7 +312,8 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [{{:keys [::specs/->child]} ::specs/incoming
+  [state-agent
+   {{:keys [::specs/->child]} ::specs/incoming
     :as state}
    ^bytes buf]
   (when-not ->child
@@ -282,53 +326,15 @@
   ;; approach, and this was triggered by a block of
   ;; data coming from the parent.
 
-  (let [ready-to-ack (-> state
-                         ;; Q: Are the next 2 lines worth their own functions?
-                         (assoc-in [::specs/incoming ::specs/parent->buffer] buf)
-                         ;; This one really seems so, since I'm calling it
-                         ;; in at least 3 different places now
-                         (assoc ::specs/recent (System/nanoTime))
-                         ;; This is about sending from the child to parent
-                         ;; (No, that isn't why we're here, but it doesn't
-                         ;; hurt to check whether another block is
-                         ;; sendable)
-                         to-parent/maybe-send-block!
-                         ;; Next obvious piece is the "try receiving messages:"
-                         ;; block.
-                         ;; But I've already changed the order of operations by
-                         ;; doing that up front in parent->, which is what called
-                         ;; this.
-                         ;; Now that I'm going back through the big-picture items,
-                         ;; that decision seems less valid than it did when I was
-                         ;; staring at each tree in the forest.
-                         ;; It probably doesn't matter, but I've dealt with enough
-                         ;; subtleties in the original code that I'm very nervous
-                         ;; about that "probably"
-                         ;; OTOH, this leaves everything that follows pleasingly
-                         ;; duplicated (and ripe for refactoring) with trigger-from-timer
-                         ;; and trigger-from-child
-                         )]
-    (log/info "Getting ready to start trying to process the message we just received from parent:\n"
-              ready-to-ack)
-    (if-let [primed (from-parent/try-processing-message! ready-to-ack)]
-      (do
-        (log/debug "Message processed. Trying to forward to child")
-        (to-child/forward! ->child primed))
-      (do
-        ;; The message from parent to child was garbage.
-        ;; Discard.
-        ;; Q: Does this make sense?
-        ;; It leaves our "global" state updated in a way that left us unable
-        ;; to send earlier. That isn't likely to get fixed the next time
-        ;; through the event loop.
-        ;; (I'm hitting this because I'm sending a gibberish message that
-        ;; needs to be discarded)
-        (throw (RuntimeException. "How does DJB really handle this discard?"))
-        ready-to-ack))))
+  ;; However, there *is* the need to handle packets that the
+  ;; child has buffered up to send to the parent.
+  (trigger-io state-agent
+              (assoc-in state [::specs/incoming ::specs/parent->buffer] buf)))
 
 (defn trigger-from-timer
-  [state]
-  (trigger-io state))
+  [state-agent state]
+  (log/debug "I/O triggered by timer")
+  (trigger-io state-agent state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -417,7 +423,7 @@
         :ret ::specs/state-agent)
 (defn start!
   ([state-agent timeout]
-   (send state-agent start-event-loops!)
+   (send state-agent (partial start-event-loops! state-agent))
    (if (await-for timeout state-agent)
      state-agent
      (throw (ex-info "Starting failed"
@@ -487,7 +493,7 @@
   ;; Except for those actual pesky sends to the
   ;; child/parent, which are specifically forbidden
   ;; from blocking.
-  (send state-agent trigger-from-child buf))
+  (send state-agent (partial trigger-from-child state-agent) buf))
 
 (s/fdef parent->
         :args (s/cat :state ::specs/state-agent
@@ -546,7 +552,7 @@
           ;; CPU cycles calculating it.
           (if (<= K/max-msg-len incoming-size)
             ;; See comments in child-> re: send vs. send-off
-            (send state-agent trigger-from-parent buf)
+            (send state-agent (partial trigger-from-parent state-agent) buf)
             (do
               (log/warn (str "Child buffer overflow\n"
                              "Incoming message is " incoming-size
