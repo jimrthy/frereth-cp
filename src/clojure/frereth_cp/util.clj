@@ -9,8 +9,15 @@
 
 (set! *warn-on-reflection* true)
 
+;; TODO: Rename this to seconds-in-millis
 (defn seconds [] 1000)  ; avoid collision w/ built-in second
 (defn minute [] (* 60 (seconds)))
+(defn nanos->millis
+  [ns]
+  (/ ns 1000000))
+(defn seconds->nanos
+  [ss]
+  (* ss 1000000000))
 
 (defn pretty
   "Return a pretty-printed representation of xs"

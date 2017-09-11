@@ -33,7 +33,8 @@
             ;; are available?
             ;; (agents and core.async seem to be the
             ;; most likely)
-            [manifold.stream :as strm])
+            [manifold.stream :as strm]
+            [overtone.at-at :as at-at])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -116,6 +117,81 @@
 ;;; 456-542: Loop over (range blocknum)
 ;;; (getting into details)
 
+(defn choose-next-scheduled-time
+  [{{:keys [::specs/n-sec-per-block
+            ::specs/next-action
+            ::specs/rtt-timeout]} ::specs/flow-control
+    {:keys [::specs/->child-buffer
+            ::specs/gap-buffer]} ::specs/incoming
+    {:keys [::specs/blocks
+            ::specs/earliest-block-time
+            ::specs/last-block-time
+            ::specs/send-bytes
+            ::specs/send-eof
+            ::specs/send-eof-processed
+            ::specs/send-processed
+            ::specs/want-ping]} ::specs/outgoing
+    :keys [::specs/recent]
+    :as state}]
+  (let [resend-time (+ last-block-time n-sec-per-block)
+        default-next (+ recent (utils/seconds->nanos 60))
+        ;; Lines 286-289
+        next-based-on-ping (if want-ping
+                             ;; Go with the assumption that this matches wantping 1 in the original
+                             ;; I think the point there is for the
+                             ;; client to give the server 1 second to start up
+                             (if (= want-ping ::specs/second-1)
+                               (+ recent utils/seconds->nanos 1)
+                               (min default-next resend-time))
+                             default-next)
+        ;; Lines 290-292
+        next-based-on-eof (if (and (< (count blocks) K/max-outgoing-blocks)
+                                   (if send-eof
+                                     (not send-eof-processed)
+                                     (< send-processed send-bytes)))
+                            (min default-next resend-time)
+                            next-based-on-ping)
+        ;; Lines 293-296
+        rtt-resend-time (+ earliest-block-time rtt-timeout)
+        next-based-on-earliest-block-time (if (and (not= 0 earliest-block-time)
+                                                   (> rtt-resend-time
+                                                      resend-time))
+                                            (min next-based-on-eof rtt-resend-time)
+                                            next-based-on-eof)
+        ;; There's one last caveat, from 298-300:
+        ;; It all swirls around watchtochild, which gets set up
+        ;; between lines 276-279.
+        ;; It's convoluted enough that I don't want to try to dig into it tonight
+        watch-to-child "There's a lot involved in this decision"
+        based-on-closed-child (if (and (not= 0 (+ (count gap-buffer)
+                                                  (count ->child-buffer)))
+                                       (nil? watch-to-child))
+                                0
+                                next-based-on-earliest-block-time)
+        ;; Lines 302-305
+        actual-next (min based-on-closed-child recent)]
+    actual-next))
+
+(defn schedule-next-timeout!
+  [{:keys [::specs/recent]
+    {:keys [::specs/next-action
+            ::specs/schedule-pool]} ::specs/flow-control
+    :as state}]
+  ;; It would be nice to have a way to check
+  ;; whether this is what triggered us. If
+  ;; so, there's no reason to stop it.
+  ;; Go with the assumption that this is
+  ;; light-weight enough that it doesn't matter.
+  (at-at/stop next-action)
+
+  (let [actual-next (choose-next-scheduled-time state)
+        next-action (at-at/after (utils/nanos->millis (- actual-next recent))
+                                 trigger-from-timer
+                                 schedule-pool
+                                 :desc "Periodic wakeup")]
+    (-> state
+        (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
+
 (s/fdef start-event-loops!
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
@@ -123,8 +199,7 @@
   "This still needs to set up timers...which are going to be interesting.
 ;;;          205-259 fork child
 "
-  [{:keys [::specs/callbacks]
-    :as state}]
+  [state]
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
   ;; That checks for input on:
@@ -132,65 +207,45 @@
   ;; tochild[1] (to child)
   ;; fromchild[0] (from child)
   ;; and a timeout (based on the messaging state).
-
-  ;; I want to keep any sort of deferred/async details
-  ;; as well-hidden as possible.
-  ;; This is a boundary piece that almost seems tailor-made.
-  ;; Although I really do need to figure out what makes sense
-  ;; as "buffer size."
-  ;; And it might make a lot of sense to spread it farther
-  ;; than I'm using it now to try to take advantage of
-  ;; the transducer capabilities.
-  ;; By the same token, it's very tempting to just use
-  ;; a core.async channel instead.
-  ;; The only reason I'm not now is that I already have
-  ;; access to manifold thanks to aleph, and I don't want
-  ;; to restart my JVM to update build.boot to get access
-  ;; to core.async.
-  (assoc state
+  (let [recent (System/nanoTime)]
+    (-> state
+        (assoc
          ;; This covers line 260
-         ::specs/recent (System/nanoTime)))
+         ::specs/recent recent)
+        (schedule-next-timeout!))))
 
 (s/fdef trigger-io
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn trigger-io
   [{{:keys [::specs/->child]} ::specs/incoming
+    {:keys [::next-action]} ::specs/flow-control
     :as state}]
   (log/debug "Triggering I/O")
-  ;; I think I've figured out the problem with my
-  ;; echo test:
-  ;; After we deliver a message to the child,
-  ;; we end up back here. It (presumably)
-  ;; sends a block to the parent and then
-  ;; tries to process another from-parent
-  ;; message.
-  ;; There's still a message in the child
-  ;; buffer (because apparently that didn't
-  ;; get cleaned out), but it there is no
-  ;; incoming message for it to handle.
-  ;; So we're calling (->child nil)
-
   (let [state
-        (-> state
-            (assoc ::specs/recent (System/nanoTime))
-            ;; This doesn't seem to be working
-            ;; FIXME: Start back here.
-            ;; Q: What are the odds that I've screwed up
-            ;; the state nesting again?
-            to-parent/maybe-send-block!)
-        state (or (from-parent/try-processing-message! state)
-                  state)]
-    (to-child/forward! ->child state)
+        (as-> state state
+            (assoc state ::specs/recent (System/nanoTime))
+            (to-parent/maybe-send-block! state)
+            (or (from-parent/try-processing-message! state)
+                state)
+            (to-child/forward! ->child state))]
     ;; At the end of the main ioloop in the refernce
     ;; implementation, there's a block that closes the pipe
     ;; to the child if we're done.
     ;; I think the point is that we'll quit polling on
     ;; that and start short-circuiting out of the blocks
     ;; that might do the send, once we've hit EOF
-    ;; Q: is there anything sensible I can do here to
+    ;; Q: What can I do here to
     ;; produce the same effect?
-    ))
+
+    ;; If the child sent a big batch of data to go out
+    ;; all at once, don't waste time setting up a timeout
+    ;; scheduler. The poll in the original would have
+    ;; returned immediately anyway
+    (let [unsent-blocks-from-child? (from-child/blocks-not-sent? state)]
+      (if unsent-blocks-from-child?
+        (recur state)
+        (schedule-next-timeout! state)))))
 
 (s/fdef trigger-from-child
         :args (s/cat :state ::specs/state
@@ -295,6 +350,7 @@
                                  ::specs/last-speed-adjustment 0
                                  ;; Seems vital, albeit undocumented
                                  ::specs/n-sec-per-block K/sec->n-sec
+                                 ::specs/next-action nil
                                  ::specs/rtt 0
                                  ::specs/rtt-average 0
                                  ::specs/rtt-deviation 0
@@ -305,15 +361,15 @@
                                  ::specs/rtt-seen-older-low false
                                  ::specs/rtt-seen-recent-high false
                                  ::specs/rtt-seen-recent-low false
-                                 ::specs/rtt-timeout K/sec->n-sec}
+                                 ::specs/rtt-timeout K/sec->n-sec
+                                 ::specs/schedule-pool (at-at/mk-pool)}
            ::specs/incoming {::specs/->child child-callback
                              ::specs/->child-buffer []
                              ::specs/gap-buffer (to-child/build-gap-buffer)
                              ::specs/receive-bytes 0
                              ::specs/receive-eof false
                              ::specs/receive-total-bytes 0
-                             ::specs/receive-written 0
-                             }
+                             ::specs/receive-written 0}
            ::specs/outgoing {::specs/blocks []
                              ::specs/earliest-time 0
                              ::specs/last-block-time 0

@@ -201,6 +201,8 @@
 
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
+;; Next time for us to do something without a trigger
+(s/def ::next-action #(instance? overtone.at_at.ScheduledJob %))
 ;; These feed off recent, but are basically undocumented
 (s/def ::last-doubling int?)
 (s/def ::last-edge int?)
@@ -221,6 +223,7 @@
 (s/def ::rtt-seen-recent-low boolean?)
 (s/def ::rtt-timeout ::big-int)
 (s/def ::last-speed-adjustment ::big-int)
+(s/def ::schedule-pool (s/nilable #(instance? overtone.at_at.MutablePool %)))
 
 (s/def ::want-ping #{false ::immediate ::second-1})
 
@@ -237,6 +240,7 @@
                                     ::last-edge
                                     ::last-speed-adjustment
                                     ::n-sec-per-block
+                                    ::next-action
                                     ::rtt
                                     ::rtt-average
                                     ;; Q: Does rtt-delta belong in here?
@@ -248,32 +252,12 @@
                                     ::rtt-seen-older-low
                                     ::rtt-seen-recent-high
                                     ::rtt-seen-recent-low
-                                    ::rtt-timeout]))
+                                    ::rtt-timeout
+                                    ::schedule-pool]))
 
 ;; 2. Buffers of bytes from the parent that we have not
 ;;    yet managed to write to the child
 (s/def ::incoming (s/keys :req [::->child  ; callback
-                                ;; I'm still mingling concerns, really.
-                                ;; We honestly have a pair of buffers here.
-                                ;; There's the ->child-buffer, which is
-                                ;; a vector of byte arrays that are ready
-                                ;; to be written to the child.
-                                ;; Then there should be something like
-                                ;; a parent->buffer that holds the raw
-                                ;; incoming bytes that have arrived
-                                ;; from the parent.
-                                ;; That byte array needs to be converted
-                                ;; into ::packet (which is currently only
-                                ;; set up to cope with ByteBuf) and then
-                                ;; processed onto ->child-buffer.
-                                ;; OTOH:
-                                ;; Q: Why not just maintain the gap-buffer
-                                ;; in the same spot?
-                                ;; When it's time to write to the child,
-                                ;; "consolidate" the gaps by writing
-                                ;; everything that's sequential and updating
-                                ;; ::receive-bytes.
-                                ;; That approach seems easy-peasy.
                                 ::->child-buffer
                                 ::gap-buffer
                                 ::receive-bytes

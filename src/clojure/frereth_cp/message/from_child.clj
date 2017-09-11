@@ -59,9 +59,21 @@
   ;; And is it possible to tease apart that distinction?
   (< (+ send-bytes K/k-4) K/send-byte-buf-size))
 
+(s/fdef blocks-not-sent?
+        :args (s/cat :state ::specs/state)
+        :ret boolean?)
+(defn blocks-not-sent?
+  "Are there pending blocks from the child that haven't been sent once?"
+  [{{:keys [::specs/blocks]} ::specs/outgoing
+    :as state}]
+  (seq (filter (fn [block]
+                 (= 0 (::specs/transmissions block)))
+               blocks)))
+
 (s/fdef child-consumer
         :args (s/cat :state ::specs/state
-                     :array-o-bytes bytes?))
+                     :array-o-bytes bytes?)
+        :ret ::specs/state)
 (defn child-consumer
   "Accepts a byte-array from the child.
 
