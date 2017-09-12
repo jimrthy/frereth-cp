@@ -67,7 +67,7 @@
                        (swap! child-message-counter inc)
                        (swap! strm-address + msg-len)
                        (message/child-> state-agent array-o-bytes))))
-        initialized (message/initial-state parent-cb child-cb)
+        initialized (message/initial-state parent-cb child-cb true)
         state (message/start! initialized)]
     (reset! state-agent-atom state)
     (try
@@ -131,8 +131,6 @@
   ;; when the child sends bytes that don't fit into
   ;; a single message packet.
 
-  ;; I'm hitting an NPE with no obvious context
-  (comment (throw (RuntimeException. "Try walking through this 1 line at a time")))
   (let [packet-count 8  ; trying to make life interesting
         response (promise)
         parent-state (atom {:count 0
@@ -140,10 +138,10 @@
         parent-cb (fn [dst]
                     (let [response-state @parent-state]
                       (log/debug "parent-cb:" response-state)
-                      ;; It seems like I should really be getting 1024 byte blocks here.
-                      ;; But by max-block-length is set to 512.
-                      ;; Q: Why?
-                      (is (= K/max-msg-len (count dst)))
+                      ;; The first few blocks should max out the message size.
+                      ;; The way the test is set up, the last will be
+                      ;; (+ 512 64).
+                      ;; It doesn't seem worth the hoops it would take to validate that.
                       (swap! parent-state
                              (fn [cur]
                                (-> cur
@@ -186,8 +184,8 @@
             ;; Note that this is what the child sender should be supplying
             message-body (byte-array (range msg-len))]
         (message/child-> state message-body)
-        ;; Q: Is any of this code worth trying to salvage?
         (let [outcome (deref response 5000 ::timeout)]
+          (println "Verifying that state hasn't errored out")
           (if-let [err (agent-error state)]
             (is (not err))
             (do
@@ -195,7 +193,7 @@
               (when-not (= outcome ::timeout)
                 ;; TODO: What do I need to set up a full-blown i/o
                 ;; loop to make this accurate?
-                (is (=  #_(dec packet-count) 1 (count outcome)))
+                (is (= packet-count (count outcome)))
                 (is (= K/max-msg-len (count (first outcome))))
                 (doseq [packet outcome]
                   (is (= (count packet) (+ K/k-1 K/header-length K/min-padding-length))))
@@ -218,7 +216,7 @@
                     outgoing (::specs/outgoing outcome)
                     incoming (::specs/incoming outcome)]
                 (is (= msg-len (::specs/send-bytes outgoing)))
-                (is (= 2 (::specs/next-message-id outgoing)))
+                (is (= packet-count (::specs/next-message-id outgoing)))
                 ;; I'm not sending back any ACKs
                 (is (= (::specs/send-processed outgoing) 0))
                 ;; TODO: Need a test that does this

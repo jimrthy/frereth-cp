@@ -178,18 +178,22 @@
         actual-next (min based-on-closed-child recent)]
     actual-next))
 
+(declare trigger-from-timer)
 (defn schedule-next-timeout!
   [{:keys [::specs/recent]
     {:keys [::specs/next-action
-            ::specs/schedule-pool]} ::specs/flow-control
+            ::specs/schedule-pool]
+     :as flow-control} ::specs/flow-control
     :as state}
    state-agent]
+  (log/debug "Top of scheduler. State keys: " (keys state))
   ;; It would be nice to have a way to check
   ;; whether this is what triggered us. If
   ;; so, there's no reason to stop it.
   ;; Go with the assumption that this is
   ;; light-weight enough that it doesn't matter.
   (at-at/stop next-action)
+  (log/debug "Current next action cancelled")
 
   (let [actual-next (choose-next-scheduled-time state)
         delta-nanos (max 0 (- actual-next recent))
@@ -223,7 +227,6 @@
   ;; fromchild[0] (from child)
   ;; and a timeout (based on the messaging state).
   (let [recent (System/nanoTime)]
-    (log/debug "A")
     (-> state
         (assoc
          ;; This covers line 260
@@ -281,12 +284,14 @@
     ;; returned immediately anyway.
     ;; Except that n-sec-per-block puts a hard limit on how
     ;; fast we can send.
+    ;; TODO: Verify against the reference implementation
     (comment
       (let [unsent-blocks-from-child? (from-child/blocks-not-sent? state)]
         (if unsent-blocks-from-child?
           (recur state)
           (schedule-next-timeout! state))))
-    (schedule-next-timeout! state-agent state)))
+    (log/debug "Scheduling next timeout")
+    (schedule-next-timeout! state state-agent)))
 
 (s/fdef trigger-from-child
         :args (s/cat :state-agent ::specs/state-agent

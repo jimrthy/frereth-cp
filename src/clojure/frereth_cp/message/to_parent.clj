@@ -183,11 +183,12 @@
                        "\nbased on "
                        current-block-cursor
                        "\nHave:\n"
-                       (if-let [current-block (get-in state cursor)]
-                         (utils/pretty current-block)
-                         (str "Missing current block completely, but do have "
-                              (count (get-in state [::specs/outgoing ::specs/blocks]))
-                              " blocks we *could* have been looking at"))))
+                       (let [current-block (get-in state cursor)]
+                         (if current-block
+                           (utils/pretty current-block)
+                           (str "Missing current block completely, but do have "
+                                (count (get-in state [::specs/outgoing ::specs/blocks]))
+                                " blocks we *could* have been looking at")))))
         state'
         (-> state
             (update-in (conj cursor ::specs/transmissions) inc)
