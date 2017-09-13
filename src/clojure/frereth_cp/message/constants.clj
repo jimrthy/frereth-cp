@@ -58,7 +58,8 @@
 
 (def ^:const sec->n-sec
   "Starting point for several values"
-  1000000000)
+  ;; 1,000,000,000
+  1000000000 )
 
 (def ^:const secs-1
   "in nanoseconds"

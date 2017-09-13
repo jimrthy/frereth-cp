@@ -119,7 +119,6 @@
 
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
-            ::specs/next-action
             ::specs/rtt-timeout]} ::specs/flow-control
     {:keys [::specs/->child-buffer
             ::specs/gap-buffer]} ::specs/incoming
@@ -133,18 +132,19 @@
             ::specs/want-ping]} ::specs/outgoing
     :keys [::specs/recent]
     :as state}]
-  (let [resend-time (+ last-block-time n-sec-per-block)
-        _ (log/debug "Minimum resend time:" resend-time)
+  (let [min-resend-time (+ last-block-time n-sec-per-block)
+        _ (log/debug "Minimum resend time:" min-resend-time)
         default-next (+ recent (utils/seconds->nanos 60))
         _ (log/debug "Default +1 minute:" default-next)
         ;; Lines 286-289
+        _ (log/debug (str "Scheduling based on want-ping value '" want-ping "'"))
         next-based-on-ping (if want-ping
                              ;; Go with the assumption that this matches wantping 1 in the original
                              ;; I think the point there is for the
                              ;; client to give the server 1 second to start up
                              (if (= want-ping ::specs/second-1)
                                (+ recent utils/seconds->nanos 1)
-                               (min default-next resend-time))
+                               (min default-next min-resend-time))
                              default-next)
         _ (log/debug "Based on ping settings, adjusted next time to:" next-based-on-ping)
         ;; Lines 290-292
@@ -152,14 +152,14 @@
                                    (if send-eof
                                      (not send-eof-processed)
                                      (< send-processed send-bytes)))
-                            (min next-based-on-ping resend-time)
+                            (min next-based-on-ping min-resend-time)
                             next-based-on-ping)
         _ (log/debug "Due to EOF status:" next-based-on-eof)
         ;; Lines 293-296
         rtt-resend-time (+ earliest-time rtt-timeout)
         next-based-on-earliest-block-time (if (and (not= 0 earliest-time)
                                                    (> rtt-resend-time
-                                                      resend-time))
+                                                      min-resend-time))
                                             (min next-based-on-eof rtt-resend-time)
                                             next-based-on-eof)
         _ (log/debug "Adjusted for RTT:" next-based-on-earliest-block-time)
@@ -203,9 +203,7 @@
                                    (send-off state-agent (partial trigger-from-timer state-agent)))
                                  schedule-pool
                                  :desc "Periodic wakeup")]
-    (log/debug "Timer set to trigger in" delta "ms\n"
-               "Scheduled at" (utils/nanos->millis actual-next)
-               "from" (utils/nanos->millis recent))
+    (log/debug "Timer set to trigger in" delta "ms\n")
     (-> state
         (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
 
@@ -409,7 +407,15 @@
                              ::specs/send-processed 0
                              ::specs/total-blocks 0
                              ::specs/total-block-transmissions 0
-                             ::specs/want-ping server?}
+                             ::specs/want-ping (if server?
+                                                 false
+                                                 ;; TODO: Add option for a
+                                                 ;; client that started before the
+                                                 ;; server, meaning that it waits
+                                                 ;; for 1 second at a time before
+                                                 ;; trying to send the next
+                                                 ;; message
+                                                 ::specs/immediate)}
 
            ;; In the original, this is a local in main rather than a global
            ;; Q: Is there any difference that might matter to me, other
@@ -443,7 +449,7 @@
 
 (s/fdef child->
         :args (s/cat :state-agent ::specs/state-agent
-                     :buf ::specs/buf)
+                     :array-o-bytes bytes?)
         :ret ::specs/state-agent)
 ;;; It seems like it might make more sense to just
 ;;; use an i/o stream, rather than byte arrays.
@@ -483,7 +489,7 @@
 
 ;;;  319-336: Maybe read bytes from child
   [state-agent
-   buf]
+   array-o-bytes]
   ;; I'm torn about send vs. send-off here.
   ;; This very well *could* take a measurable amount
   ;; of time, and we could wind up with a ton of threads
@@ -498,7 +504,8 @@
   ;; Except for those actual pesky sends to the
   ;; child/parent, which are specifically forbidden
   ;; from blocking.
-  (send state-agent (partial trigger-from-child state-agent) buf))
+  (log/debug "Incoming message from child")
+  (send state-agent (partial trigger-from-child state-agent) array-o-bytes))
 
 (s/fdef parent->
         :args (s/cat :state ::specs/state-agent

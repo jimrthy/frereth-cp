@@ -4,7 +4,8 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs])
+            [frereth-cp.message.specs :as specs]
+            [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -18,12 +19,21 @@
 (defn build-block-descriptions
   "For cases where a child sends a byte array that's too large"
   [^ByteBuf buf max-block-length]
+  {:pre [#(< 0 max-block-length)]}
   (let [cap (.capacity buf)
         block-count (int (Math/ceil (/ cap max-block-length)))]
+    (log/debug (str "Building " block-count " " max-block-length "-byte buffer slice(s) from " buf))
     (map (fn [n]
            (let [length (if (< n (dec block-count))
                           max-block-length
-                          (rem cap max-block-length))]
+                          (let [remainder (mod cap max-block-length)]
+                            ;; Final block is probably smaller than the rest,
+                            ;; except when I've been writing nice clean test
+                            ;; cases that wind up setting it up to be 0 bytes
+                            ;; long without this next check.
+                            (if (not= 0 remainder)
+                              remainder
+                              max-block-length)))]
              {::specs/buf (.slice buf (* n max-block-length) length)
               ;; Q: Is there any good justification for tracking this twice?
               ::specs/length length
@@ -34,6 +44,10 @@
               ;; Q: What should these actually be?
               ::specs/start-pos 0}))
          (range block-count))))
+(let [base (byte-array (range 8192))
+      src (Unpooled/wrappedBuffer base)]
+  (.writerIndex src 8192)
+  (.slice src 0 1024))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -141,7 +155,8 @@
         ;; ignoring buffer limits
         send-bytes (+ send-bytes bytes-to-read)
         blocks (build-block-descriptions buf max-block-length)]
-    (log/debug "Blocks to add:" (count blocks))
+    (log/debug (str (count blocks) " Block(s) to add:\n"
+                    (utils/pretty blocks)))
     (when (>= send-bytes K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.

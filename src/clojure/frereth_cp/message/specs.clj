@@ -5,7 +5,8 @@
             [frereth-cp.shared.constants :as K-shared]
             [frereth-cp.util :as util])
   (:import clojure.lang.BigInt
-           io.netty.buffer.ByteBuf))
+           io.netty.buffer.ByteBuf
+           overtone.at_at.ScheduledJob))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -202,7 +203,7 @@
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
 ;; Next time for us to do something without a trigger
-(s/def ::next-action #(instance? overtone.at_at.ScheduledJob %))
+(s/def ::next-action #(instance? ScheduledJob %))
 ;; These feed off recent, but are basically undocumented
 (s/def ::last-doubling int?)
 (s/def ::last-edge int?)
@@ -225,6 +226,13 @@
 (s/def ::last-speed-adjustment ::big-int)
 (s/def ::schedule-pool (s/nilable #(instance? overtone.at_at.MutablePool %)))
 
+;; These correspond with values
+;; 0, 2, and 1, respectively.
+;; i.e. -s, -c, and -C parameters
+;; to the message program.
+;; -s : part of a server
+;; -c : client that starts after the server
+;; -C : client that starts before the server
 (s/def ::want-ping #{false ::immediate ::second-1})
 
 ;; Q: Does it make sense to split this up?
