@@ -81,7 +81,7 @@ Based on earliestblocktime_compute, in lines 138-153
                      :stop int?)
         :ret ::specs/state)
 (defn mark-acknowledged!
-  "Mark blocks between positions start and stop as ACK'd
+  "Mark sent blocks between positions start and stop as ACK'd
 
 Based [cleverly] on acknowledged(), running from lines 155-185"
   [{{:keys [::specs/blocks

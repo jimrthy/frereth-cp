@@ -118,7 +118,10 @@
    ;; to just hand the message to a serializer and have it handle
    ;; the streaming.
    ^bytes array-o-bytes]
-  (log/debug "Adding another message block(s) to"
+  (log/debug "Adding message block(s) to"
+             ;; TODO: Just log the count.
+             ;; Although it might worth keeping this
+             ;; around for trace log levels
              (get-in state [::specs/outgoing ::specs/blocks]))
   ;; Note that back-pressure gets applied if we
   ;; already have ~124K pending because caller started

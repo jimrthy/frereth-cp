@@ -142,6 +142,12 @@
   (let [consolidated (consolidate-gap-buffer primed)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])]
     (log/debug "Have" (count ->child-buffer) "blocks ready to go to child")
+    ;; Q: If I have a ton of messages to deliver, do I really want to call the child
+    ;; repeatedly right here and now?
+    ;; The reference implementation actually puts the bytes that are ready
+    ;; to write into its circular buffer and tries to write as many as possible
+    ;; (up to the end of the circular buffer) all at once. It flags the
+    ;; written bytes as invalid and proceeds.
     (reduce (fn [state ^ByteBuf buf]
               ;; Forward the byte-array inside the buffer
               (try
@@ -152,7 +158,7 @@
                 ;; skipped due to gap buffering
                 (let [bs (byte-array (.readableBytes buf))]
                   (.readBytes buf bs)
-                  (log/info "Calling back to the child:" bs)
+                  (log/info "Calling back to the child with" (count bs) "bytes")
                   (->child bs))
                 ;; And drop it
                 (log/debug "Dropping block from child buffer")

@@ -133,9 +133,9 @@
     :keys [::specs/recent]
     :as state}]
   (let [min-resend-time (+ last-block-time n-sec-per-block)
-        _ (log/debug "Minimum resend time:" min-resend-time)
+        _ (log/debug "Minimum resend time:" min-resend-time "after" last-block-time)
         default-next (+ recent (utils/seconds->nanos 60))
-        _ (log/debug "Default +1 minute:" default-next)
+        _ (log/debug "Default +1 minute:" default-next "from" recent)
         ;; Lines 286-289
         _ (log/debug (str "Scheduling based on want-ping value '" want-ping "'"))
         next-based-on-ping (if want-ping
@@ -175,7 +175,7 @@
                                 next-based-on-earliest-block-time)
         _ (log/debug "After adjusting for closed/ignored child watcher:" based-on-closed-child)
         ;; Lines 302-305
-        actual-next (min based-on-closed-child recent)]
+        actual-next (max based-on-closed-child recent)]
     actual-next))
 
 (declare trigger-from-timer)
@@ -186,24 +186,27 @@
      :as flow-control} ::specs/flow-control
     :as state}
    state-agent]
-  (log/debug "Top of scheduler. State keys: " (keys state))
-  ;; It would be nice to have a way to check
-  ;; whether this is what triggered us. If
-  ;; so, there's no reason to stop it.
-  ;; Go with the assumption that this is
-  ;; light-weight enough that it doesn't matter.
-  (at-at/stop next-action)
-  (log/debug "Current next action cancelled")
+  {:pre [recent]}
+  (log/debug "Top of scheduler")
+  (when next-action
+    ;; It would be nice to have a way to check
+    ;; whether this is what triggered us. If
+    ;; so, there's no reason to stop it.
+    ;; Go with the assumption that this is
+    ;; light-weight enough that it doesn't matter.
+    (at-at/stop next-action)
+    (log/debug "Current next action cancelled"))
 
   (let [actual-next (choose-next-scheduled-time state)
-        delta-nanos (max 0 (- actual-next recent))
+        scheduled-delay (- actual-next recent)
+        delta-nanos (max 0 scheduled-delay)
         delta (inc (utils/nanos->millis delta-nanos))
         next-action (at-at/after delta
                                  (fn []
                                    (send-off state-agent (partial trigger-from-timer state-agent)))
                                  schedule-pool
                                  :desc "Periodic wakeup")]
-    (log/debug "Timer set to trigger in" delta "ms\n")
+    (log/debug "Timer set to trigger in" delta "ms (vs" (utils/nanos->millis scheduled-delay) "scheduled)")
     (-> state
         (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
 
@@ -322,6 +325,7 @@
   (when-not ->child
     (throw (ex-info "Missing ->child"
                     {::callbacks (::specs/callbacks state)})))
+  (log/info "Incoming from parent")
   ;; This is basically an iteration of the top-level
   ;; event-loop handler from main().
   ;; I can skip the pieces that only relate to reading

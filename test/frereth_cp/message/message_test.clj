@@ -18,10 +18,11 @@
         msg-len (- K/max-msg-len K/header-length K/min-padding-length)
         ;; Note that this is what the child sender should be supplying
         message-body (byte-array (range msg-len))
-        ;; Might as well start with 0, since that's the stream address.
+        ;; Might as well start with 1, since we're at stream address 0.
+        ;; Important note: message-id 0 is reserved for pure ACKs!
         ;; TODO: Play with this and come up with test states that simulate
         ;; dropping into the middle of a conversation
-        message-id 0]
+        message-id 1]
     (is (= msg-len K/k-1))
     (.writeBytes src message-body)
     (let [incoming (to-parent/build-message-block message-id {::specs/buf src
@@ -35,7 +36,7 @@
                         (let [response-state @parent-state]
                           (log/debug "parent-cb:" response-state)
                           ;; Should get 2 callbacks here:
-                          ;; 1. The ACK
+                          ;; 1. The ACK (this has stopped showing up)
                           ;; 2. The actual response
                           ;; Although, depending on timing, 3 or
                           ;; more are possible

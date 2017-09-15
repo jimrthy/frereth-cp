@@ -189,6 +189,7 @@
                            (str "Missing current block completely, but do have "
                                 (count (get-in state [::specs/outgoing ::specs/blocks]))
                                 " blocks we *could* have been looking at")))))
+        ;; Q: How much time could I save right here and now by making state transient?
         state'
         (-> state
             (update-in (conj cursor ::specs/transmissions) inc)
@@ -366,8 +367,8 @@
                               0
                               blocks)]]
           (log/debug "Conditions ripe for sending a new outgoing message")
-          (-> state
-              (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
+          (time (-> state
+                    (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor))))
         (log/debug (str "Bad preconditions for sending a new block:\n"
                         "recent: " recent " <? " (+ earliest-time n-sec-per-block)
                         "\nBlock count: " (count blocks)
@@ -422,10 +423,11 @@
   ;; That seems like a better API.
   ;; TODO: Make that so.
   (if-let [state' (pick-next-block-to-send state)]
-    (let [state'' (pre-calculate-state-after-send state')
-          buf (get-in state'' [::specs/outgoing ::specs/send-buf])
-          ->parent (get-in state'' [::specs/outgoing ::specs/->parent])]
-      (log/debug "Sending" buf "to parent")
+    (let [{:keys [::specs/outgoing]
+           :as state''} (pre-calculate-state-after-send state')
+          buf (::specs/send-buf outgoing)
+          ->parent (::specs/->parent outgoing)]
+      (log/debug "Sending" (count buf) "bytes to parent")
       (block->parent! ->parent buf)
 ;;;      408: earliestblocktime_compute()
       ;; TODO: Honestly, we could probably shave some time/effort by

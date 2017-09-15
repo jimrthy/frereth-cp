@@ -333,32 +333,35 @@
   ;; the messaging protocol) has a scenario where the
   ;; child just hangs, waiting for an ACK to the ACKs
   ;; it sends 4 times a second.
-  (when (not= message-id 0)
-    (log/debug "Building an ACK for message" message-id)
-    ;; I'm concerned that I'm sending back gibberish.
-    ;; DJB reuses the incoming message that we're preparing
-    ;; to ACK, locked to 192 bytes.
-    ;; It seems like it probably doesn't matter, since this
-    ;; is purely an ACK, but I strongly suspect that I should
-    ;; at least 0 it all out.
-    ;; TODO: Get this from a pool.
-    ;; TODO: Switch to using a byte array
-    (let [send-buf (Unpooled/buffer (+ K/header-length
-                                       192))]
-      ;; XXX: delay acknowledgments  --DJB
-      ;; 0 ID for pure ACK
-      ;; Q: Would doing
-      #_(.writeInt send-buf 0)
-      ;; be slower?
-      ;; It seems like making it explicit would be
-      ;; more clear
-      (.writerIndex send-buf 4)
-      (.writeInt send-buf message-id)
-      (.writeLong send-buf (if (and receive-eof
-                                    (= receive-bytes receive-total-bytes))
-                             (inc receive-bytes)
-                             receive-bytes))
-      send-buf)))
+  (if (not= message-id 0)
+    (do
+      (log/debug "Building an ACK for message" message-id)
+      ;; I'm concerned that I'm sending back gibberish.
+      ;; DJB reuses the incoming message that we're preparing
+      ;; to ACK, locked to 192 bytes.
+      ;; It seems like it probably doesn't matter, since this
+      ;; is purely an ACK, but I strongly suspect that I should
+      ;; at least 0 it all out.
+      ;; TODO: Get this from a pool.
+      ;; TODO: Switch to using a byte array
+      (let [send-buf (Unpooled/buffer (+ K/header-length
+                                         192))]
+        ;; XXX: delay acknowledgments  --DJB
+        ;; 0 ID for pure ACK
+        ;; Q: Would doing
+        #_(.writeInt send-buf 0)
+        ;; be slower?
+        ;; It seems like making it explicit would be
+        ;; more clear
+        ;; TODO: Compare speeds
+        (.writerIndex send-buf 4)
+        (.writeInt send-buf message-id)
+        (.writeLong send-buf (if (and receive-eof
+                                      (= receive-bytes receive-total-bytes))
+                               (inc receive-bytes)
+                               receive-bytes))
+        send-buf))
+    (log/debug "Never ACK a pure ACK")))
 
 (defn send-ack!
   "Write ACK buffer back to parent
@@ -402,7 +405,6 @@ Line 608"
       ;; transducers?)
       (let [_ (log/debug "Deserializing parent->buffer")
             packet (deserialize parent->buffer)
-            _ (log/debug "deserialized")
             ack-id (::specs/acked-message packet)
             ;; Note that there's something terribly wrong if we
             ;; have multiple blocks with the same message ID.
@@ -419,10 +421,11 @@ Line 608"
                         ;; That takes us down to line 544
                         (flag-acked-others! packet))
             extracted (extract-message! flagged packet)]
-        (log/debug "extracted:" extracted)
+        (log/debug "handle-comprehensible message/extracted:" extracted)
         (if extracted
           (or
            (let [msg-id (::specs/message-id packet)]
+             (log/debug (str "ACK message-id " msg-id "?"))
              (when-not msg-id
                ;; Note that 0 is legal: that's a pure ACK.
                ;; We just have to have something.
