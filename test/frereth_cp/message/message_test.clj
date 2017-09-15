@@ -138,29 +138,36 @@
             (message/halt! state)))))))
 (comment (basic-echo))
 
-(deftest bigger-echo
+(deftest bigger-outbound
   ;; Flip-side of echo: I want to see what happens
   ;; when the child sends bytes that don't fit into
   ;; a single message packet.
 
-  (let [packet-count 8  ; trying to make life interesting
+  (let [start-time (System/nanoTime)
+        packet-count 9  ; trying to make life interesting
         response (promise)
         parent-state (atom {:count 0
                             :buffer []})
-        parent-cb (fn [dst]
+        parent-cb (fn [incoming]
                     (let [response-state @parent-state]
-                      (log/debug "parent-cb:" response-state)
+                      (log/debug (str "parent-cb ("
+                                      (count incoming)
+                                      " bytes): "
+                                      (-> response-state
+                                          (dissoc :buffer)
+                                          (assoc :buffer-size (count (:buffer response-state))))))
                       ;; The first few blocks should max out the message size.
                       ;; The way the test is set up, the last will be
                       ;; (+ 512 64).
                       ;; It doesn't seem worth the hoops it would take to validate that.
                       (swap! parent-state
                              (fn [cur]
+                               (log/info "Incrementing state count")
                                (-> cur
                                    (update :count inc)
                                    ;; Seems a little silly to include the ACKs.
                                    ;; Should probably think this through more thoroughly
-                                   (update :buffer conj (vec dst)))))
+                                   (update :buffer conj (vec incoming)))))
                       ;; I would like to get 8 callbacks here:
                       ;; 1 for each kilobyte of message the child tries to send.
                       ;; Actually, the initial message bytes are
@@ -168,7 +175,8 @@
                       ;; But, more importantly, I don't really have an
                       ;; i/o loop at this point. So the follow-up
                       ;; messages will never arrive.
-                      (when (= 8 (:count @parent-state))
+                      (when (= packet-count (:count @parent-state))
+                        (log/info "Received all expected packets")
                         (deliver response (:buffer @parent-state)))))
         ;; I have a circular dependency between
         ;; child-cb and initialized.
@@ -192,12 +200,14 @@
     (reset! state-agent-atom state)
     (try
       ;; Add an extra half-K just for giggles
-      (let [msg-len (+ (* packet-count K/k-1) K/k-div2)
+      (let [msg-len (+ (* (dec packet-count) K/k-1) K/k-div2)
             ;; Note that this is what the child sender should be supplying
             message-body (byte-array (range msg-len))]
         (message/child-> state message-body)
-        (let [outcome (deref response 5000 ::timeout)]
-          (println "Verifying that state hasn't errored out")
+        (let [outcome (deref response 10000 ::timeout)
+              end-time (System/nanoTime)]
+          (log/info "Verifying that state hasn't errored out after"
+                    (utils/nanos->millis (- end-time start-time)) "milliseconds")
           (if-let [err (agent-error state)]
             (is (not err))
             (do
@@ -207,8 +217,10 @@
                 ;; loop to make this accurate?
                 (is (= packet-count (count outcome)))
                 (is (= K/max-msg-len (count (first outcome))))
-                (doseq [packet outcome]
+                (doseq [packet (butlast outcome)]
                   (is (= (count packet) (+ K/k-1 K/header-length K/min-padding-length))))
+                (let [final (last outcome)]
+                  (is (= (count final) (+ K/k-div2 K/header-length K/min-padding-length))))
                 (let [rcvd-strm
                       (reduce (fn [acc with-header]
                                 (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
@@ -228,16 +240,17 @@
                     outgoing (::specs/outgoing outcome)
                     incoming (::specs/incoming outcome)]
                 (is (= msg-len (::specs/send-bytes outgoing)))
-                (is (= packet-count (::specs/next-message-id outgoing)))
+                (is (= (inc packet-count) (::specs/next-message-id outgoing)))
                 ;; I'm not sending back any ACKs
                 (is (= (::specs/send-processed outgoing) 0))
-                ;; TODO: Need a test that does this
+                ;; TODO: I do need a test that triggers EOF
                 (is (not (::specs/send-eof outgoing)))
                 (is (= (::specs/send-bytes outgoing) msg-len))
                 ;; Keeping around as a reminder for when the implementation changes
                 ;; and I need to see what's really going on again
                 (comment (is (not outcome) "What should we have here?")))))))
       (finally
+        (log/info "Ending the test")
         (message/halt! state)))))
 (comment
   (bigger-echo)

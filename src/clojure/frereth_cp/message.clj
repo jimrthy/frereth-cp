@@ -132,6 +132,9 @@
             ::specs/want-ping]} ::specs/outgoing
     :keys [::specs/recent]
     :as state}]
+  ;; I should be able to just completely bypass this if there's
+  ;; more data new pending.
+  ;; TODO: Verify that and see whether it actually works
   (let [min-resend-time (+ last-block-time n-sec-per-block)
         _ (log/debug "Minimum resend time:" min-resend-time "after" last-block-time)
         default-next (+ recent (utils/seconds->nanos 60))
@@ -201,6 +204,8 @@
         scheduled-delay (- actual-next recent)
         delta-nanos (max 0 scheduled-delay)
         delta (inc (utils/nanos->millis delta-nanos))
+        ;; FIXME: Debug only
+        #_(comment delta (max delta 1000))
         next-action (at-at/after delta
                                  (fn []
                                    (send-off state-agent (partial trigger-from-timer state-agent)))
@@ -267,6 +272,17 @@
             ;; through the event loop.
             ;; (I'm hitting this because I'm sending a gibberish message that
             ;; needs to be discarded)
+
+            ;; Really only need to do this if we got triggered
+            ;; by an incoming message from the parent.
+            ;; TODO: Verify that I'm not missing anything
+            ;; and then move it back to trigger-from-parent
+            ;; It changes the processing order, but seems like
+            ;; not wasting time on it for the timer/from-child
+            ;; conditions should be worth it.
+            ;; There's always the possibility that that opens
+            ;; me up for timing attacks, but...well, I need
+            ;; a cryptographer's opinion again.
             (or (from-parent/try-processing-message! state)
                 state)
             (to-child/forward! ->child state))]
@@ -341,6 +357,9 @@
 (defn trigger-from-timer
   [state-agent state]
   (log/debug "I/O triggered by timer")
+  ;; I keep thinking that I need to check data arriving from
+  ;; the child, but the main point to this logic branch is
+  ;; to resend an outbound block that hasn't been ACK'd yet.
   (trigger-io state-agent state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -447,9 +466,16 @@
    (start! state-agent 250)))
 
 (defn halt!
-  [state]
-  ;; TODO: Surely there's something
-  state)
+  [state-agent]
+  (let [{{:keys [::specs/next-action]
+          :as flow-control} ::specs/flow-control
+         :as state} @state-agent]
+    (when next-action
+      (log/info "Stopping scheduler")
+      (at-at/stop next-action))
+    (update-in state [::specs/flow-control ::specs/next-action]
+               (fn [_]
+                 nil))))
 
 (s/fdef child->
         :args (s/cat :state-agent ::specs/state-agent

@@ -23,6 +23,10 @@
   (let [cap (.capacity buf)
         block-count (int (Math/ceil (/ cap max-block-length)))]
     (log/debug (str "Building " block-count " " max-block-length "-byte buffer slice(s) from " buf))
+    ;; Building a single block takes ~8 ms, which seems quite a bit longer than it should.
+    ;; Especially since this is setting up a lazy seq...is *that* what's taking so long?
+    ;; TODO: Compare with using (reduce), possibly on a transient
+    ;; Maybe it evens out when we're looking at larger data
     (map (fn [n]
            (let [length (if (< n (dec block-count))
                           max-block-length

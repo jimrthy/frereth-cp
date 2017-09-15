@@ -65,6 +65,7 @@
                      :block-to-send ::specs/block)
         :ret bytes?)
 (defn build-message-block
+  "Important note: Doesn't build a message Packet. Just a description for one."
   ^bytes [^Integer next-message-id
           {^Long start-pos ::specs/start-pos
            ;; TODO: Switch this to either a bytes or a clojure
@@ -307,7 +308,8 @@
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
   (let [n (count blocks)]
-    (log/debug "Does it make sense to try to send any of our" n "pending outgoing blocks?")
+    (log/debug "Does it make sense to try to resend any of our"
+               n "pending outgoing blocks?")
     (when (< 0 n)
       (if (and (>= recent (+ earliest-time n-sec-per-block))
                ;; If we have too many outgoing blocks being
@@ -355,6 +357,7 @@
               ;; XXX: or could have the full block in post-buffer space (DJB)
               ;; "absorb" this new block -- JRG
               send-processed (+ send-processed block-length)
+              block-count (count blocks)
               ;; Want to send a new block.
               ;; In a single-threaded world where we're processing one
               ;; message packet/block at a time, that will always be the last.
@@ -362,13 +365,21 @@
               ;; count of 0.
               cursor [(reduce (fn [acc block]
                                 (if (= 0 (::specs/transmissions block))
-                                  (reduced acc)
+                                  (do
+                                    (log/debug (str "Block " acc "/" block-count " is new"))
+                                    (reduced acc))
                                   (inc acc)))
                               0
                               blocks)]]
-          (log/debug "Conditions ripe for sending a new outgoing message")
-          (time (-> state
-                    (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor))))
+          (if (< (first cursor) block-count)
+            (do
+              (log/debug "Conditions ripe for sending a new outgoing message")
+              (-> state
+                  (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
+            (do
+              (log/info "No new blocks to send")
+              ;; Be explicit about this
+              nil)))
         (log/debug (str "Bad preconditions for sending a new block:\n"
                         "recent: " recent " <? " (+ earliest-time n-sec-per-block)
                         "\nBlock count: " (count blocks)
@@ -405,7 +416,12 @@
   ;; That kind of length calculation is just built
   ;; into everything on the JVM.
 
-  ;; Note that, really, I want to send a byte-array
+  ;; I keep thinking that I want to send a byte-array.
+  ;; After all, the parent *does* have to encrypt
+  ;; it and convert that to a Message packet.
+  ;; I think I've botched that part by doing
+  ;; it here.
+  (log/warn "Should I be sending a Message Packet before I send it?")
   (->parent send-buf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -428,6 +444,8 @@
           buf (::specs/send-buf outgoing)
           ->parent (::specs/->parent outgoing)]
       (log/debug "Sending" (count buf) "bytes to parent")
+      ;; Note that this winds up doing a send to the message
+      ;; loop's agent.
       (block->parent! ->parent buf)
 ;;;      408: earliestblocktime_compute()
       ;; TODO: Honestly, we could probably shave some time/effort by

@@ -3,7 +3,8 @@
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.message.constants :as K]
             [frereth-cp.shared.constants :as K-shared]
-            [frereth-cp.util :as util])
+            [frereth-cp.util :as util]
+            [overtone.at-at])
   (:import clojure.lang.BigInt
            io.netty.buffer.ByteBuf
            overtone.at_at.ScheduledJob))

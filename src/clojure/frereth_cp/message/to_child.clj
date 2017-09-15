@@ -67,7 +67,7 @@
           (when (< 0 bytes-to-skip)
             (log/info "Skipping" bytes-to-skip "previously received bytes in" buf)
             (.skipBytes buf bytes-to-skip))
-          (log/debug "Moving first entry from " (::specs/gap-buffer incoming))
+          (log/debug (str "Moving entry 0/" (count (::specs/gap-buffer incoming))))
           (-> incoming
               (update ::specs/gap-buffer (partial drop 1))
               ;; There doesn't seem to be any good reason to hang
