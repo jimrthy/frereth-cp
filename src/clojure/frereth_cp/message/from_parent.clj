@@ -496,5 +496,5 @@ Line 608"
         (handle-comprehensible-message! state'))
       (do
         ;; Nothing to do.
-        (log/debug "False alarm. Nothing to be done")
+        (log/debug "No pending messages from parent to send to child")
         state))))

@@ -138,6 +138,19 @@
   (let [min-resend-time (+ last-block-time n-sec-per-block)
         _ (log/debug "Minimum resend time:" min-resend-time
                      "which is" n-sec-per-block
+                     ;; last-block-time causes problems.
+                     ;; Up until the point I've sent my
+                     ;; last block, it basically progresses
+                     ;; linearly up to 1907725432157608
+                     ;; (for tonight's debug session).
+                     ;; Then it jumps down to
+                     ;; 1907725404755660, which leaves
+                     ;; me with negative delays, because
+                     ;; I'm trying to send the next send
+                     ;; in the past.
+                     ;; And doing this every millisecond
+                     ;; leads to its own set of problems.
+                     ;; FIXME: Start back here.
                      "nanoseconds after" last-block-time)
         default-next (+ recent (utils/seconds->nanos 60))
         _ (log/debug "Default +1 minute:" default-next "from" recent)
@@ -204,8 +217,15 @@
       (log/debug "Current next action cancelled")
 
       (let [actual-next (choose-next-scheduled-time state)
-            scheduled-delay (- actual-next recent)
-            _ (log/debug "Initially calculated scheduled delay:" scheduled-delay "nanoseconds")
+            now (System/nanoTime)
+            ;; It seems like it would make more sense to have the delay happen from
+            ;; "now" instead of "recent"
+            ;; Doing that throws lots of sand into the gears.
+            ;; Stick with this approach for now, because it *does*
+            ;; match the reference implementation.
+            ;; Although, really, it seems very incorrect.
+            scheduled-delay (- actual-next now)
+            _ (log/debug "Initially calculated scheduled delay:" scheduled-delay "nanoseconds after" recent "vs. " now)
             delta-nanos (max 0 scheduled-delay)
             delta (inc (utils/nanos->millis delta-nanos))
             next-action (at-at/after delta
@@ -213,7 +233,7 @@
                                        (send-off state-agent (partial trigger-from-timer state-agent)))
                                      schedule-pool
                                      :desc "Periodic wakeup")]
-        (log/debug "Timer set to trigger in" delta "ms (vs" (utils/nanos->millis scheduled-delay) "scheduled)")
+        (log/debug "Timer set to trigger in" (float delta) "ms (vs" (float (utils/nanos->millis scheduled-delay)) "scheduled)")
         (-> state
             (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
     (do
@@ -258,17 +278,6 @@
         (as-> state state
             (assoc state ::specs/recent (System/nanoTime))
             (to-parent/maybe-send-block! state)
-            ;; If the message from the parent was garbage,
-            ;; just discard it.
-            ;; It seems like there's a lot of state set up
-            ;; to get to this point.
-            ;; TODO: Verify that it's truly safe to just
-            ;; run with what we have and not bother trying
-            ;; to clean up.
-            ;; It seems like it ought to be safe enough,
-            ;; but there's a lot of messiness involved.
-
-            ;; Earlier comment about this:
             ;; The message from parent to child was garbage.
             ;; Discard.
             ;; Q: Does this make sense?
@@ -278,16 +287,11 @@
             ;; (I'm hitting this because I'm sending a gibberish message that
             ;; needs to be discarded)
 
-            ;; Really only need to do this if we got triggered
-            ;; by an incoming message from the parent.
-            ;; TODO: Verify that I'm not missing anything
-            ;; and then move it back to trigger-from-parent
-            ;; It changes the processing order, but seems like
-            ;; not wasting time on it for the timer/from-child
-            ;; conditions should be worth it.
-            ;; There's always the possibility that that opens
-            ;; me up for timing attacks, but...well, I need
-            ;; a cryptographer's opinion again.
+            ;; It seems like I should be able to skip this if we got triggered
+            ;; by anything except an incoming message from the parent.
+            ;; That is misleading. We still need to cope with any messages
+            ;; from the parent that haven't been written to the child yet.
+            ;; And
             (or (from-parent/try-processing-message! state)
                 state)
             (to-child/forward! ->child state))]
