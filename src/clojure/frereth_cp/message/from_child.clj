@@ -58,9 +58,9 @@
 
 (defn room-for-child-bytes?
   "Does send-buf have enough space left for a message from child?"
-  [{{:keys [::specs/send-bytes
-            ::specs/max-block-length]} ::specs/outgoing
+  [{{:keys [::specs/send-bytes]} ::specs/outgoing
     :as state}]
+  {:pre [send-bytes]}
   ;; Line 322: This also needs to account for send-acked
   ;; For whatever reason, DJB picked this (-4K) as the
   ;; end-point to refuse to read

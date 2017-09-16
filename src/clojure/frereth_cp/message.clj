@@ -136,7 +136,9 @@
   ;; more data new pending.
   ;; TODO: Verify that and see whether it actually works
   (let [min-resend-time (+ last-block-time n-sec-per-block)
-        _ (log/debug "Minimum resend time:" min-resend-time "after" last-block-time)
+        _ (log/debug "Minimum resend time:" min-resend-time
+                     "which is" n-sec-per-block
+                     "nanoseconds after" last-block-time)
         default-next (+ recent (utils/seconds->nanos 60))
         _ (log/debug "Default +1 minute:" default-next "from" recent)
         ;; Lines 286-289
@@ -191,29 +193,32 @@
    state-agent]
   {:pre [recent]}
   (log/debug "Top of scheduler")
-  (when next-action
-    ;; It would be nice to have a way to check
-    ;; whether this is what triggered us. If
-    ;; so, there's no reason to stop it.
-    ;; Go with the assumption that this is
-    ;; light-weight enough that it doesn't matter.
-    (at-at/stop next-action)
-    (log/debug "Current next action cancelled"))
+  (if (not= next-action ::completed)
+    (do
+      ;; It would be nice to have a way to check
+      ;; whether this is what triggered us. If
+      ;; so, there's no reason to stop it.
+      ;; Go with the assumption that this is
+      ;; light-weight enough that it doesn't matter.
+      (at-at/stop next-action)
+      (log/debug "Current next action cancelled")
 
-  (let [actual-next (choose-next-scheduled-time state)
-        scheduled-delay (- actual-next recent)
-        delta-nanos (max 0 scheduled-delay)
-        delta (inc (utils/nanos->millis delta-nanos))
-        ;; FIXME: Debug only
-        #_(comment delta (max delta 1000))
-        next-action (at-at/after delta
-                                 (fn []
-                                   (send-off state-agent (partial trigger-from-timer state-agent)))
-                                 schedule-pool
-                                 :desc "Periodic wakeup")]
-    (log/debug "Timer set to trigger in" delta "ms (vs" (utils/nanos->millis scheduled-delay) "scheduled)")
-    (-> state
-        (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
+      (let [actual-next (choose-next-scheduled-time state)
+            scheduled-delay (- actual-next recent)
+            _ (log/debug "Initially calculated scheduled delay:" scheduled-delay "nanoseconds")
+            delta-nanos (max 0 scheduled-delay)
+            delta (inc (utils/nanos->millis delta-nanos))
+            next-action (at-at/after delta
+                                     (fn []
+                                       (send-off state-agent (partial trigger-from-timer state-agent)))
+                                     schedule-pool
+                                     :desc "Periodic wakeup")]
+        (log/debug "Timer set to trigger in" delta "ms (vs" (utils/nanos->millis scheduled-delay) "scheduled)")
+        (-> state
+            (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
+    (do
+      (log/debug "'next-action' flagged complete.")
+      state)))
 
 (s/fdef start-event-loops!
         :args (s/cat :state-agent ::specs/state-agent
@@ -316,8 +321,22 @@
                      :array-o-bytes bytes?)
         :ret ::specs/state)
 (defn trigger-from-child
-  [state-agent state array-o-bytes]
-  (log/debug "trigger-from-child: Received a" (class array-o-bytes))
+  [state-agent
+   {{:keys [::specs/send-bytes]
+     :as outgoing} ::specs/outgoing
+    :as state}
+   array-o-bytes]
+  (log/debug "trigger-from-child: Received a"
+             (class array-o-bytes)
+             "\nSent stream address:"
+             send-bytes)
+  (when-not send-bytes
+    (log/error "Missing ::specs/send-bytes under"
+               (keys outgoing)
+               "inside"
+               (keys state)
+               "\na.k.a.\n"
+               state))
   (trigger-io
    state-agent
    (if (from-child/room-for-child-bytes? state)
@@ -474,8 +493,7 @@
       (log/info "Stopping scheduler")
       (at-at/stop next-action))
     (update-in state [::specs/flow-control ::specs/next-action]
-               (fn [_]
-                 nil))))
+               (constantly ::completed))))
 
 (s/fdef child->
         :args (s/cat :state-agent ::specs/state-agent
@@ -534,7 +552,7 @@
   ;; Except for those actual pesky sends to the
   ;; child/parent, which are specifically forbidden
   ;; from blocking.
-  (log/debug "Incoming message from child")
+  (log/debug "Incoming message from child to" state-agent)
   (send state-agent (partial trigger-from-child state-agent) array-o-bytes))
 
 (s/fdef parent->

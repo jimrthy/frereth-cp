@@ -419,9 +419,12 @@
   ;; I keep thinking that I want to send a byte-array.
   ;; After all, the parent *does* have to encrypt
   ;; it and convert that to a Message packet.
-  ;; I think I've botched that part by doing
-  ;; it here.
-  (log/warn "Should I be sending a Message Packet before I send it?")
+  ;; It seems like a mistake to have already done
+  ;; that conversion.
+  ;; That's part of the semantic overlap:
+  ;; This part is building the actual Message,
+  ;; which will later get tucked into a Message
+  ;; Packet as a crypto box.
   (->parent send-buf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

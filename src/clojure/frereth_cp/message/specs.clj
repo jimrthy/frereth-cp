@@ -279,6 +279,13 @@
 ;; 3. Buffers of bytes that we received from the child
 ;;    but the parent has not yet ACK'd
 (s/def ::outgoing (s/keys :req [::blocks
+                                ;; TODO: Should be able to simplify and
+                                ;; speed up things slightly by keeping 2
+                                ;; separate containers of blocks.
+                                ;; One for new blocks that haven't
+                                ;; been sent yet.
+                                ;; The other for sent blocks that haven't
+                                ;; been ACK'd yet.
                                 ::earliest-time
                                 ::last-block-time
                                 ::last-panic

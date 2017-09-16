@@ -203,11 +203,12 @@
       (let [msg-len (+ (* (dec packet-count) K/k-1) K/k-div2)
             ;; Note that this is what the child sender should be supplying
             message-body (byte-array (range msg-len))]
+        (log/debug "Replicating child-send to " state)
         (message/child-> state message-body)
         (let [outcome (deref response 10000 ::timeout)
               end-time (System/nanoTime)]
           (log/info "Verifying that state hasn't errored out after"
-                    (utils/nanos->millis (- end-time start-time)) "milliseconds")
+                    (float (utils/nanos->millis (- end-time start-time))) "milliseconds")
           (if-let [err (agent-error state)]
             (is (not err))
             (do
