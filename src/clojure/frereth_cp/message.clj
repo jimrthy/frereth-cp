@@ -133,8 +133,9 @@
     :keys [::specs/recent]
     :as state}]
   ;; I should be able to just completely bypass this if there's
-  ;; more data new pending.
+  ;; more new data pending.
   ;; TODO: Verify that and see whether it actually works
+  #_(throw (RuntimeException. "Start here"))
   (let [min-resend-time (+ last-block-time n-sec-per-block)
         _ (log/debug "Minimum resend time:" min-resend-time
                      "which is" n-sec-per-block

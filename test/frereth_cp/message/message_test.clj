@@ -1,5 +1,6 @@
 (ns frereth-cp.message.message-test
   (:require [clojure.data]
+            [clojure.edn :as edn]
             [clojure.pprint :refer (pprint)]
             [clojure.test :refer (deftest is testing)]
             [clojure.tools.logging :as log]
@@ -10,7 +11,9 @@
             [frereth-cp.message.test-utilities :as test-helpers]
             [frereth-cp.message.to-parent :as to-parent]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.util :as utils])
+            [frereth-cp.util :as utils]
+            [manifold.deferred :as dfrd]
+            [manifold.stream :as strm])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest basic-echo
@@ -138,6 +141,111 @@
             (message/halt! state)))))))
 (comment (basic-echo))
 
+(deftest check-eof
+  ;; It seems like just writing an empty byte-array should suffice.
+  ;; Actually, I think that's how the reference implementation works.
+  ;; But writing the CTRL-D byte might be a better option.
+  ;; TODO: What really makes sense here?
+  (throw (RuntimeException. "Need to decide how this should work")))
+
+(deftest send-error-code
+  (throw (RuntimeException. "Need to decide how this should work")))
+
+(deftest handshake
+  (let [client->server (strm/stream)
+        server->client (strm/stream)
+        succeeded? (dfrd/deferred)
+        ;; Simulate a very stupid FSM
+        client-state (atom 0)
+        client-atom (atom nil)
+        client-parent-cb (fn [bs]
+                           (log/info "Sending a" (class bs) "to client's parent")
+                           (let [sent (strm/try-put! client->server bs 500 ::timed-out)]
+                             (is (not= @sent ::timed-out))))
+        ;; Something that spans multiple packets would be better, but
+        ;; that seems like a variation on this test.
+        ;; Although this *does* take me back to the beginning, where
+        ;; I was trying to figure out ways to gen the tests via spec.
+        cheezburgr-length 182
+        client-child-cb (fn [bs]
+                          (let [incoming (edn/read-string (String. bs))]
+                            (log/info "Client received:" incoming)
+                            (let [next-message
+                                  (condp = @client-state
+                                    0 (do
+                                        (is (= incoming ::orly?))
+                                        ::yarly)
+                                    1 (do
+                                        (is (= incoming ::kk))
+                                        ::icanhazcheezburger?)
+                                    2 (do
+                                        (is (= incoming ::kk))
+                                        ;; No response to send for this
+                                        nil)
+                                    3 (do
+                                        ;; This is based around an implementation
+                                        ;; detail that the message stream really consists
+                                        ;; of either
+                                        ;; a) the same byte array sent by the other side
+                                        ;; b) several of those byte arrays, if the block
+                                        ;; is too big to send all at once.
+                                        ;; TODO: don't rely on that.
+                                        ;; It really would be more efficient for the other
+                                        ;; side to batch up the ACK and this response
+                                        (is (b-t/bytes= incoming (byte-array (range cheezburgr-length))))
+                                        ::kthxbai)
+                                    4 (do
+                                        (is (= incoming ::kk))
+                                        ;; Time to signal EOF.
+                                        ;; TODO: Add a way to signal "close stream"
+                                        (throw (RuntimeException. "Needs more thought"))))]
+                              (swap! client-state inc)
+                              ;; Hmm...I've wound up with a circular dependency again.
+                              ;; Q: Is this a problem with my architecture, or just
+                              ;; a testing artifact?
+                              (when next-message
+                                (message/child-> @client-atom (.getBytes (pr-str next-message)))))))
+
+        server-atom (atom nil)
+        server-parent-cb (fn [bs]
+                           (log/info "Sending a" (class bs) "to server's parent")
+                           (let [sent (strm/try-put! server->client bs 500 ::timed-out)]
+                             (is (not= @sent ::timed-out))))
+        server-child-cb (fn [bs]
+                          (let [incoming (edn/read-string (String. bs))]
+                            (let [rsp (condp = incoming
+                                        ::ohai! ::orly?
+                                        ::yarly ::kk
+                                        ::icanhazcheezburger? ::kk
+                                        ::kthxbai ::kk)]
+                              (message/child-> @server-atom (.getBytes (pr-str rsp)))
+                              (when (= incoming ::icanhazcheezburger?)
+                                (message/child-> @server-atom (byte-array (range cheezburgr-length)))))))]
+    (dfrd/on-realized succeeded?
+                      (fn [good] (log/info "Success!"))
+                      (fn [bad] (is (not bad))))
+
+    (reset! client-atom (message/initial-state client-parent-cb client-child-cb false))
+    (reset! server-atom (message/initial-state server-parent-cb server-child-cb true))
+
+    (strm/consume (fn [bs]
+                    (log/info "Message from client to server")
+                    (message/parent-> @server-atom bs))
+                  client->server)
+    (strm/consume (fn [bs]
+                    (log/info "Message from server to client")
+                    (message/parent-> @client-atom bs))
+                  server->client)
+
+    (let [initial-message (Unpooled/buffer K/k-1)
+          helo (.getBytes (pr-str ::ohai!))]
+      ;; Kick off the exchange
+      (message/child-> @client-atom helo)
+      ;; TODO: Find a reasonable value for this timeout
+      (let [really-succeeded? (deref succeeded? 5000 ::timed-out)]
+        (is (not= really-succeeded? ::timed-out))))))
+(comment (handshake))
+
 (deftest bigger-outbound
   ;; Flip-side of echo: I want to see what happens
   ;; when the child sends bytes that don't fit into
@@ -253,9 +361,7 @@
       (finally
         (log/info "Ending the test")
         (message/halt! state)))))
-(comment
-  (bigger-echo)
-  )
+(comment (bigger-echo))
 
 (comment
   (deftest parallel-parent-test
