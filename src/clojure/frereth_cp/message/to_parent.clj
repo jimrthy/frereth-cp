@@ -228,7 +228,8 @@
 ;;;           goto sendblock
 
 "
-  [{:keys [::specs/recent]
+  [{:keys [::specs/message-loop-name
+           ::specs/recent]
     {:keys [::specs/blocks
             ::specs/earliest-time
             ::specs/last-panic]} ::specs/outgoing
@@ -240,11 +241,11 @@
          n-sec-per-block
          recent
          rtt-timeout]}
-  (log/debug "Checking for a block to resend")
+  (log/debug (str message-loop-name ": Checking for a block to resend"))
   (when (and (not= 0 earliest-time)
              (< recent (+ earliest-time n-sec-per-block))
              (>= recent (+ earliest-time rtt-timeout)))
-    (log/debug "It's been long enough to justify resending")
+    (log/debug (str message-loop-name ": It's been long enough to justify resending"))
     ;; This gets us to line 344
     ;; It finds the first block that matches earliest-time
     ;; It's going to re-send that block (it *does* exist...right?)
@@ -258,7 +259,7 @@
                  block]
               (if (= earliest-time (::specs/time block))
                 (do
-                  (log/info "Found earliest old block to resend")
+                  (log/info (str message-loop-name ": Found earliest old block to resend"))
                   ;; We found the block that interests up.
                   (reduced
                    (assoc
@@ -294,7 +295,8 @@
 
   357-378:  Sets up a new block to send
   Along w/ related data flags in parallel arrays"
-  [{:keys [::specs/recent]
+  [{:keys [::specs/message-loop-name
+           ::specs/recent]
     {:keys [::specs/blocks
             ::specs/earliest-time
             ::specs/max-block-length
@@ -308,8 +310,13 @@
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
   (let [n (count blocks)]
-    (log/debug "Does it make sense to try to resend any of our"
-               n "pending outgoing blocks?")
+    ;; This is one of those places where I'm getting confused
+    ;; by mixing the new blocks with the ones that have already
+    ;; been sent at least once.
+    (log/debug (str message-loop-name
+                    ": Does it make sense to try to send any of our "
+                    n
+                    " outgoing blocks as new ones?"))
     (when (< 0 n)
       (if (and (>= recent (+ earliest-time n-sec-per-block))
                ;; If we have too many outgoing blocks being
@@ -373,14 +380,15 @@
                               blocks)]]
           (if (< (first cursor) block-count)
             (do
-              (log/debug "Conditions ripe for sending a new outgoing message")
+              (log/debug (str message-loop-name ": Conditions ripe for sending a new outgoing message"))
               (-> state
                   (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
             (do
-              (log/info "No new blocks to send")
+              (log/info (str message-loop-name ": No new blocks to send"))
               ;; Be explicit about this
               nil)))
-        (log/debug (str "Bad preconditions for sending a new block:\n"
+        (log/debug (str message-loop-name
+                        ": Bad preconditions for sending a new block:\n"
                         "recent: " recent " <? " (+ earliest-time n-sec-per-block)
                         "\nBlock count: " (count blocks)
                         "\nwant-ping: " want-ping
@@ -407,9 +415,8 @@
         :args (s/cat :send-buf ::specs/buf)
         :ret any?)
 (defn block->parent!
-  "Actually send the message block to the parent
-
-  Corresponds to line 404 under the sendblock: label"
+  "Actually send the message block to the parent"
+  ;; Corresponds to line 404 under the sendblock: label
   [->parent send-buf]
   {:pre [send-buf]}
   ;; Note that I've ditched the special offset+7

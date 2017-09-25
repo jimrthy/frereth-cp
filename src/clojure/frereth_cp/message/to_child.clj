@@ -90,6 +90,7 @@
   ;; which seems like a better choice.
   [{{:keys [::specs/gap-buffer]
      :as incoming} ::specs/incoming
+    :keys [::specs/message-loop-name]
     :as state}]
   {:pre [gap-buffer]}
   (assoc state
@@ -99,7 +100,8 @@
                       buffer-entry]
                    {:pre [acc
                           receive-bytes]}
-                   (assert receive-bytes (str "Missing receive-bytes among: "
+                   (assert receive-bytes (str message-loop-name
+                                              ": Missing receive-bytes among: "
                                               (keys acc)
                                               "\nin:\n"
                                               acc
@@ -132,7 +134,8 @@
   "Try sending data to child:"
   ;; lines 615-632
   [->child
-   {:keys [::specs/incoming]
+   {:keys [::specs/incoming
+           ::specs/message-loop-name]
     :as primed}]
   ;; Major piece of the puzzle that I'm currently missing:
   ;; line 617 will generally update receive-written.
@@ -141,7 +144,10 @@
   ;; we've hit EOF).
   (let [consolidated (consolidate-gap-buffer primed)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])]
-    (log/debug "Have" (count ->child-buffer) "blocks ready to go to child")
+    (log/debug (str message-loop-name
+                    ": Have "
+                    (count ->child-buffer)
+                    " blocks ready to go to child"))
     ;; Q: If I have a ton of messages to deliver, do I really want to call the child
     ;; repeatedly right here and now?
     ;; The reference implementation actually puts the bytes that are ready
@@ -158,10 +164,13 @@
                 ;; skipped due to gap buffering
                 (let [bs (byte-array (.readableBytes buf))]
                   (.readBytes buf bs)
-                  (log/info "Calling back to the child with" (count bs) "bytes")
+                  (log/info (str message-loop-name
+                                 ": Calling back to the child with "
+                                 (count bs)
+                                 " bytes"))
                   (->child bs))
                 ;; And drop it
-                (log/debug "Dropping block from child buffer")
+                (log/debug (str message-loop-name ": Dropping block from child buffer"))
                 (.release buf)
                 (update-in state
                            [::specs/incoming ::specs/->child-buffer]

@@ -105,6 +105,7 @@
   [{{:keys [::specs/max-block-length
             ::specs/send-acked
             ::specs/send-bytes]} ::specs/outgoing
+    :keys [::specs/message-loop-name]
     :as state}
    ;; Child should neither know nor care that netty is involved,
    ;; so a ByteBuf really isn't appropriate here.
@@ -122,11 +123,11 @@
    ;; to just hand the message to a serializer and have it handle
    ;; the streaming.
    ^bytes array-o-bytes]
-  (log/debug "Adding message block(s) to"
-             ;; TODO: Just log the count.
-             ;; Although it might worth keeping this
-             ;; around for trace log levels
-             (get-in state [::specs/outgoing ::specs/blocks]))
+  (log/debug (str message-loop-name ": Adding message block(s) to "
+                  ;; TODO: Just log the count.
+                  ;; Although it might worth keeping this
+                  ;; around for trace log levels
+                  (get-in state [::specs/outgoing ::specs/blocks])))
   ;; Note that back-pressure gets applied if we
   ;; already have ~124K pending because caller started
   ;; dropping packets.
@@ -162,7 +163,7 @@
         ;; ignoring buffer limits
         send-bytes (+ send-bytes bytes-to-read)
         blocks (build-block-descriptions buf max-block-length)]
-    (log/debug (str (count blocks) " Block(s) to add:\n"
+    (log/debug (str message-loop-name ": " (count blocks) " Block(s) to add:\n"
                     (utils/pretty blocks)))
     (when (>= send-bytes K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch

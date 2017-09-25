@@ -94,7 +94,7 @@
             ;; message arrives.
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
-            initialized (message/initial-state parent-cb child-cb true)
+            initialized (message/initial-state "(test) Basic Echo" parent-cb child-cb true)
             state (message/start! initialized)]
         (reset! state-agent-atom state)
         (try
@@ -169,6 +169,7 @@
         cheezburgr-length 182
         client-child-cb (fn [bs]
                           (let [incoming (edn/read-string (String. bs))]
+                            (is incoming)
                             (log/info "Client received:" incoming)
                             (let [next-message
                                   (condp = @client-state
@@ -197,8 +198,9 @@
                                     4 (do
                                         (is (= incoming ::kk))
                                         ;; Time to signal EOF.
-                                        ;; TODO: Add a way to signal "close stream"
-                                        (throw (RuntimeException. "Needs more thought"))))]
+                                        (message/close! @client-atom)
+                                        (dfrd/success! succeeded? ::kthxbai)
+                                        nil))]
                               (swap! client-state inc)
                               ;; Hmm...I've wound up with a circular dependency again.
                               ;; Q: Is this a problem with my architecture, or just
@@ -222,28 +224,53 @@
                               (when (= incoming ::icanhazcheezburger?)
                                 (message/child-> @server-atom (byte-array (range cheezburgr-length)))))))]
     (dfrd/on-realized succeeded?
-                      (fn [good] (log/info "Success!"))
+                      (fn [good]
+                        (log/info "Success!"))
                       (fn [bad] (is (not bad))))
 
-    (reset! client-atom (message/initial-state client-parent-cb client-child-cb false))
-    (reset! server-atom (message/initial-state server-parent-cb server-child-cb true))
+    (reset! client-atom (message/initial-state "Client" client-parent-cb client-child-cb false))
+    (message/start! @client-atom)
 
-    (strm/consume (fn [bs]
-                    (log/info "Message from client to server")
-                    (message/parent-> @server-atom bs))
-                  client->server)
-    (strm/consume (fn [bs]
-                    (log/info "Message from server to client")
-                    (message/parent-> @client-atom bs))
-                  server->client)
+    ;; It seems like this next part really shouldn't happen until the initial message arrives
+    ;; from the client.
+    ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
+    ;; that isn't quite true
+    (reset! server-atom (message/initial-state "Server" server-parent-cb server-child-cb true))
+    (message/start! @server-atom)
 
-    (let [initial-message (Unpooled/buffer K/k-1)
-          helo (.getBytes (pr-str ::ohai!))]
-      ;; Kick off the exchange
-      (message/child-> @client-atom helo)
-      ;; TODO: Find a reasonable value for this timeout
-      (let [really-succeeded? (deref succeeded? 5000 ::timed-out)]
-        (is (not= really-succeeded? ::timed-out))))))
+    (try
+      (strm/consume (fn [bs]
+                      (log/info "Message from client to server")
+                      (let [srvr-agent @server-atom]
+                        (if-let [err (agent-error srvr-agent)]
+                          (do
+                            (log/error "Server failed!")
+                            (dfrd/error! succeeded? err))
+                          (message/parent-> srvr-agent bs))))
+                    client->server)
+      (strm/consume (fn [bs]
+                      (log/info "Message from server to client")
+                      (let [client-agent @client-atom]
+                        (if-let [err (agent-error client-agent)]
+                          (do
+                            (log/error "Client failed!")
+                            (dfrd/error! succeeded? err))
+                          (message/parent-> client-agent bs))))
+                    server->client)
+
+      (let [initial-message (Unpooled/buffer K/k-1)
+            helo (.getBytes (pr-str ::ohai!))]
+        ;; Kick off the exchange
+        (message/child-> @client-atom helo)
+        ;; TODO: Find a reasonable value for this timeout
+        (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
+          (log/info "Bottom of message-test")
+          (is (not= really-succeeded? ::timed-out))
+          (is (= 5 @client-state))
+          (is (= ::kthxbai really-succeeded?))))
+      (finally
+        (message/halt! @client-atom)
+        (message/halt! @server-atom)))))
 (comment (handshake))
 
 (deftest bigger-outbound
@@ -303,7 +330,7 @@
         strm-address (atom 0)
         child-cb (fn [_]
                    (throw (RuntimeException. "This should never get called")))
-        initialized (message/initial-state parent-cb child-cb true)
+        initialized (message/initial-state "(test) Child w/ Big Outbound" parent-cb child-cb true)
         state (message/start! initialized)]
     (reset! state-agent-atom state)
     (try

@@ -40,6 +40,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
+(def default-agent-start-timeout
+  "Milliseconds to wait for agent to finish startup sequence"
+  250)
+
 (def max-child-buffer-size
   "Maximum message blocks from parent to child that we'll buffer before dropping
 
@@ -130,33 +134,43 @@
             ::specs/send-eof-processed
             ::specs/send-processed
             ::specs/want-ping]} ::specs/outgoing
-    :keys [::specs/recent]
+    :keys [::specs/message-loop-name
+           ::specs/recent]
     :as state}]
   ;; I should be able to just completely bypass this if there's
   ;; more new data pending.
-  ;; TODO: Verify that and see whether it actually works
+  ;; TODO: Figure out how to make that work
   #_(throw (RuntimeException. "Start here"))
+  ;; Bigger issue:
+  ;; This scheduler is so aggressive at waiting for an initial
+  ;; message from the child that it takes 10 ms for that agent
+  ;; send to actually get through the queue
   (let [min-resend-time (+ last-block-time n-sec-per-block)
-        _ (log/debug "Minimum resend time:" min-resend-time
-                     "which is" n-sec-per-block
-                     ;; last-block-time causes problems.
-                     ;; Up until the point I've sent my
-                     ;; last block, it basically progresses
-                     ;; linearly up to 1907725432157608
-                     ;; (for tonight's debug session).
-                     ;; Then it jumps down to
-                     ;; 1907725404755660, which leaves
-                     ;; me with negative delays, because
-                     ;; I'm trying to send the next send
-                     ;; in the past.
-                     ;; And doing this every millisecond
-                     ;; leads to its own set of problems.
-                     ;; FIXME: Start back here.
-                     "nanoseconds after" last-block-time)
+        _ (log/debug (str message-loop-name
+                          ": Minimum resend time: " min-resend-time
+                          " which is " n-sec-per-block
+                          ;; last-block-time causes problems.
+                          ;; Up until the point I've sent my
+                          ;; last block, it basically progresses
+                          ;; linearly up to 1907725432157608
+                          ;; (for tonight's debug session).
+                          ;; Then it jumps down to
+                          ;; 1907725404755660, which leaves
+                          ;; me with negative delays, because
+                          ;; I'm trying to send the next send
+                          ;; in the past.
+                          ;; And doing this every millisecond
+                          ;; leads to its own set of problems.
+                          ;; FIXME: Start back here.
+                          " nanoseconds after " last-block-time))
         default-next (+ recent (utils/seconds->nanos 60))
-        _ (log/debug "Default +1 minute:" default-next "from" recent)
+        _ (log/debug (str message-loop-name
+                          ": Default +1 minute: "
+                          default-next
+                          " from "
+                          recent))
         ;; Lines 286-289
-        _ (log/debug (str "Scheduling based on want-ping value '" want-ping "'"))
+        _ (log/debug (str message-loop-name ": Scheduling based on want-ping value '" want-ping "'"))
         next-based-on-ping (if want-ping
                              ;; Go with the assumption that this matches wantping 1 in the original
                              ;; I think the point there is for the
@@ -165,7 +179,9 @@
                                (+ recent utils/seconds->nanos 1)
                                (min default-next min-resend-time))
                              default-next)
-        _ (log/debug "Based on ping settings, adjusted next time to:" next-based-on-ping)
+        _ (log/debug (str message-loop-name
+                          ": Based on ping settings, adjusted next time to: "
+                          next-based-on-ping))
         ;; Lines 290-292
         next-based-on-eof (if (and (< (count blocks) K/max-outgoing-blocks)
                                    (if send-eof
@@ -173,7 +189,9 @@
                                      (< send-processed send-bytes)))
                             (min next-based-on-ping min-resend-time)
                             next-based-on-ping)
-        _ (log/debug "Due to EOF status:" next-based-on-eof)
+        _ (log/debug (str message-loop-name
+                          ": Due to EOF status: "
+                          next-based-on-eof))
         ;; Lines 293-296
         rtt-resend-time (+ earliest-time rtt-timeout)
         next-based-on-earliest-block-time (if (and (not= 0 earliest-time)
@@ -181,7 +199,9 @@
                                                       min-resend-time))
                                             (min next-based-on-eof rtt-resend-time)
                                             next-based-on-eof)
-        _ (log/debug "Adjusted for RTT:" next-based-on-earliest-block-time)
+        _ (log/debug (str message-loop-name
+                          ": Adjusted for RTT: "
+                          next-based-on-earliest-block-time))
         ;; There's one last caveat, from 298-300:
         ;; It all swirls around watchtochild, which gets set up
         ;; between lines 276-279.
@@ -192,31 +212,26 @@
                                        (nil? watch-to-child))
                                 0
                                 next-based-on-earliest-block-time)
-        _ (log/debug "After adjusting for closed/ignored child watcher:" based-on-closed-child)
+        _ (log/debug (str message-loop-name
+                          ": After adjusting for closed/ignored child watcher: "
+                          based-on-closed-child))
         ;; Lines 302-305
         actual-next (max based-on-closed-child recent)]
     actual-next))
 
 (declare trigger-from-timer)
 (defn schedule-next-timeout!
-  [{:keys [::specs/recent]
+  [{:keys [::specs/message-loop-name
+           ::specs/recent]
     {:keys [::specs/next-action
             ::specs/schedule-pool]
      :as flow-control} ::specs/flow-control
     :as state}
    state-agent]
   {:pre [recent]}
-  (log/debug "Top of scheduler")
+  (log/debug (str message-loop-name ": Top of scheduler"))
   (if (not= next-action ::completed)
     (do
-      ;; It would be nice to have a way to check
-      ;; whether this is what triggered us. If
-      ;; so, there's no reason to stop it.
-      ;; Go with the assumption that this is
-      ;; light-weight enough that it doesn't matter.
-      (at-at/stop next-action)
-      (log/debug "Current next action cancelled")
-
       (let [actual-next (choose-next-scheduled-time state)
             now (System/nanoTime)
             ;; It seems like it would make more sense to have the delay happen from
@@ -225,8 +240,14 @@
             ;; Stick with this approach for now, because it *does*
             ;; match the reference implementation.
             ;; Although, really, it seems very incorrect.
-            scheduled-delay (- actual-next now)
-            _ (log/debug "Initially calculated scheduled delay:" scheduled-delay "nanoseconds after" recent "vs. " now)
+            scheduled-delay (- actual-next recent)
+            _ (log/debug (str message-loop-name
+                              ": Initially calculated scheduled delay: "
+                              scheduled-delay
+                              " nanoseconds after "
+                              recent
+                              " vs. "
+                              now))
             delta-nanos (max 0 scheduled-delay)
             delta (inc (utils/nanos->millis delta-nanos))
             next-action (at-at/after delta
@@ -234,11 +255,16 @@
                                        (send-off state-agent (partial trigger-from-timer state-agent)))
                                      schedule-pool
                                      :desc "Periodic wakeup")]
-        (log/debug "Timer set to trigger in" (float delta) "ms (vs" (float (utils/nanos->millis scheduled-delay)) "scheduled)")
+        (log/debug (str message-loop-name
+                        ": Timer set to trigger in "
+                        (float delta)
+                        " ms (vs "
+                        (float (utils/nanos->millis scheduled-delay))
+                        " scheduled)"))
         (-> state
             (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
     (do
-      (log/debug "'next-action' flagged complete.")
+      (log/debug (str message-loop-name ": 'next-action' flagged complete."))
       state)))
 
 (s/fdef start-event-loops!
@@ -272,9 +298,18 @@
 (defn trigger-io
   [state-agent
    {{:keys [::specs/->child]} ::specs/incoming
-    {:keys [::next-action]} ::specs/flow-control
+    {:keys [::specs/next-action]} ::specs/flow-control
+    :keys [::specs/message-loop-name]
     :as state}]
-  (log/debug "Triggering I/O")
+  (log/debug (str message-loop-name ": Triggering I/O"))
+  (when (not= next-action ::completed)
+    ;; It would be nice to have a way to check
+    ;; whether this is what triggered us. If
+    ;; so, there's no reason to stop it.
+    ;; Go with the assumption that this is
+    ;; light-weight enough that it doesn't matter.
+    (at-at/stop next-action)
+    (log/debug (str message-loop-name ": Current next action cancelled")))
   (let [state
         (as-> state state
             (assoc state ::specs/recent (System/nanoTime))
@@ -292,7 +327,8 @@
             ;; by anything except an incoming message from the parent.
             ;; That is misleading. We still need to cope with any messages
             ;; from the parent that haven't been written to the child yet.
-            ;; And
+            ;; And, realistically, we *should* cope with message blocks that
+            ;; have only partially been written
             (or (from-parent/try-processing-message! state)
                 state)
             (to-child/forward! ->child state))]
@@ -311,13 +347,12 @@
     ;; returned immediately anyway.
     ;; Except that n-sec-per-block puts a hard limit on how
     ;; fast we can send.
-    ;; TODO: Verify against the reference implementation
     (comment
       (let [unsent-blocks-from-child? (from-child/blocks-not-sent? state)]
         (if unsent-blocks-from-child?
           (recur state)
           (schedule-next-timeout! state))))
-    (log/debug "Scheduling next timeout")
+    (log/debug (str message-loop-name ": Scheduling next timeout"))
     (schedule-next-timeout! state state-agent)))
 
 (s/fdef trigger-from-child
@@ -329,24 +364,28 @@
   [state-agent
    {{:keys [::specs/send-bytes]
      :as outgoing} ::specs/outgoing
+    :keys [::specs/message-loop-name]
     :as state}
    array-o-bytes]
-  (log/debug "trigger-from-child: Received a"
-             (class array-o-bytes)
-             "\nSent stream address:"
-             send-bytes)
+  (log/debug (str "trigger-from-child: "
+                  message-loop-name
+                  ": Received a "
+                  (class array-o-bytes)
+                  "\nSent stream address: "
+                  send-bytes))
   (when-not send-bytes
-    (log/error "Missing ::specs/send-bytes under"
-               (keys outgoing)
-               "inside"
-               (keys state)
-               "\na.k.a.\n"
-               state))
+    (log/error (str message-loop-name
+                    ": Missing ::specs/send-bytes under"
+                    (keys outgoing)
+                    "inside"
+                    (keys state)
+                    "\na.k.a.\n"
+                    state)))
   (trigger-io
    state-agent
    (if (from-child/room-for-child-bytes? state)
      (do
-       (log/debug "There is room for another message")
+       (log/debug (str message-loop-name ": There is room for another message"))
        (from-child/child-consumer state array-o-bytes))
      ;; trigger-io does some state management, even
      ;; if we discard the buffer
@@ -360,12 +399,13 @@
   ;; really rather not introduce dependencies between those namespaces
   [state-agent
    {{:keys [::specs/->child]} ::specs/incoming
+    :keys [::specs/message-loop-name]
     :as state}
    ^bytes buf]
   (when-not ->child
     (throw (ex-info "Missing ->child"
                     {::callbacks (::specs/callbacks state)})))
-  (log/info "Incoming from parent")
+  (log/info (str message-loop-name ": Incoming from parent"))
   ;; This is basically an iteration of the top-level
   ;; event-loop handler from main().
   ;; I can skip the pieces that only relate to reading
@@ -379,8 +419,10 @@
               (assoc-in state [::specs/incoming ::specs/parent->buffer] buf)))
 
 (defn trigger-from-timer
-  [state-agent state]
-  (log/debug "I/O triggered by timer")
+  [state-agent
+   {:keys [::specs/message-loop-name]
+    :as state}]
+  (log/debug (str message-loop-name ": I/O triggered by timer"))
   ;; I keep thinking that I need to check data arriving from
   ;; the child, but the main point to this logic branch is
   ;; to resend an outbound block that hasn't been ACK'd yet.
@@ -390,7 +432,8 @@
 ;;; Public
 
 (s/fdef initial-state
-        :args (s/cat :parent-callback ::specs/->parent
+        :args (s/cat :human-name ::specs/message-loop-name
+                     :parent-callback ::specs/->parent
                      :child-callback ::specs/->child
                      ;; Q: What's the difference to spec that this
                      ;; argument is optional?
@@ -398,7 +441,8 @@
         :ret ::specs/state-agent)
 (defn initial-state
   "Put together an initial state that's ready to start!"
-  ([parent-callback
+  ([human-name
+    parent-callback
     child-callback
     server?]
    (agent {::specs/flow-control {::specs/last-doubling 0
@@ -464,6 +508,7 @@
                                                  ;; message
                                                  ::specs/immediate)}
 
+           ::specs/message-loop-name human-name
            ;; In the original, this is a local in main rather than a global
            ;; Q: Is there any difference that might matter to me, other
            ;; than being allocated on the stack instead of the heap?
@@ -473,8 +518,8 @@
            ;; talking about incoming/outgoing buffer management or
            ;; flow control.
            ::specs/recent 0}))
-  ([parent-callback child-callback]
-   (initial-state parent-callback child-callback false)))
+  ([human-name parent-callback child-callback]
+   (initial-state human-name parent-callback child-callback false)))
 
 (s/fdef start!
         :args (s/cat :state ::specs/state-agent)
@@ -487,7 +532,14 @@
      (throw (ex-info "Starting failed"
                      {::problem (agent-error state-agent)}))))
   ([state-agent]
-   (start! state-agent 250)))
+   (start! state-agent default-agent-start-timeout)))
+
+(defn close!
+  "Flush buffer and send EOF"
+  [state-agent]
+  ;; Actually, I don't think there's any "flush buffer" concept
+  ;; Though there probably should be
+  (throw (RuntimeException. "Q: How should this work?")))
 
 (defn halt!
   [state-agent]
@@ -504,27 +556,6 @@
         :args (s/cat :state-agent ::specs/state-agent
                      :array-o-bytes bytes?)
         :ret ::specs/state-agent)
-;;; It seems like it might make more sense to just
-;;; use an i/o stream, rather than byte arrays.
-;;; Because, really, the child might send a
-;;; million 40 byte messages in a single second.
-;;; Or it might send 40M for a puppy pic.
-
-;;; It might make sense to switch to using a
-;;; PipedOutputStream in the state-agent to buffer
-;;; the incoming messages until to-parent can
-;;; pull them off by reading from the connected
-;;; PipedInputStream.
-
-;;; But the "obvious" OOP way there is to override
-;;; the PipedOutputStream to trigger whatever i/o
-;;; processing needs to happen when the child calls
-;;; .write, and that approach simply is not worth the
-;;; pain/suffering involved.
-
-;;; Or...this is spec'd to take a ByteBuf.
-;;; There doesn't seem to be any version of reality
-;;; where that makes sense.
 (defn child->
   "Read bytes from a child buffer...if we have room"
   ;; The only real question seems to be what happens
@@ -557,8 +588,20 @@
   ;; Except for those actual pesky sends to the
   ;; child/parent, which are specifically forbidden
   ;; from blocking.
-  (log/debug "Incoming message from child to" state-agent)
-  (send state-agent (partial trigger-from-child state-agent) array-o-bytes))
+  (let [state @state-agent
+        {{:keys [::specs/next-action]} ::specs/flow-control
+         :keys [::specs/message-loop-name]} state]
+    (log/debug (str message-loop-name
+                    ": Incoming message from child to\n"
+                    state))
+    (when next-action
+      ;; Altering the agent's state outside the agent like this
+      ;; is wrong on pretty much every level.
+      ;; But I'm seeing at least 1 timer loop go through before
+      ;; this can, and that's wasting 9-10 ms.
+      (log/info (str message-loop-name ": cancelling I/O timer"))
+      (at-at/stop next-action))
+    (send state-agent (partial trigger-from-child state-agent) array-o-bytes)))
 
 (s/fdef parent->
         :args (s/cat :state ::specs/state-agent
@@ -615,7 +658,7 @@
           ;; Then again...it's basically a self-enforcing
           ;; 64K buffer, so maybe it's already covered, and I just wasted
           ;; CPU cycles calculating it.
-          (if (<= K/max-msg-len incoming-size)
+          (if (<= incoming-size K/max-msg-len)
             ;; See comments in child-> re: send vs. send-off
             (send state-agent (partial trigger-from-parent state-agent) buf)
             (do

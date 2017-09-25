@@ -18,6 +18,11 @@
 (s/def ::big-int #(instance? BigInt %))
 (s/def ::buf #(instance? ByteBuf %))
 
+;;; Just something human-readable to help me track which log
+;;; messages go where during intertwined tests.
+;;; Though it certainly isn't a bad idea in general
+(s/def ::message-loop-name string?)
+
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
 (s/def ::length int?)
@@ -76,6 +81,8 @@
 ;; sorted by ::time.
 (s/def ::blocks (s/and (s/coll-of ::block)
                        #(= (rem (count %) 2) 0)))
+(s/def ::un-sent-blocks ::blocks)
+(s/def ::un-acked-sent-blocks ::blocks)
 ;; How to find the current ::block inside a ::state
 ;; Q: Do I want to be more specific about this?
 (s/def ::current-block-cursor (s/coll-of (s/or :vec-index nat-int?
@@ -278,6 +285,8 @@
 
 ;; 3. Buffers of bytes that we received from the child
 ;;    but the parent has not yet ACK'd
+;; TODO: Replace ::blocks with
+;; ::un-sent-blocks and ::un-acked-sent-blocks
 (s/def ::outgoing (s/keys :req [::blocks
                                 ;; TODO: Should be able to simplify and
                                 ;; speed up things slightly by keeping 2
@@ -312,6 +321,8 @@
 (s/def ::state (s/keys :req [::flow-control
                              ::incoming
                              ::outgoing
+
+                             ::message-loop-name
 
                              ;; Q: Does this make more sense anywhere else?
                              ::recent]))
