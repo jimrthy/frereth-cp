@@ -7,7 +7,7 @@
                             [aleph "0.4.3"]
                             [org.apache.logging.log4j/log4j-core "2.8.2" :scope "test"]
                             [org.apache.logging.log4j/log4j-1.2-api "2.8.2" :scope "test"]
-                            [org.clojure/clojure "1.9.0-alpha17"]
+                            [org.clojure/clojure "1.9.0-beta1"]
                             [org.clojure/spec.alpha "0.1.123"]
                             [org.clojure/tools.logging "0.4.0"]
                             [overtone/at-at "1.2.0"]
