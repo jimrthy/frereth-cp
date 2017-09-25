@@ -140,6 +140,33 @@
     (.resetReaderIndex buf)
     (.array send-buf)))
 
+(s/fdef mark-block-sent
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn mark-block-sent
+  "Move block (id'd by cursor) from un-sent to un-acked"
+  [{{:keys [::specs/current-block-cursor
+            ::specs/un-sent-blocks
+            ::specs/un-ackd-blocks]
+     :as outgoing} ::specs/outgoing
+    :keys [::specs/message-loop-name]
+    :as state}]
+  (log/debug (str message-loop-name
+                  ": Marking block at "
+                  current-block-cursor
+                  " sent"))
+  ;; This is unfortunately tightly coupled with the actual implementation
+  ;; details, but that's unavoidable.
+  ;; This *is* a major part of the way the implementation all ties together.
+  (assert (= (count current-block-cursor) 2))
+  (assert (= ::specs/un-sent-blocks (first current-block-cursor)))
+  (assert (= 0 (second current-block-cursor)))
+  (let [block-to-move (get-in un-sent-blocks (rest current-block-cursor))]
+    (-> state
+        (update-in [::specs/outgoing ::un-ackd-blocks] conj block-to-move)
+        ;; Important note: This is a queue!
+        (update-in [::specs/outgoing ::un-sent-blocks] pop))))
+
 (s/fdef pre-calculate-state-after-send
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
@@ -168,52 +195,68 @@
   (assert current-block-cursor
           (str "No current-block-cursor to tell us what to send\nAvailable:\n"
                (keys outgoing)))
-  (let [next-message-id (let [n' (inc current-message-id)]
-                          ;; Stupid unsigned math
-                          ;; Actually, this seems problematic.
-                          ;; Really shouldn't be reusing IDs.
-                          ;; Q: Does that matter?
-                          (if (> n' shared-K/max-32-uint)
-                            ;; TODO: Just roll with the negative IDs. The only
-                            ;; one that's special is 0
-                            1 n'))
-        cursor (vec (concat [::specs/outgoing ::specs/blocks] current-block-cursor))
-        _ (assert (get-in state (conj cursor ::specs/transmissions))
-                  (str "Missing ::transmissions under "
-                       cursor
-                       "\nbased on "
-                       current-block-cursor
-                       "\nHave:\n"
-                       (let [current-block (get-in state cursor)]
-                         (if current-block
-                           (utils/pretty current-block)
-                           (str "Missing current block completely, but do have "
-                                (count (get-in state [::specs/outgoing ::specs/blocks]))
-                                " blocks we *could* have been looking at")))))
-        ;; Q: How much time could I save right here and now by making state transient?
-        state'
-        (-> state
-            (update-in (conj cursor ::specs/transmissions) inc)
-            (update-in (conj cursor ::specs/time) (constantly recent))
-            (assoc-in (conj cursor ::specs/message-id) current-message-id)
-            (assoc-in [::specs/outgoing ::specs/next-message-id] next-message-id))
-        block-to-send (get-in state' cursor)
-        _ (log/debug "Getting ready to build next message block for message "
-                     current-message-id
-                     "\nbased on:\n"
-                     (utils/pretty block-to-send))
-        buf (build-message-block current-message-id block-to-send)]
+  ;; Shape of cursor is wrong.
+  ;; Honestly, we just want a keyword that points us to the appropriate
+  ;; queue (either un-ackd or un-sent)
+  ;; That's assuming I get around to converting un-ackd to a priority
+  ;; queue based on ::time the way I've intended since the 1st draft.
+  ;; Now that the unsent blocks are a queue, I really don't have any
+  ;; excuse for not converting the other.
+  (throw (RuntimeException. "Break down and convert this, too"))
+  (let [cursor (vec (concat [::specs/outgoing] current-block-cursor))]
+    (assert (get-in state (conj cursor ::specs/transmissions))
+            (str "Missing ::transmissions under "
+                 cursor
+                 "\nbased on "
+                 current-block-cursor
+                 "\nHave:\n"
+                 (let [current-block (get-in state cursor)]
+                   (if current-block
+                     (utils/pretty current-block)
+                     (str "Missing current block completely, but do have "
+                          (count (get-in state [::specs/outgoing ::specs/un-sent-blocks]))
+                          " new blocks and "
+                          (count (get-in state [::specs/outgoing ::specs/un-ackd-blocks]))
+                          " previously sent blocks we *could* have been looking at")))))
+    (let [next-message-id (let [n' (inc current-message-id)]
+                            ;; Stupid unsigned math
+                            ;; Actually, this seems problematic.
+                            ;; Really shouldn't be reusing IDs.
+                            ;; Q: Does that matter?
+                            (if (> n' shared-K/max-32-uint)
+                              ;; TODO: Just roll with the negative IDs. The only
+                              ;; one that's special is 0
+                              1 n'))
+          ;; Q: How much time could I save right here and now by making state transient?
+          state'
+          (-> state
+              (update-in (conj cursor ::specs/transmissions) inc)
+              (update-in (conj cursor ::specs/time) (constantly recent))
+              (assoc-in (conj cursor ::specs/message-id) current-message-id)
+              (assoc-in [::specs/outgoing ::specs/next-message-id] next-message-id))
+          block-to-send (get-in state' cursor)
+          _ (log/debug "Getting ready to build next message block for message "
+                       current-message-id
+                       "\nbased on:\n"
+                       (utils/pretty block-to-send))
+          buf (build-message-block current-message-id block-to-send)
 
-    ;; Reference implementation waits until after the actual write before setting any of
-    ;; the next pieces. But it's a single-threaded process that's going to block at the write,
-    ;; and this part's purely functional anyway. So it should be safe enough to set up this transition here
-    (update state'
-            ::specs/outgoing
-            (fn [cur]
-              (assoc cur
-                     ::specs/last-block-time recent
-                     ::specs/send-buf buf
-                     ::specs/want-ping 0)))))
+          ;; Reference implementation waits until after the actual write before setting any of
+          ;; the next pieces. But it's a single-threaded process that's going to block at the write,
+          ;; and this part's purely functional anyway. So it should be safe enough to set up
+          ;; this transition here
+          result (update state'
+                         ::specs/outgoing
+                         (fn [cur]
+                           (assoc cur
+                                  ::specs/last-block-time recent
+                                  ::specs/send-buf buf
+                                  ::specs/want-ping 0)))]
+      (if (= ::specs/un-sent-blocks (first current-block-cursor))
+        (mark-block-sent result)
+        (do
+          (log/debug "Resending block at" current-block-cursor)
+          result)))))
 
 (s/fdef check-for-previous-block-to-resend
         :args ::specs/state
@@ -230,7 +273,7 @@
 "
   [{:keys [::specs/message-loop-name
            ::specs/recent]
-    {:keys [::specs/blocks
+    {:keys [::specs/un-ackd-blocks
             ::specs/earliest-time
             ::specs/last-panic]} ::specs/outgoing
     {:keys [::specs/last-edge
@@ -274,18 +317,11 @@
                       state))))
                 ;; We still haven't found what we're looking for.
                 ;; Proceed to the next block
-                (update-in acc [::specs/outgoing ::specs/current-block-cursor 0] inc)))
+                (update-in acc [::specs/outgoing ::specs/current-block-cursor 1] inc)))
             (assoc-in state
                       [::specs/outgoing ::specs/current-block-cursor]
-                      [0])
-            blocks)))
-
-(defn remove-unsent
-  "Get the blocks that have been put onto the wire"
-  [blocks]
-  (filter (fn [block]
-            (not= 0 (::specs/transmissions block)))
-          blocks))
+                      [::specs/un-ackd-blocks 0])
+            un-ackd-blocks)))
 
 (s/fdef check-for-new-block-to-send
         :args (s/cat :state ::specs/state)
@@ -297,27 +333,28 @@
   Along w/ related data flags in parallel arrays"
   [{:keys [::specs/message-loop-name
            ::specs/recent]
-    {:keys [::specs/blocks
-            ::specs/earliest-time
+    {:keys [::specs/earliest-time
             ::specs/max-block-length
             ::specs/send-acked
             ::specs/send-bytes
             ::specs/send-eof
             ::specs/send-eof-processed
             ::specs/send-processed
+            ::specs/un-ackd-blocks
+            ::specs/un-sent-blocks
             ::specs/want-ping]
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
-  (let [n (count blocks)]
+  (let [block-count (count un-sent-blocks)]
     ;; This is one of those places where I'm getting confused
     ;; by mixing the new blocks with the ones that have already
     ;; been sent at least once.
     (log/debug (str message-loop-name
                     ": Does it make sense to try to send any of our "
-                    n
-                    " outgoing blocks as new ones?"))
-    (when (< 0 n)
+                    block-count
+                    " unsent blocks?"))
+    (when (< 0 block-count)
       (if (and (>= recent (+ earliest-time n-sec-per-block))
                ;; If we have too many outgoing blocks being
                ;; tracked, don't put more in flight.
@@ -329,7 +366,7 @@
                ;; would guarantee that none of them ever get sent.
                ;; So only consider the ones that have already
                ;; been put on the wire.
-               (< (count (remove-unsent blocks)) K/max-outgoing-blocks)
+               (< (count un-ackd-blocks) K/max-outgoing-blocks)
                (or want-ping
                    ;; This next style clause is used several times in
                    ;; the reference implementation.
@@ -363,39 +400,25 @@
                     false)
               ;; XXX: or could have the full block in post-buffer space (DJB)
               ;; "absorb" this new block -- JRG
-              send-processed (+ send-processed block-length)
-              block-count (count blocks)
-              ;; Want to send a new block.
-              ;; In a single-threaded world where we're processing one
-              ;; message packet/block at a time, that will always be the last.
-              ;; In this scenario, it's really the first block with a transmission
-              ;; count of 0.
-              cursor [(reduce (fn [acc block]
-                                (if (= 0 (::specs/transmissions block))
-                                  (do
-                                    (log/debug (str "Block " acc "/" block-count " is new"))
-                                    (reduced acc))
-                                  (inc acc)))
-                              0
-                              blocks)]]
-          (if (< (first cursor) block-count)
-            (do
-              (log/debug (str message-loop-name ": Conditions ripe for sending a new outgoing message"))
-              (-> state
-                  (assoc-in [::specs/outgoing ::specs/current-block-cursor] cursor)))
-            (do
-              (log/info (str message-loop-name ": No new blocks to send"))
-              ;; Be explicit about this
-              nil)))
-        (log/debug (str message-loop-name
-                        ": Bad preconditions for sending a new block:\n"
-                        "recent: " recent " <? " (+ earliest-time n-sec-per-block)
-                        "\nBlock count: " (count blocks)
-                        "\nwant-ping: " want-ping
-                        "\nsend-eof: " send-eof
-                        "\n\tsend-eof-processed: " send-eof-processed
-                        "\n\tsend-processed: " send-processed
-                        "\nsend-bytes: " send-bytes))))))
+              send-processed (+ send-processed block-length)]
+          (log/debug (str message-loop-name ": Conditions ripe for sending a new outgoing message"))
+          (-> state
+              (assoc-in [::specs/outgoing ::specs/current-block-cursor] [::specs/un-sent-blocks 0])))
+        (do
+          (log/debug (str message-loop-name
+                          ": Bad preconditions for sending a new block:\n"
+                          "recent: " recent " <? " (+ earliest-time n-sec-per-block)
+                          "\nNew block count: " (block-count)
+                          "\nPreviously sent block count: " (count un-ackd-blocks)
+                          "\nwant-ping: " want-ping
+                          "\nsend-eof: " send-eof
+                          "\n\tsend-eof-processed: " send-eof-processed
+                          "\n\tsend-processed: " send-processed
+                          "\nsend-bytes: " send-bytes))
+          ;; Be explicit about this
+          ;; TODO: Avoid extra hoops. Make the caller smarter/less complex.
+          ;; Just set the cursor to nil
+          nil)))))
 
 (s/fdef pick-next-block-to-send
         :args (s/cat :state ::specs/state)
@@ -464,6 +487,6 @@
       (-> state''
           (assoc-in
            [::specs/outgoing ::specs/earliest-time]
-           (help/earliest-block-time (get-in state'' [::specs/outgoing ::specs/blocks])))
+           (help/earliest-block-time (get-in state'' [::specs/outgoing ::specs/un-ackd-blocks])))
           (update ::specs/outgoing dissoc ::specs/current-block-cursor)))
     state))

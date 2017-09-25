@@ -35,7 +35,8 @@
             ;; most likely)
             [manifold.stream :as strm]
             [overtone.at-at :as at-at])
-  (:import [io.netty.buffer ByteBuf Unpooled]))
+  (:import clojure.lang.PersistentQueue
+           [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
@@ -126,13 +127,14 @@
             ::specs/rtt-timeout]} ::specs/flow-control
     {:keys [::specs/->child-buffer
             ::specs/gap-buffer]} ::specs/incoming
-    {:keys [::specs/blocks
-            ::specs/earliest-time
+    {:keys [::specs/earliest-time
             ::specs/last-block-time
             ::specs/send-bytes
             ::specs/send-eof
             ::specs/send-eof-processed
             ::specs/send-processed
+            ::specs/un-sent-blocks
+            ::specs/un-ackd-blocks
             ::specs/want-ping]} ::specs/outgoing
     :keys [::specs/message-loop-name
            ::specs/recent]
@@ -183,7 +185,9 @@
                           ": Based on ping settings, adjusted next time to: "
                           next-based-on-ping))
         ;; Lines 290-292
-        next-based-on-eof (if (and (< (count blocks) K/max-outgoing-blocks)
+        next-based-on-eof (if (and (< (+ (count un-ackd-blocks)
+                                         (count un-sent-blocks))
+                                      K/max-outgoing-blocks)
                                    (if send-eof
                                      (not send-eof-processed)
                                      (< send-processed send-bytes)))
@@ -470,8 +474,7 @@
                              ::specs/receive-eof false
                              ::specs/receive-total-bytes 0
                              ::specs/receive-written 0}
-           ::specs/outgoing {::specs/blocks []
-                             ::specs/earliest-time 0
+           ::specs/outgoing {::specs/earliest-time 0
                              ::specs/last-block-time 0
                              ::specs/last-panic 0
                              ;; Peers started as servers start out
@@ -498,6 +501,10 @@
                              ::specs/send-processed 0
                              ::specs/total-blocks 0
                              ::specs/total-block-transmissions 0
+                             ;; TODO: This really should be a priority queue,
+                             ;; sorted by transmission time
+                             ::specs/un-ackd-blocks []
+                             ::specs/un-sent-blocks PersistentQueue/EMPTY
                              ::specs/want-ping (if server?
                                                  false
                                                  ;; TODO: Add option for a

@@ -81,8 +81,10 @@
 ;; sorted by ::time.
 (s/def ::blocks (s/and (s/coll-of ::block)
                        #(= (rem (count %) 2) 0)))
+;; Blocks from child that we haven't forwarded along to parent
 (s/def ::un-sent-blocks ::blocks)
-(s/def ::un-acked-sent-blocks ::blocks)
+;; Blocks from child that have been sent to parent, but not acknowledged
+(s/def ::un-ackd-blocks ::blocks)
 ;; How to find the current ::block inside a ::state
 ;; Q: Do I want to be more specific about this?
 (s/def ::current-block-cursor (s/coll-of (s/or :vec-index nat-int?
@@ -285,17 +287,7 @@
 
 ;; 3. Buffers of bytes that we received from the child
 ;;    but the parent has not yet ACK'd
-;; TODO: Replace ::blocks with
-;; ::un-sent-blocks and ::un-acked-sent-blocks
-(s/def ::outgoing (s/keys :req [::blocks
-                                ;; TODO: Should be able to simplify and
-                                ;; speed up things slightly by keeping 2
-                                ;; separate containers of blocks.
-                                ;; One for new blocks that haven't
-                                ;; been sent yet.
-                                ;; The other for sent blocks that haven't
-                                ;; been ACK'd yet.
-                                ::earliest-time
+(s/def ::outgoing (s/keys :req [::earliest-time  ; Q: Any point to this?
                                 ::last-block-time
                                 ::last-panic
                                 ::max-block-length
@@ -313,6 +305,10 @@
                                 ::send-processed
                                 ::total-blocks
                                 ::total-block-transmissions
+                                ;; These next 2 are the core of this piece.
+                                ;; Everything else is really to support them
+                                ::un-ackd-blocks
+                                ::un-sent-blocks
                                 ::want-ping]
                           :opt [::current-block-cursor
                                 ::send-buf]))

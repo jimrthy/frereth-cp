@@ -50,29 +50,22 @@
 ;;; Public
 
 (s/fdef earliest-block-time
-        :args ::specs/blocks
+        :args ::specs/un-ackd-blocks
         :ret nat-int?)
 (defn earliest-block-time
   "Calculate the earliest time
 
 Based on earliestblocktime_compute, in lines 138-153
 "
-  [blocks]
+  [un-acked-blocks]
   ;;; Comment from DJB:
   ;;; XXX: use priority queue
-  (let [un-acked-blocks (filter #(not= 0 (::specs/time %)) blocks)]
-    (log/debug "Calculating min-time across" un-acked-blocks)
-    (if (< 0 (count un-acked-blocks))
-      ;; I'm winding up with a nil in here, because there's a block
-      ;; with no specs/time key.
-      ;; Actually, that entry doesn't really contain anything
-      ;; useful.
-      ;; And I should only have 1 block, based on my current test.
-      ;; Something is badly off-kilter here.
-      (apply min (map ::specs/time
-                      ;; Time 0 means it's been ACK'd and is ready to discard
-                      un-acked-blocks))
-      0)))
+  (log/debug "Calculating min-time across" un-acked-blocks)
+  (if (< 0 (count un-acked-blocks))
+    (apply min (map ::specs/time
+                    ;; Time 0 means it's been ACK'd and is ready to discard
+                    un-acked-blocks))
+    0))
 
 ;;;; 155-185: acknowledged(start, stop)
 (s/fdef acknowledged
@@ -84,7 +77,7 @@ Based on earliestblocktime_compute, in lines 138-153
   "Mark sent blocks between positions start and stop as ACK'd
 
 Based [cleverly] on acknowledged(), running from lines 155-185"
-  [{{:keys [::specs/blocks
+  [{{:keys [::specs/un-ackd-blocks
             ::specs/send-eof
             ::specs/send-eof-acked]} ::specs/outgoing
     :as state}
@@ -97,7 +90,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                    Updates totalblocktransmissions and totalblocks
     (let [acked (reduce (partial flag-acked-blocks start stop)
                         (assoc state ::n 0)
-                        blocks)]
+                        un-ackd-blocks)]
       (log/debug "Done w/ initial flag reduce:\n" acked)
       ;; To match the next block, the main point is to discard
       ;; the first sequence of blocks that have been ACK'd
@@ -111,7 +104,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                        sendbytes
 ;;;                        sendprocessed
 ;;;                        blockfirst
-      (let [[to-drop to-keep] (split-with #(= 0 (::specs/time %)) (get-in acked [::specs/outgoing ::specs/blocks]))
+      (let [[to-drop to-keep] (split-with #(= 0 (::specs/time %)) (get-in acked [::specs/outgoing ::specs/un-ackd-blocks]))
             _ (log/debug "Keeping:\n" to-keep "\n\n")
             dropped-block-lengths (apply + (map ::specs/length to-drop))
             ;; TODO: Drop reliance on these
@@ -122,7 +115,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                                     (update ::specs/send-acked + dropped-block-lengths))))
                       (update-in [::specs/outgoing ::specs/send-bytes] - dropped-block-lengths)
                       (update-in [::specs/outgoing ::specs/send-processed] - dropped-block-lengths)
-                      (assoc-in [::specs/outgoing ::specs/blocks] (vec to-keep)))
+                      (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] (vec to-keep)))
 ;;;           177-182: Possibly set sendeofacked flag
             state (if (and send-eof
                            (= start 0)
@@ -136,7 +129,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
           (log/debug "Releasing the buf associated with" block)
           (let [^ByteBuf buffer (::specs/buf block)]
             (.release buffer)))
-        (assoc-in state [::specs/outgoing ::specs/earliest-time] (earliest-block-time blocks))))
+        (assoc-in state [::specs/outgoing ::specs/earliest-time] (earliest-block-time un-ackd-blocks))))
     ;;; No change
     state))
 

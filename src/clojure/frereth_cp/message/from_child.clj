@@ -82,11 +82,9 @@
         :ret boolean?)
 (defn blocks-not-sent?
   "Are there pending blocks from the child that haven't been sent once?"
-  [{{:keys [::specs/blocks]} ::specs/outgoing
+  [{{:keys [::specs/un-sent-blocks]} ::specs/outgoing
     :as state}]
-  (seq (filter (fn [block]
-                 (= 0 (::specs/transmissions block)))
-               blocks)))
+  (< 0 (count un-sent-blocks)))
 
 (s/fdef child-consumer
         :args (s/cat :state ::specs/state
@@ -124,10 +122,10 @@
    ;; the streaming.
    ^bytes array-o-bytes]
   (log/debug (str message-loop-name ": Adding message block(s) to "
-                  ;; TODO: Just log the count.
-                  ;; Although it might worth keeping this
-                  ;; around for trace log levels
-                  (get-in state [::specs/outgoing ::specs/blocks])))
+                  ;; TODO: Might be worth logging the actual contents
+                  ;; when it's time to trace
+                  (count (get-in state [::specs/outgoing ::specs/un-sent-blocks]))
+                  " others"))
   ;; Note that back-pressure gets applied if we
   ;; already have ~124K pending because caller started
   ;; dropping packets.
@@ -171,8 +169,12 @@
       (throw (AssertionError. "End of stream")))
     (-> state
         (update ::specs/outgoing (fn [cur]
-                                   (-> cur
-                                       (update ::specs/blocks (comp vec concat) blocks)
-                                       (assoc ::specs/send-bytes send-bytes))))
-;;;  337: update recent
+                                   ;; un-sent-blocks is a PersistentQueue.
+                                   ;; Can't just concat.
+                                   (let [result (reduce (fn [acc block]
+                                                          (update acc ::specs/un-sent-blocks conj block))
+                                                        cur
+                                                        blocks)]
+                                     (assoc result ::specs/send-bytes send-bytes))))
+        ;; 337: update recent
         (assoc ::specs/recent (System/nanoTime)))))
