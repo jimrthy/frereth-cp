@@ -14,7 +14,8 @@
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
-  (:import [io.netty.buffer ByteBuf Unpooled]))
+  (:import clojure.lang.ExceptionInfo
+           [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest basic-echo
   (let [src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
@@ -94,51 +95,53 @@
             ;; message arrives.
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
-            initialized (message/initial-state "(test) Basic Echo" parent-cb child-cb true)
-            state (message/start! initialized)]
-        (reset! state-agent-atom state)
+            initialized (message/initial-state "(test) Basic Echo" parent-cb child-cb true)]
         (try
-          ;; TODO: Add tests that send a variety of gibberish messages
-          (let [wrote (future (message/parent-> state incoming))
-                outcome (deref response 1000 ::timeout)]
-            (if-let [err (agent-error state)]
-              (is (not err))
-              (do
-                (is (not= outcome ::timeout))
-                (when-not (= outcome ::timeout)
-                  (is (= @parent-state 2))
-                  ;; I'm getting the response message header here, which is
-                  ;; correct, even though it seems wrong.
-                  ;; In the real thing, these are the bytes I'm getting ready
-                  ;; to send over the wire
-                  (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
-                  (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
-                                                         (vec outcome)))]
-                    (is (= (count message-body) (count without-header)))
-                    (is (b-t/bytes= message-body without-header))))
-                (is (realized? wrote))
-                (when (realized? wrote)
-                  (let [outcome-agent @wrote]
-                    (is (not (agent-error outcome-agent)))
-                    (when-not (agent-error outcome-agent)
-                      ;; Fun detail:
-                      ;; wrote is a promise.
-                      ;; When I deref that, there's an agent
-                      ;; that I need to deref again to get
-                      ;; the actual end-state
-                      (let [child-outcome @outcome-agent
-                            outgoing (::specs/outgoing child-outcome)
-                            incoming (::specs/incoming child-outcome)]
-                        (is (= (::specs/receive-bytes incoming) (inc msg-len)))
-                        (is (= (::specs/next-message-id outgoing) 2))
-                        (is (= (::specs/send-processed outgoing) 0))
-                        (is (not (::specs/send-eof outgoing)))
-                        (is (= (::specs/send-bytes outgoing) msg-len))
-                        ;; Keeping around as a reminder for when the implementation changes
-                        ;; and I need to see what's really going on again
-                        (comment (is (not outcome) "What should we have here?")))))))))
+          (let [state (message/start! initialized)]
+            (reset! state-agent-atom state)
+            ;; TODO: Add tests that send a variety of gibberish messages
+            (let [wrote (future (message/parent-> state incoming))
+                  outcome (deref response 1000 ::timeout)]
+              (if-let [err (agent-error state)]
+                (is (not err))
+                (do
+                  (is (not= outcome ::timeout))
+                  (when-not (= outcome ::timeout)
+                    (is (= @parent-state 2))
+                    ;; I'm getting the response message header here, which is
+                    ;; correct, even though it seems wrong.
+                    ;; In the real thing, these are the bytes I'm getting ready
+                    ;; to send over the wire
+                    (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
+                    (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
+                                                           (vec outcome)))]
+                      (is (= (count message-body) (count without-header)))
+                      (is (b-t/bytes= message-body without-header))))
+                  (is (realized? wrote))
+                  (when (realized? wrote)
+                    (let [outcome-agent @wrote]
+                      (is (not (agent-error outcome-agent)))
+                      (when-not (agent-error outcome-agent)
+                        ;; Fun detail:
+                        ;; wrote is a promise.
+                        ;; When I deref that, there's an agent
+                        ;; that I need to deref again to get
+                        ;; the actual end-state
+                        (let [child-outcome @outcome-agent
+                              outgoing (::specs/outgoing child-outcome)
+                              incoming (::specs/incoming child-outcome)]
+                          (is (= (::specs/receive-bytes incoming) (inc msg-len)))
+                          (is (= (::specs/next-message-id outgoing) 2))
+                          (is (= (::specs/send-processed outgoing) 0))
+                          (is (not (::specs/send-eof outgoing)))
+                          (is (= (::specs/send-bytes outgoing) msg-len))
+                          ;; Keeping around as a reminder for when the implementation changes
+                          ;; and I need to see what's really going on again
+                          (comment (is (not outcome) "What should we have here?"))))))))))
+          (catch ExceptionInfo ex
+            (log/error ex "Starting the event loop"))
           (finally
-            (message/halt! state)))))))
+            (message/halt! initialized)))))))
 (comment (basic-echo))
 
 (deftest check-eof
@@ -170,7 +173,7 @@
         client-child-cb (fn [bs]
                           (let [incoming (edn/read-string (String. bs))]
                             (is incoming)
-                            (log/info "Client received:" incoming)
+                            (log/info (str "Client received:" incoming ", a " (class incoming)))
                             (let [next-message
                                   (condp = @client-state
                                     0 (do

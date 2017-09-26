@@ -42,10 +42,18 @@
               ;; Q: Is there any good justification for tracking this twice?
               ::specs/length length
               ;; TODO: Add a signal for marking this true
+              ;; (It probably needs to involve a close! function
+              ;; in the message ns)
               ::specs/send-eof false
               ::specs/transmissions 0
               ::specs/time (System/nanoTime)
-              ;; Q: What should these actually be?
+              ;; Q: What should this actually be?
+              ;; I know it gets filled in later, but it seems
+              ;; wrong to not have that information readily available
+              ;; here to just set now.
+              ;; Then again, there's the possibility of using a Nagle
+              ;; algorithm later to consolidate smaller blocks,
+              ;; so maybe it doesn't make sense to mess with it here.
               ::specs/start-pos 0}))
          (range block-count))))
 (let [base (byte-array (range 8192))
@@ -86,11 +94,12 @@
     :as state}]
   (< 0 (count un-sent-blocks)))
 
-(s/fdef child-consumer
+(s/fdef consume-from-child
+        ;; TODO: This is screaming for generative testing
         :args (s/cat :state ::specs/state
                      :array-o-bytes bytes?)
         :ret ::specs/state)
-(defn child-consumer
+(defn consume-from-child
   "Accepts a byte-array from the child.
 
   Lines 319-337"
@@ -102,7 +111,8 @@
   ;; those buffers here until they've been ACK'd.
   [{{:keys [::specs/max-block-length
             ::specs/send-acked
-            ::specs/send-bytes]} ::specs/outgoing
+            ::specs/send-bytes
+            ::specs/un-sent-blocks]} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}
    ;; Child should neither know nor care that netty is involved,
@@ -124,7 +134,7 @@
   (log/debug (str message-loop-name ": Adding message block(s) to "
                   ;; TODO: Might be worth logging the actual contents
                   ;; when it's time to trace
-                  (count (get-in state [::specs/outgoing ::specs/un-sent-blocks]))
+                  (count un-sent-blocks)
                   " others"))
   ;; Note that back-pressure gets applied if we
   ;; already have ~124K pending because caller started
@@ -168,13 +178,14 @@
       ;; this...it needs to force a fresh handshake.
       (throw (AssertionError. "End of stream")))
     (-> state
-        (update ::specs/outgoing (fn [cur]
-                                   ;; un-sent-blocks is a PersistentQueue.
-                                   ;; Can't just concat.
-                                   (let [result (reduce (fn [acc block]
-                                                          (update acc ::specs/un-sent-blocks conj block))
-                                                        cur
-                                                        blocks)]
-                                     (assoc result ::specs/send-bytes send-bytes))))
+        (update-in [::specs/outgoing ::specs/un-sent-blocks]
+                   (fn [cur]
+                     ;; un-sent-blocks is a PersistentQueue.
+                     ;; Can't just concat.
+                     (reduce (fn [acc block]
+                               (conj acc block))
+                             cur
+                             blocks)))
+        (assoc-in [::specs/outgoing ::specs/send-bytes] send-bytes)
         ;; 337: update recent
         (assoc ::specs/recent (System/nanoTime)))))

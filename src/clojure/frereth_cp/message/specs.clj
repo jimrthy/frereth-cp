@@ -81,14 +81,13 @@
 ;; sorted by ::time.
 (s/def ::blocks (s/and (s/coll-of ::block)
                        #(= (rem (count %) 2) 0)))
-;; Blocks from child that we haven't forwarded along to parent
-(s/def ::un-sent-blocks ::blocks)
+
 ;; Blocks from child that have been sent to parent, but not acknowledged
 (s/def ::un-ackd-blocks ::blocks)
-;; How to find the current ::block inside a ::state
-;; Q: Do I want to be more specific about this?
-(s/def ::current-block-cursor (s/coll-of (s/or :vec-index nat-int?
-                                               :map-key keyword?)))
+;; Blocks from child that we haven't forwarded along to parent
+(s/def ::un-sent-blocks ::blocks)
+;; Which queue contains the next block to send?
+(s/def ::next-block-queue #{::un-ackd-blocks ::un-sent-blocks})
 
 (s/def ::acked-message ::message-id)
 ;; This is really an 8-byte unsigned int
@@ -310,7 +309,7 @@
                                 ::un-ackd-blocks
                                 ::un-sent-blocks
                                 ::want-ping]
-                          :opt [::current-block-cursor
+                          :opt [::next-block-queue
                                 ::send-buf]))
 
 ;; TODO: These really need a better namespace

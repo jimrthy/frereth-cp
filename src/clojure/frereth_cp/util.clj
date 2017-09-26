@@ -2,6 +2,8 @@
   "Pieces refactored from frereth.common.util
 
   Because I haven't really decided what to do with them yet"
+  ;; TODO: Try to require fipp and use it instead of
+  ;; pprint
   (:require [clojure.pprint :as pprint]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log])

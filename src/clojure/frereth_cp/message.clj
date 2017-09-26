@@ -27,12 +27,6 @@
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
-            ;; This next reference should go away
-            ;; Except...I *am* using it as part of
-            ;; aleph. And, really, what alternatives
-            ;; are available?
-            ;; (agents and core.async seem to be the
-            ;; most likely)
             [manifold.stream :as strm]
             [overtone.at-at :as at-at])
   (:import clojure.lang.PersistentQueue
@@ -390,7 +384,14 @@
    (if (from-child/room-for-child-bytes? state)
      (do
        (log/debug (str message-loop-name ": There is room for another message"))
-       (from-child/child-consumer state array-o-bytes))
+       (comment
+         (log/debug (str message-loop-name ": Before child consumption, outgoing keys == "
+                         (keys (::specs/outgoing state)))))
+       (let [result (from-child/consume-from-child state array-o-bytes)]
+         (comment
+           (log/debug (str message-loop-name ": After child consumption, outgoing keys == "
+                           (keys (::specs/outgoing result)))))
+         result))
      ;; trigger-io does some state management, even
      ;; if we discard the buffer
      state)))
@@ -501,9 +502,16 @@
                              ::specs/send-processed 0
                              ::specs/total-blocks 0
                              ::specs/total-block-transmissions 0
-                             ;; TODO: This really should be a priority queue,
-                             ;; sorted by transmission time
-                             ::specs/un-ackd-blocks []
+                             ;; This isn't a legal comparator
+                             ;; TODO: Start back here
+                             ::specs/un-ackd-blocks (sorted-set-by (fn [x y]
+                                                                     (let [x-time (::specs/time x)
+                                                                           y-time (::specs/time y)]
+                                                                       (if (= x-time y-time)
+                                                                         (throw (RuntimeException. "Really shouldn't be possible"))
+                                                                         (if (< x-time y-time)
+                                                                           -1
+                                                                           1)))))
                              ::specs/un-sent-blocks PersistentQueue/EMPTY
                              ::specs/want-ping (if server?
                                                  false
@@ -536,7 +544,7 @@
    (send state-agent (partial start-event-loops! state-agent))
    (if (await-for timeout state-agent)
      state-agent
-     (throw (ex-info "Starting failed"
+     (throw (ex-info "Starting timed out"
                      {::problem (agent-error state-agent)}))))
   ([state-agent]
    (start! state-agent default-agent-start-timeout)))
