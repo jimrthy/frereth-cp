@@ -672,12 +672,16 @@
 
     ;; I'm going to take a simpler and easier approach, at least for
     ;; the first pass.
-    ;; Note that I've actually taken 2 approaches that, really, are
-    ;; mutually exclusive.
+
     ;; trigger-from-parent is expecting to have a ::->child-buffer key
     ;; that's really a vector that we can just conj onto.
-    (let [state @state-agent
-          {{:keys [::specs/->child-buffer]} ::specs/incoming} state]
+    (let [{{:keys [::specs/->child-buffer]} ::specs/incoming
+           :as state} @state-agent]
+      ;; It seems very wrong to do this here. But I really need
+      ;; it to happen as fast as possible, because it tends to
+      ;; get triggered again while I'm in the middle of other
+      ;; things when it's running aggressively at the beginning.
+      (cancel-timer! state)
       (if (< (count ->child-buffer) max-child-buffer-size)
         (let [previously-buffered-message-bytes (reduce + 0
                                                     (map (fn [^bytes buf]
@@ -692,12 +696,14 @@
           ;; CPU cycles calculating it.
           (if (<= incoming-size K/max-msg-len)
             (do
-              (cancel-timer! state)
               ;; See comments in child-> re: send vs. send-off
               (send state-agent (partial trigger-from-parent state-agent) buf))
             (do
               (log/warn (str "Child buffer overflow\n"
                              "Incoming message is " incoming-size
                              " / " K/max-msg-len))
+              (schedule-next-timeout! state state-agent)
               state-agent)))
-        state-agent))))
+        (do
+          (schedule-next-timeout! state state-agent)
+          state-agent)))))

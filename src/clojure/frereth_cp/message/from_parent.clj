@@ -42,20 +42,29 @@
   [^bytes incoming]
   {:pre [incoming]
    :post [%]}
-  (let [;; Q: How much of a performance hit do I take by
+  (let [;; It's tempting to use something like doto here
+        ;; instead.
+        ;; Don't.
+        ;; This is actually a functional call.
+        ;; .order returns a new buffer with different
+        ;; semantics.
+        buf (.order (Unpooled/wrappedBuffer incoming)
+                    ByteOrder/LITTLE_ENDIAN)
+        ;; Q: How much of a performance hit do I take by
         ;; wrapping this?
         ;; Using decompose is nice and convenient here, but
         ;; I can definitely see it cause problems.
         ;; TODO: Benchmark!
-        buf (doto (Unpooled/wrappedBuffer incoming)
-               (.order ByteOrder/LITTLE_ENDIAN))
         header (shared/decompose marshall/message-header-dscr buf)
-        D (::specs/size-and-flags header)
-        D' D
-        SF (bit-and D (bit-or K/normal-eof K/error-eof))
-        D (- D SF)
+        D' (::specs/size-and-flags header)
+        SF (bit-and D' (bit-or K/normal-eof K/error-eof))
+        D (- D' SF)
         padding-count (- (.readableBytes buf)
                          D')]
+    (log/debug (str "Decomposed "
+                    (count incoming)
+                    " bytes into\n"
+                    header))
     ;; Start by skipping the initial padding (if any)
     (when (and (nat-int? padding-count)
                (pos? padding-count))
@@ -246,7 +255,9 @@
         :ret ::specs/state)
 (defn extract-message!
   "Lines 562-593"
-  [{{:keys [::specs/receive-bytes]} ::specs/incoming
+  [{{:keys [::specs/gap-buffer
+            ::specs/receive-bytes]} ::specs/incoming
+    :keys [::specs/message-loop-name]
     :as state}
    {^ByteBuf incoming-buf ::specs/buf
     D ::specs/size-and-flags
@@ -257,8 +268,7 @@
   (when-let [calculated (calculate-start-stop-bytes state packet)]
     (let [{:keys [::delta-k
                   ::max-rcvd
-                  ::min-k
-                  ]
+                  ::min-k]
            overridden-recv-total-bytes ::receive-total-bytes
            ^Long max-k ::max-k} calculated]
       ;; There are at least a couple of curve balls in the air right here:
@@ -285,6 +295,14 @@
       ;;    It's cleared on line 630, after we've written the bytes to the
       ;;    child pipe.
       ;; I'm fairly certain this is what that for loop amounts to
+
+      (log/debug (str message-loop-name
+                      ": This next block will fail if\n"
+                      gap-buffer
+                      "\n(a "
+                      (class gap-buffer)
+                      ")\nis not associative.\n"
+                      "Q: How/when did that happen?"))
 
       (if (not= 0 message-id)
         (-> state
@@ -404,8 +422,7 @@
       ;; Q: Is that worth the GC savings?
       ;; Note that, if I switch to his approach, he did
       ;; not bother to 0 out the rest of the message
-      (let [response (byte-array (+ K/header-length
-                                    192))]
+      (let [response (byte-array 192)]
         ;; XXX: delay acknowledgments  --DJB
         ;; 0 ID for pure ACK (4 bytes)
         ;; 4 bytes for the message-id

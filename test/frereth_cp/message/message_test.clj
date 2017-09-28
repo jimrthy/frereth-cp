@@ -180,9 +180,12 @@
                           (is bs)
                           (let [s (String. bs)
                                 incoming (edn/read-string s)]
-                            (is (> 0 (count s)))
+                            (is (< 0 (count s)))
                             (is incoming)
-                            (log/info (str "Client received:" incoming ", a " (class incoming)))
+                            (log/info (str "Client (state "
+                                           @client-state
+                                           ") received: "
+                                           incoming ", a " (class incoming)))
                             (let [next-message
                                   (condp = @client-state
                                     0 (do
@@ -190,9 +193,11 @@
                                         ::yarly)
                                     1 (do
                                         (is (= incoming ::kk))
-                                        ::icanhazcheezburger?)
+                                        ::icanhazchbrgr?)
                                     2 (do
                                         (is (= incoming ::kk))
+                                        ;; This is the ACK associated
+                                        ;; with the chzbrgr request
                                         ;; No response to send for this
                                         nil)
                                     3 (do
@@ -226,15 +231,21 @@
                            (let [sent (strm/try-put! server->client bs 500 ::timed-out)]
                              (is (not= @sent ::timed-out))))
         server-child-cb (fn [bs]
-                          (let [incoming (edn/read-string (String. bs))]
-                            (let [rsp (condp = incoming
+                          (let [incoming (edn/read-string (String. bs))
+                                rsp (condp = incoming
                                         ::ohai! ::orly?
                                         ::yarly ::kk
-                                        ::icanhazcheezburger? ::kk
+                                        ::icanhazchbrgr? ::kk
                                         ::kthxbai ::kk)]
-                              (message/child-> @server-atom (.getBytes (pr-str rsp)))
-                              (when (= incoming ::icanhazcheezburger?)
-                                (message/child-> @server-atom (byte-array (range cheezburgr-length)))))))]
+                            (log/info "Server received"
+                                      incoming
+                                      "\nwhich triggers"
+                                      rsp)
+                            (message/child-> @server-atom (.getBytes (pr-str rsp)))
+                            (when (= incoming ::icanhazchzbrgr?)
+                              ;; One of the main points is that this doesn't need to be a lock-step
+                              ;; request/response.
+                              (message/child-> @server-atom (byte-array (range cheezburgr-length))))))]
     (dfrd/on-realized succeeded?
                       (fn [good]
                         (log/info "Success!"))

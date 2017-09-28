@@ -30,7 +30,7 @@
 ;; TODO: Ask about how.
 (s/fdef consolidate-message-block
         :args (s/cat :incoming ::specs/incoming
-                     :gap-buffer (s/tuple ::specs/gap-buffer-key ::specs/buf))
+                     :gap-buffer ::specs/gap-buffer)
         :ret ::specs/incoming)
 (defn consolidate-message-block
   "Move the parts of the gap-buffer that are ready to write to child
@@ -45,7 +45,8 @@
     :as incoming}
    k-v-pair]
   (let [[[start stop] ^ByteBuf buf] k-v-pair]
-    (log/debug "Does"  start "-" stop "close a hole in" gap-buffer "from HWM" receive-bytes "?")
+    (log/debug (str "Does " start "-" stop " close a hole in "
+                    gap-buffer " from HWM " receive-bytes "?"))
     ;; For now, this top-level if check is redundant.
     ;; I'd rather be safe and trust the JIT than remove it
     ;; under the assumption that callers will be correct.
@@ -57,7 +58,7 @@
         (do
           (log/debug "Dropping previously consolidated block")
           (throw (RuntimeException. "Probably need to call .release"))
-          (update incoming ::specs/gap-buffer (partial drop 1)))
+          (update incoming ::specs/gap-buffer pop))
         ;; Consolidate this message block
         ;; I'm dubious about the logic for bytes-to-skip
         ;; and receive-bytes.
@@ -168,14 +169,41 @@
                 (let [bs (byte-array (.readableBytes buf))]
                   (.readBytes buf bs)
                   (log/info (str message-loop-name
-                                 ": Calling back to the child with "
+                                 ": triggering child's callback with "
                                  (count bs)
                                  " bytes"))
-                  (->child bs))
-                ;; And drop it
+                  ;; Really need to isolate this in its own
+                  ;; try-catch block. Problems in the provided callback are
+                  ;; very different than problems at this level.
+                  ;; The former should probably fail immediately.
+                  ;; The latter should probably fail even more
+                  ;; catastrophically, and be even more obvious.
+
+                  ;; Problems in the client code using this library
+                  ;; are bad, and I should help the devs who wrote
+                  ;; that code find their bugs. At the same time, there
+                  ;; could very well be multiple clients using this
+                  ;; library at the same time. One misbehaving
+                  ;; client shouldn't cause problems for the rest.
+
+                  ;; The flip side of this is that problems *here*
+                  ;; indicate a bug that affects everyone using the
+                  ;; library. The sooner those can be nailed down,
+                  ;; the happier it will be for everyone.
+                  (try
+                    (->child bs)
+                    (catch RuntimeException ex
+                      ;; It's very tempting to just re-raise this exception,
+                      ;; especially if I'm inside an agent.
+                      ;; For now, just log and swallow it.
+                      (log/error ex
+                                 (str message-loop-name
+                                      ": Failure in child callback.")))))
+                ;; And drop the consolidated blocks
                 (log/debug (str message-loop-name ": Dropping block from child buffer"))
                 (.release buf)
                 (update-in state'
+                           ;; Yes, this is already a vector
                            [::specs/incoming ::specs/->child-buffer]
                         (comp vec rest))
                 (catch RuntimeException ex

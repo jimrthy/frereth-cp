@@ -78,6 +78,12 @@
   ;;; Lines 387-402
   ;;; Q: make this thread-safe?
 
+  ;; The reference implementation does this after calculating u,
+  ;; which just seems silly.
+  (when (or (neg? length)
+            (< K/k-1 length))
+    (throw (AssertionError. (str "illegal block length: " length))))
+
   ;; It's tempting to use a direct buffer here, but that temptation
   ;; would probably be wrong.
   ;; Since this has to be converted to a ByteArray so it can be
@@ -86,38 +92,45 @@
   ;; the points about "Use pooled direct buffers" and "Write
   ;; direct buffers...always."
 
-  ;; For now, that concern is premature optimization
+  ;; For now, that concern is premature optimization.
   ;; Back to regularly scheduled actual implementation comments:
   ;; Note that we also need padding.
   (let [u (calculate-padded-size block-to-send)
-        ;; Q: Why does this happen after calculating u?
-        _ (when (or (neg? length)
-                    (< K/k-1 length))
-            (throw (AssertionError. (str "illegal block length: " length))))
-        ;; ByteBuf instances default to BIG_ENDIAN, which is not what CurveCP uses
+        ;; ByteBuf instances default to BIG_ENDIAN, which is not what CurveCP uses.
         ;; It seems like it would be better to switch to a Pooled allocator
         ;; Or, better yet, just start with a byte-array.
         ;; It's not like there are a lot of aset calls to make here.
         ;; And I have the functions in bit-twiddling that should
         ;; correspond to the proper little-endian packing.
         ;; Then again...this is something that really deserves some
-        ;; hefty bookmarking.
+        ;; hefty benchmarking.
         ;; TODO: That.
         send-buf (.order (Unpooled/buffer u)
-                         java.nio.ByteOrder/LITTLE_ENDIAN)]
+                         java.nio.ByteOrder/LITTLE_ENDIAN)
+        flag-size (calculate-message-data-packet-length-flags block-to-send)]
+    (log/debug (str "Building a Message Block byte array for message "
+                    next-message-id
+                    "\nTotal length: " u
+                    "\nSize | Flags: " flag-size
+                    "\nStart Position: " start-pos))
+
     ;; Q: Is this worth switching to shared/compose?
     (.writeInt send-buf next-message-id)
+
     ;; XXX: include any acknowledgments that have piled up (--DJB)
     ;; Reference implementation doesn't zero anything out. It just skips these
     ;; bytes. Which seems like it can't possibly be correct.
     (.writeBytes send-buf #^bytes shared/all-zeros 0 34)  ; all the ACK fields
+
     ;; SUCC/FAIL flag | data block size
-    (.writeShort send-buf (calculate-message-data-packet-length-flags block-to-send))
+    (.writeShort send-buf flag-size)
+
     ;; stream position of the first byte in the data block being sent
     ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
     ;; i.e. the total number of bytes in the stream.
     (.writeLong send-buf start-pos)
-    ;; Note that we're a fairly arbitrary amount of padding
+
+    ;; Note that we're sending a fairly arbitrary amount of padding
     (let [data-start (- u length)
           writer-index (.writerIndex send-buf)]
 
@@ -127,6 +140,7 @@
       (comment
         (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
                                                                                     (dec send-buf-size))))
+      ;; Start by skipping to the appropriate start position
       (.writerIndex send-buf data-start))
 
     ;; Need to save buf's initial read-index because we aren't ready
@@ -135,6 +149,9 @@
     ;; which is all based around the circular buffer concept.
     ;; I keep telling myself that a ByteBuffer will surely be fast
     ;; enough.
+    ;; And...at this point, it seems a little silly for buf to be
+    ;; a ByteBuf instead of ordinary byte array.
+    ;; That's a concern for some other day.
     (.markReaderIndex buf)
     (.writeBytes send-buf buf)
     (.resetReaderIndex buf)
@@ -157,18 +174,18 @@
                                (keys outgoing)))
     ;; Based on this, it looks as though block-to-move is an empty list
     (log/debug (str message-loop-name
-                    ": Moving next first unsent block\n("
+                    ": Moving first unsent block\n("
                     ;; TODO: Verify that this has a ::specs/time key and value
                     block-to-move
-                    "\nfrom\n"
+                    ")\nfrom\n"
                     un-sent-blocks
-                    ")\nto\n"
+                    "\nto\n"
                     un-ackd-blocks))
     (-> state
         ;; Since I'm having issues with this, it seems worth mentioning that
         ;; this is a sorted-set (by specs/time)
-        (update-in [::specs/outgoing ::un-ackd-blocks] conj block-to-move)
-        (update-in [::specs/outgoing ::un-sent-blocks] pop))))
+        (update-in [::specs/outgoing ::specs/un-ackd-blocks] conj block-to-move)
+        (update-in [::specs/outgoing ::specs/un-sent-blocks] pop))))
 
 (s/fdef pre-calculate-state-after-send
         :args (s/cat :state ::specs/state)
@@ -415,7 +432,7 @@
           (log/debug (str message-loop-name
                           ": Bad preconditions for sending a new block:\n"
                           "recent: " recent " <? " (+ earliest-time n-sec-per-block)
-                          "\nNew block count: " (block-count)
+                          "\nNew block count: " block-count
                           "\nPreviously sent block count: " (count un-ackd-blocks)
                           "\nwant-ping: " want-ping
                           "\nsend-eof: " send-eof
@@ -491,13 +508,14 @@
       ;; Note that this winds up doing a send to the message
       ;; loop's agent.
       (block->parent! ->parent send-buf)
-      ;; It looks like this is working on an empty set,
-      ;; which may no longer be sorted.
       (log/debug (str message-loop-name
                       ": Calculating earliest time among "
                       (count un-ackd-blocks)
-                      " blocks that have not been ACK'd in a "
-                      (class un-ackd-blocks)))
+                      " blocks\nthat have not been ACK'd in a "
+                      (class un-ackd-blocks)
+                      ".\nThis is very distinct from the "
+                      (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
+                      " that is/are left in un-sent-blocks:\n"))
 ;;;      408: earliestblocktime_compute()
       (-> state''
           (assoc-in [::specs/outgoing ::specs/earliest-time]
