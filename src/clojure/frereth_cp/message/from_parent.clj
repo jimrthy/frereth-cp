@@ -305,8 +305,7 @@
                    [::specs/ack-gap-4->5 ::specs/ack-length-5] ; 30-32
                    [::specs/ack-gap-5->6 ::specs/ack-length-6]])] ; 34-36
     (log/debug (str message-loop-name
-                    ;; It's pretty silly to log a lazy seq like this.
-                    ": Gaps: " gaps
+                    ": Gaps: " (into [] gaps)
                     "\nState: " state))
     (->
      (reduce (fn [{:keys [::stop-byte]
@@ -408,26 +407,38 @@ Line 608"
     ;; the outgoing blocks in here.
     ;; But there's an excellent chance that the incoming message
     ;; is going to ACK some or all of what we have pending in here.
-    {:keys [::specs/blocks]} ::specs/outgoing
+    {:keys [::specs/un-acked-blocks]} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}]
-  ;; Q: Do I want the first message here or the last?
-  ;; Top A: There should be only one entry.
-  ;; That isn't a realistic expectation, though.
+  ;; Keep in mind that parent->buffer is an array of bytes that has
+  ;; just been pulled off the wire
   (let [len (count parent->buffer)]
+    ;; Lines 452-453
     (if (and (>= len K/min-msg-len)
              (<= len K/max-msg-len))
       ;; TODO: Time this. See whether it's worth combining these calls
       ;;  using either some version of comp or as-> (or possibly
       ;; transducers?)
       (let [_ (log/debug (str message-loop-name ": Deserializing parent->buffer"))
+            ;; Discrepancy with reference implementation:
+            ;; that calls the flow control updates before anything else.
+            ;; Actually, I turned a lot of this upside down for convenience.
+            ;; It seems like it probably doesn't matter, but it's
+            ;; worth calling out.
             packet (deserialize parent->buffer)
             ack-id (::specs/acked-message packet)
             ;; Note that there's something terribly wrong if we
             ;; have multiple blocks with the same message ID.
             ;; Q: Isn't there?
+            ;; A: Well, inside the available 128K buffer space.
+            ;; At best, we have 32 bits for block IDs, -1 for
+            ;; ID 0 (which is a pure ACK).
+            ;; And in java land with only signed integers, there's
+            ;; a good chance we really only have 16 bits.
+            ;; But we're limiting the buffer to 128 messages at a time,
+            ;; so it shouldn't happen here.
             acked-blocks (filter #(= ack-id (::specs/message-id %))
-                                 blocks)
+                                 un-acked-blocks)
             flagged (-> (reduce flow-control/update-statistics
                                 ;; Remove parent->buffer.
                                 ;; It's been parsed into packet
@@ -436,10 +447,14 @@ Line 608"
                                        ::specs/parent->buffer)
                                 acked-blocks)
                         ;; That takes us down to line 544
+                        ;; It seems more than a bit silly to calculate flag-acked-others!
+                        ;; if the incoming message is a pure ACK (i.e. message ID 0).
+                        ;; Leave it be for now, just to try to stay in sync with reference
+                        ;; implementation, but this smells.
                         (flag-acked-others! packet))
             extracted (extract-message! flagged packet)]
         (log/debug (str message-loop-name
-                        ": handle-comprehensible message/extracted:"
+                        ": handle-comprehensible message/extracted:\n"
                         extracted))
         (if extracted
           (or
@@ -497,7 +512,7 @@ Line 608"
             ;; any previously buffered incoming messages to finish
             ;; processing?
             (not= 0 child-buffer-count)
-            ;; This next check includes an &&
+            ;; This next check (line 438) includes an &&
             ;; to verify that tochild is > 0 (I'm
             ;; pretty sure that's just verifying that
             ;; the pipe is open)
@@ -514,6 +529,7 @@ Line 608"
       ;; Guess: for initial Message part of Initiate packet
       (let [state' (assoc-in state [::specs/incoming ::specs/max-byte-length] K/k-1)]
         (log/debug (str message-loop-name ": Handling incoming message, if it's comprehensible"))
+        ;; Move on to line 444
         (handle-comprehensible-message! state'))
       (do
         ;; Nothing to do.

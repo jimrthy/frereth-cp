@@ -78,12 +78,6 @@
 ;;; 307-318: Poll for incoming data
 ;;;     317 XXX: keepalives
 
-;;;
-;;;
-;;;
-;;;  634-643: try closing pipe to child: (DJB)
-;;;           Well, maybe. If we're done with it
-
 ;;; 444-609 handle this message if it's comprehensible: (DJB)
 ;;; (in more depth)
 ;;;         445-450: boilerplate
@@ -113,8 +107,8 @@
 ;;;                 Evidence:
 ;;;        606: /* XXX: incorporate selective acknowledgents */ (DJB)
 
-;;; 456-542: Loop over (range blocknum)
-;;; (getting into details)
+;;;  634-643: try closing pipe to child: (DJB)
+;;;           Well, maybe. If we're done with it
 
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
@@ -227,7 +221,8 @@
     :as state}
    state-agent]
   {:pre [recent]}
-  (log/debug (str message-loop-name ": Top of scheduler"))
+  (log/debug (str message-loop-name ": Top of scheduler at "
+                  (System/nanoTime)))
   (if (not= next-action ::completed)
     (do
       (let [actual-next (choose-next-scheduled-time state)
@@ -246,10 +241,19 @@
                               recent
                               " vs. "
                               now))
+            ;; Make sure that at least it isn't negative
+            ;; (I keep running across bugs that have issues with this,
+            ;; and it wreaks havoc with my REPL)
             delta-nanos (max 0 scheduled-delay)
             delta (inc (utils/nanos->millis delta-nanos))
             next-action (at-at/after delta
                                      (fn []
+                                       (log/debug (str message-loop-name
+                                                       ": Timer for "
+                                                       delta
+                                                       " ms after "
+                                                       now
+                                                       " triggering I/O"))
                                        (send-off state-agent (partial trigger-from-timer state-agent)))
                                      schedule-pool
                                      :desc "Periodic wakeup")]
@@ -289,6 +293,26 @@
          ::specs/recent recent)
         (schedule-next-timeout! state-agent))))
 
+(s/fdef cancel-timer!
+        :args (s/cat :state ::specs/state)
+        :ret any?)
+(defn cancel-timer!
+  "Input cancels the next pending timer"
+  [{{:keys [::specs/next-action]} ::specs/flow-control
+    :keys [::specs/message-loop-name]
+    :as state}]
+  (when (and next-action
+             (not= next-action ::completed))
+    ;; Altering the agent's state outside the agent like this
+    ;; is wrong on pretty much every level.
+    ;; But I'm seeing at least 1 timer loop go through before
+    ;; this can, and that's wasting 9-10 ms.
+    ;; This doesn't help much for the initial client loop that's
+    ;; eagerly waiting for input from the child. I think there's
+    ;; something badly wrong with the details behind that.
+    (log/info (str message-loop-name ": cancelling I/O timer"))
+    (at-at/stop next-action)))
+
 (s/fdef trigger-io
         :args (s/cat :state-agent ::specs/state-agent
                      :state ::specs/state)
@@ -300,14 +324,13 @@
     :keys [::specs/message-loop-name]
     :as state}]
   (log/debug (str message-loop-name ": Triggering I/O"))
-  (when (not= next-action ::completed)
-    ;; It would be nice to have a way to check
-    ;; whether this is what triggered us. If
-    ;; so, there's no reason to stop it.
-    ;; Go with the assumption that this is
-    ;; light-weight enough that it doesn't matter.
-    (at-at/stop next-action)
-    (log/debug (str message-loop-name ": Current next action cancelled")))
+  ;; Originally, it seemed like it would make sense to cancel
+  ;; the timer here, to avoid duplicating the call when I
+  ;; get input from either the parent or the child.
+  ;; Doing it that way entails too much delay. If the
+  ;; timer is running in a tight loop, it might trigger
+  ;; several more times before they get around to
+  ;; actually calling this.
   (let [state
         (as-> state state
             (assoc state ::specs/recent (System/nanoTime))
@@ -329,6 +352,25 @@
             ;; have only partially been written
             (or (from-parent/try-processing-message! state)
                 state)
+            ;; If this is a pure ACK, the child gets an empty message, which
+            ;; we don't really want.
+            ;; By the same token, the other side might have deliberately
+            ;; sent an empty message, which we do.
+            ;; I've read complaints that those don't arrive at the client
+            ;; (mainly from the perspective of protocols that send empty
+            ;; packets for things like ACKs or heartbeats), so it seems
+            ;; reasonable to forward those along.
+            ;; However, it seems as though I'm also forwarding along pure
+            ;; ACK messages.
+            ;; It looks as though the reference implementation does that,
+            ;; but the pipe to the child swallows any 0-byte writes.
+            ;; TODO: Need to verify the actual behavior instead of just
+            ;; reading code.
+            ;; Either way, I need to decide how I want to handle this.
+            ;; Right now, I'm leaning toward making pure ACKs disappear
+            ;; after they've done their job, but forwarding along
+            ;; "real" empty messages.
+            (throw (RuntimeException. "Nail down that decision"))
             (to-child/forward! ->child state))]
     ;; At the end of the main ioloop in the refernce
     ;; implementation, there's a block that closes the pipe
@@ -384,16 +426,10 @@
    (if (from-child/room-for-child-bytes? state)
      (do
        (log/debug (str message-loop-name ": There is room for another message"))
-       (comment
-         (log/debug (str message-loop-name ": Before child consumption, outgoing keys == "
-                         (keys (::specs/outgoing state)))))
        (let [result (from-child/consume-from-child state array-o-bytes)]
-         (comment
-           (log/debug (str message-loop-name ": After child consumption, outgoing keys == "
-                           (keys (::specs/outgoing result)))))
          result))
      ;; trigger-io does some state management, even
-     ;; if we discard the buffer
+     ;; if we discard the incoming buffer
      state)))
 
 (defn trigger-from-parent
@@ -604,18 +640,11 @@
   ;; child/parent, which are specifically forbidden
   ;; from blocking.
   (let [state @state-agent
-        {{:keys [::specs/next-action]} ::specs/flow-control
-         :keys [::specs/message-loop-name]} state]
+        {:keys [::specs/message-loop-name]} state]
     (log/debug (str message-loop-name
                     ": Incoming message from child to\n"
                     state))
-    (when next-action
-      ;; Altering the agent's state outside the agent like this
-      ;; is wrong on pretty much every level.
-      ;; But I'm seeing at least 1 timer loop go through before
-      ;; this can, and that's wasting 9-10 ms.
-      (log/info (str message-loop-name ": cancelling I/O timer"))
-      (at-at/stop next-action))
+    (cancel-timer! state)
     (send state-agent (partial trigger-from-child state-agent) array-o-bytes)))
 
 (s/fdef parent->
@@ -660,7 +689,8 @@
     ;; mutually exclusive.
     ;; trigger-from-parent is expecting to have a ::->child-buffer key
     ;; that's really a vector that we can just conj onto.
-    (let [{{:keys [::specs/->child-buffer]} ::specs/incoming} state-agent]
+    (let [state @state-agent
+          {{:keys [::specs/->child-buffer]} ::specs/incoming} state]
       (if (< (count ->child-buffer) max-child-buffer-size)
         (let [previously-buffered-message-bytes (reduce + 0
                                                     (map (fn [^bytes buf]
@@ -674,8 +704,10 @@
           ;; 64K buffer, so maybe it's already covered, and I just wasted
           ;; CPU cycles calculating it.
           (if (<= incoming-size K/max-msg-len)
-            ;; See comments in child-> re: send vs. send-off
-            (send state-agent (partial trigger-from-parent state-agent) buf)
+            (do
+              (cancel-timer! state)
+              ;; See comments in child-> re: send vs. send-off
+              (send state-agent (partial trigger-from-parent state-agent) buf))
             (do
               (log/warn (str "Child buffer overflow\n"
                              "Incoming message is " incoming-size

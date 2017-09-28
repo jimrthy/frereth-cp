@@ -145,14 +145,20 @@
 (comment (basic-echo))
 
 (deftest check-eof
-  ;; It seems like just writing an empty byte-array should suffice.
-  ;; Actually, I think that's how the reference implementation works.
-  ;; But writing the CTRL-D byte might be a better option.
-  ;; TODO: What really makes sense here?
+  ;; TODO: Add a close! method to the message ns that triggers this
   (throw (RuntimeException. "Need to decide how this should work")))
 
 (deftest send-error-code
   (throw (RuntimeException. "Need to decide how this should work")))
+
+(deftest verify-empty-message-arrives
+  ;; If other side deliberately sends an empty message block, we
+  ;; *want* the child to be notified about that.
+  ;; It seems nonsensical, since it doesn't update the stream address.
+  ;; But this is one complaint I've read about the reference implementation:
+  ;; Some protocols are simple enough that they rely on empty messages
+  ;; for heartbeats.
+  (throw (RuntimeException. "Write this")))
 
 (deftest handshake
   (let [client->server (strm/stream)
@@ -171,7 +177,10 @@
         ;; I was trying to figure out ways to gen the tests via spec.
         cheezburgr-length 182
         client-child-cb (fn [bs]
-                          (let [incoming (edn/read-string (String. bs))]
+                          (is bs)
+                          (let [s (String. bs)
+                                incoming (edn/read-string s)]
+                            (is (> 0 (count s)))
                             (is incoming)
                             (log/info (str "Client received:" incoming ", a " (class incoming)))
                             (let [next-message
@@ -268,10 +277,10 @@
         ;; TODO: Find a reasonable value for this timeout
         (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
           (log/info "Bottom of message-test")
-          (is (not= really-succeeded? ::timed-out))
-          (is (= 5 @client-state))
-          (is (= ::kthxbai really-succeeded?))))
+          (is (= ::kthxbai really-succeeded?))
+          (is (= 5 @client-state))))
       (finally
+        (log/info "Cleaning up")
         (message/halt! @client-atom)
         (message/halt! @server-atom)))))
 (comment (handshake))

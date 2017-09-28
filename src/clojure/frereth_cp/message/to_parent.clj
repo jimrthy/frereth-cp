@@ -150,12 +150,18 @@
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}]
-  (log/debug (str message-loop-name
-                  ": Marking first unsent block as sent "))
   (assert (= ::specs/un-sent-blocks
              (::specs/next-block-queue outgoing)))
   (let [block-to-move (peek un-sent-blocks)]
+    (log/debug (str message-loop-name
+                    ": Moving next first unsent block\n("
+                    ;; TODO: Verify that this has a ::specs/time key and value
+                    block-to-move
+                    ")\nto\n"
+                    un-ackd-blocks))
     (-> state
+        ;; Since I'm having issues with this, it seems worth mentioning that
+        ;; this is a sorted-set (by specs/time)
         (update-in [::specs/outgoing ::un-ackd-blocks] conj block-to-move)
         (update-in [::specs/outgoing ::un-sent-blocks] pop))))
 
@@ -164,7 +170,8 @@
         :ret ::specs/state)
 (defn pre-calculate-state-after-send
   "This is mostly setting up the buffer to do the send from child to parent"
-  [{:keys [::specs/recent]
+  [{:keys [::specs/message-loop-name
+           ::specs/recent]
     {:keys [::specs/next-block-queue
             ::specs/send-buf-size]
      current-message-id ::specs/next-message-id
@@ -185,16 +192,19 @@
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
   (assert next-block-queue
-          (str "No next-block-queue to tell us what to send\nAvailable:\n"
+          (str message-loop-name
+               ": No next-block-queue to tell us what to send\nAvailable:\n"
                (keys outgoing)))
   (let [q (get-in state [::specs/outgoing next-block-queue])]
     (let [transmission-count (-> q
                                  peek
                                  ::specs/transmissions)]
       (assert transmission-count
-              (str "Missing ::transmissions under "
+              (str message-loop-name
+                   ": Missing ::transmissions under "
                    next-block-queue)))
-    (log/debug (str "Looking for "
+    (log/debug (str message-loop-name
+                    ": Looking for "
                     next-block-queue
                     " inside\n"
                     (::specs/outgoing state)))
@@ -218,9 +228,10 @@
                                 (update ::specs/transmissions inc)
                                 (assoc ::specs/time recent)
                                 (assoc ::specs/message-id current-message-id))]
-        (log/debug "Getting ready to build next message block for message "
-                   current-message-id
-                   "\nbased on:\n"
+        (log/debug (str message-loop-name
+                    ": Getting ready to build next message block for message "
+                        current-message-id
+                        "\nbased on:\n")
                    (utils/pretty current-message))
         (let [buf (build-message-block current-message-id current-message)
               ;; Reference implementation waits until after the actual write before setting any of
@@ -241,7 +252,7 @@
           (if (= ::specs/un-sent-blocks next-block-queue)
             (mark-block-sent result)
             (do
-              (log/debug "Resending a block")
+              (log/debug (str message-loop-name ": Resending a block"))
               result)))))))
 
 (s/fdef check-for-previous-block-to-resend
@@ -436,7 +447,8 @@
         :ret ::specs/state)
 (defn maybe-send-block!
   "Possibly send a block from child to parent"
-  [state]
+  [{:keys [::specs/message-loop-name]
+    :as state}]
   ;; I could have pick-next-block-to-send just adjust the state
   ;; to signal whether there *is* a next block to send, instead
   ;; of having it return nil like this.
@@ -447,13 +459,17 @@
                    ::specs/send-buf
                    ::specs/un-ackd-blocks]} ::specs/outgoing
            :as state''} (pre-calculate-state-after-send state')]
-      (log/debug "Sending" (count send-buf) "bytes to parent")
+      (log/debug (str message-loop-name
+                      ": Sending "
+                      (count send-buf)
+                      " bytes to parent"))
       ;; Note that this winds up doing a send to the message
       ;; loop's agent.
       (block->parent! ->parent send-buf)
       ;; It looks like this is working on an empty set,
       ;; which may no longer be sorted.
-      (log/debug (str "Calculating earliest time among "
+      (log/debug (str message-loop-name
+                      ": Calculating earliest time among "
                       (count un-ackd-blocks)
                       " blocks that have not been ACK'd in a "
                       (class un-ackd-blocks)))
