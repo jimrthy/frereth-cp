@@ -11,7 +11,8 @@
   I keep wanting to think of this as a simple transducer and just
   skip the buffering pieces, but they (and the flow control) are
   really the main point."
-  (:require [clojure.spec.alpha :as s]
+  (:require [clojure.pprint :refer (cl-format)]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
@@ -221,8 +222,10 @@
     :as state}
    state-agent]
   {:pre [recent]}
-  (log/debug (str message-loop-name ": Top of scheduler at "
-                  (System/nanoTime)))
+  (log/debug (cl-format nil
+                        "~a: Top of scheduler at ~:d"
+                        message-loop-name
+                        (System/nanoTime)))
   (if (not= next-action ::completed)
     (do
       (let [actual-next (choose-next-scheduled-time state)
@@ -234,35 +237,32 @@
             ;; match the reference implementation.
             ;; Although, really, it seems very incorrect.
             scheduled-delay (- actual-next recent)
-            _ (log/debug (str message-loop-name
-                              ": Initially calculated scheduled delay: "
-                              scheduled-delay
-                              " nanoseconds after "
-                              recent
-                              " vs. "
-                              now))
+            _ (log/debug (cl-format nil
+                                    "~a: Initially calculated scheduled delay: ~:d nanoseconds after ~:d vs. ~:d"
+                                    message-loop-name
+                                    scheduled-delay
+                                    recent
+                                    now))
             ;; Make sure that at least it isn't negative
             ;; (I keep running across bugs that have issues with this,
             ;; and it wreaks havoc with my REPL)
             delta-nanos (max 0 scheduled-delay)
             delta (inc (utils/nanos->millis delta-nanos))
+            delta_f (float delta)  ; For printing
             next-action (at-at/after delta
                                      (fn []
-                                       (log/debug (str message-loop-name
-                                                       ": Timer for "
-                                                       delta
-                                                       " ms after "
-                                                       now
-                                                       " triggering I/O"))
+                                       (log/debug (cl-format nil
+                                                             "~a: Timer for ~:d ms after ~:d triggering I/O"
+                                                             delta_f
+                                                             now))
                                        (send-off state-agent (partial trigger-from-timer state-agent)))
                                      schedule-pool
                                      :desc "Periodic wakeup")]
-        (log/debug (str message-loop-name
-                        ": Timer set to trigger in "
-                        (float delta)
-                        " ms (vs "
-                        (float (utils/nanos->millis scheduled-delay))
-                        " scheduled)"))
+        (log/debug (cl-format nil
+                              "~a: Timer set to trigger in ~a ms (vs ~a scheduled)"
+                              message-loop-name
+                              delta_f
+                              (float (utils/nanos->millis scheduled-delay))))
         (-> state
             (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
     (do
@@ -352,25 +352,6 @@
             ;; have only partially been written
             (or (from-parent/try-processing-message! state)
                 state)
-            ;; If this is a pure ACK, the child gets an empty message, which
-            ;; we don't really want.
-            ;; By the same token, the other side might have deliberately
-            ;; sent an empty message, which we do.
-            ;; I've read complaints that those don't arrive at the client
-            ;; (mainly from the perspective of protocols that send empty
-            ;; packets for things like ACKs or heartbeats), so it seems
-            ;; reasonable to forward those along.
-            ;; However, it seems as though I'm also forwarding along pure
-            ;; ACK messages.
-            ;; It looks as though the reference implementation does that,
-            ;; but the pipe to the child swallows any 0-byte writes.
-            ;; TODO: Need to verify the actual behavior instead of just
-            ;; reading code.
-            ;; Either way, I need to decide how I want to handle this.
-            ;; Right now, I'm leaning toward making pure ACKs disappear
-            ;; after they've done their job, but forwarding along
-            ;; "real" empty messages.
-            (throw (RuntimeException. "Nail down that decision"))
             (to-child/forward! ->child state))]
     ;; At the end of the main ioloop in the refernce
     ;; implementation, there's a block that closes the pipe

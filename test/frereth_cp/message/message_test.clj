@@ -277,6 +277,9 @@
         ;; TODO: Find a reasonable value for this timeout
         (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
           (log/info "Bottom of message-test")
+          (let [client-agent @client-atom]
+            (is (not (agent-error client-agent))))
+          (is (not (agent-error @server-atom)))
           (is (= ::kthxbai really-succeeded?))
           (is (= 5 @client-state))))
       (finally

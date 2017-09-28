@@ -39,46 +39,51 @@
   "Convert a raw message block into a message structure"
   ;; Important: there may still be overlap with previously read bytes!
   ;; (but that's a problem for downstream)
-  [^bytes buf]
-  {:pre [buf]}
+  [^bytes incoming]
+  {:pre [incoming]}
   (let [;; Q: How much of a performance hit do I take by
         ;; wrapping this?
         ;; Using decompose is nice and convenient here, but
         ;; I can definitely see it cause problems.
         ;; TODO: Benchmark!
-        buf' (.order (Unpooled/wrappedBuffer buf)
-                     ByteOrder/LITTLE_ENDIAN)
-        header (shared/decompose marshall/message-header-dscr buf')
+        buf (doto (Unpooled/wrappedBuffer incoming)
+               (.order ByteOrder/LITTLE_ENDIAN))
+        header (shared/decompose marshall/message-header-dscr buf)
         D (::specs/size-and-flags header)
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
         D (- D SF)
-        zero-padding-count (- (.readableBytes buf')
+        zero-padding-count (- (.readableBytes buf)
                               D')]
     (when (nat-int? zero-padding-count)
       (when (pos? zero-padding-count)
-        (.skipBytes buf' zero-padding-count))
+        (.skipBytes buf zero-padding-count))
       ;; 3 approaches seem to make sense here:
       ;; 1. Create a copy of buf and release the original,
       ;; trying to be memory efficient.
       (comment
-        (let [result (assoc header ::specs/buf (.copy buf'))]
-          (.release buf')
+        (let [result (assoc header ::specs/buf (.copy buf))]
+          (.release buf)
           result))
       ;; 2. Avoid the time overhead of making the copy.
       ;; If we don't release this very quickly, something
       ;; bigger/more important is drastically wrong.
-      ;; TODO: Try out this potential compromise:
-      ;; (preliminary testing suggests that it should work)
       (comment
-        (.discardReadBytes buf')
-        (.capacity buf' D'))
+        ;; TODO: Try out this potential compromise:
+        ;; (preliminary testing suggests that it should work)
+        ;; This is really an artifact from an early implementation
+        ;; when I was trying to stick very closely to the
+        ;; reference implementation. Which reads a length
+        ;; byte followed by a stream of bytes from a pipe.
+        ;; Q: Does this make any sense at all now?
+        (.discardReadBytes buf)
+        (.capacity buf D'))
       ;; 3. Just do these manipulations on the incoming
       ;; byte-array (vector?) and avoid the overhead (?)
       ;; of adding a ByteBuf to the mix
 
-      ;; Going with option 2 for now
-      (assoc header ::specs/buf buf'))))
+      ;; Going with easiest approach to option 2 for now
+      (assoc header ::specs/buf buf))))
 
 (s/fdef calculate-start-stop-bytes
         :args (s/cat :state ::specs/state
@@ -228,7 +233,7 @@
 
 (s/fdef extract-message!
         :args (s/cat :state ::specs/state
-                     :receive-buf ::specs/buf)
+                     :packet ::specs/packet)
         :ret ::specs/state)
 (defn extract-message!
   "Lines 562-593"
@@ -237,13 +242,15 @@
    {^ByteBuf incoming-buf ::specs/buf
     D ::specs/size-and-flags
     start-byte ::specs/start-byte
+    :keys [::specs/message-id]
     :as packet}]
   {:pre [start-byte]}
   (when-let [calculated (calculate-start-stop-bytes state packet)]
     (let [{:keys [::delta-k
                   ::max-rcvd
                   ::min-k
-                  ::receive-total-bytes]
+                  ]
+           overridden-recv-total-bytes ::receive-total-bytes
            ^Long max-k ::max-k} calculated]
       ;; There are at least a couple of curve balls in the air right here:
       ;; 1. Only write bytes at stream addresses(?)
@@ -270,19 +277,36 @@
       ;;    child pipe.
       ;; I'm fairly certain this is what that for loop amounts to
 
-      (-> state
-          #_(update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
-                                                                     (+ receive-bytes delta-k)))
-          (update-in [::specs/incoming ::specs/receive-total-bytes]
-                     (fn [cur]
-                       ;; calculate-start-stop-bytes might have an override for this
-                       (or receive-total-bytes
-                           cur)))
-          (update-in [::specs/incoming ::specs/gap-buffer]
-                     assoc
-                     ;; This needs to be the absolute stream position of the values that are left
-                     [(+ start-byte min-k) (+ start-byte max-k)]
-                     incoming-buf)))))
+      (if (not= 0 message-id)
+        (-> state
+            ;; Q: Why did I comment out this next line?
+            ;; Partial A: Well, I was debugging...
+            ;; Can/should it go away completely?
+            #_(update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
+                                                                         (+ receive-bytes delta-k)))
+            (update-in [::specs/incoming ::specs/receive-total-bytes]
+                       (fn [cur]
+                         ;; calculate-start-stop-bytes might have overriden for this
+                         ;; In the outer scope.
+                         ;;
+                         (or overridden-recv-total-bytes
+                             cur)))
+            (update-in [::specs/incoming ::specs/gap-buffer]
+                       assoc
+                       ;; This needs to be the absolute stream position of the values that are left
+                       [(+ start-byte min-k) (+ start-byte max-k)]
+                       incoming-buf))
+        (do
+          ;; This seems problematic, but that's because
+          ;; I'm tangling up the outgoing vs. incoming buffers
+          ;; again.
+          ;; The ACK was for the sake of the un-ackd-blocks in
+          ;; outgoing.
+          ;; The gap-buffer that we are *not* updating is about
+          ;; arriving messages that might have been dropped/misordered
+          ;; due to UDP issues.
+          (log/debug "Discarding a pure ACK")
+          state)))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state
@@ -420,17 +444,19 @@ Line 608"
       ;;  using either some version of comp or as-> (or possibly
       ;; transducers?)
       (let [_ (log/debug (str message-loop-name ": Deserializing parent->buffer"))
-            ;; Discrepancy with reference implementation:
+            ;; This looks like a discrepancy with reference implementation:
             ;; that calls the flow control updates before anything else.
-            ;; Actually, I turned a lot of this upside down for convenience.
-            ;; It seems like it probably doesn't matter, but it's
-            ;; worth calling out.
+            ;; It doesn't quite mesh up, since there's never any
+            ;; explicit call like this to do the deserialization.
+            ;; But the next real steps are
+            ;; 1. updating the statistics and
+            ;; 2. Set up the flags for sending an ACK
+            ;; So it's remained pretty faithful to the original
             packet (deserialize parent->buffer)
             ack-id (::specs/acked-message packet)
-            ;; Note that there's something terribly wrong if we
+            ;; Note that, in theory, we *could*
             ;; have multiple blocks with the same message ID.
-            ;; Q: Isn't there?
-            ;; A: Well, inside the available 128K buffer space.
+            ;; But probably not inside the available 128K buffer space.
             ;; At best, we have 32 bits for block IDs, -1 for
             ;; ID 0 (which is a pure ACK).
             ;; And in java land with only signed integers, there's

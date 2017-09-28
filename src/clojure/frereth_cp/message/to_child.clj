@@ -136,13 +136,13 @@
   [->child
    {:keys [::specs/incoming
            ::specs/message-loop-name]
-    :as primed}]
+    :as state}]
   ;; Major piece of the puzzle that I'm currently missing:
   ;; line 617 will generally update receive-written.
   ;; TODO: expand it to include the pieces I haven't translated yet
   ;; (such as sending some signal, like a nil, to indicate that
   ;; we've hit EOF).
-  (let [consolidated (consolidate-gap-buffer primed)
+  (let [consolidated (consolidate-gap-buffer state)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])]
     (log/debug (str message-loop-name
                     ": Have "
@@ -153,8 +153,11 @@
     ;; The reference implementation actually puts the bytes that are ready
     ;; to write into its circular buffer and tries to write as many as possible
     ;; (up to the end of the circular buffer) all at once. It flags the
-    ;; written bytes as invalid and proceeds.
-    (reduce (fn [state ^ByteBuf buf]
+    ;; written bytes as invalid and moves on.
+    ;; In that world, anything that didn't get written this time will happen
+    ;; on the next loop iteration.
+    ;; Which looks like it might not happen for another minute.
+    (reduce (fn [state' ^ByteBuf buf]
               ;; Forward the byte-array inside the buffer
               (try
                 ;; It's tempting to special-case this to avoid the
@@ -172,7 +175,7 @@
                 ;; And drop it
                 (log/debug (str message-loop-name ": Dropping block from child buffer"))
                 (.release buf)
-                (update-in state
+                (update-in state'
                            [::specs/incoming ::specs/->child-buffer]
                         (comp vec rest))
                 (catch RuntimeException ex
@@ -189,7 +192,7 @@
                   ;; single vector of bytes, but the performance implications
                   ;; of that don't seem worth imposing.
                   (log/error ex "Failed to forward message to child")
-                  (reduced state))))
+                  (reduced state'))))
             consolidated
             ->child-buffer)
     ;; 610-614: counters/looping

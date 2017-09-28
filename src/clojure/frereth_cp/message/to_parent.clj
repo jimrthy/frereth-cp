@@ -153,10 +153,15 @@
   (assert (= ::specs/un-sent-blocks
              (::specs/next-block-queue outgoing)))
   (let [block-to-move (peek un-sent-blocks)]
+    (assert block-to-move (str "Trying to move non-existent block from among\n"
+                               (keys outgoing)))
+    ;; Based on this, it looks as though block-to-move is an empty list
     (log/debug (str message-loop-name
                     ": Moving next first unsent block\n("
                     ;; TODO: Verify that this has a ::specs/time key and value
                     block-to-move
+                    "\nfrom\n"
+                    un-sent-blocks
                     ")\nto\n"
                     un-ackd-blocks))
     (-> state
@@ -204,7 +209,7 @@
                    ": Missing ::transmissions under "
                    next-block-queue)))
     (log/debug (str message-loop-name
-                    ": Looking for "
+                    ": Next message should come from "
                     next-block-queue
                     " inside\n"
                     (::specs/outgoing state)))
@@ -245,6 +250,7 @@
                                       ::specs/last-block-time recent
                                       ::specs/send-buf buf
                                       ::specs/want-ping false)))]
+          (log/debug "Next block built and stats updated")
           ;; It's tempting to split this part up to avoid the conditional.
           ;; Maybe turn the call into a multimethod.
           ;; The latter would be a terrible mistake, since there are
@@ -283,27 +289,34 @@
          rtt-timeout]}
   (assert earliest-time (str "Missing earliest-time among " (keys outgoing)))
   (log/debug (str message-loop-name ": Checking for a block to resend"))
-  (when (and (not= 0 earliest-time)
+  (if (and (not= 0 earliest-time)
              (< recent (+ earliest-time n-sec-per-block))
              (>= recent (+ earliest-time rtt-timeout)))
-    (log/debug (str message-loop-name ": It's been long enough to justify resending"))
-    ;; This gets us to line 344
-    ;; It finds the first block that matches earliest-time
-    ;; It's going to re-send that block (it *does* exist...right?)
-    (let [block (peek (get-in state [::specs/outgoing ::specs/un-ackd-blocks]))
-          state (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
-      ;; TODO: Need to verify that nothing fell through the cracks
-      ;; But first, it might adjust some of the globals.
-      (assoc
-       (if (> recent (+ last-panic (* 4 rtt-timeout)))
-         ;; Need to update some of the related flow-control fields
-         (-> state
-             (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
-             (assoc-in [::specs/outgoing ::specs/last-panic] recent)
-             (assoc-in [::specs/flow-control ::specs/last-edge] recent))
-         ;; We haven't had another timeout since the last-panic.
-         ;; Don't adjust those dials.
-         state)))))
+    (do
+      (log/debug (str message-loop-name ": It's been long enough to justify resending"))
+      ;; This gets us to line 344
+      ;; It finds the first block that matches earliest-time
+      ;; It's going to re-send that block (it *does* exist...right?)
+      (let [block (peek (get-in state [::specs/outgoing ::specs/un-ackd-blocks]))
+            state (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
+        ;; TODO: Need to verify that nothing fell through the cracks
+        ;; But first, it might adjust some of the globals.
+        (assoc
+         (if (> recent (+ last-panic (* 4 rtt-timeout)))
+           ;; Need to update some of the related flow-control fields
+           (-> state
+               (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
+               (assoc-in [::specs/outgoing ::specs/last-panic] recent)
+               (assoc-in [::specs/flow-control ::specs/last-edge] recent))
+           ;; We haven't had another timeout since the last-panic.
+           ;; Don't adjust those dials.
+           state))))
+    (do
+      (log/debug (str message-loop-name
+                      ": Hasn't been long enough to justify"
+                      " resending any of our "
+                      (count un-ackd-blocks)
+                      " previously sent un-ack'd blocks")))))
 
 (s/fdef check-for-new-block-to-send
         :args (s/cat :state ::specs/state)
