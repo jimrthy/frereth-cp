@@ -225,10 +225,16 @@
                               1 n'))
           ;; Q: How much time could I save right here and now by making state transient?
           current-message (peek q)]
+      ;; It's tempting to pop that message off of whichever queue is its current home.
+      ;; That doesn't make sense here/yet.
+      ;; Either we're resending a previous message that never got ACK'd (in which
+      ;; case it must stay exactly where it is until we *do* get an ACK), or we're
+      ;; sending a new message.
+      ;; If it's the latter, it *does* need to move from the un-sent queue to the
+      ;; un-ackd queue.
+      ;; But that's an operation to handle elsewhere.
       (assert current-message)
-      (let [state' (-> state
-                       (update-in (conj [::specs/outgoing] next-block-queue) pop)
-                       (assoc-in [::specs/outgoing ::specs/next-message-id] next-message-id))
+      (let [state' (assoc-in state [::specs/outgoing ::specs/next-message-id] next-message-id)
             updated-message (-> current-message
                                 (update ::specs/transmissions inc)
                                 (assoc ::specs/time recent)
@@ -247,7 +253,13 @@
                              ::specs/outgoing
                              (fn [cur]
                                (assoc cur
+                                      ;; Q: Is it really worth tracking this separately?
+                                      ;; It's easy enough to calculate anywhere I actually
+                                      ;; want it.
+                                      ;; TODO: Track down everywhere it's used and think
+                                      ;; about it.
                                       ::specs/last-block-time recent
+                                      ;; Q: Am I still using this?
                                       ::specs/send-buf buf
                                       ::specs/want-ping false)))]
           (log/debug "Next block built and stats updated")

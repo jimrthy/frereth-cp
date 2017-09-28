@@ -137,29 +137,31 @@
   ;; message from the child that it takes 10 ms for that agent
   ;; send to actually get through the queue
   (let [min-resend-time (+ last-block-time n-sec-per-block)
-        _ (log/debug (str message-loop-name
-                          ": Minimum resend time: " min-resend-time
-                          " which is " n-sec-per-block
-                          ;; last-block-time causes problems.
-                          ;; Up until the point I've sent my
-                          ;; last block, it basically progresses
-                          ;; linearly up to 1907725432157608
-                          ;; (for tonight's debug session).
-                          ;; Then it jumps down to
-                          ;; 1907725404755660, which leaves
-                          ;; me with negative delays, because
-                          ;; I'm trying to send the next send
-                          ;; in the past.
-                          ;; And doing this every millisecond
-                          ;; leads to its own set of problems.
-                          ;; FIXME: Start back here.
-                          " nanoseconds after " last-block-time))
+        _ (log/debug (cl-format nil
+                                "~a: Minimum resend time: ~:d which is ~:d nanoseconds after ~:d"
+                                message-loop-name
+                                min-resend-time
+                                n-sec-per-block
+                                ;; last-block-time causes problems.
+                                ;; Up until the point I've sent my
+                                ;; last block, it basically progresses
+                                ;; linearly up to 1907725432157608
+                                ;; (for tonight's debug session).
+                                ;; Then it jumps down to
+                                ;; 1907725404755660, which leaves
+                                ;; me with negative delays, because
+                                ;; I'm trying to send the next send
+                                ;; in the past.
+                                ;; And doing this every millisecond
+                                ;; leads to its own set of problems.
+                                ;; FIXME: Start back here.
+                                last-block-time))
         default-next (+ recent (utils/seconds->nanos 60))
-        _ (log/debug (str message-loop-name
-                          ": Default +1 minute: "
-                          default-next
-                          " from "
-                          recent))
+        _ (log/debug (cl-format nil
+                                "~a: Default +1 minute: ~:d from ~:d"
+                                message-loop-name
+                                default-next
+                                recent))
         ;; Lines 286-289
         _ (log/debug (str message-loop-name ": Scheduling based on want-ping value '" want-ping "'"))
         next-based-on-ping (if want-ping
@@ -170,9 +172,10 @@
                                (+ recent utils/seconds->nanos 1)
                                (min default-next min-resend-time))
                              default-next)
-        _ (log/debug (str message-loop-name
-                          ": Based on ping settings, adjusted next time to: "
-                          next-based-on-ping))
+        _ (log/debug (cl-format nil
+                                "~a: Based on ping settings, adjusted next time to: ~:d"
+                                message-loop-name
+                                next-based-on-ping))
         ;; Lines 290-292
         next-based-on-eof (if (and (< (+ (count un-ackd-blocks)
                                          (count un-sent-blocks))
@@ -182,9 +185,10 @@
                                      (< send-processed send-bytes)))
                             (min next-based-on-ping min-resend-time)
                             next-based-on-ping)
-        _ (log/debug (str message-loop-name
-                          ": Due to EOF status: "
-                          next-based-on-eof))
+        _ (log/debug (cl-format nil
+                                "~a: Due to EOF status: ~:d"
+                                message-loop-name
+                                next-based-on-eof))
         ;; Lines 293-296
         rtt-resend-time (+ earliest-time rtt-timeout)
         next-based-on-earliest-block-time (if (and (not= 0 earliest-time)
@@ -192,9 +196,10 @@
                                                       min-resend-time))
                                             (min next-based-on-eof rtt-resend-time)
                                             next-based-on-eof)
-        _ (log/debug (str message-loop-name
-                          ": Adjusted for RTT: "
-                          next-based-on-earliest-block-time))
+        _ (log/debug (cl-format nil
+                                "~a: Adjusted for RTT: ~:d"
+                                 message-loop-name
+                                 next-based-on-earliest-block-time))
         ;; There's one last caveat, from 298-300:
         ;; It all swirls around watchtochild, which gets set up
         ;; between lines 276-279.
@@ -205,9 +210,10 @@
                                        (nil? watch-to-child))
                                 0
                                 next-based-on-earliest-block-time)
-        _ (log/debug (str message-loop-name
-                          ": After adjusting for closed/ignored child watcher: "
-                          based-on-closed-child))
+        _ (log/debug (cl-format nil
+                                "~a: After adjusting for closed/ignored child watcher: ~:d"
+                                message-loop-name
+                                based-on-closed-child))
         ;; Lines 302-305
         actual-next (max based-on-closed-child recent)]
     actual-next))

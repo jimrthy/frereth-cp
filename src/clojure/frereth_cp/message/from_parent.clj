@@ -40,7 +40,8 @@
   ;; Important: there may still be overlap with previously read bytes!
   ;; (but that's a problem for downstream)
   [^bytes incoming]
-  {:pre [incoming]}
+  {:pre [incoming]
+   :post [%]}
   (let [;; Q: How much of a performance hit do I take by
         ;; wrapping this?
         ;; Using decompose is nice and convenient here, but
@@ -53,37 +54,45 @@
         D' D
         SF (bit-and D (bit-or K/normal-eof K/error-eof))
         D (- D SF)
-        zero-padding-count (- (.readableBytes buf)
-                              D')]
-    (when (nat-int? zero-padding-count)
-      (when (pos? zero-padding-count)
-        (.skipBytes buf zero-padding-count))
-      ;; 3 approaches seem to make sense here:
-      ;; 1. Create a copy of buf and release the original,
-      ;; trying to be memory efficient.
-      (comment
-        (let [result (assoc header ::specs/buf (.copy buf))]
-          (.release buf)
-          result))
+        padding-count (- (.readableBytes buf)
+                         D')]
+    ;; Start by skipping the initial padding (if any)
+    (when (and (nat-int? padding-count)
+               (pos? padding-count))
+      (.skipBytes buf padding-count))
+
+    ;;; And then return a portion of buf that we can
+    ;;; safely mangle later.
+    ;;; I really don't like any of the obvious options.
+
+    ;; 3 approaches seem to make sense here:
+    ;; 1. Create a copy of buf and release the original,
+    ;; trying to be memory efficient.
+    (comment
+      (let [result (assoc header ::specs/buf (.copy buf))]
+        (.release buf)
+        result))
       ;; 2. Avoid the time overhead of making the copy.
       ;; If we don't release this very quickly, something
       ;; bigger/more important is drastically wrong.
-      (comment
-        ;; TODO: Try out this potential compromise:
-        ;; (preliminary testing suggests that it should work)
-        ;; This is really an artifact from an early implementation
-        ;; when I was trying to stick very closely to the
-        ;; reference implementation. Which reads a length
-        ;; byte followed by a stream of bytes from a pipe.
-        ;; Q: Does this make any sense at all now?
-        (.discardReadBytes buf)
-        (.capacity buf D'))
+
+    (comment
+      ;; TODO: Try out this potential compromise:
+      ;; (preliminary testing suggests that it should work)
+      ;; This is really an artifact from an early implementation
+      ;; when I was trying to stick very closely to the
+      ;; reference implementation. Which reads a length
+      ;; byte followed by a stream of bytes from a pipe.
+      ;; Q: Does this make any sense at all now?
+      (.discardReadBytes buf)
+      (.capacity buf D'))
       ;; 3. Just do these manipulations on the incoming
       ;; byte-array (vector?) and avoid the overhead (?)
       ;; of adding a ByteBuf to the mix
 
       ;; Going with easiest approach to option 2 for now
-      (assoc header ::specs/buf buf))))
+
+    (assoc header ::specs/buf buf)))
 
 (s/fdef calculate-start-stop-bytes
         :args (s/cat :state ::specs/state
@@ -318,8 +327,9 @@
     :as state}
    packet]
   (log/info (str message-loop-name
-                  ": Top of flag-acked-others!\n"
-                  packet))
+                  ": Top of flag-acked-others!\nExtracting gap ACK from\n"
+                  packet
+                  "\n"))
   (let [gaps (map (fn [[startfn stopfn]]
                     [(startfn packet) (stopfn packet)])
                   [[(constantly 0) ::specs/ack-length-1] ;  0-8
@@ -335,6 +345,13 @@
      (reduce (fn [{:keys [::stop-byte]
                    :as state}
                   [start stop]]
+               (when-not (and start stop)
+                 (log/error (str message-loop-name
+                                 ": missing either "
+                                 start
+                                 " or "
+                                 stop
+                                 " somewhere in packet.")))
                ;; Note that this is based on absolute stream addresses
                (let [start-byte (+ stop-byte start)
                      stop-byte (+ start-byte stop)]
@@ -443,7 +460,9 @@ Line 608"
       ;; TODO: Time this. See whether it's worth combining these calls
       ;;  using either some version of comp or as-> (or possibly
       ;; transducers?)
-      (let [_ (log/debug (str message-loop-name ": Deserializing parent->buffer"))
+      (let [_ (log/debug (str message-loop-name ": Deserializing parent->buffer: "
+                              parent->buffer ", a " (class parent->buffer)
+                              " containing " (count parent->buffer) " bytes"))
             ;; This looks like a discrepancy with reference implementation:
             ;; that calls the flow control updates before anything else.
             ;; It doesn't quite mesh up, since there's never any
@@ -453,6 +472,7 @@ Line 608"
             ;; 2. Set up the flags for sending an ACK
             ;; So it's remained pretty faithful to the original
             packet (deserialize parent->buffer)
+            _ (assert packet (str "Unable to extract a packet from " parent->buffer))
             ack-id (::specs/acked-message packet)
             ;; Note that, in theory, we *could*
             ;; have multiple blocks with the same message ID.
