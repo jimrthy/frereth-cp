@@ -13,7 +13,8 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [manifold.stream :as strm]
+            [overtone.at-at :as at-at])
   (:import clojure.lang.ExceptionInfo
            [io.netty.buffer ByteBuf Unpooled]))
 
@@ -288,9 +289,15 @@
         ;; TODO: Find a reasonable value for this timeout
         (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
           (log/info "Bottom of message-test")
-          (let [client-agent @client-atom]
-            (is (not (agent-error client-agent))))
+          (is (not (agent-error @client-atom)))
           (is (not (agent-error @server-atom)))
+          (when (= really-succeeded? ::timed-out)
+            ;; Double deref to get to the agent state.
+            (let [{:keys [::specs/flow-control]
+                   :as client-state} @(deref client-atom)]
+              ;; I'm mostly interested in the next-action inside flow-control
+              (is (not flow-control))
+              (at-at/show-schedule (::specs/schedule-pool flow-control))))
           (is (= ::kthxbai really-succeeded?))
           (is (= 5 @client-state))))
       (finally

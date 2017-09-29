@@ -303,7 +303,7 @@
         :args (s/cat :state ::specs/state)
         :ret any?)
 (defn cancel-timer!
-  "Input cancels the next pending timer"
+  "Cancels the next pending timer"
   [{{:keys [::specs/next-action]} ::specs/flow-control
     :keys [::specs/message-loop-name]
     :as state}]
@@ -313,10 +313,27 @@
     ;; is wrong on pretty much every level.
     ;; But I'm seeing at least 1 timer loop go through before
     ;; this can, and that's wasting 9-10 ms.
+
     ;; This doesn't help much for the initial client loop that's
     ;; eagerly waiting for input from the child. I think there's
     ;; something badly wrong with the details behind that.
-    (log/info (str message-loop-name ": cancelling I/O timer"))
+
+    ;; More importantly, this approach just doesn't seem
+    ;; to work, now that I think I've sorted out most of
+    ;; my other major bugs.
+
+    ;; I schedule and cancel a couple of times, and then this
+    ;; just seems to quit working.
+    ;; I'm not sure whether to blame deadlocks, race conditions,
+    ;; or something I don't understand about java thread
+    ;; pools.
+
+    ;; What I am sure about is that these sorts of issues
+    ;; are why I decided to switch to clojure in the first
+    ;; place.
+    (log/info (str message-loop-name ": cancelling I/O timer "
+                   next-action
+                   ", a " (class next-action)))
     (at-at/stop next-action)))
 
 (s/fdef trigger-io
@@ -583,10 +600,10 @@
   [state-agent]
   (let [{{:keys [::specs/next-action]
           :as flow-control} ::specs/flow-control
+         :keys [::specs/message-loop-name]
          :as state} @state-agent]
-    (when next-action
-      (log/info "Stopping scheduler")
-      (at-at/stop next-action))
+    (log/info "Halting" message-loop-name)
+    (cancel-timer! state)
     (update-in state [::specs/flow-control ::specs/next-action]
                (constantly ::completed))))
 
@@ -676,7 +693,10 @@
     ;; trigger-from-parent is expecting to have a ::->child-buffer key
     ;; that's really a vector that we can just conj onto.
     (let [{{:keys [::specs/->child-buffer]} ::specs/incoming
+           :keys [::specs/message-loop-name]
            :as state} @state-agent]
+      (log/debug (str message-loop-name
+                      ": Top of parent->"))
       ;; It seems very wrong to do this here. But I really need
       ;; it to happen as fast as possible, because it tends to
       ;; get triggered again while I'm in the middle of other
