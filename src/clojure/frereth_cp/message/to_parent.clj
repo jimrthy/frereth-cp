@@ -1,5 +1,6 @@
 (ns frereth-cp.message.to-parent
-  (:require [clojure.spec.alpha :as s]
+  (:require [clojure.pprint :refer [cl-format]]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
@@ -429,16 +430,27 @@
           (-> state
               (assoc-in [::specs/outgoing ::specs/next-block-queue] ::specs/un-sent-blocks)))
         (do
-          (log/debug (str message-loop-name
-                          ": Bad preconditions for sending a new block:\n"
-                          "recent: " recent " <? " (+ earliest-time n-sec-per-block)
-                          "\nNew block count: " block-count
-                          "\nPreviously sent block count: " (count un-ackd-blocks)
-                          "\nwant-ping: " want-ping
-                          "\nsend-eof: " send-eof
-                          "\n\tsend-eof-processed: " send-eof-processed
-                          "\n\tsend-processed: " send-processed
-                          "\nsend-bytes: " send-bytes))
+          (let [fmt (str "~a: Bad preconditions for sending a new block:\n"
+                         "recent: ~:d <? ~:d\n"
+                         "New block count: ~d"
+                         "\nPreviously sent block count: ~d"
+                         "\nwant-ping: ~d"
+                         "\nsend-eof: ~a"
+                         "\n\tsend-eof-processed: ~a"
+                         "\n\tsend-processed: ~:d"
+                         "\nsend-bytes: ~:d")]
+            (log/debug (cl-format nil
+                                  fmt
+                                  message-loop-name
+                                  recent
+                                  (+ earliest-time n-sec-per-block)
+                                  block-count
+                                  (count un-ackd-blocks)
+                                  want-ping
+                                  send-eof
+                                  send-eof-processed
+                                  send-processed
+                                  send-bytes)))
           ;; Be explicit about this
           ;; TODO: Avoid extra hoops. Make the caller smarter/less complex.
           ;; Just set the cursor to nil
@@ -515,7 +527,7 @@
                       (class un-ackd-blocks)
                       ".\nThis is very distinct from the "
                       (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
-                      " that is/are left in un-sent-blocks:\n"))
+                      " that is/are left in un-sent-blocks"))
 ;;;      408: earliestblocktime_compute()
       (-> state''
           (assoc-in [::specs/outgoing ::specs/earliest-time]

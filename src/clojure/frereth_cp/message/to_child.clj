@@ -19,6 +19,18 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+(s/fdef pop-map-first
+        :args (s/cat :hm map?)
+        :fn (fn [{:keys [:args :ret]}]
+              (let [{:keys [:hm]} args]
+                (= (dec (count hm))
+                   (count ret))))
+        :ret map?)
+(defn pop-map-first
+  "Really for a sorted-map"
+  [associative]
+  (dissoc associative (first (keys associative))))
+
 ;; The caller needs to verify that the gap-buffer's start
 ;; is < receive-bytes.
 ;; Well, it does, because it can short-circuit a reduce
@@ -58,7 +70,9 @@
         (do
           (log/debug "Dropping previously consolidated block")
           (throw (RuntimeException. "Probably need to call .release"))
-          (update incoming ::specs/gap-buffer pop))
+          ;; Note that the exception keeps this from getting called.
+          ;; And, so far, I haven't hit that.
+          (update incoming ::specs/gap-buffer pop-map-first))
         ;; Consolidate this message block
         ;; I'm dubious about the logic for bytes-to-skip
         ;; and receive-bytes.
@@ -70,7 +84,7 @@
             (.skipBytes buf bytes-to-skip))
           (log/debug (str "Moving entry 0/" (count (::specs/gap-buffer incoming))))
           (-> incoming
-              (update ::specs/gap-buffer (partial drop 1))
+              (update ::specs/gap-buffer pop-map-first)
               ;; There doesn't seem to be any good reason to hang
               ;; onto buf here. It's helpful for debugging,
               ;; but I need byte-arrays downstream.
