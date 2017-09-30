@@ -296,14 +296,6 @@
       ;;    child pipe.
       ;; I'm fairly certain this is what that for loop amounts to
 
-      (log/debug (str message-loop-name
-                      ": This next block will fail if\n"
-                      gap-buffer
-                      "\n(a "
-                      (class gap-buffer)
-                      ")\nis not associative.\n"
-                      "Q: How/when did that happen?"))
-
       (if (not= 0 message-id)
         (-> state
             ;; Q: Why did I comment out this next line?
@@ -343,7 +335,14 @@
   "Lines 544-560"
   [{:keys [::specs/message-loop-name]
     :as state}
-   packet]
+   {:keys [::specs/message-id]
+    :as packet}]
+  ;; TODO: If message-id is 0, don't waste time doing any
+  ;; of this.
+  ;; That really should be just a simple if check.
+  ;; But the caller may have different ideas.
+  ;; Actually, if (= message-id 0), this probably shouldn't
+  ;; have been called in the first place.
   (log/info (str message-loop-name
                   ": Top of flag-acked-others!\nExtracting gap ACK from\n"
                   packet
@@ -590,7 +589,7 @@ Line 608"
       ;; 440: sets maxblocklen=1024
       ;; Q: Why was it ever 512?
       ;; Guess: for initial Message part of Initiate packet
-      (let [state' (assoc-in state [::specs/incoming ::specs/max-byte-length] K/k-1)]
+      (let [state' (assoc-in state [::specs/outcoming ::specs/max-block-length] K/k-1)]
         (log/debug (str message-loop-name ": Handling incoming message, if it's comprehensible"))
         ;; Move on to line 444
         (handle-comprehensible-message! state'))

@@ -10,7 +10,6 @@
                             [org.clojure/clojure "1.9.0-beta1"]
                             [org.clojure/spec.alpha "0.1.123"]
                             [org.clojure/tools.logging "0.4.0"]
-                            [overtone/at-at "1.2.0"]
                             [samestep/boot-refresh "0.1.0" :scope "test"]
                             [tolitius/boot-check "0.1.4" :scope "test"]])
 

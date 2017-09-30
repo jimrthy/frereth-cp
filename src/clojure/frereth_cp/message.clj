@@ -28,10 +28,10 @@
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
-            [manifold.stream :as strm]
-            [overtone.at-at :as at-at])
+            [manifold.stream :as strm])
   (:import clojure.lang.PersistentQueue
-           [io.netty.buffer ByteBuf Unpooled]))
+           [io.netty.buffer ByteBuf Unpooled]
+           java.util.concurrent.TimeoutException))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
@@ -243,37 +243,75 @@
             ;; match the reference implementation.
             ;; Although, really, it seems very incorrect.
             scheduled-delay (- actual-next recent)
-            _ (log/debug (cl-format nil
-                                    "~a: Initially calculated scheduled delay: ~:d nanoseconds after ~:d vs. ~:d"
-                                    message-loop-name
-                                    scheduled-delay
-                                    recent
-                                    now))
             ;; Make sure that at least it isn't negative
             ;; (I keep running across bugs that have issues with this,
             ;; and it wreaks havoc with my REPL)
             delta-nanos (max 0 scheduled-delay)
             delta (inc (utils/nanos->millis delta-nanos))
             delta_f (float delta)  ; For printing
-            next-action (at-at/after delta
-                                     (fn []
-                                       (log/debug (cl-format nil
-                                                             "~a: Timer for ~:d ms after ~:d triggering I/O"
-                                                             delta_f
-                                                             now))
-                                       (send-off state-agent (partial trigger-from-timer state-agent)))
-                                     schedule-pool
-                                     :desc "Periodic wakeup")]
+            next-action (dfrd/deferred)
+            result (-> state
+                       (assoc-in [::specs/flow-control ::specs/next-action] next-action))]
         (log/debug (cl-format nil
-                              "~a: Timer set to trigger in ~a ms (vs ~a scheduled)"
+                              "~a: Initially calculated scheduled delay: ~:d nanoseconds after ~:d vs. ~:d"
+                              message-loop-name
+                              scheduled-delay
+                              recent
+                              now))
+        (dfrd/on-realized next-action
+                          (fn [success]
+                            (let [fmt (str "~a: Timer for ~:d ms "
+                                           "after ~:d cancelled "
+                                           "because input arrived "
+                                           "from elsewhere")]
+                              (log/debug (cl-format nil
+                                                    fmt
+                                                    message-loop-name
+                                                    delta_f
+                                                    now))))
+                          (fn [failure]
+                            (if (instance? TimeoutException failure)
+                              (do
+                                ;; This actually wasn't a failure.
+                                ;; It just tripped the timer, so it's
+                                ;; time to do it again.
+                                (log/debug (cl-format nil
+                                                      "~a: Timer for ~:d ms after ~:d triggering I/O"
+                                                      message-loop-name
+                                                      delta_f
+                                                      now))
+                                (send-off state-agent (partial trigger-from-timer state-agent)))
+                              (do
+                                (log/error failure (cl-format nil
+                                                              "~a: Waiting on timer for ~:d ms after ~:d triggering I/O"
+                                                              delta_f
+                                                              now))
+                                (send state-agent (fn [_]
+                                                    failure))))))
+        (log/debug (cl-format nil
+                              "~a: Setting timer to trigger in ~a ms (vs ~a scheduled)"
                               message-loop-name
                               delta_f
                               (float (utils/nanos->millis scheduled-delay))))
-        (-> state
-            (assoc-in [::specs/flow-control ::specs/next-action] next-action))))
+        (dfrd/timeout! next-action delta)
+        result))
     (do
       (log/debug (str message-loop-name ": 'next-action' flagged complete."))
       state)))
+
+(comment
+  (let [d (dfrd/deferred)]
+    (dfrd/on-realized d
+                      (fn [success]
+                        (println "Succeeded:" success))
+                      (fn [failure]
+                        (println "Failed:" (class failure))))
+    (dfrd/timeout! d 250)
+    (try
+      (deref d 500 ::real-time-out)
+      (catch java.util.concurrent.TimeoutException ex
+        (println "oops:" ex))))
+  )
 
 (s/fdef start-event-loops!
         :args (s/cat :state-agent ::specs/state-agent
@@ -331,10 +369,20 @@
     ;; What I am sure about is that these sorts of issues
     ;; are why I decided to switch to clojure in the first
     ;; place.
+
+    ;; I can see this going 2 directions:
+    ;; 1. Don't do this kind of state modification outside
+    ;;    the agent send (which seems to be prohibitively
+    ;;    slow)
+    ;; 2. Switch to manifold for the signalling (which seems
+    ;;    like a lot of work, but is probably the Right
+    ;;    Thing)
+    ;; TODO: create a new branch and see just how involved
+    ;; option 2 really is.
     (log/info (str message-loop-name ": cancelling I/O timer "
                    next-action
                    ", a " (class next-action)))
-    (at-at/stop next-action)))
+    (dfrd/success! next-action ::superseded)))
 
 (s/fdef trigger-io
         :args (s/cat :state-agent ::specs/state-agent
@@ -411,9 +459,8 @@
     :keys [::specs/message-loop-name]
     :as state}
    array-o-bytes]
-  (log/debug (str "trigger-from-child: "
-                  message-loop-name
-                  ": Received a "
+  (log/debug (str message-loop-name
+                  ": trigger-from-child Received a "
                   (class array-o-bytes)
                   "\nSent stream address: "
                   send-bytes))
@@ -506,8 +553,7 @@
                                  ::specs/rtt-seen-older-low false
                                  ::specs/rtt-seen-recent-high false
                                  ::specs/rtt-seen-recent-low false
-                                 ::specs/rtt-timeout K/sec->n-sec
-                                 ::specs/schedule-pool (at-at/mk-pool)}
+                                 ::specs/rtt-timeout K/sec->n-sec}
            ::specs/incoming {::specs/->child child-callback
                              ::specs/->child-buffer []
                              ::specs/gap-buffer (to-child/build-gap-buffer)
@@ -603,6 +649,9 @@
          :keys [::specs/message-loop-name]
          :as state} @state-agent]
     (log/info "Halting" message-loop-name)
+    ;; This seems to work on the server, but it fails when
+    ;; the client's cranking through messages faster than
+    ;; emacs can track.
     (cancel-timer! state)
     (update-in state [::specs/flow-control ::specs/next-action]
                (constantly ::completed))))
@@ -629,26 +678,35 @@
 ;;;  319-336: Maybe read bytes from child
   [state-agent
    array-o-bytes]
-  ;; I'm torn about send vs. send-off here.
-  ;; This very well *could* take a measurable amount
-  ;; of time, and we could wind up with a ton of threads
-  ;; if there's a lot of data flowing back and forth.
-  ;; Note that the client count isn't a direct factor here,
-  ;; since each client should receive its own agent.
-  ;; This is something to watch and measure.
-  ;; Go with send for now, since it's recommended for
-  ;; CPU- (as opposed to IO-) bound actions.
-  ;; And I don't think there's anything here that
-  ;; could block.
-  ;; Except for those actual pesky sends to the
-  ;; child/parent, which are specifically forbidden
-  ;; from blocking.
   (let [state @state-agent
         {:keys [::specs/message-loop-name]} state]
     (log/debug (str message-loop-name
                     ": Incoming message from child to\n"
                     state))
+    ;; In a lot of ways, it seems like it would be more
+    ;; elegant to have this (and parent->) call succeed!
+    ;; on next-action.
+    ;; Then have the handler set up for that in the
+    ;; scheduler check the success value and do the
+    ;; send[-off].
+    ;; Sticking with this approach for now, since I'm
+    ;; trying to make incremental changes, but...it
+    ;; needs more thought.
     (cancel-timer! state)
+    ;; I'm torn about send vs. send-off here.
+    ;; This very well *could* take a measurable amount
+    ;; of time, and we could wind up with a ton of threads
+    ;; if there's a lot of data flowing back and forth.
+    ;; Note that the client count isn't a direct factor here,
+    ;; since each client should receive its own agent.
+    ;; This is something to watch and measure.
+    ;; Go with send for now, since it's recommended for
+    ;; CPU- (as opposed to IO-) bound actions.
+    ;; And I don't think there's anything here that
+    ;; could block.
+    ;; Except for those actual pesky sends to the
+    ;; child/parent, which are specifically forbidden
+    ;; from blocking (according to the spec)
     (send state-agent (partial trigger-from-child state-agent) array-o-bytes)))
 
 (s/fdef parent->

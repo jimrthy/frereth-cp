@@ -228,8 +228,10 @@
                    next-block-queue)))
     (log/debug (str message-loop-name
                     ": Next message should come from "
+                    (count next-block-queue)
+                    " blocks in\n"
                     next-block-queue
-                    " inside\n"
+                    "\ninside\n"
                     (::specs/outgoing state)))
     (let [next-message-id (let [n' (inc current-message-id)]
                             ;; Stupid unsigned math
@@ -522,6 +524,9 @@
       (block->parent! ->parent send-buf)
       (log/debug (str message-loop-name
                       ": Calculating earliest time among "
+                      ;; I don't have message-id here.
+                      ;; TODO: Get it. It *will* make debugging
+                      ;; easier.
                       (count un-ackd-blocks)
                       " blocks\nthat have not been ACK'd in a "
                       (class un-ackd-blocks)

@@ -4,10 +4,9 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.shared.constants :as K-shared]
             [frereth-cp.util :as util]
-            [overtone.at-at])
+            [manifold.deferred :as dfrd])
   (:import clojure.lang.BigInt
-           io.netty.buffer.ByteBuf
-           overtone.at_at.ScheduledJob))
+           io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -211,8 +210,8 @@
 
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
-;; Next time for us to do something without a trigger
-(s/def ::next-action #(instance? ScheduledJob %))
+;; deferred for triggering I/O on a timer
+(s/def ::next-action dfrd/deferred?)
 ;; These feed off recent, but are basically undocumented
 (s/def ::last-doubling int?)
 (s/def ::last-edge int?)
