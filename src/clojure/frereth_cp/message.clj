@@ -138,24 +138,26 @@
   ;; send to actually get through the queue
   (let [min-resend-time (+ last-block-time n-sec-per-block)
         _ (log/debug (cl-format nil
-                                "~a: Minimum resend time: ~:d which is ~:d nanoseconds after ~:d"
+                                "~a: Minimum resend time: ~:d which is ~:d nanoseconds after ~:d (contrast w/ ~:d)"
                                 message-loop-name
                                 min-resend-time
                                 n-sec-per-block
-                                ;; last-block-time causes problems.
-                                ;; Up until the point I've sent my
-                                ;; last block, it basically progresses
-                                ;; linearly up to 1907725432157608
-                                ;; (for tonight's debug session).
-                                ;; Then it jumps down to
-                                ;; 1907725404755660, which leaves
-                                ;; me with negative delays, because
-                                ;; I'm trying to send the next send
-                                ;; in the past.
-                                ;; And doing this every millisecond
-                                ;; leads to its own set of problems.
-                                ;; FIXME: Start back here.
-                                last-block-time))
+                                ;; I'm calculating last-block-time
+                                ;; incorrectly, due to a misunderstanding
+                                ;; about the name.
+                                ;; It should really be the value of
+                                ;; recent, set immediately after
+                                ;; I send a block to parent.
+                                last-block-time
+                                ;; Extracting this here seems
+                                ;; wasteful. And useless, if
+                                ;; there are no un-ackd-blocks.
+                                ;; The latter consideration
+                                ;; is why I *have* to track
+                                ;; last-block-time separately.
+                                (-> un-ackd-blocks
+                                    last
+                                    ::specs/time)))
         default-next (+ recent (utils/seconds->nanos 60))
         _ (log/debug (cl-format nil
                                 "~a: Default +1 minute: ~:d from ~:d"
@@ -219,11 +221,14 @@
     actual-next))
 
 (declare trigger-from-timer)
+(s/fdef schedule-next-timeout!
+        :args (s/cat :state ::specs/state
+                     :state-agent ::specs/state-agent)
+        :ret ::specs/state)
 (defn schedule-next-timeout!
   [{:keys [::specs/message-loop-name
            ::specs/recent]
-    {:keys [::specs/next-action
-            ::specs/schedule-pool]
+    {:keys [::specs/next-action]
      :as flow-control} ::specs/flow-control
     :as state}
    state-agent]
@@ -406,26 +411,21 @@
   ;; actually calling this.
   (let [state
         (as-> state state
-            (assoc state ::specs/recent (System/nanoTime))
-            (to-parent/maybe-send-block! state)
-            ;; The message from parent to child was garbage.
-            ;; Discard.
-            ;; Q: Does this make sense?
-            ;; It leaves our "global" state updated in a way that left us unable
-            ;; to send earlier. That isn't likely to get fixed the next time
-            ;; through the event loop.
-            ;; (I'm hitting this because I'm sending a gibberish message that
-            ;; needs to be discarded)
-
-            ;; It seems like I should be able to skip this if we got triggered
-            ;; by anything except an incoming message from the parent.
-            ;; That is misleading. We still need to cope with any messages
-            ;; from the parent that haven't been written to the child yet.
-            ;; And, realistically, we *should* cope with message blocks that
-            ;; have only partially been written
-            (or (from-parent/try-processing-message! state)
-                state)
-            (to-child/forward! ->child state))]
+          (assoc state ::specs/recent (System/nanoTime))
+          ;; It doesn't make any sense to call this if
+          ;; we were triggered by a message coming in from
+          ;; the parent.
+          ;; Even if there are pending blocks are ready to
+          ;; send, outgoing messages are throttled by
+          ;; the flow-control logic.
+          ;; Likewise, there isn't a lot of sense in
+          ;; calling it from the child, due to the same
+          ;; throttling issues.
+          ;; Unless we're just idling along, checking for
+          ;; resends every second. Which should only happen
+          ;; if there *are* blocks to resend.
+          ;; This still needs more consideration.
+          (to-parent/maybe-send-block! state))]
     ;; At the end of the main ioloop in the refernce
     ;; implementation, there's a block that closes the pipe
     ;; to the child if we're done.
@@ -434,6 +434,7 @@
     ;; that might do the send, once we've hit EOF
     ;; Q: What can I do here to
     ;; produce the same effect?
+    ;; TODO: Worry about that once the basic idea works.
 
     ;; If the child sent a big batch of data to go out
     ;; all at once, don't waste time setting up a timeout
@@ -461,19 +462,11 @@
     :keys [::specs/message-loop-name]
     :as state}
    array-o-bytes]
-  (log/debug (str message-loop-name
-                  ": trigger-from-child Received a "
-                  (class array-o-bytes)
-                  "\nSent stream address: "
-                  send-bytes))
-  (when-not send-bytes
-    (log/error (str message-loop-name
-                    ": Missing ::specs/send-bytes under"
-                    (keys outgoing)
-                    "inside"
-                    (keys state)
-                    "\na.k.a.\n"
-                    state)))
+  {:pre [array-o-bytes]}
+  (cancel-timer! state)
+  (log/info (str message-loop-name
+                 ": trigger-from-child\nSent stream address: "
+                 send-bytes))
   (trigger-io
    state-agent
    (if (from-child/room-for-child-bytes? state)
@@ -482,9 +475,19 @@
        (let [result (from-child/consume-from-child state array-o-bytes)]
          result))
      ;; trigger-io does some state management, even
-     ;; if we discard the incoming buffer
-     state)))
+     ;; if we discard the incoming bytes because our
+     ;; buffer is full
+     ;; TODO: Need a way to signal the child to
+     ;; try again shortly
+     (do
+       (log/error "Discarding incoming bytes, silently")
+       state))))
 
+(s/fdef trigger-from-parent
+        :args (s/cat :state-agent ::specs/state-agent
+                     :state ::specs/state
+                     :array-o-bytes bytes?)
+        :ret ::specs/state)
 (defn trigger-from-parent
   "Message block arrived from parent. We have work to do."
   ;; TODO: Move as much of this as possible into from-parent
@@ -495,11 +498,12 @@
    {{:keys [::specs/->child]} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
-   ^bytes buf]
-  (when-not ->child
-    (throw (ex-info "Missing ->child"
-                    {::callbacks (::specs/callbacks state)})))
+   ^bytes message]
+  {:pre [->child]}
+
+  (cancel-timer! state)
   (log/info (str message-loop-name ": Incoming from parent"))
+
   ;; This is basically an iteration of the top-level
   ;; event-loop handler from main().
   ;; I can skip the pieces that only relate to reading
@@ -509,8 +513,20 @@
 
   ;; However, there *is* the need to handle packets that the
   ;; child has buffered up to send to the parent.
-  (trigger-io state-agent
-              (assoc-in state [::specs/incoming ::specs/parent->buffer] buf)))
+
+  ;; Except that we can't do this here/now. That part's
+  ;; limited by the flow-control logic (handled by the
+  ;; timer) and the callbacks arriving from the child.
+  ;; It seems like we probably should cancel/reschedule,
+  ;; since whatever ACK just arrived might adjust the RTT
+  ;; logic.
+
+  (let [pre-processed (from-parent/try-processing-message! state)
+        state' (if pre-processed
+                 (to-child/forward! ->child pre-processed)
+                 state)]
+    (schedule-next-timeout! state' state-agent)
+    (trigger-io state-agent state')))
 
 (defn trigger-from-timer
   [state-agent
