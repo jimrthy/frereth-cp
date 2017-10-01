@@ -232,7 +232,6 @@
 (s/def ::rtt-seen-recent-low boolean?)
 (s/def ::rtt-timeout ::big-int)
 (s/def ::last-speed-adjustment ::big-int)
-(s/def ::schedule-pool (s/nilable #(instance? overtone.at_at.MutablePool %)))
 
 ;; These correspond with values
 ;; 0, 2, and 1, respectively.

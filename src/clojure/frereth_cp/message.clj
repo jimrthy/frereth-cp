@@ -289,7 +289,7 @@
                                 (send state-agent (fn [_]
                                                     failure))))))
         (log/debug (cl-format nil
-                              "~a: Setting timer to trigger in ~a ms (vs ~a scheduled)"
+                              "~a: Setting timer to trigger in ~:d ms (vs ~:d scheduled)"
                               message-loop-name
                               delta_f
                               (float (utils/nanos->millis scheduled-delay))))
@@ -382,6 +382,8 @@
     (log/info (str message-loop-name ": cancelling I/O timer "
                    next-action
                    ", a " (class next-action)))
+    ;; Note that this is not cancelling the error-handling
+    ;; timeout the way I'd hoped.
     (dfrd/success! next-action ::superseded)))
 
 (s/fdef trigger-io
@@ -489,7 +491,7 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [state-agent
+  [state-agent  ; so we can forward downstream to trigger the next state change
    {{:keys [::specs/->child]} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
@@ -760,11 +762,15 @@
       ;; get triggered again while I'm in the middle of other
       ;; things when it's running aggressively at the beginning.
       (cancel-timer! state)
+      ;; One flaw with these buffer checks stems from what
+      ;; happens with a pure ACK. I think I may have botched
+      ;; this aspect of the translation.
       (if (< (count ->child-buffer) max-child-buffer-size)
         (let [previously-buffered-message-bytes (reduce + 0
                                                     (map (fn [^bytes buf]
                                                            (count buf))
                                                          ->child-buffer))]
+          (log/debug "There's room in the child buffer; processing")
           ;; Probably need to do something with previously-buffered-message-bytes.
           ;; Definitely need to check the number of bytes that have not
           ;; been forwarded along yet.
@@ -774,14 +780,23 @@
           ;; CPU cycles calculating it.
           (if (<= incoming-size K/max-msg-len)
             (do
+              (log/debug (str message-loop-name
+                              ": Message fits. Tell agent to handle"))
               ;; See comments in child-> re: send vs. send-off
               (send state-agent (partial trigger-from-parent state-agent) buf))
             (do
-              (log/warn (str "Child buffer overflow\n"
+              ;; TODO: If there's
+              (log/warn (str "Message too large\n"
                              "Incoming message is " incoming-size
                              " / " K/max-msg-len))
               (schedule-next-timeout! state state-agent)
               state-agent)))
         (do
+          (log/warn (str message-loop-name
+                         ": Child buffer overflow\n"
+                         "Have " (count ->child-buffer)
+                         "/"
+                         max-child-buffer-size
+                         " messages buffered. Wait!"))
           (schedule-next-timeout! state state-agent)
           state-agent)))))

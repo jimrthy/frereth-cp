@@ -13,8 +13,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
-            [manifold.stream :as strm]
-            [overtone.at-at :as at-at])
+            [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            [io.netty.buffer ByteBuf Unpooled]))
 
@@ -296,8 +295,12 @@
             (let [{:keys [::specs/flow-control]
                    :as client-state} @(deref client-atom)]
               ;; I'm mostly interested in the next-action inside flow-control
-              (is (not flow-control))
-              (at-at/show-schedule (::specs/schedule-pool flow-control))))
+              ;; Down-side to switching to manifold for scheduling:
+              ;; I don't really have any insight into what's going on
+              ;; here.
+              ;; Q: Is that true? Or have I just not studied its
+              ;; docs thoroughly enough?
+              (is (not flow-control))))
           (is (= ::kthxbai really-succeeded?))
           (is (= 5 @client-state))))
       (finally

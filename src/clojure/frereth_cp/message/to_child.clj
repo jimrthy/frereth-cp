@@ -48,10 +48,12 @@
   "Move the parts of the gap-buffer that are ready to write to child
 
   Really only meant as a helper refactored out of consolidate-gap-buffer"
+  ;; @param message-loop-name: Help us track which is doing what
   ;; @param incoming: Really an accumulator inside a reduce
   ;; @param k-v-pair: Incoming message block. Tuple of (start-stop tuple) => bytes
   ;; @return modified accumulator
-  [{:keys [::specs/->child-buffer
+  [message-loop-name
+   {:keys [::specs/->child-buffer
            ::specs/receive-bytes
            ::specs/gap-buffer]
     :as incoming}
@@ -125,7 +127,7 @@
                    (let [[[start stop] buf] buffer-entry]
                      ;; Q: Have we [possibly] filled an existing gap?
                      (if (<= start receive-bytes)
-                       (consolidate-message-block acc buffer-entry)
+                       (consolidate-message-block message-loop-name acc buffer-entry)
                        ;; There's another gap. Move on
                        (reduced acc))))
                  ;; TODO: Experiment with using a transient for this

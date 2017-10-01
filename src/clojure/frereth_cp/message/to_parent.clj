@@ -200,6 +200,12 @@
      current-message-id ::specs/next-message-id
      :as outgoing} ::specs/outgoing
     :as state}]
+  ;; Really just for timing info
+  (log/debug (str message-loop-name ": top of pre-calculate ofter-send"))
+  (assert next-block-queue
+          (str message-loop-name
+               ": No next-block-queue to tell us what to send\nAvailable:\n"
+               (keys outgoing)))
   ;; Starts with line 380 sendblock:
   ;; Resending old block will goto this
   ;; It's in the middle of a do {} while(0) loop
@@ -214,10 +220,6 @@
 ;;;                the write to FD9 at offset +7, which is the
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
-  (assert next-block-queue
-          (str message-loop-name
-               ": No next-block-queue to tell us what to send\nAvailable:\n"
-               (keys outgoing)))
   (let [q (get-in state [::specs/outgoing next-block-queue])]
     (let [transmission-count (-> q
                                  peek
@@ -228,7 +230,7 @@
                    next-block-queue)))
     (log/debug (str message-loop-name
                     ": Next message should come from "
-                    (count next-block-queue)
+                    (count q)
                     " blocks in\n"
                     next-block-queue
                     "\ninside\n"
@@ -282,7 +284,8 @@
                                       ;; Q: Am I still using this?
                                       ::specs/send-buf buf
                                       ::specs/want-ping false)))]
-          (log/debug "Next block built and stats updated")
+          (log/debug (str message-loop-name
+                          ": Next block built and stats updated"))
           ;; It's tempting to split this part up to avoid the conditional.
           ;; Maybe turn the call into a multimethod.
           ;; The latter would be a terrible mistake, since there are
@@ -344,11 +347,16 @@
            ;; Don't adjust those dials.
            state))))
     (do
+      ;; Honestly, it makes more sense to consolidate the
+      ;; gap-buffer with any ACKs in this message before
+      ;; looking for messages to resend.
+      ;; TODO: That instead.
       (log/debug (str message-loop-name
                       ": Hasn't been long enough to justify"
                       " resending any of our "
                       (count un-ackd-blocks)
-                      " previously sent un-ack'd blocks")))))
+                      " previously sent un-ack'd blocks"))
+      nil)))
 
 (s/fdef check-for-new-block-to-send
         :args (s/cat :state ::specs/state)
@@ -536,6 +544,6 @@
 ;;;      408: earliestblocktime_compute()
       (-> state''
           (assoc-in [::specs/outgoing ::specs/earliest-time]
-                    (help/earliest-block-time un-ackd-blocks))
+                    (help/earliest-block-time message-loop-name un-ackd-blocks))
           (update ::specs/outgoing dissoc ::specs/next-block-queue)))
     state))

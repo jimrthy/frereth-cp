@@ -39,7 +39,8 @@
   "Convert a raw message block into a message structure"
   ;; Important: there may still be overlap with previously read bytes!
   ;; (but that's a problem for downstream)
-  [^bytes incoming]
+  [message-loop-name
+   ^bytes incoming]
   {:pre [incoming]
    :post [%]}
   (let [;; It's tempting to use something like doto here
@@ -61,7 +62,8 @@
         D (- D' SF)
         padding-count (- (.readableBytes buf)
                          D')]
-    (log/debug (str "Decomposed "
+    (log/debug (str message-loop-name
+                    ": Decomposed "
                     (count incoming)
                     " bytes into\n"
                     header))
@@ -487,8 +489,10 @@ Line 608"
             ;; 1. updating the statistics and
             ;; 2. Set up the flags for sending an ACK
             ;; So it's remained pretty faithful to the original
-            packet (deserialize parent->buffer)
-            _ (assert packet (str "Unable to extract a packet from " parent->buffer))
+            packet (deserialize message-loop-name parent->buffer)
+            _ (assert packet (str message-loop-name
+                                  ": Unable to extract a packet from "
+                                  parent->buffer))
             ack-id (::specs/acked-message packet)
             ;; Note that, in theory, we *could*
             ;; have multiple blocks with the same message ID.

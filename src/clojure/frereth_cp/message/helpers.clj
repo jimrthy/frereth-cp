@@ -57,10 +57,12 @@
 
 Based on earliestblocktime_compute, in lines 138-153
 "
-  [un-acked-blocks]
+  [message-loop-name un-acked-blocks]
   ;;; Comment from DJB:
   ;;; XXX: use priority queue
-  (log/debug "Calculating min-time across" un-acked-blocks)
+  (log/debug (str message-loop-name
+                  ": Calculating min-time across"
+                  un-acked-blocks))
   (if (< 0 (count un-acked-blocks))
     (apply min (map ::specs/time
                     ;; Time 0 means it's been ACK'd and is ready to discard
@@ -80,10 +82,13 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
   [{{:keys [::specs/un-ackd-blocks
             ::specs/send-eof
             ::specs/send-eof-acked]} ::specs/outgoing
+    {:keys [::specs/message-loop-name]}
     :as state}
    start
    stop]
-  (log/debug "Setting ACK flags on blocks with addresses from" start "to" stop)
+  (log/debug (str message-loop-name
+                  ": Setting ACK flags on blocks with addresses from"
+                  start "to" stop))
   (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
@@ -91,7 +96,9 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     (let [acked (reduce (partial flag-acked-blocks start stop)
                         (assoc state ::n 0)
                         un-ackd-blocks)]
-      (log/debug "Done w/ initial flag reduce:\n" acked)
+      (log/debug (str message-loop-name
+                      ": Done w/ initial flag reduce:\n"
+                      acked))
       ;; To match the next block, the main point is to discard
       ;; the first sequence of blocks that have been ACK'd
       ;; drop-while seems obvious
@@ -105,7 +112,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                        sendprocessed
 ;;;                        blockfirst
       (let [[to-drop to-keep] (split-with #(= 0 (::specs/time %)) (get-in acked [::specs/outgoing ::specs/un-ackd-blocks]))
-            _ (log/debug "Keeping:\n" to-keep "\n\n")
+            _ (log/debug (str message-loop-name ": Keeping:\n" to-keep "\n\n"))
             dropped-block-lengths (apply + (map ::specs/length to-drop))
             ;; TODO: Drop reliance on these
             state (-> acked
@@ -126,12 +133,16 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                     state)]
 ;;;           183: earliestblocktime_compute()
         (doseq [block to-drop]
-          (log/debug "Releasing the buf associated with" block)
+          (log/debug (str message-loop-name
+                          ": Releasing the buf associated with"
+                          block))
           (let [^ByteBuf buffer (::specs/buf block)]
             (.release buffer)))
         (assoc-in state [::specs/outgoing ::specs/earliest-time] (earliest-block-time un-ackd-blocks))))
     ;;; No change
     state))
+
+;;; Q: Would these wrappers make more sense under shared/bit-twiddling?
 
 (defn read-long
   [^ByteBuf bb]
