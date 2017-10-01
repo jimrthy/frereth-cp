@@ -30,7 +30,7 @@
            ::specs/transmissions]
     :as block}]
   {:pre [transmissions]}
-  (println "flag-acked-blocks:" start "-" stop "for" block)
+  (log/debug "flag-acked-blocks:" start "-" stop "for" block)
   (update
    (if (<= start
            start-pos
@@ -40,7 +40,17 @@
          (update ::specs/outgoing
                  (fn [cur]
                    (-> cur
-                       (assoc-in [::specs/blocks n ::specs/time] 0)
+                       ;; The reference implementation flags them
+                       ;; sent by setting the time to 0.
+                       ;; This seems like a terrible idea when I
+                       ;; do so much scheduling based on the earliest
+                       ;; block time.
+                       ;; Plus, this needs to update un-ackd-blocks
+                       ;; rather than the obsolete ::blocks
+                       #_(assoc-in [::specs/blocks n ::specs/time] 0)
+                       ;; Removing them doesn't match the intent of
+                       ;; the function. But it should do what I want.
+                       (update ::specs/un-ackd-blocks disj block)
                        (update ::specs/total-blocks inc)
                        (update ::specs/total-block-transmissions + transmissions)))))
      acc)
@@ -82,13 +92,13 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
   [{{:keys [::specs/un-ackd-blocks
             ::specs/send-eof
             ::specs/send-eof-acked]} ::specs/outgoing
-    {:keys [::specs/message-loop-name]}
+    :keys [::specs/message-loop-name]
     :as state}
    start
    stop]
   (log/debug (str message-loop-name
-                  ": Setting ACK flags on blocks with addresses from"
-                  start "to" stop))
+                  ": Setting ACK flags on blocks with addresses from "
+                  start " to " stop))
   (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
