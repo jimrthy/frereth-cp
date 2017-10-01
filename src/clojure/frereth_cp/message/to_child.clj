@@ -59,7 +59,8 @@
     :as incoming}
    k-v-pair]
   (let [[[start stop] ^ByteBuf buf] k-v-pair]
-    (log/debug (str "Does " start "-" stop " close a hole in "
+    (log/debug (str message-loop-name
+                    ": Does " start "-" stop " close a hole in "
                     gap-buffer " from HWM " receive-bytes "?"))
     ;; For now, this top-level if check is redundant.
     ;; I'd rather be safe and trust the JIT than remove it
@@ -70,10 +71,15 @@
       ;; Q: Did a previous message overwrite this message block?
       (if (< stop receive-bytes)
         (do
-          (log/debug "Dropping previously consolidated block")
-          (throw (RuntimeException. "Probably need to call .release"))
-          ;; Note that the exception keeps this from getting called.
-          ;; And, so far, I haven't hit that.
+          (log/debug (str message-loop-name
+                          ": Dropping previously consolidated block"))
+          (let [to-drop (val (first gap-buffer))]
+            (try
+              (.release to-drop)
+              (catch RuntimeException ex
+                (log/error ex (str message-loop-name
+                                   ": Failed to release"
+                                   to-drop)))))
           (update incoming ::specs/gap-buffer pop-map-first))
         ;; Consolidate this message block
         ;; I'm dubious about the logic for bytes-to-skip
@@ -109,7 +115,11 @@
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}]
-  {:pre [gap-buffer]}
+  (when-not gap-buffer
+    (throw (ex-info "Missing gap-buffer"
+                    {::incoming incoming
+                     ::message-loop message-loop-name
+                     ::incoming-keys (keys incoming)})))
   (assoc state
          ::specs/incoming
          (reduce (fn [{:keys [::specs/receive-bytes]
