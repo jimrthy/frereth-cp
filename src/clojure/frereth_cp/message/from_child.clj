@@ -18,11 +18,17 @@
 
 (defn build-block-descriptions
   "For cases where a child sends a byte array that's too large"
-  [^ByteBuf buf max-block-length]
+  [message-loop-name ^ByteBuf buf max-block-length]
   {:pre [#(< 0 max-block-length)]}
   (let [cap (.capacity buf)
         block-count (int (Math/ceil (/ cap max-block-length)))]
-    (log/debug (str "Building " block-count " " max-block-length "-byte buffer slice(s) from " buf))
+    (log/debug (str message-loop-name
+                    ": Building "
+                    block-count
+                    " "
+                    max-block-length
+                    "-byte buffer slice(s) from "
+                    buf))
     ;; Building a single block takes ~8 ms, which seems quite a bit longer than it should.
     ;; Especially since this is setting up a lazy seq...is *that* what's taking so long?
     ;; TODO: Compare with using (reduce), possibly on a transient
@@ -170,7 +176,7 @@
         ;; This no longer matches the reality where I'm basically
         ;; ignoring buffer limits
         send-bytes (+ send-bytes bytes-to-read)
-        blocks (build-block-descriptions buf max-block-length)]
+        blocks (build-block-descriptions message-loop-name buf max-block-length)]
     (log/debug (str message-loop-name ": " (count blocks) " Block(s) to add:\n"
                     (utils/pretty blocks)))
     (when (>= send-bytes K/stream-length-limit)

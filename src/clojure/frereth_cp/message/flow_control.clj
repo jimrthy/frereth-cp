@@ -1,6 +1,7 @@
 (ns frereth-cp.message.flow-control
   "Cope with flow-control algorithms"
   (:require [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.crypto :as crypto]))
@@ -180,9 +181,13 @@
 
   TODO: Better name
   Lines 458-541"
-  [{:keys [::specs/recent]
+  [{:keys [::specs/message-loop-name
+           ::specs/recent]
     :as state}
    {acked-time ::specs/time
     :as acked-block}]
+  (log/debug (str message-loop-name
+                  ": Updating flow-control stats due to "
+                  acked-block))
   (let [state (recalc-rtt-average state acked-time)]
     (jacobson's-retransmission-timeout state)))

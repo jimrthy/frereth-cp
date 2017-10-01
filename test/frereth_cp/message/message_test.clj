@@ -309,6 +309,11 @@
         (message/halt! @server-atom)))))
 (comment (handshake))
 
+(deftest overflow-from-child
+  ;; If the child sends bytes faster than we can
+  ;; buffer/send, we need a way to signal back-pressure.
+  (throw (RuntimeException. "Not Implemented")))
+
 (deftest bigger-outbound
   ;; Flip-side of echo: I want to see what happens
   ;; when the child sends bytes that don't fit into

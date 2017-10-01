@@ -178,6 +178,7 @@
 (s/def ::strm-strt-addr nat-int?)
 (s/def ::strm-stop-addr nat-int?)
 (s/def ::gap-buffer-key (s/tuple ::strm-strt-addr ::strm-stop-addr))
+;; Note that this is really a sorted-map
 (s/def ::gap-buffer (s/map-of ::gap-buffer-key ::buf))
 
 ;;; These next 5 really swirld around the sendbuf array/circular queue

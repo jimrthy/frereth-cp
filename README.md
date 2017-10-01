@@ -23,7 +23,9 @@ In retrospect, this probably wasn't a great
 idea. A pure java implementation seems like it would have been
 a much wiser choice.
 
-But, hey, I've taken it this far.
+But, hey, I've taken it this far. And this *does* give me a
+higher-level perspective to really think about what's going
+on, above and beyond the bit twiddling.
 
 ## Usage
 
