@@ -110,13 +110,12 @@
                      :packet ::specs/packet)
         :ret ::start-stop-details)
 (defn calculate-start-stop-bytes
-  "calculate start/stop bytes (lines 562-574)"
+  "Extract start/stop ACK addresses (lines 562-574)"
   [{{:keys [::specs/receive-bytes
             ::specs/receive-written]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
-   ;; Q: Isn't this a byte array now?
    {^ByteBuf incoming-buf ::specs/buf
     D ::specs/size-and-flags
     start-byte ::specs/start-byte
@@ -326,7 +325,8 @@
           ;; The gap-buffer that we are *not* updating is about
           ;; arriving messages that might have been dropped/misordered
           ;; due to UDP issues.
-          (log/debug "Discarding a pure ACK")
+          (log/debug (str message-loop-name
+                          ": Pure ACK never updates gap-buffer"))
           state)))))
 
 (s/fdef flag-acked-others!
@@ -358,7 +358,7 @@
                    [::specs/ack-gap-4->5 ::specs/ack-length-5] ; 30-32
                    [::specs/ack-gap-5->6 ::specs/ack-length-6]])] ; 34-36
     (log/debug (str message-loop-name
-                    ": Gaps: " (into [] gaps)
+                    ": ACK'ing with Gaps: " (into [] gaps)
                     "\nState: " state))
     (->
      (reduce (fn [{:keys [::stop-byte]
@@ -505,19 +505,20 @@ Line 608"
             ;; so it shouldn't happen here.
             acked-blocks (filter #(= ack-id (::specs/message-id %))
                                  un-acked-blocks)
-            flagged (-> (reduce flow-control/update-statistics
-                                ;; Remove parent->buffer.
-                                ;; It's been parsed into packet
-                                (update state ::specs/incoming
-                                        dissoc
-                                       ::specs/parent->buffer)
-                                acked-blocks)
-                        ;; That takes us down to line 544
-                        ;; It seems more than a bit silly to calculate flag-acked-others!
-                        ;; if the incoming message is a pure ACK (i.e. message ID 0).
-                        ;; Leave it be for now, just to try to stay in sync with reference
-                        ;; implementation, but this smells.
-                        (flag-acked-others! packet))
+            ;; That takes us down to line 544
+            ;; It seems more than a bit silly to calculate flag-acked-others!
+            ;; if the incoming message is a pure ACK (i.e. message ID 0).
+            ;; That seeming silliness is completely correct: this
+            ;; is the entire point behind a pure ACK.
+            acked-gaps (flag-acked-others! packet)
+            flagged (reduce flow-control/update-statistics
+                            ;; Remove parent->buffer.
+                            ;; It's been parsed into packet
+                            (update acked-gaps
+                                    ::specs/incoming
+                                    dissoc
+                                    ::specs/parent->buffer)
+                            acked-blocks)
             extracted (extract-message! flagged packet)]
         (log/debug (str message-loop-name
                         ": handle-comprehensible message/extracted:\n"
@@ -592,10 +593,14 @@ Line 608"
             (>= receive-written receive-bytes))
       ;; 440: sets maxblocklen=1024
       ;; Q: Why was it ever 512?
-      ;; Guess: for initial Message part of Initiate packet
-      (let [state' (assoc-in state [::specs/outcoming ::specs/max-block-length] K/k-1)]
+      ;; Guess: for initial Message part of Initiate packet, although
+      ;; that limit's higher.
+      (let [state' (assoc-in state [::specs/outgoing ::specs/max-block-length] K/k-1)]
         (log/debug (str message-loop-name ": Handling incoming message, if it's comprehensible"))
         ;; Move on to line 444
+        ;; It seems as though this should forward the incoming message
+        ;; along to the child. But it's really just setting up the
+        ;; state to do that.
         (handle-comprehensible-message! state'))
       (do
         ;; Nothing to do.
