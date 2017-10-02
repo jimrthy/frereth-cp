@@ -9,14 +9,14 @@
         acked (help/mark-acknowledged! start-state 0 56)]
     (try
       (comment (pprint acked))
-      (is (= (keys start-state) (keys acked)))
+      (is (= (keys start-state) (keys (dissoc acked ::help/n))))
       ;; It's tempting to convert these to a set to make
       ;; comparing problems easier.
       ;; But start-state has invalid data now, since one of
       ;; its ByteBuf instances has been released.
-      (let [b1 (::specs/blocks start-state)
+      (let [b1 (get-in start-state [::specs/outgoing ::specs/un-ackd-blocks])
             b1n (count b1)
-            b2 (::specs/blocks acked)
+            b2 (get-in acked [::specs/outgoing ::specs/un-ackd-blocks])
             b2n (count b2)]
         (when-not (= (dec b1n) b2n)
           ;; Can't call clojure.data/diff due to the same issue with
@@ -26,9 +26,13 @@
               (str "Start-state has " b1n
                    " blocks.\nFlagged version has "
                    b2n
-                   "\n"))))
-      (is (= (drop 1 (::specs/blocks start-state))
-             (::specs/blocks acked)))
+                   "\n")))
+        (let [dropped (filter (fn [{:keys [::specs/start-pos
+                                           ::specs/length]}]
+                                (> 56 (+ start-pos length)))
+                              b1)]
+          (is (= (map (partial disj b1) dropped)
+                 b2))))
       (finally
         ;; Don't do this over start-state, since 1 of its buffers has been released
         (doseq [b (::specs/blocks acked)]

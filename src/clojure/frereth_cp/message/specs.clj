@@ -14,6 +14,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+(s/def ::ackd? boolean?)
+
 (s/def ::big-int #(instance? BigInt %))
 (s/def ::buf #(instance? ByteBuf %))
 
@@ -59,7 +61,8 @@
 (s/def ::transmissions int?)
 
 ;; This is really block from the child
-(s/def ::block (s/keys :req [::buf
+(s/def ::block (s/keys :req [::ackd?
+                             ::buf
                              ;; We already have length in ::buf, under .getReadableBytes.
                              ;; It would save space and be less error prone to just use
                              ;; that.

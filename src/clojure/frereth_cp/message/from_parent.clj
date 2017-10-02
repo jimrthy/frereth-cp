@@ -453,6 +453,26 @@ Line 608"
     (log/debug (str message-loop-name
                     ": No bytes to send...presumably we just processed a pure ACK"))))
 
+(s/fdef drop-ackd-blocks
+        :args (s/cat :state ::specs/state
+                     :acked-blocks ::specs/blocks)
+        :ret ::specs/state)
+(defn drop-ackd-blocks
+  [{:keys [::specs/message-loop-name]
+    :as state}
+   ackd-blocks]
+  (reduce (fn [acc ackd]
+            (log/debug (str message-loop-name
+                            ": Marking "
+                            ackd
+                            " as ACK'd"))
+            (update-in acc
+                       [::specs/outgoing ::specs/un-ackd-blocks]
+                       disj
+                       ackd))
+          state
+          ackd-blocks))
+
 (s/fdef handle-comprehensible-message!
         :args (s/cat :state ::specs/state)
         :ret (s/nilable ::specs/state))
@@ -466,7 +486,7 @@ Line 608"
     ;; the outgoing blocks in here.
     ;; But there's an excellent chance that the incoming message
     ;; is going to ACK some or all of what we have pending in here.
-    {:keys [::specs/un-acked-blocks]} ::specs/outgoing
+    {:keys [::specs/un-ackd-blocks]} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}]
   ;; Keep in mind that parent->buffer is an array of bytes that has
@@ -505,20 +525,26 @@ Line 608"
             ;; ID 0 (which is a pure ACK).
             ;; And in java land with only signed integers, there's
             ;; a good chance we really only have 16 bits.
-            ;; But we're limiting the buffer to 128 messages at a time,
+            ;; But we're limiting the buffer to ~256 messages at a time,
             ;; so it shouldn't happen here.
+            _ (log/debug (str message-loop-name
+                              ": looking for un-acked blocks among\n"
+                              un-ackd-blocks
+                              "\nthat match message ID "
+                              ack-id))
             acked-blocks (filter #(= ack-id (::specs/message-id %))
-                                 un-acked-blocks)
+                                 un-ackd-blocks)
+            dropped-ackd (drop-ackd-blocks state acked-blocks)
             ;; That takes us down to line 544
             ;; It seems more than a bit silly to calculate flag-acked-others!
             ;; if the incoming message is a pure ACK (i.e. message ID 0).
             ;; That seeming silliness is completely correct: this
             ;; is the entire point behind a pure ACK.
-            acked-gaps (flag-acked-others! state packet)
+            with-acked-gaps (flag-acked-others! dropped-ackd packet)
             flagged (reduce flow-control/update-statistics
                             ;; Remove parent->buffer.
                             ;; It's been parsed into packet
-                            (update acked-gaps
+                            (update with-acked-gaps
                                     ::specs/incoming
                                     dissoc
                                     ::specs/parent->buffer)
@@ -599,6 +625,11 @@ Line 608"
       ;; Q: Why was it ever 512?
       ;; Guess: for initial Message part of Initiate packet, although
       ;; that limit's higher.
+      ;; If that's the case, it seems like a mistake to do this after the
+      ;; first non-ACK response.
+      ;; That isn't true. The message handshake pieces happen at the
+      ;; client layer. This part receives the decrypted message payloads
+      ;; and reassembles them into the stream.
       (let [state' (assoc-in state [::specs/outgoing ::specs/max-block-length] K/k-1)]
         (log/debug (str message-loop-name ": Handling incoming message, if it's comprehensible"))
         ;; Move on to line 444

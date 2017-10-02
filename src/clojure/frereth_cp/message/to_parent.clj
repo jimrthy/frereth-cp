@@ -388,20 +388,14 @@
                       "\nrecent: " recent))
       nil)))
 
-(s/fdef check-for-new-block-to-send
+(s/fdef ok-to-send-new?
         :args (s/cat :state ::specs/state)
-        :ret (s/nilable ::specs/state))
-(defn check-for-new-block-to-send
-  "Q: Is there a new block ready to send?
-
-  357-378:  Sets up a new block to send
-  Along w/ related data flags in parallel arrays"
+        :ret boolean?)
+(defn ok-to-send-new?
   [{:keys [::specs/message-loop-name
            ::specs/recent]
     {:keys [::specs/earliest-time
-            ::specs/max-block-length
-            ::specs/send-acked
-            ::specs/send-bytes
+            ::send-bytes
             ::specs/send-eof
             ::specs/send-eof-processed
             ::specs/send-processed
@@ -410,6 +404,70 @@
             ::specs/want-ping]
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
+    :as state}]
+  (let [result
+        (and (>= recent (+ earliest-time n-sec-per-block))
+             ;; If we have too many outgoing blocks being
+             ;; tracked, don't put more in flight.
+             ;; There's obviously something going wrong
+             ;; somewhere.
+             ;; Reference implementation tracks them all.
+             ;; However: if the client dumps 256K worth of
+             ;; message on us in one fell swoop, this check
+             ;; would guarantee that none of them ever get sent.
+             ;; So only consider the ones that have already
+             ;; been put on the wire.
+             (< (count un-ackd-blocks) K/max-outgoing-blocks)
+             (or want-ping
+                 ;; This next style clause is used several times in
+                 ;; the reference implementation.
+                 ;; The actual check is negative in context, so
+                 ;; it's really a not
+                 ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
+                 ;; C programmers have assured me that it translates into
+                 (if send-eof
+                   (not send-eof-processed)
+                   (< send-processed send-bytes))))]
+    (when-not result
+      (let [fmt (str "~a: Bad preconditions for sending a new block:\n"
+                     "recent: ~:d <? ~:d\n"
+                     "New block count: ~d"
+                     "\nPreviously sent block count: ~d"
+                     "\nwant-ping: ~d"
+                     "\nsend-eof: ~a"
+                     "\n\tsend-eof-processed: ~a"
+                     "\n\tsend-processed: ~:d"
+                     "\nsend-bytes: ~:d")]
+        (log/debug (cl-format nil
+                              fmt
+                              message-loop-name
+                              recent
+                              (+ earliest-time n-sec-per-block)
+                              (count un-sent-blocks)
+                              (count un-ackd-blocks)
+                              want-ping
+                              send-eof
+                              send-eof-processed
+                              send-processed
+                              send-bytes))))
+    result))
+
+(s/fdef check-for-new-block-to-send
+        :args (s/cat :state ::specs/state)
+        :ret (s/nilable ::specs/state))
+(defn check-for-new-block-to-send
+  "Q: Is there a new block ready to send?
+
+  357-378:  Sets up a new block to send
+  Along w/ related data flags in parallel arrays"
+  [{:keys [::specs/message-loop-name]
+    {:keys [::specs/max-block-length
+            ::specs/send-acked
+            ::specs/send-bytes
+            ::specs/send-eof
+            ::specs/send-processed
+            ::specs/un-sent-blocks]
+     :as outgoing} ::specs/outgoing
     :as state}]
   (let [block-count (count un-sent-blocks)]
     ;; This is one of those places where I'm getting confused
@@ -420,28 +478,7 @@
                     block-count
                     " unsent blocks?"))
     (when (< 0 block-count)
-      (if (and (>= recent (+ earliest-time n-sec-per-block))
-               ;; If we have too many outgoing blocks being
-               ;; tracked, don't put more in flight.
-               ;; There's obviously something going wrong
-               ;; somewhere.
-               ;; Reference implementation tracks them all.
-               ;; However: if the client dumps 256K worth of
-               ;; message on us in one fell swoop, this check
-               ;; would guarantee that none of them ever get sent.
-               ;; So only consider the ones that have already
-               ;; been put on the wire.
-               (< (count un-ackd-blocks) K/max-outgoing-blocks)
-               (or want-ping
-                   ;; This next style clause is used several times in
-                   ;; the reference implementation.
-                   ;; The actual check is negative in context, so
-                   ;; it's really a not
-                   ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
-                   ;; C programmers have assured me that it translates into
-                   (if send-eof
-                     (not send-eof-processed)
-                     (< send-processed send-bytes))))
+      (if (ok-to-send-new? state)
         ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
         (let [start-pos (+ send-acked send-processed)
               block-length (max (- send-bytes send-processed)
@@ -470,30 +507,9 @@
           (-> state
               (assoc-in [::specs/outgoing ::specs/next-block-queue] ::specs/un-sent-blocks)))
         (do
-          (let [fmt (str "~a: Bad preconditions for sending a new block:\n"
-                         "recent: ~:d <? ~:d\n"
-                         "New block count: ~d"
-                         "\nPreviously sent block count: ~d"
-                         "\nwant-ping: ~d"
-                         "\nsend-eof: ~a"
-                         "\n\tsend-eof-processed: ~a"
-                         "\n\tsend-processed: ~:d"
-                         "\nsend-bytes: ~:d")]
-            (log/debug (cl-format nil
-                                  fmt
-                                  message-loop-name
-                                  recent
-                                  (+ earliest-time n-sec-per-block)
-                                  block-count
-                                  (count un-ackd-blocks)
-                                  want-ping
-                                  send-eof
-                                  send-eof-processed
-                                  send-processed
-                                  send-bytes)))
           ;; Be explicit about this
           ;; TODO: Avoid extra hoops. Make the caller smarter/less complex.
-          ;; Just set the cursor to nil
+          ;; Just set the cursor to nil here.
           nil)))))
 
 (s/fdef pick-next-block-to-send

@@ -44,7 +44,8 @@
                             (if (not= 0 remainder)
                               remainder
                               max-block-length)))]
-             {::specs/buf (.slice buf (* n max-block-length) length)
+             {::specs/ackd? false
+              ::specs/buf (.slice buf (* n max-block-length) length)
               ;; Q: Is there any good justification for tracking this twice?
               ::specs/length length
               ;; TODO: Add a signal for marking this true
@@ -141,7 +142,7 @@
                   ;; TODO: Might be worth logging the actual contents
                   ;; when it's time to trace
                   (count un-sent-blocks)
-                  " others"))
+                  " unsent others"))
   ;; Note that back-pressure gets applied if we
   ;; already have ~124K pending because caller started
   ;; dropping packets.

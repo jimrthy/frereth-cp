@@ -226,7 +226,10 @@
                                  (str message-loop-name
                                       ": Failure in child callback.")))))
                 ;; And drop the consolidated blocks
-                (log/debug (str message-loop-name ": Dropping block from child buffer"))
+                (log/debug (str message-loop-name
+                                " (thread "
+                                (Thread/currentThread)
+                                "): Dropping block we just finished sending to child"))
                 (.release buf)
                 (update-in state'
                            ;; Yes, this is already a vector

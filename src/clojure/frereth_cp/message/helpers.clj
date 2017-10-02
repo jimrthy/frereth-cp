@@ -16,6 +16,42 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+(s/fdef mark-block-ackd
+        :args (s/cat :outgoing ::specs/outgoing
+                     :block ::specs/block)
+        :ret ::specs/outgoing)
+(defn mark-block-ackd
+  [{:keys [::specs/un-ackd-blocks]
+    :as outgoing}
+   block]
+  (log/debug "Marking" block "ACK'd")
+  ;; The reference implementation flags them
+  ;; sent by setting the time to 0.
+  ;; This seems like a terrible idea when I
+  ;; do so much scheduling based on the earliest
+  ;; block time.
+  ;; Plus, this needs to update un-ackd-blocks
+  ;; rather than the obsolete ::blocks
+  ;; Note that that's a sorted-set. Which
+  ;; takes this back to "totally busted."
+  #_(assoc-in outgoing [::specs/un-ackd-blocks n ::specs/time] 0)
+  ;; Removing them doesn't match the intent of
+  ;; the function. But it should do what I want.
+  #_(update outgoing ::specs/un-ackd-blocks disj block)
+  ;; This approach seems annoyingly inefficient.
+  ;; Q: Would it be faster/more efficient to convert
+  ;; un-ackd-blocks to a sorted-map? (The trick there is
+  ;; that I'd need to pick a key. start-pos seems pretty
+  ;; obvious, but I don't have that readily available
+  ;; when I initially create the block)
+  (-> outgoing
+      (update ::specs/un-ackd-blocks disj block)
+      (update ::specs/un-ackd-blocks
+              conj
+              (assoc block
+                     ::specs/ackd?
+                     true))))
+
 (s/fdef flag-acked-blocks
         :args (s/cat :start int?
                      :stop int?
@@ -30,29 +66,22 @@
            ::specs/transmissions]
     :as block}]
   {:pre [transmissions]}
-  (log/debug "flag-acked-blocks:" start "-" stop "for" block)
+  (log/debug (str "flag-acked-blocks: " start "-" stop
+                  " for\n" block))
   (update
    (if (<= start
            start-pos
            (+ start-pos (::specs/length block))
            stop)
-     (-> acc
-         (update ::specs/outgoing
-                 (fn [cur]
-                   (-> cur
-                       ;; The reference implementation flags them
-                       ;; sent by setting the time to 0.
-                       ;; This seems like a terrible idea when I
-                       ;; do so much scheduling based on the earliest
-                       ;; block time.
-                       ;; Plus, this needs to update un-ackd-blocks
-                       ;; rather than the obsolete ::blocks
-                       #_(assoc-in [::specs/blocks n ::specs/time] 0)
-                       ;; Removing them doesn't match the intent of
-                       ;; the function. But it should do what I want.
-                       (update ::specs/un-ackd-blocks disj block)
-                       (update ::specs/total-blocks inc)
-                       (update ::specs/total-block-transmissions + transmissions)))))
+     (do
+       (log/debug "(it's a match)")
+       (-> acc
+           (update ::specs/outgoing
+                   (fn [cur]
+                     (-> cur
+                         (mark-block-ackd block)
+                         (update ::specs/total-blocks inc)
+                         (update ::specs/total-block-transmissions + transmissions))))))
      acc)
    ::n inc))
 
@@ -60,7 +89,8 @@
 ;;; Public
 
 (s/fdef earliest-block-time
-        :args ::specs/un-ackd-blocks
+        :args (s/cat :message-loop-name string?
+                     :blocks ::specs/un-ackd-blocks)
         :ret nat-int?)
 (defn earliest-block-time
   "Calculate the earliest time
@@ -121,10 +151,23 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                        sendbytes
 ;;;                        sendprocessed
 ;;;                        blockfirst
-      (let [[to-drop to-keep] (split-with #(= 0 (::specs/time %)) (get-in acked [::specs/outgoing ::specs/un-ackd-blocks]))
-            _ (log/debug (str message-loop-name ": Keeping:\n" to-keep "\n\n"))
+      (let [[to-drop to-keep] (split-with #(::specs/ackd? %)
+                                          (get-in acked [::specs/outgoing ::specs/un-ackd-blocks]))
+            _ (log/debug (str message-loop-name
+                              ": Keeping "
+                              (count to-keep)
+                              " blocks:\n"
+                              (reduce (fn [acc b]
+                                        (str acc "\n" b))
+                                      ""
+                                      to-keep)
+                              "\n\n"))
             dropped-block-lengths (apply + (map ::specs/length to-drop))
-            ;; TODO: Drop reliance on these
+            kept (reduce (fn [acc dropped]
+                           (disj acc dropped))
+                         un-ackd-blocks
+                         to-drop)
+            ;; TODO: Drop reliance on these send-* keys
             state (-> acked
                       (update ::specs/outgoing
                               (fn [cur]
@@ -132,7 +175,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                                     (update ::specs/send-acked + dropped-block-lengths))))
                       (update-in [::specs/outgoing ::specs/send-bytes] - dropped-block-lengths)
                       (update-in [::specs/outgoing ::specs/send-processed] - dropped-block-lengths)
-                      (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] (vec to-keep)))
+                      (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] kept))
 ;;;           177-182: Possibly set sendeofacked flag
             state (if (and send-eof
                            (= start 0)
@@ -148,7 +191,8 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                           block))
           (let [^ByteBuf buffer (::specs/buf block)]
             (.release buffer)))
-        (assoc-in state [::specs/outgoing ::specs/earliest-time] (earliest-block-time un-ackd-blocks))))
+        (assoc-in state [::specs/outgoing ::specs/earliest-time]
+                  (earliest-block-time message-loop-name un-ackd-blocks))))
     ;;; No change
     state))
 
