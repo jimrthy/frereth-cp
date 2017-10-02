@@ -25,19 +25,11 @@
     :as outgoing}
    block]
   (log/debug "Marking" block "ACK'd")
-  ;; The reference implementation flags them
-  ;; sent by setting the time to 0.
-  ;; This seems like a terrible idea when I
-  ;; do so much scheduling based on the earliest
-  ;; block time.
-  ;; Plus, this needs to update un-ackd-blocks
-  ;; rather than the obsolete ::blocks
-  ;; Note that that's a sorted-set. Which
-  ;; takes this back to "totally busted."
-  #_(assoc-in outgoing [::specs/un-ackd-blocks n ::specs/time] 0)
-  ;; Removing them doesn't match the intent of
-  ;; the function. But it should do what I want.
-  #_(update outgoing ::specs/un-ackd-blocks disj block)
+  (assert (contains? un-ackd-blocks block)
+          (str "Can't mark\n"
+               block
+               "\nas ACK'd because it is not in\n"
+               un-ackd-blocks))
   ;; This approach seems annoyingly inefficient.
   ;; Q: Would it be faster/more efficient to convert
   ;; un-ackd-blocks to a sorted-map? (The trick there is
@@ -60,30 +52,30 @@
         :ret ::block-counting-state)
 (defn flag-acked-blocks
   [start stop
-   {:keys [::n]
-    :as acc}
+   acc
    {:keys [::specs/start-pos
            ::specs/transmissions]
     :as block}]
-  {:pre [transmissions]}
+  #_{:pre [transmissions]}
+  (when-not transmissions
+    (throw (ex-info "Missing transmissions"
+                    {::problem block})))
   (log/debug (str "flag-acked-blocks: " start "-" stop
                   " for\n" block))
-  (update
-   (if (<= start
-           start-pos
-           (+ start-pos (::specs/length block))
-           stop)
-     (do
-       (log/debug "(it's a match)")
-       (-> acc
-           (update ::specs/outgoing
-                   (fn [cur]
-                     (-> cur
-                         (mark-block-ackd block)
-                         (update ::specs/total-blocks inc)
-                         (update ::specs/total-block-transmissions + transmissions))))))
-     acc)
-   ::n inc))
+  (if (<= start
+          start-pos
+          (+ start-pos (::specs/length block))
+          stop)
+    (do
+      (log/debug "(it's a match)")
+      (update acc
+              ::specs/outgoing
+              (fn [cur]
+                (-> cur
+                    (mark-block-ackd block)
+                    (update ::specs/total-blocks inc)
+                    (update ::specs/total-block-transmissions + transmissions)))))
+    acc))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -110,7 +102,7 @@ Based on earliestblocktime_compute, in lines 138-153
     0))
 
 ;;;; 155-185: acknowledged(start, stop)
-(s/fdef acknowledged
+(s/fdef mark-acknowledged!
         :args (s/cat :state ::specs/state
                      :start int?
                      :stop int?)
@@ -134,7 +126,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                    Marks blocks between start and stop as ACK'd
 ;;;                    Updates totalblocktransmissions and totalblocks
     (let [acked (reduce (partial flag-acked-blocks start stop)
-                        (assoc state ::n 0)
+                        state
                         un-ackd-blocks)]
       (log/debug (str message-loop-name
                       ": Done w/ initial flag reduce:\n"
@@ -151,8 +143,9 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                        sendbytes
 ;;;                        sendprocessed
 ;;;                        blockfirst
-      (let [[to-drop to-keep] (split-with #(::specs/ackd? %)
-                                          (get-in acked [::specs/outgoing ::specs/un-ackd-blocks]))
+      (let [possibly-ackd (get-in acked [::specs/outgoing ::specs/un-ackd-blocks])
+            to-drop (filter ::specs/ackd? possibly-ackd)
+            to-keep (remove ::specs/ackd? possibly-ackd)
             _ (log/debug (str message-loop-name
                               ": Keeping "
                               (count to-keep)
@@ -161,6 +154,8 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                                         (str acc "\n" b))
                                       ""
                                       to-keep)
+                              "\nout of\n"
+                              possibly-ackd
                               "\n\n"))
             dropped-block-lengths (apply + (map ::specs/length to-drop))
             kept (reduce (fn [acc dropped]
@@ -189,6 +184,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
           (log/debug (str message-loop-name
                           ": Releasing the buf associated with"
                           block))
+          ;; This is why the function name has a !
           (let [^ByteBuf buffer (::specs/buf block)]
             (.release buffer)))
         (assoc-in state [::specs/outgoing ::specs/earliest-time]

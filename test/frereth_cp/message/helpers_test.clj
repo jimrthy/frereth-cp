@@ -1,8 +1,20 @@
 (ns frereth-cp.message.helpers-test
-  (:require [clojure.test :refer (deftest is)]
+  (:require [clojure.test :refer (deftest is testing)]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.message.test-utilities :as test-helpers]))
+
+(deftest check-basic-acking
+  (let [target {::value 1
+                ::specs/ackd? false}
+        not-target {::value 2
+                    ::specs/ackd? false}
+        start {::specs/un-ackd-blocks #{target
+                                        not-target}}
+        actual (help/mark-block-ackd start target)
+        expected {::specs/un-ackd-blocks #{not-target
+                                           (assoc target ::specs/ackd? true)}}]
+    (is (= expected actual))))
 
 (deftest check-mark-acked
   (let [start-state (test-helpers/build-ack-flag-message-portion)
@@ -31,7 +43,7 @@
                                            ::specs/length]}]
                                 (> 56 (+ start-pos length)))
                               b1)]
-          (is (= (map (partial disj b1) dropped)
+          (is (= (apply set (map (partial disj b1) dropped))
                  b2))))
       (finally
         ;; Don't do this over start-state, since 1 of its buffers has been released
@@ -40,20 +52,27 @@
 
 (deftest check-flag-acked-block
   (let [start-state (test-helpers/build-ack-flag-message-portion)
+        blocks (get-in start-state [::specs/outgoing ::specs/un-ackd-blocks])
+        block (last blocks)
         flagged (help/flag-acked-blocks 0 56
-                                        (assoc start-state ::help/n 0)
-                                        (first (::specs/blocks start-state)))]
+                                        start-state
+                                        block)]
     (try
-      (is (= (-> start-state
-                 (update-in [::specs/blocks 0 ::specs/time] (constantly 0))
-                 (assoc ::specs/total-block-transmissions 1
-                        ::specs/total-blocks 1))
-             (dissoc flagged ::help/n)))
-      (let [flagged (help/flag-acked-blocks 0 56
-                                            (assoc start-state ::help/n 1)
-                                            (second (::specs/blocks start-state)))]
-        (is (= (assoc start-state ::help/n 2)
-               flagged)))
+      (testing "ACK'd"
+        (let [expected (-> start-state
+                           (update-in [::specs/outgoing ::specs/un-ackd-blocks]
+                                      (fn [cur]
+                                        (-> cur
+                                            (disj block)
+                                            (conj (assoc block ::specs/ackd? true)))))
+                           (assoc-in [::specs/outgoing ::specs/total-block-transmissions] 1)
+                           (assoc-in [::specs/outgoing ::specs/total-blocks] 1))]
+          (is (= expected flagged))))
+      (testing "Not"
+          (let [flagged (help/flag-acked-blocks 0 56
+                                                start-state
+                                                (second blocks))]
+            (is (= start-state flagged))))
       (finally
         (doseq [b (::specs/blocks start-state)]
           (.release (::specs/buf b)))))))
