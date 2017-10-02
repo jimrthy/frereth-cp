@@ -472,6 +472,10 @@ Line 608"
   ;; Keep in mind that parent->buffer is an array of bytes that has
   ;; just been pulled off the wire
   (let [len (count parent->buffer)]
+    (log/debug (str message-loop-name
+                    ": Handling a "
+                    len
+                    " byte message"))
     ;; Lines 452-453
     (if (and (>= len K/min-msg-len)
              (<= len K/max-msg-len))
@@ -510,7 +514,7 @@ Line 608"
             ;; if the incoming message is a pure ACK (i.e. message ID 0).
             ;; That seeming silliness is completely correct: this
             ;; is the entire point behind a pure ACK.
-            acked-gaps (flag-acked-others! packet)
+            acked-gaps (flag-acked-others! state packet)
             flagged (reduce flow-control/update-statistics
                             ;; Remove parent->buffer.
                             ;; It's been parsed into packet

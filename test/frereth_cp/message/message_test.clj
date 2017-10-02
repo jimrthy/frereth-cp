@@ -130,11 +130,11 @@
                         (let [child-outcome @outcome-agent
                               outgoing (::specs/outgoing child-outcome)
                               incoming (::specs/incoming child-outcome)]
-                          (is (= (::specs/receive-bytes incoming) (inc msg-len)))
-                          (is (= (::specs/next-message-id outgoing) 2))
-                          (is (= (::specs/send-processed outgoing) 0))
+                          (is (= (inc msg-len) (::specs/receive-bytes incoming)))
+                          (is (= 2 (::specs/next-message-id outgoing)))
+                          (is (= 0 (::specs/send-processed outgoing)))
                           (is (not (::specs/send-eof outgoing)))
-                          (is (= (::specs/send-bytes outgoing) msg-len))
+                          (is (= msg-len (::specs/send-bytes outgoing)))
                           ;; Keeping around as a reminder for when the implementation changes
                           ;; and I need to see what's really going on again
                           (comment (is (not outcome) "What should we have here?"))))))))))
