@@ -417,6 +417,8 @@
                     outgoing (::specs/outgoing outcome)
                     incoming (::specs/incoming outcome)]
                 (is (= msg-len (::specs/send-bytes outgoing)))
+                ;; This check is broken now.
+                ;; Q: But was it wrong before?
                 (is (= (inc packet-count) (::specs/next-message-id outgoing)))
                 ;; I'm not sending back any ACKs
                 (is (= (::specs/send-processed outgoing) 0))

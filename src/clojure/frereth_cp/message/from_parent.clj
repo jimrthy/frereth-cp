@@ -459,13 +459,29 @@ Line 608"
         :ret ::specs/state)
 (defn drop-ackd-blocks
   [{:keys [::specs/message-loop-name]
+    {:keys [::specs/un-ackd-blocks]} ::specs/outgoing
     :as state}
    ackd-blocks]
+  ;; Note that, in theory, we *could*
+  ;; have multiple blocks with the same message ID.
+  ;; But probably not inside the available 128K buffer space.
+  ;; At best, we have 32 bits for block IDs, -1 for
+  ;; ID 0 (which is a pure ACK).
+  ;; And in java land with only signed integers, there's
+  ;; a good chance we really only have 16 bits.
+  ;; But we're limiting the buffer to ~256 messages at a time,
+  ;; (depending on size) so it shouldn't happen here.
   (reduce (fn [acc ackd]
             (log/debug (str message-loop-name
-                            ": Marking "
+                            ": Discarding "
                             ackd
                             " as ACK'd"))
+            (log/warn "(without updating stats)")
+            ;; This ignores some of the stat-gathering
+            ;; that comes from helpers/mark-acknowledged!
+            ;; Q: Was this usage ever intended?
+            ;; TODO: At the very least, need to update
+            ;; total blocks and total block transmissions
             (update-in acc
                        [::specs/outgoing ::specs/un-ackd-blocks]
                        disj
@@ -499,83 +515,79 @@ Line 608"
     ;; Lines 452-453
     (if (and (>= len K/min-msg-len)
              (<= len K/max-msg-len))
-      ;; TODO: Time this. See whether it's worth combining these calls
-      ;;  using either some version of comp or as-> (or possibly
-      ;; transducers?)
-      (let [_ (log/debug (str message-loop-name ": Deserializing parent->buffer: "
-                              parent->buffer ", a " (class parent->buffer)
-                              " containing " (count parent->buffer) " bytes"))
-            ;; This looks like a discrepancy with reference implementation:
-            ;; that calls the flow control updates before anything else.
-            ;; It doesn't quite mesh up, since there's never any
-            ;; explicit call like this to do the deserialization.
-            ;; But the next real steps are
-            ;; 1. updating the statistics and
-            ;; 2. Set up the flags for sending an ACK
-            ;; So it's remained pretty faithful to the original
-            packet (deserialize message-loop-name parent->buffer)
-            _ (assert packet (str message-loop-name
-                                  ": Unable to extract a packet from "
-                                  parent->buffer))
-            ack-id (::specs/acked-message packet)
-            ;; Note that, in theory, we *could*
-            ;; have multiple blocks with the same message ID.
-            ;; But probably not inside the available 128K buffer space.
-            ;; At best, we have 32 bits for block IDs, -1 for
-            ;; ID 0 (which is a pure ACK).
-            ;; And in java land with only signed integers, there's
-            ;; a good chance we really only have 16 bits.
-            ;; But we're limiting the buffer to ~256 messages at a time,
-            ;; so it shouldn't happen here.
-            _ (log/debug (str message-loop-name
-                              ": looking for un-acked blocks among\n"
-                              un-ackd-blocks
-                              "\nthat match message ID "
-                              ack-id))
-            acked-blocks (filter #(= ack-id (::specs/message-id %))
-                                 un-ackd-blocks)
-            dropped-ackd (drop-ackd-blocks state acked-blocks)
-            ;; That takes us down to line 544
-            ;; It seems more than a bit silly to calculate flag-acked-others!
-            ;; if the incoming message is a pure ACK (i.e. message ID 0).
-            ;; That seeming silliness is completely correct: this
-            ;; is the entire point behind a pure ACK.
-            with-acked-gaps (flag-acked-others! dropped-ackd packet)
-            flagged (reduce flow-control/update-statistics
-                            ;; Remove parent->buffer.
-                            ;; It's been parsed into packet
-                            (update with-acked-gaps
-                                    ::specs/incoming
-                                    dissoc
-                                    ::specs/parent->buffer)
-                            acked-blocks)
-            extracted (extract-message! flagged packet)]
-        (log/debug (str message-loop-name
-                        ": handle-comprehensible message/extracted:\n"
-                        extracted))
-        (if extracted
-          (or
-           (let [msg-id (::specs/message-id packet)]
-             (log/debug (str message-loop-name ": ACK message-id " msg-id "?"))
-             (when-not msg-id
-               ;; Note that 0 is legal: that's a pure ACK.
-               ;; We just have to have something.
-               ;; (This comment is because I have to keep remembering
-               ;; how truthiness works in C)
-               (throw (ex-info "Missing the incoming message-id"
-                               extracted)))
-             (when-let [ack-msg (prep-send-ack extracted msg-id)]
-               (log/debug (str message-loop-name ": Have an ACK to send back"))
-               ;; since this is called for side-effects, ignore the
-               ;; return value.
-               (send-ack! extracted ack-msg)
-               (log/debug (str message-loop-name ": ACK'd"))
-               (update extracted
-                       ::specs/incoming
-                       dissoc
-                       ::specs/packet)))
-           extracted)
-          flagged))
+      (do
+        (log/debug (str message-loop-name ": Deserializing parent->buffer: "
+                        parent->buffer ", a " (class parent->buffer)
+                        " containing " (count parent->buffer) " bytes"))
+
+        ;; TODO: Time this. See whether it's worth combining these calls
+        ;;  using either some version of comp or as-> (or possibly
+        ;; transducers?)
+        ;; At the very least, find a way to break it into multiple
+        ;; functions.
+        ;; This gigantic let is awful
+        (let [;; This looks like a discrepancy with reference implementation:
+              ;; that calls the flow control updates before anything else.
+              ;; It doesn't quite mesh up, since there's never any
+              ;; explicit call like this to do the deserialization.
+              ;; But the next real steps are
+              ;; 1. updating the statistics and
+              ;; 2. Set up the flags for sending an ACK
+              ;; So it's remained pretty faithful to the original
+              {:keys [::specs/acked-message]
+               :as packet} (deserialize message-loop-name parent->buffer)
+              _ (assert packet (str message-loop-name
+                                    ": Unable to extract a packet from "
+                                    parent->buffer))
+              _ (log/debug (str message-loop-name
+                                ": looking for un-acked blocks among\n"
+                                un-ackd-blocks
+                                "\nthat match message ID "
+                                acked-message))
+              ackd-blocks (filter #(= acked-message (::specs/message-id %))
+                                  un-ackd-blocks)
+              dropped-ackd (drop-ackd-blocks state ackd-blocks)
+              ;; That takes us down to line 544
+              ;; It seems more than a bit silly to calculate flag-acked-others!
+              ;; if the incoming message is a pure ACK (i.e. message ID 0).
+              ;; That seeming silliness is completely correct: this
+              ;; is the entire point behind a pure ACK.
+              with-acked-gaps (flag-acked-others! dropped-ackd packet)
+              flagged (reduce flow-control/update-statistics
+                              ;; Remove parent->buffer.
+                              ;; It's been parsed into packet
+                              (update with-acked-gaps
+                                      ::specs/incoming
+                                      dissoc
+                                      ::specs/parent->buffer)
+                              ackd-blocks)
+              extracted (extract-message! flagged packet)]
+          (log/debug (str message-loop-name
+                          ": handle-comprehensible message/extracted:\n"
+                          extracted))
+          (if extracted
+            (or
+             (let [msg-id (::specs/message-id packet)]
+               (log/debug (str message-loop-name ": ACK message-id " msg-id "?"))
+               (when-not msg-id
+                 ;; Note that 0 is legal: that's a pure ACK.
+                 ;; We just have to have something.
+                 ;; (This comment is because I have to keep remembering
+                 ;; how truthiness works in C)
+                 (throw (ex-info "Missing the incoming message-id"
+                                 extracted)))
+               (when-let [ack-msg (prep-send-ack extracted msg-id)]
+                 (log/debug (str message-loop-name ": Have an ACK to send back"))
+                 ;; since this is called for side-effects, ignore the
+                 ;; return value.
+                 (send-ack! extracted ack-msg)
+                 (log/debug (str message-loop-name ": ACK'd"))
+                 (update extracted
+                         ::specs/incoming
+                         dissoc
+                         ::specs/packet)))
+             extracted)
+            flagged)))
       (do
         (if (< 0 len)
           (log/warn (str message-loop-name ": Illegal incoming message length:") len)

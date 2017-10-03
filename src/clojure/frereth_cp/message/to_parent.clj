@@ -395,7 +395,7 @@
   [{:keys [::specs/message-loop-name
            ::specs/recent]
     {:keys [::specs/earliest-time
-            ::send-bytes
+            ::specs/send-bytes
             ::specs/send-eof
             ::specs/send-eof-processed
             ::specs/send-processed
@@ -405,6 +405,13 @@
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
+  #_{:pre [send-bytes
+           send-processed]}
+  (when-not send-bytes
+    (throw (ex-info "Missing send-bytes"
+                    {::among (keys outgoing)
+                     ::have send-bytes
+                     ::details outgoing})))
   (let [result
         (and (>= recent (+ earliest-time n-sec-per-block))
              ;; If we have too many outgoing blocks being
