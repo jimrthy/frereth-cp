@@ -182,6 +182,8 @@
                                 incoming (edn/read-string s)]
                             (is (< 0 (count s)))
                             (is incoming)
+                            ;; We're receiving the initial ::orly? response in State 0.
+                            ;; The ::yarly disappears
                             (log/info (str "Client (state "
                                            @client-state
                                            ") received: "

@@ -237,13 +237,13 @@
 (s/def ::rtt-timeout ::big-int)
 (s/def ::last-speed-adjustment ::big-int)
 
-;; These correspond with values
+;; These correspond with wantping values
 ;; 0, 2, and 1, respectively.
 ;; i.e. -s, -c, and -C parameters
 ;; to the message program.
-;; -s : part of a server
-;; -c : client that starts after the server
-;; -C : client that starts before the server
+;; -s : part of a server (0)
+;; -c : client that starts after the server (2)
+;; -C : client that starts before the server (1)
 (s/def ::want-ping #{false ::immediate ::second-1})
 
 ;; Q: Does it make sense to split this up?

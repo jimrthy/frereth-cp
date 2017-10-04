@@ -16,50 +16,20 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
-(s/fdef mark-block-ackd
-        :args (s/cat :outgoing ::specs/outgoing
-                     :block ::specs/block)
-        :ret ::specs/outgoing)
-(defn mark-block-ackd
-  [{:keys [::specs/un-ackd-blocks]
-    :as outgoing}
-   block]
-  (log/debug "Marking" block "ACK'd")
-  (assert (contains? un-ackd-blocks block)
-          (str "Can't mark\n"
-               block
-               "\nas ACK'd because it is not in\n"
-               un-ackd-blocks))
-  ;; This approach seems annoyingly inefficient.
-  ;; Q: Would it be faster/more efficient to convert
-  ;; un-ackd-blocks to a sorted-map? (The trick there is
-  ;; that I'd need to pick a key. start-pos seems pretty
-  ;; obvious, but I don't have that readily available
-  ;; when I initially create the block)
-  (-> outgoing
-      (update ::specs/un-ackd-blocks disj block)
-      (update ::specs/un-ackd-blocks
-              conj
-              (assoc block
-                     ::specs/ackd?
-                     true))))
-
 (s/fdef flag-acked-blocks
         :args (s/cat :start int?
                      :stop int?
                      :acc ::block-counting-state
                      :block ::specs/block)
         :ret ::block-counting-state)
+(declare mark-block-ackd)
 (defn flag-acked-blocks
   [start stop
    acc
    {:keys [::specs/start-pos
            ::specs/transmissions]
     :as block}]
-  #_{:pre [transmissions]}
-  (when-not transmissions
-    (throw (ex-info "Missing transmissions"
-                    {::problem block})))
+  {:pre [transmissions]}
   (log/debug (str "flag-acked-blocks: " start "-" stop
                   " for\n" block))
   (if (<= start
@@ -67,7 +37,7 @@
           (+ start-pos (::specs/length block))
           stop)
     (do
-      (log/debug "(it's a match)")
+      (log/trace "(it's a match)")
       (update acc
               ::specs/outgoing
               (fn [cur]
@@ -118,6 +88,10 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     :as state}
    start
    stop]
+  ;; This next log message is annoying right now.
+  ;; That's probably because we aren't taking advantages of
+  ;; any of these addressing options and really only ACK'ing
+  ;; the high-water-mark stream address.
   (log/debug (str message-loop-name
                   ": Setting ACK flags on blocks with addresses from "
                   start " to " stop))
@@ -191,6 +165,34 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                   (earliest-block-time message-loop-name un-ackd-blocks))))
     ;;; No change
     state))
+
+(s/fdef mark-block-ackd
+        :args (s/cat :outgoing ::specs/outgoing
+                     :block ::specs/block)
+        :ret ::specs/outgoing)
+(defn mark-block-ackd
+  [{:keys [::specs/un-ackd-blocks]
+    :as outgoing}
+   block]
+  (log/debug "Marking" block "ACK'd")
+  (assert (contains? un-ackd-blocks block)
+          (str "Can't mark\n"
+               block
+               "\nas ACK'd because it is not in\n"
+               un-ackd-blocks))
+  ;; This approach seems annoyingly inefficient.
+  ;; Q: Would it be faster/more efficient to convert
+  ;; un-ackd-blocks to a sorted-map? (The trick there is
+  ;; that I'd need to pick a key. start-pos seems pretty
+  ;; obvious, but I don't have that readily available
+  ;; when I initially create the block)
+  (-> outgoing
+      (update ::specs/un-ackd-blocks disj block)
+      (update ::specs/un-ackd-blocks
+              conj
+              (assoc block
+                     ::specs/ackd?
+                     true))))
 
 ;;; Q: Would these wrappers make more sense under shared/bit-twiddling?
 

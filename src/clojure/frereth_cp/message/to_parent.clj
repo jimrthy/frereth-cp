@@ -62,12 +62,14 @@
             ::specs/error K/error-eof)))
 
 (s/fdef build-message-block
-        :args (s/cat :next-message-id nat-int?
+        :args (s/cat :message-loop-name ::specs/message-loop-name
+                     :next-message-id nat-int?
                      :block-to-send ::specs/block)
         :ret bytes?)
 (defn build-message-block
   "Important note: Doesn't build a message Packet. Just a description for one."
-  ^bytes [^Integer next-message-id
+  ^bytes [message-loop-name
+          ^Integer next-message-id
           {^Long start-pos ::specs/start-pos
            ;; TODO: Switch this to either a bytes or a clojure
            ;; vector of bytes.
@@ -109,7 +111,8 @@
         send-buf (.order (Unpooled/buffer u)
                          java.nio.ByteOrder/LITTLE_ENDIAN)
         flag-size (calculate-message-data-packet-length-flags block-to-send)]
-    (log/debug (str "Building a Message Block byte array for message "
+    (log/debug (str message-loop-name
+                    ": Building a Message Block byte array for message "
                     next-message-id
                     "\nTotal length: " u
                     "\nSize | Flags: " flag-size
@@ -179,9 +182,9 @@
                     ": Moving first unsent block\n("
                     ;; TODO: Verify that this has a ::specs/time key and value
                     block-to-move
-                    ")\nfrom\n"
-                    un-sent-blocks
-                    "\nto\n"
+                    ")\nfrom\na queue of "
+                    (count un-sent-blocks)
+                    " unsent\nto\n"
                     un-ackd-blocks
                     "\nas\n"
                     updated-block))
@@ -289,11 +292,11 @@
                                 (assoc ::specs/time recent)
                                 (assoc ::specs/message-id current-message-id))]
         (log/debug (str message-loop-name
-                    ": Getting ready to build next message block for message "
+                    ": Getting ready to build message block for message "
                         current-message-id
                         "\nbased on:\n")
                    (utils/pretty current-message))
-        (let [buf (build-message-block current-message-id updated-message)
+        (let [buf (build-message-block message-loop-name current-message-id updated-message)
               ;; Reference implementation waits until after the actual write before setting any of
               ;; the next pieces. But it's a single-threaded process that's going to block at the write,
               ;; and this part's purely functional anyway. So it should be safe enough to set up
@@ -303,10 +306,9 @@
                              (fn [cur]
                                (assoc cur
                                       ;; Q: Is it really worth tracking this separately?
-                                      ;; It's easy enough to calculate anywhere I actually
-                                      ;; want it.
-                                      ;; TODO: Track down everywhere it's used and think
-                                      ;; about it.
+                                      ;; A: Yes, absolutely.
+                                      ;; It *is* readily available in un-ackd-blocks,
+                                      ;; until the last block gets ACK'd.
                                       ::specs/last-block-time recent
                                       ;; Q: How wise is this approach?
                                       ::specs/send-buf buf

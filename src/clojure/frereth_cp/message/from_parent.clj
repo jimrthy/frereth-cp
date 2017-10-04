@@ -415,9 +415,22 @@
   ;; it sends 4 times a second.
   (if (not= message-id 0)
     (do
+      ;; Note that receive-bytes is the number of bytes
+      ;; that either
+      ;; 1. have been forwarded along to the child
+      ;; or
+      ;; 2. are buffered and ready to forward to the child
+      ;; So we have received every byte sent, up to this
+      ;; point.
+      ;; Although there's some weird off-by-1 issues
+      ;; baked into the logic.
+      ;; The important thing is that this isn't just the last
+      ;; byte in the message we most recently received.
       (log/debug (str message-loop-name
                       ": Building an ACK for message "
-                      message-id))
+                      message-id
+                      "\nup to address "
+                      receive-bytes))
       ;; DJB reuses the incoming message that we're preparing
       ;; to ACK, locked to 192 bytes.
       ;; Q: Is that worth the GC savings?
@@ -453,13 +466,18 @@ Line 608"
     (log/debug (str message-loop-name
                     ": No bytes to send...presumably we just processed a pure ACK"))))
 
-(s/fdef drop-ackd-blocks
+(s/fdef flag-blocks-ackd-by-id
         :args (s/cat :state ::specs/state
                      :acked-blocks ::specs/blocks)
         :ret ::specs/state)
-(defn drop-ackd-blocks
+(defn flag-blocks-ackd-by-id
+  "Reference implementation ignores these"
+  ;; And it's weird to have both this and the gap
+  ;; acknowledgment. Which, as written, still seems
+  ;; really wrong.
   [{:keys [::specs/message-loop-name]
-    {:keys [::specs/un-ackd-blocks]} ::specs/outgoing
+    {:keys [::specs/un-ackd-blocks]
+     :as outgoing} ::specs/outgoing
     :as state}
    ackd-blocks]
   ;; Note that, in theory, we *could*
@@ -476,16 +494,7 @@ Line 608"
                             ": Discarding "
                             ackd
                             " as ACK'd"))
-            (log/warn "(without updating stats)")
-            ;; This ignores some of the stat-gathering
-            ;; that comes from helpers/mark-acknowledged!
-            ;; Q: Was this usage ever intended?
-            ;; TODO: At the very least, need to update
-            ;; total blocks and total block transmissions
-            (update-in acc
-                       [::specs/outgoing ::specs/un-ackd-blocks]
-                       disj
-                       ackd))
+            (help/mark-block-ackd outgoing ackd))
           state
           ackd-blocks))
 
@@ -546,7 +555,7 @@ Line 608"
                                 acked-message))
               ackd-blocks (filter #(= acked-message (::specs/message-id %))
                                   un-ackd-blocks)
-              dropped-ackd (drop-ackd-blocks state ackd-blocks)
+              dropped-ackd (flag-blocks-ackd-by-id state ackd-blocks)
               ;; That takes us down to line 544
               ;; It seems more than a bit silly to calculate flag-acked-others!
               ;; if the incoming message is a pure ACK (i.e. message ID 0).

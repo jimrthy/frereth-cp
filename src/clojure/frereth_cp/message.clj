@@ -145,10 +145,15 @@
   ;; send about it to actually get through the queue
   ;; Spinning around fast-idling while I'm doing nothing is
   ;; stupid.
+  ;; And it winds up scheduling into the past, which leaves
+  ;; this triggering every millisecond.
+  ;; We can get pretty good turn-around time in memory,
+  ;; but this part...actually, if we could deliver a message
+  ;; and get an ACK in the past, that would be awesome.
   ;; TODO: Be smarter about the timeout.
   (let [min-resend-time (+ last-block-time n-sec-per-block)
         _ (log/debug (cl-format nil
-                                "~a: Minimum resend time: ~:d which is ~:d nanoseconds after ~:d (contrast w/ ~:d)"
+                                "~a: Minimum resend time: ~:d which is ~:d nanoseconds after last block time ~:d"
                                 message-loop-name
                                 min-resend-time
                                 n-sec-per-block
@@ -158,17 +163,8 @@
                                 ;; It should really be the value of
                                 ;; recent, set immediately after
                                 ;; I send a block to parent.
-                                last-block-time
-                                ;; Extracting this here seems
-                                ;; wasteful. And impossible, if
-                                ;; there are no un-ackd-blocks.
-                                ;; The latter consideration
-                                ;; is why I *have* to track
-                                ;; last-block-time separately.
-                                (-> un-ackd-blocks
-                                    last
-                                    ::specs/time)))
-        default-next (+ recent (utils/seconds->nanos 60))
+                                last-block-time))
+        default-next (+ recent (utils/seconds->nanos 60))  ; by default, wait 1 minute
         _ (log/debug (cl-format nil
                                 "~a: Default +1 minute: ~:d from ~:d"
                                 message-loop-name
@@ -181,7 +177,7 @@
                              ;; I think the point there is for the
                              ;; client to give the server 1 second to start up
                              (if (= want-ping ::specs/second-1)
-                               (+ recent utils/seconds->nanos 1)
+                               (+ recent (utils/seconds->nanos 1))
                                (min default-next min-resend-time))
                              default-next)
         _ (log/debug (cl-format nil
@@ -190,6 +186,8 @@
                                 next-based-on-ping))
         ;; Lines 290-292
         ;; Q: What is the actual point to this?
+        ;; (the logic seems really screwy, but that's almost definitely
+        ;; a lack of understanding on my part)
         next-based-on-eof (if (and (< (+ (count un-ackd-blocks)
                                          (count un-sent-blocks))
                                       K/max-outgoing-blocks)
@@ -226,7 +224,7 @@
                                 0
                                 next-based-on-earliest-block-time)
         _ (log/debug (cl-format nil
-                                "~a: After adjusting for closed/ignored child watcher: ~:d"
+                                "~a: After [pretending to] adjusting for closed/ignored child watcher: ~:d"
                                 message-loop-name
                                 based-on-closed-child))
         ;; Lines 302-305
