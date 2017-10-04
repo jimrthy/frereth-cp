@@ -473,7 +473,7 @@
   Along w/ related data flags in parallel arrays"
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/max-block-length
-            ::specs/send-acked
+            ::specs/ackd-addr
             ::specs/send-bytes
             ::specs/send-eof
             ::specs/send-processed
@@ -491,7 +491,7 @@
     (when (< 0 block-count)
       (if (ok-to-send-new? state)
         ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
-        (let [start-pos (+ send-acked send-processed)
+        (let [start-pos (+ ackd-addr send-processed)
               block-length (max (- send-bytes send-processed)
                                 max-block-length)
               ;; This next construct seems pretty ridiculous.

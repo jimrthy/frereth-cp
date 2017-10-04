@@ -178,7 +178,15 @@
 ;; within receivebytes, number of bytes given to child -- DJB
 (s/def ::receive-written nat-int?)
 
+;; Most recent stream address
+;; When you add a byte to the stream, it starts here.
+;; Should really remain = to (+ send-bytes ackd-addr)
+;; Hopefully this will allow send-bytes to go away
+(s/def ::strm-hwm nat-int?)
+
+;; For a gap-buffer entry, what is the starting address?
 (s/def ::strm-strt-addr nat-int?)
+;; For a gap-buffer entry, what is the stop address?
 (s/def ::strm-stop-addr nat-int?)
 (s/def ::gap-buffer-key (s/tuple ::strm-strt-addr ::strm-stop-addr))
 ;; Note that this is really a sorted-map
@@ -192,7 +200,9 @@
 ;; to this buffer
 (s/def ::send-buf-size nat-int?)
 ;; Number of initial bytes sent and fully acknowledged
-(s/def ::send-acked int?)
+;; Corresponds to sendacked in reference.
+;; This name just makes more sense to me.
+(s/def ::ackd-addr int?)
 ;; Number of additional bytes to send (i.e. haven't been sent yet)
 (s/def ::send-bytes int?)
 ;; within sendbytes, number of bytes absorbed into blocks
@@ -201,9 +211,11 @@
 (s/def ::send-eof-acked boolean?)
 (s/def ::send-eof-processed boolean?)
 
-;; Totally undocumented (so far)
-(s/def ::total-blocks int?)
-(s/def ::total-block-transmissions int?)
+;; How many blocks has the client ACK'd?
+(s/def ::total-blocks nat-int?)
+;; How many times have we transmitted blocks to the client?
+;; (Gets updated in a lump when a block gets ACK'd)
+(s/def ::total-block-transmissions nat-int?)
 
 (s/def ::callback (s/fspec :args (s/cat :buf bytes?)
                            :ret boolean?))
@@ -294,7 +306,7 @@
                                 ::max-block-length
                                 ::next-message-id
                                 ::->parent
-                                ::send-acked
+                                ::ackd-addr
                                 ;; Q: Does this field make any sense at all?
                                 ;; (It's a hard-coded constant that doesn't
                                 ;; seem likely to ever change)
@@ -304,6 +316,7 @@
                                 ::send-eof-acked
                                 ::send-eof-processed
                                 ::send-processed
+                                ::strm-hwm
                                 ::total-blocks
                                 ::total-block-transmissions
                                 ;; These next 2 are the core of this piece.

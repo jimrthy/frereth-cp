@@ -253,7 +253,7 @@
     (log/debug (cl-format nil
                           "~a (~a): Top of scheduler at ~:d"
                           message-loop-name
-                          (Threading/currentThread)
+                          (Thread/currentThread)
                           now))
     (if (not= next-action ::completed)
       (do
@@ -467,7 +467,7 @@
                  (do
                    (log/debug (str message-loop-name
                                    " ("
-                                   (Threading/currentThread)
+                                   (Thread/currentThread)
                                    "): There is room for another message"))
                    (let [result (from-child/consume-from-child state array-o-bytes)]
                      result))
@@ -623,7 +623,7 @@
                                                         K/initial-max-block-length)
                              ::specs/next-message-id 1
                              ::specs/->parent parent-callback
-                             ::specs/send-acked 0
+                             ::specs/ackd-addr 0
                              ;; Q: Does this make any sense at all?
                              ;; It isn't ever going to change, so I might
                              ;; as well just use the hard-coded value
@@ -637,6 +637,7 @@
                              ::specs/send-eof-acked false
                              ::specs/send-eof-processed false
                              ::specs/send-processed 0
+                             ::specs/strm-hwm 0
                              ::specs/total-blocks 0
                              ::specs/total-block-transmissions 0
                              ::specs/un-ackd-blocks (build-un-ackd-blocks)
@@ -803,7 +804,7 @@
            :as state} @state-agent]
       (log/info (str message-loop-name
                      " ("
-                     (Threading/currentThread)
+                     (Thread/currentThread)
                      "): Top of parent->"))
       ;; It seems very wrong to do this here. But I really need
       ;; it to happen as fast as possible, because it tends to

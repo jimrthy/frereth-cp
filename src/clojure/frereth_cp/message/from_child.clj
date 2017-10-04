@@ -16,9 +16,18 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+(s/fdef build-block-descriptions
+        :args (s/cat :message-loop-name ::specs/message-loop-name
+                     :strm-hwm ::specs/strm-hwm
+                     :buf ::specs/buf
+                     :max-block-length ::specs/max-block-length)
+        :ret ::specs/blocks)
 (defn build-block-descriptions
   "For cases where a child sends a byte array that's too large"
-  [message-loop-name ^ByteBuf buf max-block-length]
+  [message-loop-name
+   strm-hwm
+   ^ByteBuf buf
+   max-block-length]
   {:pre [#(< 0 max-block-length)]}
   (let [cap (.capacity buf)
         block-count (int (Math/ceil (/ cap max-block-length)))]
@@ -46,7 +55,10 @@
                               max-block-length)))]
              {::specs/ackd? false
               ::specs/buf (.slice buf (* n max-block-length) length)
-              ;; Q: Is there any good justification for tracking this twice?
+              ;; Q: Is there any good justification for tracking this
+              ;; both here and in the buf?
+              ;; A: No.
+              ;; TODO: Make this go away.
               ::specs/length length
               ;; TODO: Add a signal for marking this true
               ;; (It probably needs to involve a close! function
@@ -54,14 +66,10 @@
               ::specs/send-eof false
               ::specs/transmissions 0
               ::specs/time (System/nanoTime)
-              ;; Q: What should this actually be?
-              ;; I know it gets filled in later, but it seems
-              ;; wrong to not have that information readily available
-              ;; here to just set now.
-              ;; Then again, there's the possibility of using a Nagle
+              ;; There's the possibility of using a Nagle
               ;; algorithm later to consolidate smaller blocks,
               ;; so maybe it doesn't make sense to mess with it here.
-              ::specs/start-pos 0}))
+              ::specs/start-pos (+ strm-hwm (* n max-block-length))}))
          (range block-count))))
 (let [base (byte-array (range 8192))
       src (Unpooled/wrappedBuffer base)]
@@ -76,7 +84,7 @@
   [{{:keys [::specs/send-bytes]} ::specs/outgoing
     :as state}]
   {:pre [send-bytes]}
-  ;; Line 322: This also needs to account for send-acked
+  ;; Line 322: This also needs to account for acked-addr
   ;; For whatever reason, DJB picked this (-4K) as the
   ;; end-point to refuse to read
   ;; more child data before we hit send-byte-buf-size.
@@ -117,8 +125,9 @@
   ;; this namespace is about buffering. We need to hang onto
   ;; those buffers here until they've been ACK'd.
   [{{:keys [::specs/max-block-length
-            ::specs/send-acked
+            ::specs/ackd-addr
             ::specs/send-bytes
+            ::specs/strm-hwm
             ::specs/un-sent-blocks]} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}
@@ -165,7 +174,7 @@
         _ (.writerIndex buf buf-size)
         ;; In the original, this is the offset into the circular
         ;; buf where we're going to start writing incoming bytes.
-        pos (+ (rem send-acked K/send-byte-buf-size) send-bytes)
+        pos (+ (rem ackd-addr K/send-byte-buf-size) send-bytes)
         available-buffer-space (- K/send-byte-buf-size pos)
         ;; I'm pretty sure this concept throws a major
         ;; wrench into my gears.
@@ -177,12 +186,22 @@
         ;; This no longer matches the reality where I'm basically
         ;; ignoring buffer limits
         send-bytes (+ send-bytes bytes-to-read)
-        blocks (build-block-descriptions message-loop-name buf max-block-length)]
+        blocks (build-block-descriptions message-loop-name strm-hwm buf max-block-length)]
     (log/debug (str message-loop-name ": " (count blocks) " Block(s) to add:\n"
                     (utils/pretty blocks)))
-    (when (>= send-bytes K/stream-length-limit)
+    (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
       ;; this...it needs to force a fresh handshake.
+      ;; Note that this check has major problems:
+      ;; This is the number of bytes we have buffered
+      ;; that have not yet been ACK'd.
+      ;; We really should have quit reading from the child
+      ;; long before this due to buffer overflows.
+      ;; OTOH, the spec *does* define this as the end
+      ;; of the stream.
+      ;; So, when ackd-addr gets here (or possibly
+      ;; strm-hwm), we're done.
+      ;; TODO: Revisit this.
       (throw (AssertionError. "End of stream")))
     (-> state
         (update-in [::specs/outgoing ::specs/un-sent-blocks]
@@ -194,5 +213,6 @@
                              cur
                              blocks)))
         (assoc-in [::specs/outgoing ::specs/send-bytes] send-bytes)
-        ;; 337: update recent
+        (update-in [::specs/outgoing ::specs/strm-hwm] + bytes-to-read)
+        ;; Line 337
         (assoc ::specs/recent (System/nanoTime)))))

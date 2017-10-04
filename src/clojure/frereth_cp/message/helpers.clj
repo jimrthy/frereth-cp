@@ -109,12 +109,12 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
       ;; To match the next block, the main point is to discard
       ;; the first sequence of blocks that have been ACK'd
       ;; drop-while seems obvious
-      ;; However, we also need to update send-acked, send-bytes, and send-processed
+      ;; However, we also need to update ackd-addr, send-bytes, and send-processed
 ;;;           168-176: Updates globals for adjacent blocks that
 ;;;                    have been ACK'd
 ;;;                    This includes some counters that seem important:
 ;;;                        blocknum
-;;;                        sendacked
+;;;                        sendacked (ackd-addr, here)
 ;;;                        sendbytes
 ;;;                        sendprocessed
 ;;;                        blockfirst
@@ -142,14 +142,14 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                       (update ::specs/outgoing
                               (fn [cur]
                                 (-> cur
-                                    (update ::specs/send-acked + dropped-block-lengths))))
+                                    (update ::specs/ackd-addr + dropped-block-lengths))))
                       (update-in [::specs/outgoing ::specs/send-bytes] - dropped-block-lengths)
                       (update-in [::specs/outgoing ::specs/send-processed] - dropped-block-lengths)
                       (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] kept))
 ;;;           177-182: Possibly set sendeofacked flag
             state (if (and send-eof
                            (= start 0)
-                           (> stop (+ (get-in state [::specs/outgoing ::specs/send-acked])
+                           (> stop (+ (get-in state [::specs/outgoing ::specs/ackd-addr])
                                       (get-in state [::specs/outgoing ::specs/send-bytes])))
                            (not send-eof-acked))
                     (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)

@@ -553,14 +553,13 @@ Line 608"
                           un-ackd-blocks
                           "\nthat match message ID "
                           acked-message))
-          (let [dropped-ackd (flag-blocks-ackd-by-id state
-                                                     (if (not= 0 acked-message)
-                                                       ;; Gaping open Q: Do I really want to do this?
-                                                       (remove #(= acked-message (::specs/message-id %))
-                                                               un-ackd-blocks)
-                                                       un-ackd-blocks))
-
-
+          (let [ackd-blocks (remove #(= acked-message (::specs/message-id %))
+                                    un-ackd-blocks)
+                dropped-ackd (if (not= 0 acked-message)
+                               ;; Gaping open Q: Do I really want to do this?
+                               (flag-blocks-ackd-by-id state
+                                                       ackd-blocks)
+                               un-ackd-blocks)
                 ;; That takes us down to line 544
                 ;; It seems more than a bit silly to calculate flag-acked-others!
                 ;; if the incoming message is a pure ACK (i.e. message ID 0).
