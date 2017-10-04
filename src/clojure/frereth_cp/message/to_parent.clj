@@ -111,6 +111,8 @@
         send-buf (.order (Unpooled/buffer u)
                          java.nio.ByteOrder/LITTLE_ENDIAN)
         flag-size (calculate-message-data-packet-length-flags block-to-send)]
+    ;; For the 2nd outgoing message, start-pos is still 0.
+    (throw (RuntimeException. "Start tracing back from here"))
     (log/debug (str message-loop-name
                     ": Building a Message Block byte array for message "
                     next-message-id

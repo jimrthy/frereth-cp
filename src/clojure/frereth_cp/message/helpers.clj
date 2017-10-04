@@ -64,7 +64,8 @@ Based on earliestblocktime_compute, in lines 138-153
   ;;; XXX: use priority queue
   (log/debug (str message-loop-name
                   ": Calculating min-time across"
-                  un-acked-blocks))
+                  (count un-acked-blocks)
+                  " un-ACK'd blocks"))
   (if (< 0 (count un-acked-blocks))
     (apply min (map ::specs/time
                     ;; Time 0 means it's been ACK'd and is ready to discard

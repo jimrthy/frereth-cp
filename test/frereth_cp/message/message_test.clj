@@ -184,6 +184,7 @@
                             (is incoming)
                             ;; We're receiving the initial ::orly? response in State 0.
                             ;; The ::yarly disappears
+                            ;; FIXME: Where
                             (log/info (str "Client (state "
                                            @client-state
                                            ") received: "

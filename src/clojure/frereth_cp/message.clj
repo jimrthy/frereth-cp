@@ -251,8 +251,9 @@
   {:pre [recent]}
   (let [now (System/nanoTime)]
     (log/debug (cl-format nil
-                          "~a: Top of scheduler at ~:d"
+                          "~a (~a): Top of scheduler at ~:d"
                           message-loop-name
+                          (Threading/currentThread)
                           now))
     (if (not= next-action ::completed)
       (do
@@ -464,7 +465,10 @@
                  send-bytes))
   (let [state' (if (from-child/room-for-child-bytes? state)
                  (do
-                   (log/debug (str message-loop-name ": There is room for another message"))
+                   (log/debug (str message-loop-name
+                                   " ("
+                                   (Threading/currentThread)
+                                   "): There is room for another message"))
                    (let [result (from-child/consume-from-child state array-o-bytes)]
                      result))
                  ;; trigger-output does some state management, even
@@ -798,7 +802,9 @@
            :keys [::specs/message-loop-name]
            :as state} @state-agent]
       (log/info (str message-loop-name
-                     ": Top of parent->"))
+                     " ("
+                     (Threading/currentThread)
+                     "): Top of parent->"))
       ;; It seems very wrong to do this here. But I really need
       ;; it to happen as fast as possible, because it tends to
       ;; get triggered again while I'm in the middle of other

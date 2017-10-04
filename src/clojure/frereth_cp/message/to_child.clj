@@ -169,6 +169,7 @@
   ;; TODO: expand it to include the pieces I haven't translated yet
   ;; (such as sending some signal, like a nil, to indicate that
   ;; we've hit EOF).
+  (log/warn "TODO: Should update receive-written sometime soon")
   (let [consolidated (consolidate-gap-buffer state)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])]
     (log/debug (str message-loop-name

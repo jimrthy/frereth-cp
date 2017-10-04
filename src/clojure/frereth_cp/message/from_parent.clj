@@ -544,59 +544,64 @@ Line 608"
               ;; 2. Set up the flags for sending an ACK
               ;; So it's remained pretty faithful to the original
               {:keys [::specs/acked-message]
-               :as packet} (deserialize message-loop-name parent->buffer)
-              _ (assert packet (str message-loop-name
-                                    ": Unable to extract a packet from "
-                                    parent->buffer))
-              _ (log/debug (str message-loop-name
-                                ": looking for un-acked blocks among\n"
-                                un-ackd-blocks
-                                "\nthat match message ID "
-                                acked-message))
-              ackd-blocks (filter #(= acked-message (::specs/message-id %))
-                                  un-ackd-blocks)
-              dropped-ackd (flag-blocks-ackd-by-id state ackd-blocks)
-              ;; That takes us down to line 544
-              ;; It seems more than a bit silly to calculate flag-acked-others!
-              ;; if the incoming message is a pure ACK (i.e. message ID 0).
-              ;; That seeming silliness is completely correct: this
-              ;; is the entire point behind a pure ACK.
-              with-acked-gaps (flag-acked-others! dropped-ackd packet)
-              flagged (reduce flow-control/update-statistics
-                              ;; Remove parent->buffer.
-                              ;; It's been parsed into packet
-                              (update with-acked-gaps
-                                      ::specs/incoming
-                                      dissoc
-                                      ::specs/parent->buffer)
-                              ackd-blocks)
-              extracted (extract-message! flagged packet)]
+               :as packet} (deserialize message-loop-name parent->buffer)]
+          (assert packet (str message-loop-name
+                              ": Unable to extract a packet from "
+                              parent->buffer))
           (log/debug (str message-loop-name
-                          ": handle-comprehensible message/extracted:\n"
-                          extracted))
-          (if extracted
-            (or
-             (let [msg-id (::specs/message-id packet)]
-               (log/debug (str message-loop-name ": ACK message-id " msg-id "?"))
-               (when-not msg-id
-                 ;; Note that 0 is legal: that's a pure ACK.
-                 ;; We just have to have something.
-                 ;; (This comment is because I have to keep remembering
-                 ;; how truthiness works in C)
-                 (throw (ex-info "Missing the incoming message-id"
-                                 extracted)))
-               (when-let [ack-msg (prep-send-ack extracted msg-id)]
-                 (log/debug (str message-loop-name ": Have an ACK to send back"))
-                 ;; since this is called for side-effects, ignore the
-                 ;; return value.
-                 (send-ack! extracted ack-msg)
-                 (log/debug (str message-loop-name ": ACK'd"))
-                 (update extracted
-                         ::specs/incoming
-                         dissoc
-                         ::specs/packet)))
-             extracted)
-            flagged)))
+                          ": looking for un-acked blocks among\n"
+                          un-ackd-blocks
+                          "\nthat match message ID "
+                          acked-message))
+          (let [dropped-ackd (flag-blocks-ackd-by-id state
+                                                     (if (not= 0 acked-message)
+                                                       ;; Gaping open Q: Do I really want to do this?
+                                                       (remove #(= acked-message (::specs/message-id %))
+                                                               un-ackd-blocks)
+                                                       un-ackd-blocks))
+
+
+                ;; That takes us down to line 544
+                ;; It seems more than a bit silly to calculate flag-acked-others!
+                ;; if the incoming message is a pure ACK (i.e. message ID 0).
+                ;; That seeming silliness is completely correct: this
+                ;; is the entire point behind a pure ACK.
+                with-acked-gaps (flag-acked-others! dropped-ackd packet)
+                flagged (reduce flow-control/update-statistics
+                                ;; Remove parent->buffer.
+                                ;; It's been parsed into packet
+                                (update with-acked-gaps
+                                        ::specs/incoming
+                                        dissoc
+                                        ::specs/parent->buffer)
+                                ackd-blocks)
+                extracted (extract-message! flagged packet)]
+            (log/debug (str message-loop-name
+                            ": handle-comprehensible message/extracted:\n"
+                            extracted))
+            (if extracted
+              (or
+               (let [msg-id (::specs/message-id packet)]
+                 (log/debug (str message-loop-name ": ACK message-id " msg-id "?"))
+                 (when-not msg-id
+                   ;; Note that 0 is legal: that's a pure ACK.
+                   ;; We just have to have something.
+                   ;; (This comment is because I have to keep remembering
+                   ;; how truthiness works in C)
+                   (throw (ex-info "Missing the incoming message-id"
+                                   extracted)))
+                 (when-let [ack-msg (prep-send-ack extracted msg-id)]
+                   (log/debug (str message-loop-name ": Have an ACK to send back"))
+                   ;; since this is called for side-effects, ignore the
+                   ;; return value.
+                   (send-ack! extracted ack-msg)
+                   (log/debug (str message-loop-name ": ACK'd"))
+                   (update extracted
+                           ::specs/incoming
+                           dissoc
+                           ::specs/packet)))
+               extracted)
+              flagged))))
       (do
         (if (< 0 len)
           (log/warn (str message-loop-name ": Illegal incoming message length:") len)
