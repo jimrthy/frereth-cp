@@ -318,7 +318,7 @@
   ;; Flip-side of echo: I want to see what happens
   ;; when the child sends bytes that don't fit into
   ;; a single message packet.
-
+  (log/info "Start testing writing big chunk of outbound data")
   (let [start-time (System/nanoTime)
         packet-count 9  ; trying to make life interesting
         response (promise)
@@ -346,11 +346,6 @@
                                    (update :buffer conj (vec incoming)))))
                       ;; I would like to get 8 callbacks here:
                       ;; 1 for each kilobyte of message the child tries to send.
-                      ;; Actually, the initial message bytes are
-                      ;; only getting 512 bytes, which seems like an odd issue.
-                      ;; But, more importantly, I don't really have an
-                      ;; i/o loop at this point. So the follow-up
-                      ;; messages will never arrive.
                       (when (= packet-count (:count @parent-state))
                         (log/info "Received all expected packets")
                         (deliver response (:buffer @parent-state)))))
@@ -370,7 +365,13 @@
         child-message-counter (atom 0)
         strm-address (atom 0)
         child-cb (fn [_]
-                   (throw (RuntimeException. "This should never get called")))
+                   ;; This is for messages from elsewhere to the child.
+                   ;; This test is all about the child spewing "lots" of data
+                   ;; TODO: Honestly, need a test that really does just start off by
+                   ;; sending megabytes (or gigabytes) of data as soon as the connection
+                   ;; is warmed up.
+                   ;; Library should be robust enough to handle that failure.
+                   (is false "This should never get called"))
         initialized (message/initial-state "(test) Child w/ Big Outbound" parent-cb child-cb true)
         state (message/start! initialized)]
     (reset! state-agent-atom state)
@@ -413,13 +414,23 @@
                                        (take K/standard-max-block-length)
                                        byte-array)))))
               (let [state-agent @state-agent-atom
-                    outcome @state-agent
-                    outgoing (::specs/outgoing outcome)
-                    incoming (::specs/incoming outcome)]
+                    _ (log/info "Deref'ing the state-agent")
+                    {:keys [::specs/incoming
+                            ::specs/outgoing]
+                     :as outcome} @state-agent]
                 (is (= msg-len (::specs/send-bytes outgoing)))
-                ;; This check is broken now.
-                ;; Q: But was it wrong before?
-                (is (= (inc packet-count) (::specs/next-message-id outgoing)))
+                (let [n-m-id (::specs/next-message-id outgoing)]
+                  ;; There's a timing issue with the next check.
+                  ;; There's a good chance we'll get here before
+                  ;; the agent is through updating its state due
+                  ;; to the last message we fed from the child.
+                  ;; So it might be one or the other
+                  (is (or (= (inc packet-count) n-m-id)
+                          (= packet-count n-m-id)))
+                  ;; Either way, this relationship won't be impacted
+                  ;; by timing issues
+                  (is (= (inc (count (::specs/un-ackd-blocks outgoing)))
+                         n-m-id)))
                 ;; I'm not sending back any ACKs
                 (is (= (::specs/send-processed outgoing) 0))
                 ;; TODO: I do need a test that triggers EOF
