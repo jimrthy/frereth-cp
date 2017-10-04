@@ -399,22 +399,20 @@
   [{:keys [::specs/message-loop-name
            ::specs/recent]
     {:keys [::specs/earliest-time
-            ::specs/send-bytes
             ::specs/send-eof
             ::specs/send-eof-processed
-            ::specs/send-processed
+            ::specs/strm-hwm
             ::specs/un-ackd-blocks
             ::specs/un-sent-blocks
             ::specs/want-ping]
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
-  #_{:pre [send-bytes
-           send-processed]}
-  (when-not send-bytes
-    (throw (ex-info "Missing send-bytes"
+  #_{:pre [strm-hwm]}
+  (when-not strm-hwm
+    (throw (ex-info "Missing strm-hwm"
                     {::among (keys outgoing)
-                     ::have send-bytes
+                     ::have strm-hwm
                      ::details outgoing})))
   (let [result
         (and (>= recent (+ earliest-time n-sec-per-block))
@@ -438,7 +436,8 @@
                  ;; C programmers have assured me that it translates into
                  (if send-eof
                    (not send-eof-processed)
-                   (< send-processed send-bytes))))]
+                   (or (< 0 (count un-ackd-blocks))
+                       (< 0 (count un-sent-blocks))))))]
     (when-not result
       (let [fmt (str "~a: Bad preconditions for sending a new block:\n"
                      "recent: ~:d <? ~:d\n"
@@ -447,8 +446,7 @@
                      "\nwant-ping: ~d"
                      "\nsend-eof: ~a"
                      "\n\tsend-eof-processed: ~a"
-                     "\n\tsend-processed: ~:d"
-                     "\nsend-bytes: ~:d")]
+                     "\n\tstrm-hwm: ~:d")]
         (log/debug (cl-format nil
                               fmt
                               message-loop-name
@@ -459,8 +457,7 @@
                               want-ping
                               send-eof
                               send-eof-processed
-                              send-processed
-                              send-bytes))))
+                              strm-hwm))))
     result))
 
 (s/fdef check-for-new-block-to-send
@@ -474,9 +471,8 @@
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/max-block-length
             ::specs/ackd-addr
-            ::specs/send-bytes
             ::specs/send-eof
-            ::specs/send-processed
+            ::specs/strm-hwm
             ::specs/un-sent-blocks]
      :as outgoing} ::specs/outgoing
     :as state}]
@@ -491,32 +487,25 @@
     (when (< 0 block-count)
       (if (ok-to-send-new? state)
         ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
-        (let [start-pos (+ ackd-addr send-processed)
-              block-length (max (- send-bytes send-processed)
-                                max-block-length)
-              ;; This next construct seems pretty ridiculous.
-              ;; It's just assuring that (<= send-byte-buf-size (+ start-pos block-length))
-              ;; The bitwise-and is a shortcut for modulo that used to be faster,
-              ;; once upon a time.
-              ;; Q: does it make any difference at all these days?
-              ;; A: According to stack overflow, the modulo will get optimized
-              ;; to bitwise logic by any decent compiler.
-              ;; Then again, maybe it's a vital piece to the puzzle.
-              ;; TODO: Get an opinion from a cryptographer.
-              block-length (if (> (+ (bit-and start-pos (dec K/send-byte-buf-size))
-                                     block-length)
-                                  K/send-byte-buf-size)
-                             (- K/send-byte-buf-size (bit-and start-pos (dec K/send-byte-buf-size)))
-                             block-length)
-              eof (if (= send-processed send-bytes)
+        ;; Consolidating smaller blocks *would* be a good idea -- JRG
+        (let [block (first un-sent-blocks)
+              start-pos (::start-pos block)
+              block-length (.readableBytes (::buf block))
+              ;; There's some logic going on here, around line
+              ;; 361, that I didn't translate correctly.
+              ;; TODO: Get back to this when I can think about
+              ;; coping with EOF
+              last-buffered-block (last un-sent-blocks)  ; Q: How does that perform?
+
+              eof (if (= (+ (::start-pos last-buffered-block)
+                            (-> last-buffered-block ::buf .readableBytes))
+                         strm-hwm)
                     send-eof
-                    false)
-              ;; XXX: or could have the full block in post-buffer space (DJB)
-              ;; "absorb" this new block -- JRG
-              send-processed (+ send-processed block-length)]
+                    false)]
           (log/debug (str message-loop-name ": Conditions ripe for sending a new outgoing message"))
-          (-> state
-              (assoc-in [::specs/outgoing ::specs/next-block-queue] ::specs/un-sent-blocks)))
+          (assoc-in state
+                    [::specs/outgoing ::specs/next-block-queue]
+                    ::specs/un-sent-blocks))
         (do
           ;; Be explicit about this
           ;; TODO: Avoid extra hoops. Make the caller smarter/less complex.

@@ -81,9 +81,11 @@
 
 (defn room-for-child-bytes?
   "Does send-buf have enough space left for a message from child?"
-  [{{:keys [::specs/send-bytes]} ::specs/outgoing
+  [{{:keys [::specs/ackd-addr
+            ::specs/strm-hwm]} ::specs/outgoing
     :as state}]
-  {:pre [send-bytes]}
+  {:pre [ackd-addr
+         strm-hwm]}
   ;; Line 322: This also needs to account for acked-addr
   ;; For whatever reason, DJB picked this (-4K) as the
   ;; end-point to refuse to read
@@ -98,7 +100,8 @@
   ;; it "just" dealing with the fact that we have a circular
   ;; buffer with parts that have not yet been GC'd?
   ;; And is it possible to tease apart that distinction?
-  (< (+ send-bytes K/k-4) K/send-byte-buf-size))
+  (let [send-bytes (- strm-hwm ackd-addr)]
+    (< (+ send-bytes K/k-4) K/send-byte-buf-size)))
 
 (s/fdef blocks-not-sent?
         :args (s/cat :state ::specs/state)
@@ -126,7 +129,6 @@
   ;; those buffers here until they've been ACK'd.
   [{{:keys [::specs/max-block-length
             ::specs/ackd-addr
-            ::specs/send-bytes
             ::specs/strm-hwm
             ::specs/un-sent-blocks]} ::specs/outgoing
     :keys [::specs/message-loop-name]
@@ -174,7 +176,7 @@
         _ (.writerIndex buf buf-size)
         ;; In the original, this is the offset into the circular
         ;; buf where we're going to start writing incoming bytes.
-        pos (+ (rem ackd-addr K/send-byte-buf-size) send-bytes)
+        pos (rem strm-hwm K/send-byte-buf-size)
         available-buffer-space (- K/send-byte-buf-size pos)
         ;; I'm pretty sure this concept throws a major
         ;; wrench into my gears.
@@ -183,11 +185,11 @@
         ;; Q: If I drop the extra bytes, how do I inform the
         ;; client?
         bytes-to-read (min available-buffer-space buf-size)
-        ;; This no longer matches the reality where I'm basically
-        ;; ignoring buffer limits
-        send-bytes (+ send-bytes bytes-to-read)
         blocks (build-block-descriptions message-loop-name strm-hwm buf max-block-length)]
-    (log/debug (str message-loop-name ": " (count blocks) " Block(s) to add:\n"
+    (log/debug (str message-loop-name
+                    " ("
+                    (Thread/currentThread)
+                    "): " (count blocks) " Block(s) to add:\n"
                     (utils/pretty blocks)))
     (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch
@@ -212,7 +214,6 @@
                                (conj acc block))
                              cur
                              blocks)))
-        (assoc-in [::specs/outgoing ::specs/send-bytes] send-bytes)
         (update-in [::specs/outgoing ::specs/strm-hwm] + bytes-to-read)
         ;; Line 337
         (assoc ::specs/recent (System/nanoTime)))))

@@ -123,12 +123,12 @@
             ::specs/rtt-timeout]} ::specs/flow-control
     {:keys [::specs/->child-buffer
             ::specs/gap-buffer]} ::specs/incoming
-    {:keys [::specs/earliest-time
+    {:keys [::specs/ackd-addr
+            ::specs/earliest-time
             ::specs/last-block-time
-            ::specs/send-bytes
             ::specs/send-eof
             ::specs/send-eof-processed
-            ::specs/send-processed
+            ::specs/strm-hwm
             ::specs/un-sent-blocks
             ::specs/un-ackd-blocks
             ::specs/want-ping]} ::specs/outgoing
@@ -193,7 +193,8 @@
                                       K/max-outgoing-blocks)
                                    (if send-eof
                                      (not send-eof-processed)
-                                     (< send-processed send-bytes)))
+                                     (or (< 0 (count un-ackd-blocks))
+                                         (< 0 (count un-sent-blocks)))))
                             (min next-based-on-ping min-resend-time)
                             next-based-on-ping)
         _ (log/debug (cl-format nil
@@ -449,7 +450,7 @@
                      :array-o-bytes bytes?)
         :ret ::specs/state)
 (defn trigger-from-child
-  [{{:keys [::specs/send-bytes]
+  [{{:keys [::specs/strm-hwm]
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}
@@ -462,7 +463,7 @@
   (cancel-timer! state ::from-child)
   (log/info (str message-loop-name
                  ": trigger-from-child\nSent stream address: "
-                 send-bytes))
+                 strm-hwm))
   (let [state' (if (from-child/room-for-child-bytes? state)
                  (do
                    (log/debug (str message-loop-name
@@ -632,11 +633,9 @@
                              ;; That almost seems like premature optimization,
                              ;; but this approach seems like serious YAGNI.
                              ::specs/send-buf-size K/send-byte-buf-size
-                             ::specs/send-bytes 0
                              ::specs/send-eof false
                              ::specs/send-eof-acked false
                              ::specs/send-eof-processed false
-                             ::specs/send-processed 0
                              ::specs/strm-hwm 0
                              ::specs/total-blocks 0
                              ::specs/total-block-transmissions 0

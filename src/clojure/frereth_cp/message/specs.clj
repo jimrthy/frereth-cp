@@ -178,10 +178,10 @@
 ;; within receivebytes, number of bytes given to child -- DJB
 (s/def ::receive-written nat-int?)
 
-;; Most recent stream address
+;; Highest stream address
 ;; When you add a byte to the stream, it starts here.
-;; Should really remain = to (+ send-bytes ackd-addr)
-;; Hopefully this will allow send-bytes to go away
+;; In the reference implementation, this is
+;; sendacked + sendbytes
 (s/def ::strm-hwm nat-int?)
 
 ;; For a gap-buffer entry, what is the starting address?
@@ -203,10 +203,6 @@
 ;; Corresponds to sendacked in reference.
 ;; This name just makes more sense to me.
 (s/def ::ackd-addr int?)
-;; Number of additional bytes to send (i.e. haven't been sent yet)
-(s/def ::send-bytes int?)
-;; within sendbytes, number of bytes absorbed into blocks
-(s/def ::send-processed int?)
 
 (s/def ::send-eof-acked boolean?)
 (s/def ::send-eof-processed boolean?)
@@ -311,11 +307,9 @@
                                 ;; (It's a hard-coded constant that doesn't
                                 ;; seem likely to ever change)
                                 ::send-buf-size
-                                ::send-bytes
                                 ::send-eof
                                 ::send-eof-acked
                                 ::send-eof-processed
-                                ::send-processed
                                 ::strm-hwm
                                 ::total-blocks
                                 ::total-block-transmissions

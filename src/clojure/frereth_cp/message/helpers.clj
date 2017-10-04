@@ -109,14 +109,14 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
       ;; To match the next block, the main point is to discard
       ;; the first sequence of blocks that have been ACK'd
       ;; drop-while seems obvious
-      ;; However, we also need to update ackd-addr, send-bytes, and send-processed
+      ;; However, we also need to update ackd-addr
 ;;;           168-176: Updates globals for adjacent blocks that
 ;;;                    have been ACK'd
 ;;;                    This includes some counters that seem important:
 ;;;                        blocknum
 ;;;                        sendacked (ackd-addr, here)
-;;;                        sendbytes
-;;;                        sendprocessed
+;;;                        sendbytes (obsoleted replaced by strm-hwm)
+;;;                        sendprocessed (pointless, due to un-*-blocks
 ;;;                        blockfirst
       (let [possibly-ackd (get-in acked [::specs/outgoing ::specs/un-ackd-blocks])
             to-drop (filter ::specs/ackd? possibly-ackd)
@@ -139,18 +139,14 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                          to-drop)
             ;; TODO: Drop reliance on these send-* keys
             state (-> acked
-                      (update ::specs/outgoing
-                              (fn [cur]
-                                (-> cur
-                                    (update ::specs/ackd-addr + dropped-block-lengths))))
-                      (update-in [::specs/outgoing ::specs/send-bytes] - dropped-block-lengths)
-                      (update-in [::specs/outgoing ::specs/send-processed] - dropped-block-lengths)
+                      (update-in [::specs/outgoing ::specs/ackd-addr] + dropped-block-lengths)
                       (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] kept))
 ;;;           177-182: Possibly set sendeofacked flag
             state (if (and send-eof
                            (= start 0)
-                           (> stop (+ (get-in state [::specs/outgoing ::specs/ackd-addr])
-                                      (get-in state [::specs/outgoing ::specs/send-bytes])))
+                           ;; It seems like this next check should be >=
+                           ;; But this is what the reference implementation checks.
+                           (> stop (get-in state [::specs/outgoing ::specs/strm-hwm]))
                            (not send-eof-acked))
                     (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
                     state)]
