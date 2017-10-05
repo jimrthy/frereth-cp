@@ -61,13 +61,12 @@
             ::specs/normal K/normal-eof
             ::specs/error K/error-eof)))
 
-(s/fdef build-message-block
+(s/fdef build-message-block-description
         :args (s/cat :message-loop-name ::specs/message-loop-name
                      :next-message-id nat-int?
                      :block-to-send ::specs/block)
         :ret bytes?)
-(defn build-message-block
-  "Important note: Doesn't build a message Packet. Just a description for one."
+(defn build-message-block-description
   ^bytes [message-loop-name
           ^Integer next-message-id
           {^Long start-pos ::specs/start-pos
@@ -296,7 +295,9 @@
                         current-message-id
                         "\nbased on:\n")
                    (utils/pretty current-message))
-        (let [buf (build-message-block message-loop-name current-message-id updated-message)
+        (let [buf (build-message-block-description message-loop-name
+                                                   current-message-id
+                                                   updated-message)
               ;; Reference implementation waits until after the actual write before setting any of
               ;; the next pieces. But it's a single-threaded process that's going to block at the write,
               ;; and this part's purely functional anyway. So it should be safe enough to set up
@@ -356,7 +357,7 @@
   ;; Q: How much impact would that really have?
   ;; (There would definitely be *some*
   (if (and (not= 0 earliest-time)
-           (< recent (+ earliest-time n-sec-per-block))
+           (>= recent (+ earliest-time n-sec-per-block))
            (>= recent (+ earliest-time rtt-timeout)))
     (do
       (log/debug (str message-loop-name ": It has been long enough to justify resending"))

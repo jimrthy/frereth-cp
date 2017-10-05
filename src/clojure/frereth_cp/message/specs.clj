@@ -165,14 +165,6 @@
 ;; arrays or possibly clojure vectors of bytes.
 ;; (I'm still torn about that detail)
 (s/def ::parent->buffer bytes?)
-;; number of initial bytes fully received --DJB
-;; This is actually the number of bytes that have been
-;; buffered up to forward along to the child.
-;; Which means that (after we've buffered the initial
-;; message) it's 1 greater than the stream address (which
-;; is 0-based)
-;; TODO: Rename this to strm-hwm
-(s/def ::receive-bytes nat-int?)
 ;; total number of bytes in stream, if receiveeof --DJB
 (s/def ::receive-total-bytes int?)
 ;; within receivebytes, number of bytes given to child -- DJB
@@ -180,8 +172,16 @@
 
 ;; Highest stream address
 ;; When you add a byte to the stream, it starts here.
+;; Note that this is dual-purpose:
+
+;; For outgoing:
 ;; In the reference implementation, this is
 ;; sendacked + sendbytes
+
+;; For incoming:
+;; number of initial bytes fully received --DJB
+;; i.e. the address in the stream that has been
+;; buffered up to send to the child
 (s/def ::strm-hwm nat-int?)
 
 ;; For a gap-buffer entry, what is the starting address?
@@ -287,10 +287,10 @@
 (s/def ::incoming (s/keys :req [::->child  ; callback
                                 ::->child-buffer
                                 ::gap-buffer
-                                ::receive-bytes
                                 ::receive-eof
                                 ::receive-total-bytes
-                                ::receive-written]
+                                ::receive-written
+                                ::strm-hwm]
                           :opt [::packet
                                 ::parent->buffer]))
 

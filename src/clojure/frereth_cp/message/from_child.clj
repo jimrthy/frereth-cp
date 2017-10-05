@@ -76,8 +76,31 @@
   (.writerIndex src 8192)
   (.slice src 0 1024))
 
+(s/fdef count-buffered-bytes
+        :args (s/cat :blocks ::specs/blocks)
+        :ret nat-int?)
+(defn count-buffered-bytes
+  [blocks]
+  (reduce (fn [acc block]
+            (+ acc
+               (let [^ByteBuf buf (::specs/buf block)]
+                 ( .readableBytes buf))))
+          0
+          blocks))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
+
+(s/fdef buffer-size
+        :args (s/cat :outgoing ::specs/outgoing)
+        :ret nat-int?)
+(defn buffer-size
+  [{:keys [::specs/un-ackd-blocks
+           ::specs/un-sent-blocks]
+    :as outgoing}]
+  (reduce +
+          (map count-buffered-bytes [un-ackd-blocks
+                                     un-sent-blocks])))
 
 (defn room-for-child-bytes?
   "Does send-buf have enough space left for a message from child?"
@@ -149,7 +172,8 @@
    ;; to just hand the message to a serializer and have it handle
    ;; the streaming.
    ^bytes array-o-bytes]
-  (log/debug (str message-loop-name ": Adding message block(s) to "
+  (utils/debug  message-loop-name
+                (str "Adding message block(s) to "
                   ;; TODO: Might be worth logging the actual contents
                   ;; when it's time to trace
                   (count un-sent-blocks)
@@ -176,7 +200,7 @@
         _ (.writerIndex buf buf-size)
         ;; In the original, this is the offset into the circular
         ;; buf where we're going to start writing incoming bytes.
-        pos (rem strm-hwm K/send-byte-buf-size)
+        pos (rem (inc strm-hwm) K/send-byte-buf-size)
         available-buffer-space (- K/send-byte-buf-size pos)
         ;; I'm pretty sure this concept throws a major
         ;; wrench into my gears.

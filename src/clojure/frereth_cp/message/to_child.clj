@@ -17,6 +17,16 @@
   (:import [io.netty.buffer ByteBuf]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Magic numbers
+
+(def callback-threshold-warning
+  "Warn if calling back to child w/ incoming message takes too long (in milliseconds)"
+  20)
+(def callback-threshold-error
+  "Signal error if calling back to child w/ incoming message takes much too long (in milliseconds)"
+  200)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
 (s/fdef pop-map-first
@@ -32,7 +42,7 @@
   (dissoc associative (first (keys associative))))
 
 ;; The caller needs to verify that the gap-buffer's start
-;; is < receive-bytes.
+;; is <= strm-hwm.
 ;; Well, it does, because it can short-circuit a reduce
 ;; if that's the case.
 ;; It seems like it would be nice to be able to spec that
@@ -54,42 +64,47 @@
   ;; @return modified accumulator
   [message-loop-name
    {:keys [::specs/->child-buffer
-           ::specs/receive-bytes
-           ::specs/gap-buffer]
+           ::specs/gap-buffer
+           ::specs/strm-hwm]
     :as incoming}
    k-v-pair]
   (let [[[start stop] ^ByteBuf buf] k-v-pair]
-    (utils/debug (str "Does " start "-" stop " close a hole in "
-                      gap-buffer " from HWM " receive-bytes "?"))
+    (utils/debug message-loop-name
+                 (str "Does " start "-" stop " close a hole in "
+                      gap-buffer " from HWM " strm-hwm "?"))
     ;; For now, this top-level if check is redundant.
     ;; I'd rather be safe and trust the JIT than remove it
     ;; under the assumption that callers will be correct.
     ;; Even though I'm the only caller at the moment, this
     ;; is a detail I don't trust in myself.
-    (if (<= start receive-bytes)
+    (if (<= start (inc strm-hwm))
       ;; Q: Did a previous message overwrite this message block?
-      (if (< stop receive-bytes)
+      (if (<= stop strm-hwm)
         (do
-          (log/debug (str message-loop-name
-                          ": Dropping previously consolidated block"))
+          (utils/debug message-loop-name
+                       "Dropping previously consolidated block")
           (let [to-drop (val (first gap-buffer))]
             (try
               (.release to-drop)
               (catch RuntimeException ex
-                (log/error ex (str message-loop-name
-                                   ": Failed to release"
-                                   to-drop)))))
+                (utils/error message-loop-name
+                             ex
+                             "Failed to release"
+                             to-drop))))
           (update incoming ::specs/gap-buffer pop-map-first))
         ;; Consolidate this message block
-        ;; I'm dubious about the logic for bytes-to-skip
-        ;; and receive-bytes.
-        ;; The math behind it seems wrong...but it seems
-        ;; to work in practice.
-        (let [bytes-to-skip (- receive-bytes start)]
+        (let [bytes-to-skip (- strm-hwm start)]
           (when (< 0 bytes-to-skip)
-            (log/info "Skipping" bytes-to-skip "previously received bytes in" buf)
+            (utils/info message-loop-name
+                        "Skipping"
+                        bytes-to-skip
+                        "previously received bytes in"
+                        buf)
             (.skipBytes buf bytes-to-skip))
-          (log/debug (str "Moving entry 0/" (count (::specs/gap-buffer incoming))))
+          (utils/debug message-loop-name
+                       (str "Moving entry 0/"
+                            (count (::specs/gap-buffer
+                                    incoming))))
           (-> incoming
               (update ::specs/gap-buffer pop-map-first)
               ;; There doesn't seem to be any good reason to hang
@@ -99,9 +114,12 @@
               ;; sense to copy the bytes over
               ;; (and release the buffer)
               (update ::specs/->child-buffer conj buf)
-              ;; TODO: Compare performance w/ using assoc here
-              (update ::specs/receive-bytes (constantly (inc stop))))))
-      (reduced incoming))))
+              ;; Microbenchmarks indicate that assoc
+              ;; is significantly faster than update
+              (assoc ::specs/strm-hwm (inc stop)))))
+      ;; Gap starts past the end of the stream.
+      (do
+        (reduced incoming)))))
 
 (s/fdef consolidate-gap-buffer
         :args (s/cat :state ::specs/state)
@@ -121,13 +139,12 @@
                      ::incoming-keys (keys incoming)})))
   (assoc state
          ::specs/incoming
-         (reduce (fn [{:keys [::specs/receive-bytes]
+         (reduce (fn [{:keys [::specs/strm-hwm]
                        :as acc}
                       buffer-entry]
-                   {:pre [acc
-                          receive-bytes]}
-                   (assert receive-bytes (str message-loop-name
-                                              ": Missing receive-bytes among: "
+                   {:pre [acc]}
+                   (assert strm-hwm (str message-loop-name
+                                         ": Missing strm-hwm among: "
                                               (keys acc)
                                               "\nin:\n"
                                               acc
@@ -135,7 +152,7 @@
                                               (class acc)))
                    (let [[[start stop] buf] buffer-entry]
                      ;; Q: Have we [possibly] filled an existing gap?
-                     (if (<= start receive-bytes)
+                     (if (<= start (inc strm-hwm))
                        (consolidate-message-block message-loop-name acc buffer-entry)
                        ;; There's another gap. Move on
                        (reduced acc))))
@@ -172,12 +189,10 @@
   (let [consolidated (consolidate-gap-buffer state)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])
         block-count (count ->child-buffer)]
-    (log/debug (str message-loop-name
-                    " ("
-                    (Thread/currentThread)
-                    "): Have "
-                    block-count
-                    " consolidated blocks ready to go to child"))
+    (utils/debug message-loop-name
+                 "Have"
+                 block-count
+                 "consolidated blocks ready to go to child")
     (if (< 0 block-count)
       ;; Q: If I have a ton of messages to deliver, do I really want to call the child
       ;; repeatedly right here and now?
@@ -198,10 +213,10 @@
                   ;; skipped due to gap buffering
                   (let [bs (byte-array (.readableBytes buf))]
                     (.readBytes buf bs)
-                    (log/info (str message-loop-name
-                                   ": triggering child's callback with "
-                                   (count bs)
-                                   " bytes"))
+                    (utils/info message-loop-name
+                                "triggering child's callback with"
+                              (count bs)
+                              "bytes")
                     ;; Really need to isolate this in its own
                     ;; try-catch block. Problems in the provided callback are
                     ;; very different than problems at this level.
@@ -221,7 +236,19 @@
                     ;; library. The sooner those can be nailed down,
                     ;; the happier it will be for everyone.
                     (try
-                      (->child bs)
+                      ;; Use milliseconds here because it's supposedly
+                      ;; ~2x faster than nanoTime, and this resolution
+                      ;; as plenty granular
+                      (let [start-time (System/currentTimeMillis)]
+                        (->child bs)
+                        (let [end-time (System/currentTimeMillis)
+                              delta (- end-time start-time)
+                              logger (if (< callback-threshold-warning delta)
+                                       (if (< callback-threshold-error delta)
+                                         utils/error
+                                         utils/warn)
+                                       utils/debug)]
+                          (logger message-loop-name "Child callback took" delta "ms")))
                       (catch RuntimeException ex
                         ;; It's very tempting to just re-raise this exception,
                         ;; especially if I'm inside an agent.

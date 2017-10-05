@@ -6,6 +6,7 @@
             [clojure.tools.logging :as log]
             [frereth-cp.message :as message]
             [frereth-cp.message.constants :as K]
+            [frereth-cp.message.from-child :as from-child]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.message.test-utilities :as test-helpers]
@@ -18,7 +19,8 @@
            [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest basic-echo
-  (let [src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
+  (let [loop-name "Echo Test"
+        src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
         msg-len (- K/max-msg-len K/header-length K/min-padding-length)
         ;; Note that this is what the child sender should be supplying
         message-body (byte-array (range msg-len))
@@ -29,16 +31,18 @@
         message-id 1]
     (is (= msg-len K/k-1))
     (.writeBytes src message-body)
-    (let [incoming (to-parent/build-message-block message-id {::specs/buf src
-                                                              ::specs/length msg-len
-                                                              ::specs/send-eof false
-                                                              ::specs/start-pos 0})]
+    (let [incoming (to-parent/build-message-block-description loop-name
+                    message-id
+                                                              {::specs/buf src
+                                                               ::specs/length msg-len
+                                                               ::specs/send-eof false
+                                                               ::specs/start-pos 0})]
       (is (= K/max-msg-len (count incoming)))
       (let [response (promise)
             parent-state (atom 0)
             parent-cb (fn [dst]
                         (let [response-state @parent-state]
-                          (log/debug "parent-cb:" response-state)
+                          (utils/debug "parent-cb:" response-state)
                           ;; Should get 2 callbacks here:
                           ;; 1. The ACK (this has stopped showing up)
                           ;; 2. The actual response
@@ -73,14 +77,16 @@
                                 (class array-o-bytes)))
                        (assert array-o-bytes)
                        (let [msg-len (count array-o-bytes)]
-                         (log/debug "Echoing back an incoming message:"
-                                    msg-len
-                                    "bytes")
+                         (utils/debug "child-cb"
+                                      "Echoing back an incoming message:"
+                                      msg-len
+                                      "bytes")
                          (when (not= K/k-1 msg-len)
-                           (log/warn "Incoming message doesn't match length we sent"
-                                     {::expected K/k-1
-                                      ::actual msg-len
-                                      ::details (vec array-o-bytes)}))
+                           (utils/warn "child-cb"
+                                       "Incoming message doesn't match length we sent"
+                                       {::expected K/k-1
+                                        ::actual msg-len
+                                        ::details (vec array-o-bytes)}))
                          ;; Just echo it directly back.
                          (let [state-agent @state-agent-atom]
                            (is state-agent)
@@ -95,7 +101,7 @@
             ;; message arrives.
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
-            initialized (message/initial-state "(test) Basic Echo" parent-cb child-cb true)]
+            initialized (message/initial-state loop-name parent-cb child-cb true)]
         (try
           (let [state (message/start! initialized)]
             (reset! state-agent-atom state)
@@ -130,16 +136,19 @@
                         (let [child-outcome @outcome-agent
                               outgoing (::specs/outgoing child-outcome)
                               incoming (::specs/incoming child-outcome)]
-                          (is (= (inc msg-len) (::specs/receive-bytes incoming)))
+                          #_(throw (RuntimeException. "Start back here"))
+                          ;; strm-hwm is 1026 instead of the expected 1024
+                          (is (= msg-len (inc (::specs/strm-hwm incoming))))
                           (is (= 2 (::specs/next-message-id outgoing)))
-                          (is (= 0 (::specs/send-processed outgoing)))
+                          ;; Still have the message buffered
+                          (is (= 0 (from-child/buffer-size outgoing)))
                           (is (not (::specs/send-eof outgoing)))
-                          (is (= msg-len (::specs/send-bytes outgoing)))
+                          (is (= msg-len (::specs/strm-hwm outgoing)))
                           ;; Keeping around as a reminder for when the implementation changes
                           ;; and I need to see what's really going on again
                           (comment (is (not outcome) "What should we have here?"))))))))))
           (catch ExceptionInfo ex
-            (log/error ex "Starting the event loop"))
+            (log/error loop-name ex "Starting the event loop"))
           (finally
             (message/halt! initialized)))))))
 (comment (basic-echo))
@@ -242,6 +251,7 @@
                                 ;; rather than
                                 ;; ":frereth-cp.message.message-test/yarly"
                                 ;; due to an off-by-1 error.
+                                #_(comment (throw (RuntimeException. "Start back here")))
                                 _ (log/debug (str "Matching '" incoming
                                                   "', a " (class incoming)) )
                                 rsp (condp = incoming

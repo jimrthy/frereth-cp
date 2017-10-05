@@ -7,7 +7,8 @@
             [frereth-cp.message.marshall :as marshall]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t])
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]
            java.nio.ByteOrder))
 
@@ -111,8 +112,8 @@
         :ret ::start-stop-details)
 (defn calculate-start-stop-bytes
   "Extract start/stop ACK addresses (lines 562-574)"
-  [{{:keys [::specs/receive-bytes
-            ::specs/receive-written]
+  [{{:keys [::specs/receive-written
+            ::specs/strm-hwm]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
@@ -121,11 +122,11 @@
     start-byte ::specs/start-byte
     :as packet}]
   (assert D (str message-loop-name ": Missing ::specs/size-and-flags among\n" (keys packet)))
-  (log/debug (str message-loop-name
-                  ": calculate-start-stop-bytes: D == "
-                  D
-                  "\nIncoming State:\n"
-                  incoming))
+  (utils/debug message-loop-name
+               "calculate-start-stop-bytes: D =="
+               D
+               "\nIncoming State:\n"
+               incoming)
   ;; If we're re-receiving bytes...well, the reference
   ;; implementation just discards them.
   ;; It would be safer to verify that the overlapping bits
@@ -173,8 +174,8 @@
                         stop-byte))
         ;; Q: Why are we writing to receive-buf?
         ;; A: receive-buf is a circular buffer of bytes past the
-        ;; receive-bytes counter which holds bytes that have not yet
-        ;; been forwarded along to the child.
+        ;; strm-hwm counter which holds bytes that have not yet
+        ;; been buffered to forward along to the child.
         ;; At least, that's the case in the reference implementation.
         ;; In this scenario where I've ditched that circular buffer,
         ;; it simply does not apply.
@@ -192,8 +193,11 @@
         ;;    b) memory copy churn
         ;; 5) Consolidating new incoming blocks
         ;; There's actually plenty of ripe fruit to pluck here.
-        (log/debug (str message-loop-name ": receive-written: " receive-written
-                        "\nstop-byte: " stop-byte)
+        (utils/debug message-loop-name
+                     "receive-written:"
+                     receive-written
+                     "\nstop-byte:"
+                     stop-byte
                    ;; We aren't using this.
                    ;; Big Q: Should we?
                    ;; A: Maybe. It would save some GC.
@@ -257,7 +261,7 @@
 (defn extract-message!
   "Lines 562-593"
   [{{:keys [::specs/gap-buffer
-            ::specs/receive-bytes]} ::specs/incoming
+            ::specs/strm-hwm]} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
    {^ByteBuf incoming-buf ::specs/buf
@@ -292,7 +296,8 @@
       ;; quite a bit more efficient, and that I should look into using a buddy structure.
 
       ;; 3. The array of receivevalid flags is used in the loop between lines
-      ;;    589-593 to decide how much to increment receive-bytes.
+      ;;    589-593 to decide how much to increment strm-hwm (a.k.a receivebytes,
+      ;;    in the original).
       ;;    It's cleared on line 630, after we've written the bytes to the
       ;;    child pipe.
       ;; I'm fairly certain this is what that for loop amounts to
@@ -302,8 +307,8 @@
             ;; Q: Why did I comment out this next line?
             ;; Partial A: Well, I was debugging...
             ;; Can/should it go away completely?
-            #_(update-in [::specs/incoming ::specs/receive-bytes] + (min (- max-rcvd receive-bytes)
-                                                                         (+ receive-bytes delta-k)))
+            #_(update-in [::specs/incoming ::specs/strm-hwm] + (min (- max-rcvd strm-hwm)
+                                                                    (+ strm-hwm delta-k)))
             (update-in [::specs/incoming ::specs/receive-total-bytes]
                        (fn [cur]
                          ;; calculate-start-stop-bytes might have overriden for this
@@ -325,8 +330,8 @@
           ;; The gap-buffer that we are *not* updating is about
           ;; arriving messages that might have been dropped/misordered
           ;; due to UDP issues.
-          (log/debug (str message-loop-name
-                          ": Pure ACK never updates gap-buffer"))
+          (utils/debug message-loop-name
+                       "Pure ACK never updates gap-buffer")
           state)))))
 
 (s/fdef flag-acked-others!
@@ -395,16 +400,16 @@
   "Build a ByteBuf to ACK the message we just received
 
   Lines 595-606"
-  [{{:keys [::specs/receive-bytes
-            ::specs/receive-eof
-            ::specs/receive-total-bytes]} ::specs/incoming
+  [{{:keys [::specs/receive-eof
+            ::specs/receive-total-bytes
+            ::specs/strm-hwm]} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
    message-id]
-  {:pre [receive-bytes
+  {:pre [message-id
          (some? receive-eof)
          receive-total-bytes
-         message-id]}
+         strm-hwm]}
   ;; XXX: incorporate selective acknowledgments --DJB
   ;; never acknowledge a pure acknowledgment --DJB
   ;; I've seen at least one email pointing out that the
@@ -415,22 +420,22 @@
   ;; it sends 4 times a second.
   (if (not= message-id 0)
     (do
-      ;; Note that receive-bytes is the number of bytes
+      ;; Note that strm-hwm is the address of the stream
       ;; that either
       ;; 1. have been forwarded along to the child
       ;; or
       ;; 2. are buffered and ready to forward to the child
-      ;; So we have received every byte sent, up to this
-      ;; point.
+      ;; So we have "fully" received every byte sent, up
+      ;; to this point.
       ;; Although there's some weird off-by-1 issues
       ;; baked into the logic.
       ;; The important thing is that this isn't just the last
       ;; byte in the message we most recently received.
-      (log/debug (str message-loop-name
-                      ": Building an ACK for message "
-                      message-id
-                      "\nup to address "
-                      receive-bytes))
+      (utils/debug message-loop-name
+                   (str "Building an ACK for message "
+                        message-id
+                        "\nup to address "
+                        strm-hwm))
       ;; DJB reuses the incoming message that we're preparing
       ;; to ACK, locked to 192 bytes.
       ;; Q: Is that worth the GC savings?
@@ -441,12 +446,22 @@
         ;; 0 ID for pure ACK (4 bytes)
         ;; 4 bytes for the message-id
         (b-t/uint32-pack! response 4 message-id)
+        ;; Line 602
         (b-t/uint64-pack! response 8 (if (and receive-eof
-                                              (= receive-bytes receive-total-bytes))
-                                       (inc receive-bytes)
-                                       receive-bytes))
+                                              (= strm-hwm receive-total-bytes))
+                                       ;; Avoid 1-off errors due to the
+                                       ;; difference between tracking
+                                       ;; the stream address (which I'm
+                                       ;; doing) vs. the receivebytes
+                                       ;; count (which is how the
+                                       ;; reference implementation tracks
+                                       ;; this)
+                                       (+ strm-hwm 2)
+                                       (inc strm-hwm)))
         response))
-    (log/debug (str message-loop-name ": Never ACK a pure ACK"))))
+    (do
+      (utils/debug message-loop-name "Never ACK a pure ACK")
+      nil)))
 
 (defn send-ack!
   "Write ACK buffer back to parent
@@ -626,17 +641,17 @@ Line 608"
   "436-613: try processing a message: --DJB"
   [{{:keys [::specs/->child-buffer
             ::specs/parent->buffer
-            ::specs/receive-bytes
-            ::specs/receive-written]} ::specs/incoming
+            ::specs/receive-written
+            ::specs/strm-hwm]} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}]
   (let [child-buffer-count (count ->child-buffer)]
-    (log/debug (str message-loop-name
-                    ": from-parent/try-processing-message"
-                    "\nchild-buffer-count: " child-buffer-count
-                    "\nparent->buffer count: " (count parent->buffer)
-                    "\nreceive-written: " receive-written
-                    "\nreceive-bytes: " receive-bytes))
+    (utils/debug message-loop-name
+                 (str "try-processing-message"
+                      "\nchild-buffer-count: " child-buffer-count
+                      "\nparent->buffer count: " (count parent->buffer)
+                      "\nreceive-written: " receive-written
+                      "\nstrm-hwm: " strm-hwm))
     (if (or (< 0 (count parent->buffer))   ; new incoming message?
             ;; any previously buffered incoming messages to finish
             ;; processing?
@@ -652,7 +667,7 @@ Line 608"
             ;; Note that there's really an && close connected
             ;; to this check: it quits mattering once the tochild
             ;; pipe has been closed.
-            (>= receive-written receive-bytes))
+            (> receive-written strm-hwm))
       ;; 440: sets maxblocklen=1024
       ;; Q: Why was it ever 512?
       ;; Guess: for initial Message part of Initiate packet, although

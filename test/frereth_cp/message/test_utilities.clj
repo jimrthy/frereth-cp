@@ -84,8 +84,8 @@
     {::specs/message-loop-name "Unit Testing"
      ::specs/outgoing {::specs/un-ackd-blocks start-blocks
                        ::specs/earliest-time 0
-                       ::specs/send-acked 0
-                       ::specs/send-bytes 1000 ; Something bigger than what's getting acked
+                       ::specs/ackd-addr 0
+                       ::specs/strm-hwm 1000 ; Something bigger than what's getting acked
                        ::specs/send-processed (* 2 bytes-acked) ; 786
                        ::specs/total-block-transmissions 0
                        ::specs/total-blocks 0}}))

@@ -431,16 +431,19 @@
           ;; It doesn't make any sense to call this if
           ;; we were triggered by a message coming in from
           ;; the parent.
-          ;; Even if there are pending blocks are ready to
+          ;; Even if there pending blocks are ready to
           ;; send, outgoing messages are throttled by
           ;; the flow-control logic.
           ;; Likewise, there isn't a lot of sense in
           ;; calling it from the child, due to the same
           ;; throttling issues.
-          ;; Unless we're just idling along, checking for
-          ;; resends every second. Which should only happen
-          ;; if there *are* blocks to resend.
-          ;; This still needs more consideration.
+          ;; This really only makes sense when the
+          ;; timer triggers to let us know that it's
+          ;; OK to send a new message.
+          ;; The timeout on that may completely change
+          ;; when the child schedules another send,
+          ;; or a message arrives from parent to
+          ;; update the RTT.
           (to-parent/maybe-send-block! state))]
     ;; At the end of the main ioloop in the refernce
     ;; implementation, there's a block that closes the pipe
@@ -637,10 +640,13 @@
            ::specs/incoming {::specs/->child child-callback
                              ::specs/->child-buffer []
                              ::specs/gap-buffer (to-child/build-gap-buffer)
-                             ::specs/receive-bytes 0
                              ::specs/receive-eof false
                              ::specs/receive-total-bytes 0
-                             ::specs/receive-written 0}
+                             ::specs/receive-written 0
+                             ;; Note that the reference implementation
+                             ;; tracks receivebytes instead of the
+                             ;; address.
+                             ::specs/strm-hwm -1}
            ::specs/outgoing {::specs/earliest-time 0
                              ;; Start with something that's vaguely sane to
                              ;; avoid 1-ms idle spin waiting for first
