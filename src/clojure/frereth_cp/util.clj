@@ -22,6 +22,7 @@
   (let [lvl lvl-name
         loop-name (gensym)
         args-name (gensym)]
+    ;; Adding an fdef doesn't seem like a terrible idea
     `(defn ~lvl
        [~loop-name & ~args-name]
        (~(symbol (str "log/" lvl)) (pprint/cl-format nil

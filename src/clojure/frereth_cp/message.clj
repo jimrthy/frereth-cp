@@ -151,10 +151,17 @@
   ;; but this part...actually, if we could deliver a message
   ;; and get an ACK in the past, that would be awesome.
   ;; TODO: Be smarter about the timeout.
-  (let [min-resend-time (+ last-block-time n-sec-per-block)
+  (let [now (System/nanoTime)
+        ;; TODO: This seems to be screaming for cond->
+        min-resend-time (+ last-block-time n-sec-per-block)
         _ (log/debug (cl-format nil
-                                "~a: Minimum resend time: ~:d which is ~:d nanoseconds after last block time ~:d"
+                                (str "~a (~a) at ~:d: Minimum resend time: ~:d\n"
+                                     "which is ~:d nanoseconds\n"
+                                     "after last block time ~:d.\n"
+                                     "Recent was ~:d ns in the past")
                                 message-loop-name
+                                (Thread/currentThread)
+                                now
                                 min-resend-time
                                 n-sec-per-block
                                 ;; I'm calculating last-block-time
@@ -163,7 +170,8 @@
                                 ;; It should really be the value of
                                 ;; recent, set immediately after
                                 ;; I send a block to parent.
-                                last-block-time))
+                                last-block-time
+                                (- now recent)))
         default-next (+ recent (utils/seconds->nanos 60))  ; by default, wait 1 minute
         _ (log/debug (cl-format nil
                                 "~a: Default +1 minute: ~:d from ~:d"
@@ -188,15 +196,27 @@
         ;; Q: What is the actual point to this?
         ;; (the logic seems really screwy, but that's almost definitely
         ;; a lack of understanding on my part)
-        next-based-on-eof (if (and (< (+ (count un-ackd-blocks)
-                                         (count un-sent-blocks))
-                                      K/max-outgoing-blocks)
-                                   (if send-eof
-                                     (not send-eof-processed)
-                                     (or (< 0 (count un-ackd-blocks))
-                                         (< 0 (count un-sent-blocks)))))
-                            (min next-based-on-ping min-resend-time)
-                            next-based-on-ping)
+        next-based-on-eof (let [un-ackd-count (count un-ackd-blocks)
+                                un-sent-count(count un-sent-blocks)]
+                            (if (and (< (+ un-ackd-count
+                                           un-sent-count)
+                                        K/max-outgoing-blocks)
+                                     (if send-eof
+                                       (not send-eof-processed)
+                                       (or (< 0 un-ackd-count)
+                                           (< 0 un-sent-count))))
+                              (let [next-time
+                                    (min next-based-on-ping min-resend-time)]
+                                (log/debug "EOF criteria:\nun-ackd-count:"
+                                           un-ackd-count
+                                           "\nun-sent-count:"
+                                           un-sent-count
+                                           "\nsend-eof:"
+                                           send-eof
+                                           "\nsend-eof-processed:"
+                                           send-eof-processed)
+                                next-time)
+                              next-based-on-ping))
         _ (log/debug (cl-format nil
                                 "~a: Due to EOF status: ~:d"
                                 message-loop-name
@@ -264,7 +284,9 @@
               ;; Doing that throws lots of sand into the gears.
               ;; Stick with this approach for now, because it *does*
               ;; match the reference implementation.
-              ;; Although, really, it seems very incorrect.
+              ;; It seems very incorrect, but it also supplies an adjustment
+              ;; for the time it took this event loop iteration to process.
+              ;; Q: Is that fair/accurate?
               scheduled-delay (- actual-next recent)
               ;; Make sure that at least it isn't negative
               ;; (I keep running across bugs that have issues with this,
@@ -442,7 +464,16 @@
           (recur state)
           (schedule-next-timeout! state))))
     (log/debug (str message-loop-name ": Scheduling next timeout"))
-    (schedule-next-timeout! state state-agent)))
+    ;; This is taking a ludicrous amount of time.
+    (let [start (System/nanoTime)
+          ;; TODO: How much should I blame on logging?
+          result (schedule-next-timeout! state state-agent)
+          end (System/nanoTime)]
+      (utils/debug message-loop-name
+                   "Scheduling next timeout took"
+                   (- end start)
+                   " nanoseconds")
+      result)))
 
 (s/fdef trigger-from-child
         :args (s/cat :state ::specs/state

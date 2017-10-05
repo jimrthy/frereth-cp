@@ -171,7 +171,7 @@
 ;; Which means that (after we've buffered the initial
 ;; message) it's 1 greater than the stream address (which
 ;; is 0-based)
-;; TODO: Rename this to high-water-mark
+;; TODO: Rename this to strm-hwm
 (s/def ::receive-bytes nat-int?)
 ;; total number of bytes in stream, if receiveeof --DJB
 (s/def ::receive-total-bytes int?)

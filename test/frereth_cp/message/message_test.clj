@@ -235,6 +235,15 @@
                              (is (not= @sent ::timed-out))))
         server-child-cb (fn [bs]
                           (let [incoming (edn/read-string (String. bs))
+                                ;; Latest test is failing here, on ::yarly.
+                                ;; Wut?
+                                ;; I'm receiving
+                                ;; "frereth-cp.message.message-test/yarly"
+                                ;; rather than
+                                ;; ":frereth-cp.message.message-test/yarly"
+                                ;; due to an off-by-1 error.
+                                _ (log/debug (str "Matching '" incoming
+                                                  "', a " (class incoming)) )
                                 rsp (condp = incoming
                                         ::ohai! ::orly?
                                         ::yarly ::kk

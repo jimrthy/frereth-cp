@@ -111,8 +111,6 @@
         send-buf (.order (Unpooled/buffer u)
                          java.nio.ByteOrder/LITTLE_ENDIAN)
         flag-size (calculate-message-data-packet-length-flags block-to-send)]
-    ;; For the 2nd outgoing message, start-pos is still 0.
-    (throw (RuntimeException. "Start tracing back from here"))
     (log/debug (str message-loop-name
                     ": Building a Message Block byte array for message "
                     next-message-id
@@ -354,6 +352,9 @@
          rtt-timeout]}
   (assert earliest-time (str "Missing earliest-time among " (keys outgoing)))
   (log/debug (str message-loop-name ": Checking for a block to resend"))
+  ;; It's tempting to make adjustments in here using now vs. recent.
+  ;; Q: How much impact would that really have?
+  ;; (There would definitely be *some*
   (if (and (not= 0 earliest-time)
            (< recent (+ earliest-time n-sec-per-block))
            (>= recent (+ earliest-time rtt-timeout)))
@@ -364,7 +365,6 @@
       ;; It's going to re-send that block (it *does* exist...right?)
       (let [block (peek (get-in state [::specs/outgoing ::specs/un-ackd-blocks]))
             state (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
-        ;; TODO: Need to verify that nothing fell through the cracks
         ;; But first, it might adjust some of the globals.
         (assoc
          (if (> recent (+ last-panic (* 4 rtt-timeout)))
@@ -381,15 +381,22 @@
       ;; gap-buffer with any ACKs in this message before
       ;; looking for messages to resend.
       ;; TODO: That instead.
-      (log/debug (str message-loop-name
-                      ": Hasn't been long enough to justify"
-                      " resending any of our "
-                      (count un-ackd-blocks)
-                      " previously sent un-ack'd blocks, based on"
-                      "\nEarliest time: " earliest-time
-                      "\nnanoseconds per block: " n-sec-per-block
-                      "\nrtt-timeout: " rtt-timeout
-                      "\nrecent: " recent))
+      (log/debug (cl-format nil
+                            (str
+                             "~a (~a): Hasn't been long enough to"
+                             " justify resending any of our ~d previously "
+                             "sent un-ack'd blocks, based on"
+                             "\nEarliest time: ~:d"
+                             "\nnanoseconds per block: ~:d"
+                             "\nrtt-timeout: ~:d"
+                             "\nrecent: ~:d")
+                            message-loop-name
+                            (Thread/currentThread)
+                            (count un-ackd-blocks)
+                            earliest-time
+                            n-sec-per-block
+                            rtt-timeout
+                            recent))
       nil)))
 
 (s/fdef ok-to-send-new?
@@ -489,16 +496,16 @@
         ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
         ;; Consolidating smaller blocks *would* be a good idea -- JRG
         (let [block (first un-sent-blocks)
-              start-pos (::start-pos block)
-              block-length (.readableBytes (::buf block))
+              start-pos (::specs/start-pos block)
+              block-length (.readableBytes (::specs/buf block))
               ;; There's some logic going on here, around line
               ;; 361, that I didn't translate correctly.
               ;; TODO: Get back to this when I can think about
               ;; coping with EOF
               last-buffered-block (last un-sent-blocks)  ; Q: How does that perform?
 
-              eof (if (= (+ (::start-pos last-buffered-block)
-                            (-> last-buffered-block ::buf .readableBytes))
+              eof (if (= (+ (::specs/start-pos last-buffered-block)
+                            (-> last-buffered-block ::specs/buf .readableBytes))
                          strm-hwm)
                     send-eof
                     false)]

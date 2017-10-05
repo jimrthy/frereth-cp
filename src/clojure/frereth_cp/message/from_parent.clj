@@ -363,7 +363,7 @@
     (->
      (reduce (fn [{:keys [::stop-byte]
                    :as state}
-                  [start stop]]
+                  [start stop :as gap-key]]
                (when-not (and start stop)
                  (log/error (str message-loop-name
                                  ": missing either "
@@ -494,7 +494,8 @@ Line 608"
                             ": Discarding "
                             ackd
                             " as ACK'd"))
-            (help/mark-block-ackd outgoing ackd))
+            (update acc ::specs/outgoing
+                    #(help/mark-block-ackd % ackd)))
           state
           ackd-blocks))
 
@@ -555,11 +556,17 @@ Line 608"
                           acked-message))
           (let [ackd-blocks (remove #(= acked-message (::specs/message-id %))
                                     un-ackd-blocks)
+                ;; This seems like it would be a good place to drop the
+                ;; message that's just been ACK'd.
+                ;; That would mean coping with gaps.
+                ;; Which, realistically, we have to do
+                ;; on this side anyway, even if the other
+                ;; side doesn't.
                 dropped-ackd (if (not= 0 acked-message)
                                ;; Gaping open Q: Do I really want to do this?
                                (flag-blocks-ackd-by-id state
                                                        ackd-blocks)
-                               un-ackd-blocks)
+                               state)
                 ;; That takes us down to line 544
                 ;; It seems more than a bit silly to calculate flag-acked-others!
                 ;; if the incoming message is a pure ACK (i.e. message ID 0).

@@ -63,7 +63,7 @@ Based on earliestblocktime_compute, in lines 138-153
   ;;; Comment from DJB:
   ;;; XXX: use priority queue
   (log/debug (str message-loop-name
-                  ": Calculating min-time across"
+                  ": Calculating min-time across "
                   (count un-acked-blocks)
                   " un-ACK'd blocks"))
   (if (< 0 (count un-acked-blocks))
@@ -122,7 +122,9 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
             to-drop (filter ::specs/ackd? possibly-ackd)
             to-keep (remove ::specs/ackd? possibly-ackd)
             _ (log/debug (str message-loop-name
-                              ": Keeping "
+                              " ("
+                              (Thread/currentThread)
+                              "): Keeping "
                               (count to-keep)
                               " blocks:\n"
                               (reduce (fn [acc b]
@@ -132,13 +134,21 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                               "\nout of\n"
                               possibly-ackd
                               "\n\n"))
-            dropped-block-lengths (apply + (map ::specs/length to-drop))
+            dropped-block-lengths (apply + (map (fn [b]
+                                                  (-> b ::specs/buf .readableBytes))
+                                                to-drop))
             kept (reduce (fn [acc dropped]
                            (disj acc dropped))
                          un-ackd-blocks
                          to-drop)
-            ;; TODO: Drop reliance on these send-* keys
             state (-> acked
+                      ;; Note that this really needs to be the stream address of the
+                      ;; highest contiguous block that's been ACK'd.
+                      ;; This makes any scheme for ACK'ing pieces out of
+                      ;; order more complicated.
+                      ;; As-is, this is really tracking the count of bytes
+                      ;; that have been ACK'd.
+                      ;; For these purposes, that doesn't accomplish much.
                       (update-in [::specs/outgoing ::specs/ackd-addr] + dropped-block-lengths)
                       (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] kept))
 ;;;           177-182: Possibly set sendeofacked flag
@@ -150,6 +160,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                            (not send-eof-acked))
                     (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
                     state)]
+        (log/warn "Get back to ackd-addr handling")
 ;;;           183: earliestblocktime_compute()
         (doseq [block to-drop]
           (log/debug (str message-loop-name
@@ -171,7 +182,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
   [{:keys [::specs/un-ackd-blocks]
     :as outgoing}
    block]
-  (log/debug "Marking" block "ACK'd")
+  (log/warn "Marking\n" block "\nACK'd isn't working. Q: Why not?")
   (assert (contains? un-ackd-blocks block)
           (str "Can't mark\n"
                block
