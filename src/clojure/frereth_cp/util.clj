@@ -6,10 +6,42 @@
   ;; pprint
   (:require [clojure.pprint :as pprint]
             [clojure.spec.alpha :as s]
+            [clojure.string :as string]
             [clojure.tools.logging :as log])
   (:import clojure.lang.ExceptionInfo))
 
 (set! *warn-on-reflection* true)
+
+;;;; Logging wrappers
+
+;;; TODO: Debug this
+;;; (in a different branch...don't get derailed from the current one)
+(defmacro def-log-fn
+  "I'm starting to add enough boilerplate to be annoying"
+  [lvl-name]
+  (let [lvl lvl-name
+        loop-name (gensym)
+        args-name (gensym)]
+    `(defn ~lvl
+       [~loop-name & ~args-name]
+       (~(symbol (str "log/" lvl)) (pprint/cl-format nil
+                                                     "~a (~a):"
+                                                     ~loop-name
+                                                     (Thread/currentThread))
+        (string/join " " ~args-name)))))
+(doseq [wrapper-name '[trace debug info warn error]]
+  (eval `(def-log-fn ~wrapper-name)))
+
+(comment
+  (macroexpand-1 '(def-log-fn debug))
+  (def-log-fn debug)
+  (debug "here" "check")
+  (let [wrapper-name 'debug]
+    (macroexpand-1 `(def-log-fn ~wrapper-name)))
+  (debug "check" "abc" "def")
+)
+
+;;;; More traditional pieces
 
 ;; TODO: Rename this to seconds-in-millis
 (defn seconds [] 1000)  ; avoid collision w/ built-in second
@@ -21,6 +53,9 @@
   [ss]
   (* ss 1000000000))
 
+;;; TODO: Try to :require fipp
+;;; If it's available, define pretty using it instead of
+;;; pprint
 (defn pretty
   "Return a pretty-printed representation of xs"
   [& xs]
@@ -54,8 +89,9 @@ Falling back to standard")
         :ret string?)
 (defn show-stack-trace
   "Convert stack trace to a readable string
-Slow and inefficient, but you have bigger issues than
-performance if you're calling this"
+  Slow and inefficient, but you have bigger issues than
+  performance if you're calling this"
+  ;; This is more-or-less a built-in. TODO: Switch to using that
   [^Throwable ex]
   (let [base (if (instance? ExceptionInfo ex)
                (str ex "\n" (pretty (.getData ^ExceptionInfo ex)))
