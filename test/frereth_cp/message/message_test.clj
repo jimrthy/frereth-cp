@@ -33,23 +33,24 @@
     (.writeBytes src message-body)
     (let [incoming (to-parent/build-message-block-description loop-name
                     message-id
-                                                              {::specs/buf src
-                                                               ::specs/length msg-len
-                                                               ::specs/send-eof false
-                                                               ::specs/start-pos 0})]
+                    {::specs/buf src
+                     ::specs/length msg-len
+                     ::specs/send-eof false
+                     ::specs/start-pos 0})]
       (is (= K/max-msg-len (count incoming)))
       (let [response (promise)
             parent-state (atom 0)
             parent-cb (fn [dst]
                         (let [response-state @parent-state]
-                          (utils/debug "parent-cb:" response-state)
+                          (log/debug (utils/pre-log "parent-cb")
+                                     response-state)
                           ;; Should get 2 callbacks here:
                           ;; 1. The ACK (this has stopped showing up)
                           ;; 2. The actual response
                           ;; Although, depending on timing, 3 or
                           ;; more are possible
-                          ;; (If we don't end this quickly enough to
-                          ;; avoid a repeated send, for example)
+                          ;; It's unlikely, but this could drag
+                          ;; on long enough to trigger a repeated send
                           (when (= response-state 1)
                             (deliver response dst))
                           (swap! parent-state inc)))
@@ -77,12 +78,13 @@
                                 (class array-o-bytes)))
                        (assert array-o-bytes)
                        (let [msg-len (count array-o-bytes)]
-                         (utils/debug "child-cb"
+
+                         (log/debug (utils/pre-log "child-cb")
                                       "Echoing back an incoming message:"
                                       msg-len
                                       "bytes")
                          (when (not= K/k-1 msg-len)
-                           (utils/warn "child-cb"
+                           (log/warn (utils/pre-log "child-cb")
                                        "Incoming message doesn't match length we sent"
                                        {::expected K/k-1
                                         ::actual msg-len
@@ -128,20 +130,26 @@
                     (let [outcome-agent @wrote]
                       (is (not (agent-error outcome-agent)))
                       (when-not (agent-error outcome-agent)
+                        (await state)
+                        (log/info "Checking test outcome")
                         ;; Fun detail:
                         ;; wrote is a promise.
                         ;; When I deref that, there's an agent
                         ;; that I need to deref again to get
                         ;; the actual end-state
-                        (let [child-outcome @outcome-agent
-                              outgoing (::specs/outgoing child-outcome)
-                              incoming (::specs/incoming child-outcome)]
-                          #_(throw (RuntimeException. "Start back here"))
-                          ;; strm-hwm is 1026 instead of the expected 1024
+                        (let [{:keys [::specs/incoming
+                                      ::specs/outgoing]
+                               :as child-outcome} @state]
+                          (is incoming)
                           (is (= msg-len (inc (::specs/strm-hwm incoming))))
+                          (is (= msg-len (::specs/contiguous-stream-count incoming)))
+                          (is (= (inc (::specs/strm-hwm incoming))
+                                 (::specs/contiguous-stream-count incoming)))
                           (is (= 2 (::specs/next-message-id outgoing)))
-                          ;; Still have the message buffered
-                          (is (= 0 (from-child/buffer-size outgoing)))
+                          ;; Still have the message buffered.
+                          (is (= msg-len (from-child/buffer-size outgoing)))
+                          (is (= 0 (count (::specs/un-sent-blocks outgoing))))
+                          (is (= 1 (count (::specs/un-ackd-blocks outgoing))))
                           (is (not (::specs/send-eof outgoing)))
                           (is (= msg-len (::specs/strm-hwm outgoing)))
                           ;; Keeping around as a reminder for when the implementation changes

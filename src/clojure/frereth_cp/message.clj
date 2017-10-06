@@ -128,7 +128,6 @@
             ::specs/last-block-time
             ::specs/send-eof
             ::specs/send-eof-processed
-            ::specs/strm-hwm
             ::specs/un-sent-blocks
             ::specs/un-ackd-blocks
             ::specs/want-ping]} ::specs/outgoing
@@ -414,10 +413,7 @@
     {:keys [::specs/next-action]} ::specs/flow-control
     :keys [::specs/message-loop-name]
     :as state}]
-  (log/debug (str message-loop-name
-                  " (thread "
-                  (Thread/currentThread)
-                  "): Triggering Output"))
+  (log/debug (utils/pre-log message-loop-name) "Triggering Output")
   ;; Originally, it seemed like it would make sense to cancel
   ;; the timer here, to avoid duplicating the call when I
   ;; get input from either the parent or the child.
@@ -469,13 +465,13 @@
     (log/debug (str message-loop-name ": Scheduling next timeout"))
     ;; This is taking a ludicrous amount of time.
     (let [start (System/nanoTime)
-          ;; TODO: How much should I blame on logging?
+          ;; Q: How much should I blame on logging?
           result (schedule-next-timeout! state state-agent)
           end (System/nanoTime)]
-      (utils/debug message-loop-name
-                   "Scheduling next timeout took"
-                   (- end start)
-                   " nanoseconds")
+      (log/debug (utils/pre-log message-loop-name)
+                 "Scheduling next timeout took"
+                 (- end start)
+                 " nanoseconds")
       result)))
 
 (s/fdef trigger-from-child
@@ -494,32 +490,36 @@
   ;; The downside to doing this here (and trigger-from-parent)
   ;; is that we could easily hit a timeout between the time
   ;; we call send and this gets called.
+  ;; That's in contrast with the craziness of updating the
+  ;; state outside of the agent's handler.
   (cancel-timer! state ::from-child)
-  (log/info (str message-loop-name
-                 ": trigger-from-child\nSent stream address: "
-                 strm-hwm))
+  (log/info (utils/pre-log message-loop-name)
+            "trigger-from-child\nSent stream address: "
+            strm-hwm)
   (let [state' (if (from-child/room-for-child-bytes? state)
                  (do
-                   (log/debug (str message-loop-name
-                                   " ("
-                                   (Thread/currentThread)
-                                   "): There is room for another message"))
+                   (log/debug (utils/pre-log message-loop-name)
+                              "There is room for another message")
                    (let [result (from-child/consume-from-child state array-o-bytes)]
                      result))
                  ;; trigger-output does some state management, even
                  ;; if we discard the incoming bytes because our
-                 ;; buffer is full
+                 ;; buffer is full.
                  ;; TODO: Need a way to signal the child to
                  ;; try again shortly
                  (do
-                   (log/error "Discarding incoming bytes, silently")
+                   (log/error (utils/pre-log message-loop-name)
+                              "Discarding incoming bytes, silently")
                    state))]
     ;; Q: worth checking output conditions here.
     ;; It's pointless to call this if we just have
     ;; to wait for the timer to expire.
-    (trigger-output
-     state-agent
-     state')))
+    (let [new-state (trigger-output
+                     state-agent
+                     state')]
+      (log/debug (utils/pre-log message-loop-name)
+                 "Truly  updating agent state due to input from child")
+      new-state)))
 
 (s/fdef trigger-from-parent
         :args (s/cat :state ::specs/state
@@ -639,6 +639,7 @@
                                  ::specs/rtt-timeout K/sec->n-sec}
            ::specs/incoming {::specs/->child child-callback
                              ::specs/->child-buffer []
+                             ::specs/contiguous-stream-count 0
                              ::specs/gap-buffer (to-child/build-gap-buffer)
                              ::specs/receive-eof false
                              ::specs/receive-total-bytes 0

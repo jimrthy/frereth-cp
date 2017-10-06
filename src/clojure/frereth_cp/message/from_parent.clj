@@ -59,7 +59,7 @@
         ;; TODO: Benchmark!
         header (shared/decompose marshall/message-header-dscr buf)
         D' (::specs/size-and-flags header)
-        SF (bit-and D' (bit-or K/normal-eof K/error-eof))
+        SF (bit-and D' (bit-or K/eof-normal K/eof-error))
         D (- D' SF)
         padding-count (- (.readableBytes buf)
                          D')]
@@ -112,8 +112,7 @@
         :ret ::start-stop-details)
 (defn calculate-start-stop-bytes
   "Extract start/stop ACK addresses (lines 562-574)"
-  [{{:keys [::specs/receive-written
-            ::specs/strm-hwm]
+  [{{:keys [::specs/receive-written]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
@@ -122,7 +121,7 @@
     start-byte ::specs/start-byte
     :as packet}]
   (assert D (str message-loop-name ": Missing ::specs/size-and-flags among\n" (keys packet)))
-  (utils/debug message-loop-name
+  (log/debug (utils/pre-log message-loop-name)
                "calculate-start-stop-bytes: D =="
                D
                "\nIncoming State:\n"
@@ -139,13 +138,8 @@
   ;; authority.
   ;; So stick with the current approach for now.
   (let [starting-point (.readerIndex incoming-buf)
-        ;; For from-parent-test/check-start-stop-calculation:
-        ;; This is starting at position 112.
-        ;; Then 113.
-        ;; Then 112 again.
-        ;; Q: What gives?
         D' D
-        SF (bit-and D (bit-or K/normal-eof K/error-eof))
+        SF (bit-and D (bit-or K/eof-normal K/eof-error))
         D (- D SF)
         message-length (.readableBytes incoming-buf)]
     (log/debug (str message-loop-name
@@ -171,34 +165,25 @@
                         ": Starting with ACK from "
                         start-byte
                         " to "
+                        ;; It looks like there's a 1-off error here.
+                        ;; If Message 1 (start-byte 0) is 1024
+                        ;; bytes long, stop-byte should be at
+                        ;; address 1023.
+                        ;; At least for purposes of the ACK.
+                        ;; Q: Right?
+                        ;; A: Wrong.
+                        ;; Lines 589-593:
+                        ;; If we receive 1 byte at address 0,
+                        ;; that increments receivebytes to 1.
+                        ;; Line 605:
+                        ;; That's what goes into the ACK block.
                         stop-byte))
-        ;; Q: Why are we writing to receive-buf?
-        ;; A: receive-buf is a circular buffer of bytes past the
-        ;; strm-hwm counter which holds bytes that have not yet
-        ;; been buffered to forward along to the child.
-        ;; At least, that's the case in the reference implementation.
-        ;; In this scenario where I've ditched that circular buffer,
-        ;; it simply does not apply.
-        ;; That does not make the decision to do that ditching correct.
-        ;; However, I can probably move forward successfully with this
-        ;; approach using a sorted-map (or possibly sorted-map-by)
-        ;; acting as a priority queue.
-        ;; Or the buddy queue that DJB recommended initially.
-        ;; The key to this approach would be
-        ;; 1) receive message from parent
-        ;; 2) reduce of the buffer of received messages
-        ;; 3) forwarding the completed stream blocks to the child
-        ;; 4) finding a balance between
-        ;;    a) calling that over and over
-        ;;    b) memory copy churn
-        ;; 5) Consolidating new incoming blocks
-        ;; There's actually plenty of ripe fruit to pluck here.
-        (utils/debug message-loop-name
-                     "receive-written:"
-                     receive-written
-                     "\nstop-byte:"
-                     stop-byte
-                   ;; We aren't using this.
+        (log/debug (utils/pre-log message-loop-name)
+                   "\ncalculate-start-stop-bytes\nreceive-written:"
+                   receive-written
+                   "\nstop-byte:"
+                   stop-byte
+                   ;; We aren't using anything like this.
                    ;; Big Q: Should we?
                    ;; A: Maybe. It would save some GC.
                    ;; "\nreceive-buf writable length:" (.writableBytes receive-buf)
@@ -215,8 +200,8 @@
           ;; 576-579: SF (StopFlag? deals w/ EOF)
           (let [receive-eof (case SF
                               0 false
-                              normal-eof ::specs/normal
-                              error-eof ::specs/error)
+                              K/eof-normal ::specs/normal
+                              K/eof-error ::specs/error)
                 ;; Note that this needs to update the "global state" because
                 ;; we've reached the end of the stream.
                 receive-total-bytes (when receive-eof stop-byte)]
@@ -303,35 +288,36 @@
       ;; I'm fairly certain this is what that for loop amounts to
 
       (if (not= 0 message-id)
-        (-> state
-            ;; Q: Why did I comment out this next line?
-            ;; Partial A: Well, I was debugging...
-            ;; Can/should it go away completely?
-            #_(update-in [::specs/incoming ::specs/strm-hwm] + (min (- max-rcvd strm-hwm)
-                                                                    (+ strm-hwm delta-k)))
-            (update-in [::specs/incoming ::specs/receive-total-bytes]
-                       (fn [cur]
-                         ;; calculate-start-stop-bytes might have overriden for this
-                         ;; In the outer scope.
-                         ;;
-                         (or overridden-recv-total-bytes
-                             cur)))
-            (update-in [::specs/incoming ::specs/gap-buffer]
-                       assoc
-                       ;; This needs to be the absolute stream position of the values that are left
-                       [(+ start-byte min-k) (+ start-byte max-k)]
-                       incoming-buf))
+        (do
+          (-> state
+              ;; It seems to make the most sense to do this here.
+              ;; But, really, we can't until after we've done gap-buffer
+              ;; consolidation.
+              ;; Which should not be based on the HWM.
+              (assoc-in [::specs/incoming ::specs/strm-hwm] (min max-rcvd
+                                                                 (+ strm-hwm delta-k)))
+              (update-in [::specs/incoming ::specs/receive-total-bytes]
+                         (fn [cur]
+                           ;; calculate-start-stop-bytes might have overriden for this
+                           ;; In the outer scope.
+                           (or overridden-recv-total-bytes
+                               cur)))
+              (update-in [::specs/incoming ::specs/gap-buffer]
+                         assoc
+                         ;; These are the absolute stream positions
+                         ;; of the values that are left
+                         [(+ start-byte min-k) (+ start-byte max-k)]
+                         incoming-buf)))
         (do
           ;; This seems problematic, but that's because
-          ;; I'm tangling up the outgoing vs. incoming buffers
-          ;; again.
+          ;; it's easy to tangle up the outgoing vs. incoming buffers.
           ;; The ACK was for the sake of the un-ackd-blocks in
           ;; outgoing.
           ;; The gap-buffer that we are *not* updating is about
           ;; arriving messages that might have been dropped/misordered
           ;; due to UDP issues.
-          (utils/debug message-loop-name
-                       "Pure ACK never updates gap-buffer")
+          (log/debug (utils/pre-log message-loop-name)
+                     "Pure ACK never updates gap-buffer")
           state)))))
 
 (s/fdef flag-acked-others!
@@ -339,7 +325,9 @@
                      :packet ::specs/packet)
         :ret ::specs/state)
 (defn flag-acked-others!
-  "Lines 544-560"
+  "Cope with sent message the other side just ACK'd
+
+  Lines 544-560"
   [{:keys [::specs/message-loop-name]
     :as state}
    {:keys [::specs/message-id]
@@ -400,8 +388,10 @@
   "Build a ByteBuf to ACK the message we just received
 
   Lines 595-606"
-  [{{:keys [::specs/receive-eof
+  [{{:keys [::specs/contiguous-stream-count
+            ::specs/receive-eof
             ::specs/receive-total-bytes
+            ::specs/receive-written
             ::specs/strm-hwm]} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
@@ -431,11 +421,11 @@
       ;; baked into the logic.
       ;; The important thing is that this isn't just the last
       ;; byte in the message we most recently received.
-      (utils/debug message-loop-name
-                   (str "Building an ACK for message "
-                        message-id
-                        "\nup to address "
-                        strm-hwm))
+      (log/debug (utils/pre-log message-loop-name)
+                 (str "Building an ACK for message "
+                      message-id
+                      "\nup to address "
+                      strm-hwm))
       ;; DJB reuses the incoming message that we're preparing
       ;; to ACK, locked to 192 bytes.
       ;; Q: Is that worth the GC savings?
@@ -448,7 +438,7 @@
         (b-t/uint32-pack! response 4 message-id)
         ;; Line 602
         (b-t/uint64-pack! response 8 (if (and receive-eof
-                                              (= strm-hwm receive-total-bytes))
+                                              (= contiguous-stream-count receive-total-bytes))
                                        ;; Avoid 1-off errors due to the
                                        ;; difference between tracking
                                        ;; the stream address (which I'm
@@ -456,11 +446,14 @@
                                        ;; count (which is how the
                                        ;; reference implementation tracks
                                        ;; this)
-                                       (+ strm-hwm 2)
-                                       (inc strm-hwm)))
+                                       (inc contiguous-stream-count)
+                                       contiguous-stream-count))
+        ;; Note that the gap-buffer should make it easy to also ACK
+        ;; messages that aren't part of that contiguous stream.
+        ;; TODO: Go ahead and add that functionality.
         response))
     (do
-      (utils/debug message-loop-name "Never ACK a pure ACK")
+      (log/debug (utils/pre-log message-loop-name) "Never ACK a pure ACK")
       nil)))
 
 (defn send-ack!
@@ -527,8 +520,11 @@ Line 608"
     ;; the outgoing blocks in here.
     ;; But there's an excellent chance that the incoming message
     ;; is going to ACK some or all of what we have pending in here.
-    {:keys [::specs/un-ackd-blocks]} ::specs/outgoing
-    :keys [::specs/message-loop-name]
+    {:keys [::specs/un-ackd-blocks]
+     :as outgoing} ::specs/outgoing
+    :keys [::specs/flow-control
+           ::specs/incoming
+           ::specs/message-loop-name]
     :as state}]
   ;; Keep in mind that parent->buffer is an array of bytes that has
   ;; just been pulled off the wire
@@ -596,14 +592,24 @@ Line 608"
                                         dissoc
                                         ::specs/parent->buffer)
                                 ackd-blocks)
-                extracted (extract-message! flagged packet)]
-            (log/debug (str message-loop-name
-                            ": handle-comprehensible message/extracted:\n"
-                            extracted))
+                {:keys [::specs/flow-control
+                        ::specs/incoming
+                        ::specs/outgoing]
+                 :as extracted} (extract-message! flagged packet)]
+            (log/debug (utils/pre-log message-loop-name)
+                       "handle-comprehensible message/extracted:\n"
+                       "\n\tincoming:\n"
+                       incoming
+                       "\n\tflow-control:\n"
+                       flow-control
+                       "\n\toutgoing:\n"
+                       outgoing
+                       "\n\tFields:\n"
+                       (keys extracted))
             (if extracted
               (or
                (let [msg-id (::specs/message-id packet)]
-                 (log/debug (str message-loop-name ": ACK message-id " msg-id "?"))
+                 (log/debug (utils/pre-log message-loop-name) (str "ACK message-id " msg-id "?"))
                  (when-not msg-id
                    ;; Note that 0 is legal: that's a pure ACK.
                    ;; We just have to have something.
@@ -616,7 +622,7 @@ Line 608"
                    ;; since this is called for side-effects, ignore the
                    ;; return value.
                    (send-ack! extracted ack-msg)
-                   (log/debug (str message-loop-name ": ACK'd"))
+                   (log/debug (utils/pre-log message-loop-name) "ACK'd")
                    (update extracted
                            ::specs/incoming
                            dissoc
@@ -625,9 +631,11 @@ Line 608"
               flagged))))
       (do
         (if (< 0 len)
-          (log/warn (str message-loop-name ": Illegal incoming message length:") len)
+          (log/warn (utils/pre-log message-loop-name)
+                    (str "Illegal incoming message length:") len)
           ;; Nothing to see here. Move along.
-          (log/debug (str message-loop-name ": i/o loop iteration w/out parent interaction")))
+          (log/debug (utils/pre-log message-loop-name)
+                     "i/o loop iteration w/out parent interaction"))
         ;; Be explicit about this
         nil))))
 
@@ -646,12 +654,12 @@ Line 608"
     :keys [::specs/message-loop-name]
     :as state}]
   (let [child-buffer-count (count ->child-buffer)]
-    (utils/debug message-loop-name
-                 (str "try-processing-message"
-                      "\nchild-buffer-count: " child-buffer-count
-                      "\nparent->buffer count: " (count parent->buffer)
-                      "\nreceive-written: " receive-written
-                      "\nstrm-hwm: " strm-hwm))
+    (log/debug (utils/pre-log message-loop-name)
+               (str "try-processing-message"
+                    "\nchild-buffer-count: " child-buffer-count
+                    "\nparent->buffer count: " (count parent->buffer)
+                    "\nreceive-written: " receive-written
+                    "\nstrm-hwm: " strm-hwm))
     (if (or (< 0 (count parent->buffer))   ; new incoming message?
             ;; any previously buffered incoming messages to finish
             ;; processing?

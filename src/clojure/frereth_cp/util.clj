@@ -14,8 +14,15 @@
 
 ;;;; Logging wrappers
 
-;;; TODO: Debug this
-;;; (in a different branch...don't get derailed from the current one)
+(defn pre-log
+  [human-name]
+  (pprint/cl-format nil
+                    "~a (~a):"
+                    human-name
+                    (Thread/currentThread)))
+
+;;; TODO: Make this go away. It hides even more about the
+;;; caller than standard logging
 (defmacro def-log-fn
   "I'm starting to add enough boilerplate to be annoying"
   [lvl-name]
@@ -25,12 +32,10 @@
     ;; Adding an fdef doesn't seem like a terrible idea
     `(defn ~lvl
        [~loop-name & ~args-name]
-       (~(symbol (str "log/" lvl)) (pprint/cl-format nil
-                                                     "~a (~a):"
-                                                     ~loop-name
-                                                     (Thread/currentThread))
+       (log/warn "Deprecated log call")
+       (~(symbol (str "log/" lvl)) (pre-log ~loop-name)
         (string/join " " ~args-name)))))
-(doseq [wrapper-name '[trace debug info warn error]]
+(doseq [wrapper-name '[trace debug info warn ]]
   (eval `(def-log-fn ~wrapper-name)))
 
 (comment

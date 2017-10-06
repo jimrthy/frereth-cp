@@ -63,7 +63,7 @@
 
 (s/fdef build-message-block-description
         :args (s/cat :message-loop-name ::specs/message-loop-name
-                     :next-message-id nat-int?
+                     :next-message-id ::specs/next-message-id
                      :block-to-send ::specs/block)
         :ret bytes?)
 (defn build-message-block-description
@@ -110,8 +110,8 @@
         send-buf (.order (Unpooled/buffer u)
                          java.nio.ByteOrder/LITTLE_ENDIAN)
         flag-size (calculate-message-data-packet-length-flags block-to-send)]
-    (log/debug (str message-loop-name
-                    ": Building a Message Block byte array for message "
+    (log/debug (utils/pre-log message-loop-name)
+               (str ": Building a Message Block byte array for message "
                     next-message-id
                     "\nTotal length: " u
                     "\nSize | Flags: " flag-size
@@ -311,11 +311,12 @@
                                       ;; It *is* readily available in un-ackd-blocks,
                                       ;; until the last block gets ACK'd.
                                       ::specs/last-block-time recent
-                                      ;; Q: How wise is this approach?
+                                      ;; Q: How wise is it to inject send-buf here?
                                       ::specs/send-buf buf
                                       ::specs/want-ping false)))]
-          (log/debug (str message-loop-name
-                          ": Next block built and stats updated"))
+          (log/debug (utils/pre-log message-loop-name)
+                     "Next block built and control state updated to"
+                     result)
           ;; It's tempting to split this part up to avoid the conditional.
           ;; Maybe turn the call into a multimethod.
           ;; The latter would be a mistake, since there are
@@ -584,11 +585,8 @@
       ;; Note that this winds up doing a send to the message
       ;; loop's agent.
       (block->parent! ->parent send-buf)
-      (log/debug (str message-loop-name
-                      ": Calculating earliest time among "
-                      ;; I don't have message-id here.
-                      ;; TODO: Get it. It *will* make debugging
-                      ;; easier.
+      (log/debug (utils/pre-log message-loop-name)
+                 (str "Calculating earliest time among "
                       (count un-ackd-blocks)
                       " blocks\nthat have not been ACK'd in a "
                       (class un-ackd-blocks)

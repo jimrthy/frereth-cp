@@ -73,8 +73,8 @@
   "in nanoseconds"
   (* 60 secs-1))
 
-(def error-eof k-4)
-(def normal-eof k-2)
+(def eof-error k-4)
+(def eof-normal k-2)
 
 (def recv-byte-buf-size
   "How many bytes from the parent will we buffer to send to the child?"

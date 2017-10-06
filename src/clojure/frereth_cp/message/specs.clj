@@ -165,6 +165,7 @@
 ;; arrays or possibly clojure vectors of bytes.
 ;; (I'm still torn about that detail)
 (s/def ::parent->buffer bytes?)
+
 ;; total number of bytes in stream, if receiveeof --DJB
 (s/def ::receive-total-bytes int?)
 ;; within receivebytes, number of bytes given to child -- DJB
@@ -182,7 +183,12 @@
 ;; number of initial bytes fully received --DJB
 ;; i.e. the address in the stream that has been
 ;; buffered up to send to the child
-(s/def ::strm-hwm nat-int?)
+(s/def ::strm-hwm int?)
+;; The number of bytes that have been received
+;; without gaps.
+;; Actually, this is probably the real point
+;; behind receivebytes in the original.
+(s/def ::contiguous-stream-count nat-int?)
 
 ;; For a gap-buffer entry, what is the starting address?
 (s/def ::strm-strt-addr nat-int?)
@@ -286,6 +292,7 @@
 ;;    yet managed to write to the child
 (s/def ::incoming (s/keys :req [::->child  ; callback
                                 ::->child-buffer
+                                ::contiguous-stream-end
                                 ::gap-buffer
                                 ::receive-eof
                                 ::receive-total-bytes

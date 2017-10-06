@@ -65,46 +65,44 @@
   [message-loop-name
    {:keys [::specs/->child-buffer
            ::specs/gap-buffer
-           ::specs/strm-hwm]
+           ::specs/contiguous-stream-count]
     :as incoming}
    k-v-pair]
   (let [[[start stop] ^ByteBuf buf] k-v-pair]
-    (utils/debug message-loop-name
-                 (str "Does " start "-" stop " close a hole in "
-                      gap-buffer " from HWM " strm-hwm "?"))
+    ;; Important note re: the logic that's about to hit:
+    ;; start, strm-hwm, and stop are all absolute stream
+    ;; addresses.
+    ;; If we've received 1 byte, the strm-hwm is at 0.
+    ;; If start is 0 or 1, then we might have some overlap.
+    ;; As long as stop is somewhere past strm-hwm.
+    (log/debug (utils/pre-log message-loop-name)
+               (str "Does " start "-" stop " close a hole in "
+                    gap-buffer " after "
+                    contiguous-stream-count
+                    " contiguous bytes?"))
     ;; For now, this top-level if check is redundant.
     ;; I'd rather be safe and trust the JIT than remove it
     ;; under the assumption that callers will be correct.
     ;; Even though I'm the only caller at the moment, this
-    ;; is a detail I don't trust in myself.
-    (if (<= start (inc strm-hwm))
+    ;; is a detail I don't trust myself to not botch at
+    ;; some future time..
+    (if (<= start contiguous-stream-count)
       ;; Q: Did a previous message overwrite this message block?
-      (if (<= stop strm-hwm)
-        (do
-          (utils/debug message-loop-name
-                       "Dropping previously consolidated block")
-          (let [to-drop (val (first gap-buffer))]
-            (try
-              (.release to-drop)
-              (catch RuntimeException ex
-                (utils/error message-loop-name
-                             ex
-                             "Failed to release"
-                             to-drop))))
-          (update incoming ::specs/gap-buffer pop-map-first))
+      (if (> stop contiguous-stream-count)
         ;; Consolidate this message block
-        (let [bytes-to-skip (- strm-hwm start)]
-          (when (< 0 bytes-to-skip)
-            (utils/info message-loop-name
+        (do
+          (when (< start contiguous-stream-count)
+            (let [bytes-to-skip (- contiguous-stream-count start)]
+              (log/info (utils/pre-log message-loop-name)
                         "Skipping"
                         bytes-to-skip
                         "previously received bytes in"
                         buf)
-            (.skipBytes buf bytes-to-skip))
-          (utils/debug message-loop-name
-                       (str "Moving entry 0/"
-                            (count (::specs/gap-buffer
-                                    incoming))))
+              (.skipBytes buf bytes-to-skip)))
+          (log/debug (utils/pre-log message-loop-name)
+                     (str "Moving entry 0/"
+                          (count (::specs/gap-buffer
+                                  incoming))))
           (-> incoming
               (update ::specs/gap-buffer pop-map-first)
               ;; There doesn't seem to be any good reason to hang
@@ -116,7 +114,19 @@
               (update ::specs/->child-buffer conj buf)
               ;; Microbenchmarks indicate that assoc
               ;; is significantly faster than update
-              (assoc ::specs/strm-hwm (inc stop)))))
+              (assoc ::specs/contiguous-stream-count stop)))
+        (do
+          (log/debug (utils/pre-log message-loop-name)
+                     "Dropping previously consolidated block")
+          (let [to-drop (val (first gap-buffer))]
+            (try
+              (.release to-drop)
+              (catch RuntimeException ex
+                (log/error (utils/pre-log message-loop-name)
+                           ex
+                           "Failed to release"
+                           to-drop))))
+          (update incoming ::specs/gap-buffer pop-map-first)))
       ;; Gap starts past the end of the stream.
       (do
         (reduced incoming)))))
@@ -139,22 +149,24 @@
                      ::incoming-keys (keys incoming)})))
   (assoc state
          ::specs/incoming
-         (reduce (fn [{:keys [::specs/strm-hwm]
+         (reduce (fn [{:keys [::specs/contiguous-stream-count]
                        :as acc}
                       buffer-entry]
                    {:pre [acc]}
-                   (assert strm-hwm (str message-loop-name
-                                         ": Missing strm-hwm among: "
-                                              (keys acc)
-                                              "\nin:\n"
-                                              acc
-                                              "\na"
-                                              (class acc)))
+                   (assert contiguous-stream-count
+                           (str (utils/pre-log message-loop-name)
+                                "Missing contiguous-stream-count among: "
+                                (keys acc)
+                                "\nin:\n"
+                                acc
+                                "\na"
+                                (class acc)))
                    (let [[[start stop] buf] buffer-entry]
                      ;; Q: Have we [possibly] filled an existing gap?
-                     (if (<= start (inc strm-hwm))
+                     (if (<= start contiguous-stream-count)
                        (consolidate-message-block message-loop-name acc buffer-entry)
-                       ;; There's another gap. Move on
+                       ;; Start is past the contiguous end.
+                       ;; That means there's another gap. Move on.
                        (reduced acc))))
                  ;; TODO: Experiment with using a transient for this
                  incoming
@@ -189,7 +201,7 @@
   (let [consolidated (consolidate-gap-buffer state)
         ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])
         block-count (count ->child-buffer)]
-    (utils/debug message-loop-name
+    (log/debug (utils/pre-log message-loop-name)
                  "Have"
                  block-count
                  "consolidated blocks ready to go to child")
@@ -213,8 +225,8 @@
                   ;; skipped due to gap buffering
                   (let [bs (byte-array (.readableBytes buf))]
                     (.readBytes buf bs)
-                    (utils/info message-loop-name
-                                "triggering child's callback with"
+                    (log/info (utils/pre-log message-loop-name)
+                              "triggering child's callback with"
                               (count bs)
                               "bytes")
                     ;; Really need to isolate this in its own
@@ -243,24 +255,23 @@
                         (->child bs)
                         (let [end-time (System/currentTimeMillis)
                               delta (- end-time start-time)
-                              logger (if (< callback-threshold-warning delta)
-                                       (if (< callback-threshold-error delta)
-                                         utils/error
-                                         utils/warn)
-                                       utils/debug)]
-                          (logger message-loop-name "Child callback took" delta "ms")))
+                              prefix (utils/pre-log message-loop-name)
+                              msg (str "Child callback took " delta " ms")]
+                          (if (< callback-threshold-warning delta)
+                            (if (< callback-threshold-error delta)
+                              (log/error prefix msg)
+                              (log/warn prefix msg))
+                            (log/debug prefix msg))))
                       (catch RuntimeException ex
                         ;; It's very tempting to just re-raise this exception,
                         ;; especially if I'm inside an agent.
                         ;; For now, just log and swallow it.
                         (log/error ex
-                                   (str message-loop-name
-                                        ": Failure in child callback.")))))
+                                   (utils/pre-log message-loop-name)
+                                   "Failure in child callback."))))
                   ;; And drop the consolidated blocks
-                  (log/debug (str message-loop-name
-                                  " (thread "
-                                  (Thread/currentThread)
-                                  "): Dropping block we just finished sending to child"))
+                  (log/debug (utils/pre-log message-loop-name)
+                             "Dropping block we just finished sending to child")
                   (.release buf)
                   (update-in state'
                              ;; Yes, this is already a vector
