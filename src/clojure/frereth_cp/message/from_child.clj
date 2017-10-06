@@ -173,7 +173,7 @@
    ;; to just hand the message to a serializer and have it handle
    ;; the streaming.
    ^bytes array-o-bytes]
-  (utils/debug  message-loop-name
+  (log/debug (utils/pre-log message-loop-name)
                 (str "Adding message block(s) to "
                   ;; TODO: Might be worth logging the actual contents
                   ;; when it's time to trace

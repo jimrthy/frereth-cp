@@ -248,7 +248,12 @@
                                 message-loop-name
                                 based-on-closed-child))
         ;; Lines 302-305
-        actual-next (max based-on-closed-child recent)]
+        actual-next (max based-on-closed-child recent)
+        end-time (System/nanoTime)]
+    (log/debug (utils/pre-log message-loop-name
+                              "Calculating next scheduled time took "
+                              (- end-time now)
+                              " nanoseconds"))
     actual-next))
 
 ;;; I really want to move schedule-next-timeout to flow-control.
@@ -270,10 +275,9 @@
    state-agent]
   {:pre [recent]}
   (let [now (System/nanoTime)]
-    (log/debug (cl-format nil
-                          "~a (~a): Top of scheduler at ~:d"
-                          message-loop-name
-                          (Thread/currentThread)
+    (log/debug (utils/pre-log message-loop-name)
+               (cl-format nil
+                          "Top of scheduler at ~:d"
                           now))
     (if (not= next-action ::completed)
       (do
@@ -469,9 +473,8 @@
           result (schedule-next-timeout! state state-agent)
           end (System/nanoTime)]
       (log/debug (utils/pre-log message-loop-name)
-                 "Scheduling next timeout took"
-                 (- end start)
-                 " nanoseconds")
+                 (cl-format nil  "Scheduling next timeout took ~:d  nanoseconds"
+                            (- end start)))
       result)))
 
 (s/fdef trigger-from-child
@@ -518,7 +521,7 @@
                      state-agent
                      state')]
       (log/debug (utils/pre-log message-loop-name)
-                 "Truly  updating agent state due to input from child")
+                 "Truly updating agent state due to input from child")
       new-state)))
 
 (s/fdef trigger-from-parent

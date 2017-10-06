@@ -201,6 +201,7 @@
   [{:keys [::specs/message-loop-name
            ::specs/outgoing]
     :as state}
+   prev-block
    updated-block]
   (log/debug (str message-loop-name ": Resending a block"))
   (assert (= ::specs/un-ackd-blocks
@@ -208,7 +209,7 @@
   (update-in state
              [::specs/outgoing ::specs/un-ackd-blocks]
              (fn [cur]
-               (conj (pop cur) updated-block))))
+               (conj (disj cur prev-block) updated-block))))
 
 (s/fdef pre-calculate-state-after-send
         :args (s/cat :state ::specs/state)
@@ -242,7 +243,8 @@
 ;;;                the write to FD9 at offset +7, which is the
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
-  (let [q (get-in state [::specs/outgoing next-block-queue])]
+  (let [q (get-in state [::specs/outgoing next-block-queue])
+        current-message (first q)]
     (log/debug (str message-loop-name
                     ": Next message should come from "
                     (count q)
@@ -250,13 +252,12 @@
                     next-block-queue
                     "\ninside\n"
                     (::specs/outgoing state)))
-    (let [transmission-count (-> q
-                                 peek
-                                 ::specs/transmissions)]
+    (let [transmission-count (::specs/transmissions current-message)]
       (assert transmission-count
               (str message-loop-name
                    ": Missing ::transmissions under "
                    next-block-queue)))
+    ;; Q: How much time could I save right here and now by making state transient?
     (let [next-message-id (let [n' (inc current-message-id)]
                             ;; Stupid unsigned math
                             ;; Actually, this seems even more problematic
@@ -266,9 +267,7 @@
                             (if (> n' shared-K/max-32-uint)
                               ;; TODO: Just roll with the negative IDs. The only
                               ;; one that's special is 0
-                              1 n'))
-          ;; Q: How much time could I save right here and now by making state transient?
-          current-message (peek q)]
+                              1 n'))]
       ;; It's tempting to pop that message off of whichever queue is its current home.
       ;; That doesn't make sense here/yet.
       ;; Either we're resending a previous message that never got ACK'd (in which
@@ -324,7 +323,7 @@
           ;; resending one that had its ACK timeout)
           (if (= ::specs/un-sent-blocks next-block-queue)
             (mark-block-sent result updated-message)
-            (mark-block-resent result updated-message)))))))
+            (mark-block-resent result current-message updated-message)))))))
 
 (s/fdef check-for-previous-block-to-resend
         :args ::specs/state
@@ -337,7 +336,6 @@
 ;;;              Double nsecperblock
 ;;;              Update trigger times
 ;;;           goto sendblock
-
 "
   [{:keys [::specs/message-loop-name
            ::specs/recent]
@@ -365,19 +363,18 @@
       ;; This gets us to line 344
       ;; It finds the first block that matches earliest-time
       ;; It's going to re-send that block (it *does* exist...right?)
-      (let [block (peek (get-in state [::specs/outgoing ::specs/un-ackd-blocks]))
+      (let [block (first (get-in state [::specs/outgoing ::specs/un-ackd-blocks]))
             state (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
         ;; But first, it might adjust some of the globals.
-        (assoc
-         (if (> recent (+ last-panic (* 4 rtt-timeout)))
-           ;; Need to update some of the related flow-control fields
-           (-> state
-               (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
-               (assoc-in [::specs/outgoing ::specs/last-panic] recent)
-               (assoc-in [::specs/flow-control ::specs/last-edge] recent))
-           ;; We haven't had another timeout since the last-panic.
-           ;; Don't adjust those dials.
-           state))))
+        (if (> recent (+ last-panic (* 4 rtt-timeout)))
+          ;; Need to update some of the related flow-control fields
+          (-> state
+              (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
+              (assoc-in [::specs/outgoing ::specs/last-panic] recent)
+              (assoc-in [::specs/flow-control ::specs/last-edge] recent))
+          ;; We haven't had another timeout since the last-panic.
+          ;; Don't adjust those dials.
+          state)))
     (do
       ;; Honestly, it makes more sense to consolidate the
       ;; gap-buffer with any ACKs in this message before

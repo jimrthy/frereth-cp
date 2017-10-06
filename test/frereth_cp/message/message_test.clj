@@ -355,6 +355,7 @@
         parent-state (atom {:count 0
                             :buffer []})
         parent-cb (fn [incoming]
+                    (throw (RuntimeException. "This is getting blocked waiting for an ACK"))
                     (let [response-state @parent-state]
                       (log/debug (str "parent-cb ("
                                       (count incoming)
@@ -448,7 +449,7 @@
                     {:keys [::specs/incoming
                             ::specs/outgoing]
                      :as outcome} @state-agent]
-                (is (= msg-len (::specs/send-bytes outgoing)))
+                (is (= msg-len (::specs/contiguous-stream-count outgoing)))
                 (let [n-m-id (::specs/next-message-id outgoing)]
                   ;; There's a timing issue with the next check.
                   ;; There's a good chance we'll get here before
@@ -461,11 +462,12 @@
                   ;; by timing issues
                   (is (= (inc (count (::specs/un-ackd-blocks outgoing)))
                          n-m-id)))
-                ;; I'm not sending back any ACKs
-                (is (= (::specs/send-processed outgoing) 0))
+                ;; I'm not sending back any ACKs, so the bytes
+                ;; should all remain buffered
+                (is (= (from-child/buffer-size outcome) msg-len))
                 ;; TODO: I do need a test that triggers EOF
                 (is (not (::specs/send-eof outgoing)))
-                (is (= (::specs/send-bytes outgoing) msg-len))
+                (is (= (::specs/contiguous-stream-count outgoing) msg-len))
                 ;; Keeping around as a reminder for when the implementation changes
                 ;; and I need to see what's really going on again
                 (comment (is (not outcome) "What should we have here?")))))))
