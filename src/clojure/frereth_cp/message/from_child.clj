@@ -98,6 +98,7 @@
   [{:keys [::specs/un-ackd-blocks
            ::specs/un-sent-blocks]
     :as outgoing}]
+  "How many bytes are currently waiting in send buffers?"
   (reduce +
           (map count-buffered-bytes [un-ackd-blocks
                                      un-sent-blocks])))

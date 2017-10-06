@@ -32,7 +32,8 @@
   ;; up with variations that check more interesting numbers
   (testing "16 bytes"
     (let [length 16
-          buf (Unpooled/buffer length)]
+          buf (Unpooled/buffer length)
+          human-name "check-message-builder"]
       (try
         (.writeBytes buf (byte-array (range length)))
         (let [arbitrary-id #_167535 16
@@ -40,18 +41,19 @@
               ;; off every ACK immediately
               acked-id #_2194584589721 32
               magical-start-byte #_(long (Math/pow 2 33)) 45
-              block (to-parent/build-message-block arbitrary-id
-                                                   {::specs/buf buf
-                                                    ;; Q: What happens if this
-                                                    ;; doesn't match the actual?
-                                                    ;; (That's a good reason to avoid
-                                                    ;; the duplication)
-                                                    ::specs/length length
-                                                    ::specs/send-eof false
-                                                    ::specs/start-pos magical-start-byte})]
-          (is (= 192 (.readableBytes block)))
-          (let [bs (.array block)
-                v (vec bs)
+              block (to-parent/build-message-block-description
+                     human-name
+                     arbitrary-id
+                     {::specs/buf buf
+                      ;; Q: What happens if this
+                      ;; doesn't match the actual?
+                      ;; (That's a good reason to avoid
+                      ;; the duplication)
+                      ::specs/length length
+                      ::specs/send-eof false
+                      ::specs/start-pos magical-start-byte})]
+          (is (= 192 (count block)))
+          (let [v (vec block)
                 sh [0 0]]
             (is (= [16 0 0 0] (subvec v 0 4)) "Message ID")
             (is (= [0 0 0 0] (subvec v 4 8)) "ACK ID")
@@ -80,7 +82,7 @@
                         ::specs/size-and-flags
                         ::specs/start-byte
                         ::specs/buf]
-                 :as packet} (from-parent/deserialize block)]
+                 :as packet} (from-parent/deserialize human-name block)]
             (comment
               (is (not packet)))
             (try

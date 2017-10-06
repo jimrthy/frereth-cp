@@ -12,20 +12,20 @@
         ;; To be safe, any test that uses these needs
         ;; to .release() these buffers before it ends.
         ;; Q: Doesn't it?
-        b1 (Unpooled/buffer 16)
-        _ (.writeBytes b1 (byte-array [1]))
-        b2 (Unpooled/buffer 16)
-        _ (.writeBytes b2 (byte-array [2]))
-        b3 (Unpooled/buffer 16)
-        _ (.writeBytes b3 (byte-array [1]))
-        b4 (Unpooled/buffer 16)
-        _ (.writeBytes b4 (byte-array [2]))
-        b5 (Unpooled/buffer 16)
-        _ (.writeBytes b5 (byte-array [1]))
+        b1 (Unpooled/buffer 40)
+        _ (.writeBytes b1 (byte-array (range 40)))
+        b2 (Unpooled/buffer 256)
+        _ (.writeBytes b2 (byte-array (->> (range) (drop 40) (take 256))))
+        b3 (Unpooled/buffer 64)
+        _ (.writeBytes b3 (byte-array (->> (range) (drop 296) (take 64))))
+        b4 (Unpooled/buffer 8)
+        _ (.writeBytes b4 (byte-array (->> (range) (drop 360) (take 8))))
+        b5 (Unpooled/buffer 12)
+        _ (.writeBytes b5 (byte-array (->> (range) (drop 368) (take 12))))
         b6 (Unpooled/buffer 16)
-        _ (.writeBytes b6 (byte-array [2]))
-        b7 (Unpooled/buffer 16)
-        _ (.writeBytes b7 (byte-array [2]))
+        _ (.writeBytes b6 (byte-array (->> (range) (drop 380) (take 16))))
+        b7 (Unpooled/buffer 32)
+        _ (.writeBytes b7 (byte-array (->> (range) (drop 396) (take 32))))
         unsorted-start-blocks [{::specs/ackd? false
                                 ::specs/buf b1
                                 ::specs/start-pos 10
@@ -82,13 +82,13 @@
     ;; After all, this starts out as more-than-complicated enough.
     ;; OTOH...it wasn't a lot of fun to put this together once.
     {::specs/message-loop-name "Unit Testing"
-     ::specs/outgoing {::specs/un-ackd-blocks start-blocks
+     ::specs/outgoing {::specs/ackd-addr 0
+                       ::specs/contiguous-stream-count 0
                        ::specs/earliest-time 0
-                       ::specs/ackd-addr 0
                        ::specs/strm-hwm 1000 ; Something bigger than what's getting acked
-                       ::specs/send-processed (* 2 bytes-acked) ; 786
                        ::specs/total-block-transmissions 0
-                       ::specs/total-blocks 0}}))
+                       ::specs/total-blocks 0
+                       ::specs/un-ackd-blocks start-blocks}}))
 
 (defn build-ack-flag-message-portion
   "Set up a starting State that's primed with an
@@ -142,23 +142,10 @@
   ;; new level and really involves two separate
   ;; pieces doing the swapping.
   ;; This kind of low-level approach just does not
-  ;; work there.y
+  ;; work there.
+  ;; Yet.
   ([size]
    (throw (RuntimeException. "This was a bad idea"))
-   (let [{just-headers ::packet
-          :as raw} (build-ack-flag-message-portion)
-         packet (byte-array size)
-         ;; Account for the header and 16 bytes of NULL-padding
-         message-length (- size 48 16)
-         current-stream-address 2048]
-     (b-t/uint16-pack! packet 38 message-length)
-     ;; Start at the same place as the last bytes written to the child
-     (b-t/uint16-pack! packet 40 current-stream-address)
-     ;; And then the actual message bytes
-     (doseq [n (range message-length)]
-       (aset packet (+ 64 n)
-             (b-t/possibly-2s-complement-8 (rem n 256))))
-     (assoc-in raw
-               [::specs/incoming ::specs/receive-written] current-stream-address)))
+   size)
   ([]
    (build-packet-with-message 192)))

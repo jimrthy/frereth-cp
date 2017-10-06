@@ -52,14 +52,14 @@
                     ;; This has other restrictions based on
                     ;; the implementation details, but those
                     ;; aren't covered by the spec
-                    #(< (+ K/k-1 K/error-eof) %)))
+                    #(< (+ K/k-1 K/eof-error) %)))
 (defn calculate-message-data-packet-length-flags
   [{:keys [::specs/length] :as block}]
   (bit-or length
           (case (::specs/send-eof block)
             false 0
-            ::specs/normal K/normal-eof
-            ::specs/error K/error-eof)))
+            ::specs/normal K/eof-normal
+            ::specs/error K/eof-error)))
 
 (s/fdef build-message-block-description
         :args (s/cat :message-loop-name ::specs/message-loop-name
