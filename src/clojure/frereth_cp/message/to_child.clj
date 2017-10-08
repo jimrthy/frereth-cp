@@ -168,7 +168,7 @@
                        ;; Start is past the contiguous end.
                        ;; That means there's another gap. Move on.
                        (reduced acc))))
-                 ;; TODO: Experiment with using a transient for this
+                 ;; TODO: Experiment with using a transient or proteus for this
                  incoming
                  gap-buffer)))
 

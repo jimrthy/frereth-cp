@@ -257,7 +257,9 @@
               (str message-loop-name
                    ": Missing ::transmissions under "
                    next-block-queue)))
-    ;; Q: How much time could I save right here and now by making state transient?
+    ;; Q: How much time could I save right here and now by making
+    ;; state transient?
+    ;; (possibly using something like proteus)
     (let [next-message-id (let [n' (inc current-message-id)]
                             ;; Stupid unsigned math
                             ;; Actually, this seems even more problematic

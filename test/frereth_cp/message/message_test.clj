@@ -349,13 +349,28 @@
   ;; when the child sends bytes that don't fit into
   ;; a single message packet.
   (log/info "Start testing writing big chunk of outbound data")
+  ;; TODO: split this into 2 tests
+  ;; 1 should stall out like the current implementation,
+  ;; waiting for ACKs (maybe drop every other packet?
+  ;; maybe send ACKs out of order?)
+  ;; The other should just send ACKs to get this working
+  ;; the way it did originally again
+  ;; TODO: Figure out a nice way to streamline the
+  ;; component setup without bringing in another 3rd
+  ;; party library
   (let [start-time (System/nanoTime)
         packet-count 9  ; trying to make life interesting
         response (promise)
         parent-state (atom {:count 0
                             :buffer []})
         parent-cb (fn [incoming]
-                    (throw (RuntimeException. "This is getting blocked waiting for an ACK"))
+                    ;; Q: Which version better depicts how the reference implementation works?
+                    ;; Better Q: Which approach makes more sense?
+                    ;; (Seems obvious...don't want to waste bandwidth if it's just going
+                    ;; to a broken router that will never deliver. But there's a lot of
+                    ;; experience behind this sort of thing, and it would be a terrible
+                    ;; mistake to ignore that accumulated wisdom)
+                    (throw (RuntimeException. "This is going into a loop waiting for an ACK"))
                     (let [response-state @parent-state]
                       (log/debug (str "parent-cb ("
                                       (count incoming)

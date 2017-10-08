@@ -226,7 +226,7 @@ But it depends on compose, which would set up circular dependencies"
 
 (s/fdef decompose
         ;; TODO: tmplt needs a spec for the values
-        :args (s/cat :tmplt map?
+        :args (s/cat :template map?
                      :src #(instance? ByteBuf %))
         ;; TODO: Really should match each value in tmplt
         ;; with the corresponding value in ret and clarify
@@ -235,10 +235,8 @@ But it depends on compose, which would set up circular dependencies"
                 (-> % :tmplt keys))
         :ret map?)
 (defn decompose
-  "Note that this very strongly assumes that I have a ByteBuf here.
-
-  TODO: Clean this up and move it (and compose, and helpers) into their
-  own ns"
+  ;; Q: Is ztellman's vertigo applicable here?
+  "Read a C-style ByteBuf struct into a map, based on a template"
   [tmplt ^ByteBuf src]
   (reduce
    (fn

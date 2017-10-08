@@ -297,6 +297,15 @@
               delta-nanos (max 0 scheduled-delay)
               delta (inc (utils/nanos->millis delta-nanos))
               delta_f (float delta)  ; For printing
+              ;; Creating this isn't a huge overhead, but I'm skeptical
+              ;; about this approach.
+              ;; Q: What if I just set up a stream? Input from parent/child
+              ;; could write to it.
+              ;; Handle the timer by doing a try-take.
+              ;; Eliminate the agents completely.
+              ;; That would make state management more complex, but
+              ;; I should be able to make it faster by sticking that
+              ;; part into an atom
               next-action (dfrd/deferred)
               result (assoc-in state
                                [::specs/flow-control ::specs/next-action]
@@ -514,15 +523,15 @@
                    (log/error (utils/pre-log message-loop-name)
                               "Discarding incoming bytes, silently")
                    state))]
-    ;; Q: worth checking output conditions here.
+    ;; TODO: check whether we can do output now.
     ;; It's pointless to call this if we just have
     ;; to wait for the timer to expire.
-    (let [new-state (trigger-output
-                     state-agent
-                     state')]
+    (let [state'' (trigger-output
+                   state-agent
+                   state')]
       (log/debug (utils/pre-log message-loop-name)
                  "Truly updating agent state due to input from child")
-      new-state)))
+      state'')))
 
 (s/fdef trigger-from-parent
         :args (s/cat :state ::specs/state
@@ -576,6 +585,13 @@
                                    message))
           state' (to-child/forward! ->child (or pre-processed
                                                 state))]
+      ;; This will update recent.
+      ;; In the reference implementation, that happens immediately
+      ;; after trying to read from the child.
+      ;; Q: Am I setting up any problems for myself by waiting
+      ;; this long?
+      ;; i.e. Is it worth doing that at the top of the trigger
+      ;; functions instead?
       (trigger-output state-agent state'))
     (catch RuntimeException ex
       (log/error ex
@@ -744,7 +760,14 @@
                      :array-o-bytes bytes?)
         :ret ::specs/state-agent)
 (defn child->
-  "Read bytes from a child buffer...if we have room"
+  ;; TODO: Add a capturing version of this and parent->
+  ;; that can store inputs for later playback.
+  ;; Although, really, that's only half the equation.
+  ;; The client-provided callbacks really need to support
+  ;; this also.
+  ;; And this is mostly about side-effects, so time
+  ;; is a vital implicit input.
+  "Send bytes from a child buffer...if we have room"
   ;; The only real question seems to be what happens
   ;; when that buffer overflows.
 
