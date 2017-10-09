@@ -329,9 +329,9 @@
 
 (s/fdef check-for-previous-block-to-resend
         :args ::specs/state
-        :ret (s/nilable ::specs/state))
+        :ret ::specs/state)
 (defn check-for-previous-block-to-resend
-  "Returns a modified state to resend, or nil if it's safe to move on to something fresh
+  "Return value includes next-block-queue, if we should resend
 ;;;  339-356: Try re-sending an old block: (DJB)
 ;;;           Picks out the oldest block that's waiting for an ACK
 ;;;           If it's older than (+ lastpanic (* 4 rtt_timeout))
@@ -374,17 +374,17 @@
       ;; It finds the first block that matches earliest-time
       ;; It's going to re-send that block (it *does* exist...right?)
       (let [block (first un-ackd-blocks)
-            state (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
+            state' (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
         ;; But first, it might adjust some of the globals.
         (if (> recent (+ last-panic (* 4 rtt-timeout)))
           ;; Need to update some of the related flow-control fields
-          (-> state
+          (-> state'
               (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
               (assoc-in [::specs/outgoing ::specs/last-panic] recent)
               (assoc-in [::specs/flow-control ::specs/last-edge] recent))
           ;; We haven't had another timeout since the last-panic.
           ;; Don't adjust those dials.
-          state)))
+          state')))
     (do
       ;; Honestly, it makes more sense to consolidate the
       ;; gap-buffer with any ACKs in this message before
@@ -392,8 +392,8 @@
       ;; TODO: That instead.
       (log/debug (cl-format nil
                             (str
-                             "~a (~a): Hasn't been long enough to"
-                             " justify resending any of our ~d previously "
+                             "~a (~a): Conditions wrong"
+                             " for resending any of our ~d previously "
                              "sent un-ack'd blocks, based on"
                              "\nEarliest time: ~:d"
                              "\nnanoseconds per block: ~:d"
@@ -406,7 +406,7 @@
                             n-sec-per-block
                             rtt-timeout
                             recent))
-      nil)))
+      state)))
 
 (s/fdef ok-to-send-new?
         :args (s/cat :state ::specs/state)
@@ -478,7 +478,7 @@
 
 (s/fdef check-for-new-block-to-send
         :args (s/cat :state ::specs/state)
-        :ret (s/nilable ::specs/state))
+        :ret ::specs/state)
 (defn check-for-new-block-to-send
   "Q: Is there a new block ready to send?
 
@@ -500,7 +500,7 @@
                     ": Does it make sense to try to send any of our "
                     block-count
                     " unsent blocks?"))
-    (when (< 0 block-count)
+    (if (< 0 block-count)
       (if (ok-to-send-new? state)
         ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
         ;; Consolidating smaller blocks *would* be a good idea -- JRG
@@ -522,11 +522,8 @@
           (assoc-in state
                     [::specs/outgoing ::specs/next-block-queue]
                     ::specs/un-sent-blocks))
-        (do
-          ;; Be explicit about this
-          ;; TODO: Avoid extra hoops. Make the caller smarter/less complex.
-          ;; Just set the cursor to nil here.
-          nil)))))
+        ;; Leave it as-is
+        state))))
 
 (s/fdef pick-next-block-to-send
         :args (s/cat :state ::specs/state)
@@ -536,11 +533,13 @@
   ;; TODO: Instead of returning nil on nothing to do, just
   ;; do something like setting a nil cursor.
   ;; That should simplify the caller.
-  (or (check-for-previous-block-to-resend state)
+  (let [found? (check-for-previous-block-to-resend state)]
+    (if (get-in found? [::specs/outbound ::specs/next-block-queue])
+      found?)
 ;;;       357-410: Try sending a new block: (-- DJB)
-                  ;; There's goto-fun overlap with resending
-                  ;; a previous block -- JRG
-      (check-for-new-block-to-send state)))
+     ;; There's goto-fun overlap with resending
+     ;; a previous block -- JRG
+    (check-for-new-block-to-send state)))
 
 (s/fdef block->parent!
         :args (s/cat :send-buf ::specs/buf)
@@ -580,29 +579,34 @@
   ;; of having it return nil like this.
   ;; That seems like a better API.
   ;; TODO: Make that so.
-  (if-let [state' (pick-next-block-to-send state)]
-    (let [{{:keys [::specs/->parent
-                   ::specs/send-buf
-                   ::specs/un-ackd-blocks]} ::specs/outgoing
-           :as state''} (pre-calculate-state-after-send state')]
-      (log/debug (str message-loop-name
-                      ": Sending "
-                      (count send-buf)
-                      " bytes to parent"))
-      ;; Note that this winds up doing a send to the message
-      ;; loop's agent.
-      (block->parent! ->parent send-buf)
-      (log/debug (utils/pre-log message-loop-name)
-                 (str "Calculating earliest time among "
-                      (count un-ackd-blocks)
-                      " blocks\nthat have not been ACK'd in a "
-                      (class un-ackd-blocks)
-                      ".\nThis is very distinct from the "
-                      (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
-                      " that is/are left in un-sent-blocks"))
+  (let [state' (pick-next-block-to-send state)
+        {{:keys [::specs/->parent
+                 ::specs/next-block-queue
+                 ::specs/send-buf
+                 ::specs/un-ackd-blocks]} ::specs/outgoing
+         :as state''} (pre-calculate-state-after-send state')]
+    (if next-block-queue
+      (do
+        (log/debug (str message-loop-name
+                        ": Sending "
+                        (count send-buf)
+                        " bytes to parent"))
+        ;; Note that this winds up doing a send to the message
+        ;; loop's agent.
+
+        (block->parent! ->parent send-buf)
+        (log/debug (utils/pre-log message-loop-name)
+                   (str "Calculating earliest time among "
+                        (count un-ackd-blocks)
+                        " blocks\nthat have not been ACK'd in a "
+                        (class un-ackd-blocks)
+                        ".\nThis is very distinct from the "
+                        (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
+                        " that is/are left in un-sent-blocks"))
 ;;;      408: earliestblocktime_compute()
-      (-> state''
-          (assoc-in [::specs/outgoing ::specs/earliest-time]
-                    (help/earliest-block-time message-loop-name un-ackd-blocks))
-          (update ::specs/outgoing dissoc ::specs/next-block-queue)))
-    state))
+
+        (-> state''
+            (assoc-in [::specs/outgoing ::specs/earliest-time]
+                      (help/earliest-block-time message-loop-name un-ackd-blocks))
+            (update ::specs/outgoing dissoc ::specs/next-block-queue)))
+      state)))
