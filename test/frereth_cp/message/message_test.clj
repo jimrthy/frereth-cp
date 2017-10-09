@@ -361,43 +361,12 @@
   (let [start-time (System/nanoTime)
         packet-count 9  ; trying to make life interesting
         response (promise)
-        parent-state (atom {:count 0
-                            :buffer []})
-        parent-cb (fn [incoming]
-                    ;; Q: Which version better depicts how the reference implementation works?
-                    ;; Better Q: Which approach makes more sense?
-                    ;; (Seems obvious...don't want to waste bandwidth if it's just going
-                    ;; to a broken router that will never deliver. But there's a lot of
-                    ;; experience behind this sort of thing, and it would be a terrible
-                    ;; mistake to ignore that accumulated wisdom)
-                    (throw (RuntimeException. "This is going into a loop waiting for an ACK"))
-                    (let [response-state @parent-state]
-                      (log/debug (str "parent-cb ("
-                                      (count incoming)
-                                      " bytes): "
-                                      (-> response-state
-                                          (dissoc :buffer)
-                                          (assoc :buffer-size (count (:buffer response-state))))))
-                      ;; The first few blocks should max out the message size.
-                      ;; The way the test is set up, the last will be
-                      ;; (+ 512 64).
-                      ;; It doesn't seem worth the hoops it would take to validate that.
-                      (swap! parent-state
-                             (fn [cur]
-                               (log/info "Incrementing state count")
-                               (-> cur
-                                   (update :count inc)
-                                   ;; Seems a little silly to include the ACKs.
-                                   ;; Should probably think this through more thoroughly
-                                   (update :buffer conj (vec incoming)))))
-                      ;; I would like to get 8 callbacks here:
-                      ;; 1 for each kilobyte of message the child tries to send.
-                      (when (= packet-count (:count @parent-state))
-                        (log/info "Received all expected packets")
-                        (deliver response (:buffer @parent-state)))))
+        srvr-child-state (atom {:count 0
+                                :buffer []})
         ;; I have a circular dependency between
-        ;; child-cb and initialized.
-        ;; child-cb is getting called inside an
+        ;; the client's child-cb, server-parent-cb,
+        ;; and initialized.
+        ;; The callbacks get called inside an
         ;; agent send handler,
         ;; which means I have the agent state
         ;; directly available, but not the actual
@@ -408,6 +377,53 @@
         ;; it works.
         ;; Don't do anything like this for anything real.
         state-agent-atom (atom nil)
+        server-parent-cb (fn [bs]
+                           (log/info "Message from server to client."
+                                     "This really should just be an ACK")
+                           (message/parent-> @state-agent-atom bs))
+        server-child-cb (fn [incoming]
+                          (log/info "Incoming to server's child")
+
+                          ;; Q: Which version better depicts how the reference implementation works?
+                          ;; Better Q: Which approach makes more sense?
+                          ;; (Seems obvious...don't want to waste bandwidth if it's just going
+                          ;; to a broken router that will never deliver. But there's a lot of
+                          ;; experience behind this sort of thing, and it would be a terrible
+                          ;; mistake to ignore that accumulated wisdom)
+
+
+                          (let [response-state @srvr-child-state]
+                            (log/debug (str "parent-cb ("
+                                            (count incoming)
+                                            " bytes): "
+                                            (-> response-state
+                                                (dissoc :buffer)
+                                                (assoc :buffer-size (count (:buffer response-state))))))
+                            ;; The first few blocks should max out the message size.
+                            ;; The way the test is set up, the last will be
+                            ;; (+ 512 64).
+                            ;; It doesn't seem worth the hoops it would take to validate that.
+                            (swap! srvr-child-state
+                                   (fn [cur]
+                                     (log/info "Incrementing state count")
+                                     (-> cur
+                                         (update :count inc)
+                                         ;; Seems a little silly to include the ACKs.
+                                         ;; Should probably think this through more thoroughly
+                                         (update :buffer conj (vec incoming)))))
+                            ;; I would like to get 8 callbacks here:
+                            ;; 1 for each kilobyte of message the child tries to send.
+                            (when (= packet-count (:count @srvr-child-state))
+                              (log/info "Received all expected packets"))))
+        srvr-initialized (message/initial-state "(test) Server w/ Big Inbound"
+                                                server-parent-cb
+                                                server-child-cb
+                                                true)
+        srvr-state (message/start! srvr-initialized)
+
+        parent-cb (fn [bs]
+                    (log/info "Forwarding buffer to server")
+                    (message/parent-> srvr-state bs))
         child-message-counter (atom 0)
         strm-address (atom 0)
         child-cb (fn [_]
@@ -418,21 +434,21 @@
                    ;; is warmed up.
                    ;; Library should be robust enough to handle that failure.
                    (is false "This should never get called"))
-        initialized (message/initial-state "(test) Child w/ Big Outbound" parent-cb child-cb true)
-        state (message/start! initialized)]
-    (reset! state-agent-atom state)
+        client-initialized (message/initial-state "(test) Client w/ Big Outbound" parent-cb child-cb false)
+        client-state (message/start! client-initialized)]
+    (reset! state-agent-atom client-state)
     (try
       ;; Add an extra half-K just for giggles
       (let [msg-len (+ (* (dec packet-count) K/k-1) K/k-div2)
             ;; Note that this is what the child sender should be supplying
             message-body (byte-array (range msg-len))]
-        (log/debug "Replicating child-send to " state)
-        (message/child-> state message-body)
+        (log/debug "Replicating child-send to " client-state)
+        (message/child-> client-state message-body)
         (let [outcome (deref response 10000 ::timeout)
               end-time (System/nanoTime)]
           (log/info "Verifying that state hasn't errored out after"
                     (float (utils/nanos->millis (- end-time start-time))) "milliseconds")
-          (if-let [err (agent-error state)]
+          (if-let [err (agent-error client-state)]
             (is (not err))
             (do
               (is (not= outcome ::timeout))
@@ -488,7 +504,8 @@
                 (comment (is (not outcome) "What should we have here?")))))))
       (finally
         (log/info "Ending the test")
-        (message/halt! state)))))
+        (message/halt! client-state)
+        (message/halt! srvr-state)))))
 (comment (bigger-echo))
 
 (comment

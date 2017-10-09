@@ -62,15 +62,23 @@ Based on earliestblocktime_compute, in lines 138-153
   [message-loop-name un-acked-blocks]
   ;;; Comment from DJB:
   ;;; XXX: use priority queue
-  (log/debug (str message-loop-name
-                  ": Calculating min-time across "
-                  (count un-acked-blocks)
-                  " un-ACK'd blocks"))
-  (if (< 0 (count un-acked-blocks))
-    (apply min (map ::specs/time
-                    ;; Time 0 means it's been ACK'd and is ready to discard
-                    un-acked-blocks))
-    0))
+  ;; (That's what led to me using the sorted-set)
+
+  ;; This gets called right after we flag the blocks
+  ;; that have been ACK'd
+  (let [un-flagged (remove ::ackd? un-acked-blocks)]
+    (log/debug (str message-loop-name
+                    ": Calculating min-time across "
+                    (count un-flagged)
+                    " un-ACK'd blocks"))
+    (if (< 0 (count un-flagged))
+      (apply min (map ::specs/time
+                      ;; In the original,
+                      ;; time 0 means it's been ACK'd and is ready to discard
+                      ;; Having the time serve dual purposes
+                      ;; kept tripping me up.
+                      un-flagged))
+      0)))
 
 ;;;; 155-185: acknowledged(start, stop)
 (s/fdef mark-acknowledged!
@@ -96,6 +104,11 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
   (log/debug (str message-loop-name
                   ": Setting ACK flags on blocks with addresses from "
                   start " to " stop))
+  ;; This is definitely a bug.
+  ;; TODO: Figure out something more extreme to do here.
+  (when (< (get-in state [::specs/outgoing ::specs/strm-hwm])
+           stop)
+    (log/error "Other side ACK'd bytes we haven't sent yet"))
   (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
@@ -169,10 +182,18 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
           ;; This is why the function name has a !
           (let [^ByteBuf buffer (::specs/buf block)]
             (.release buffer)))
-        (assoc-in state [::specs/outgoing ::specs/earliest-time]
-                  (earliest-block-time message-loop-name un-ackd-blocks))))
-    ;;; No change
-    state))
+        (-> state
+            (assoc-in [::specs/outgoing ::specs/earliest-time]
+                      (earliest-block-time message-loop-name un-ackd-blocks))
+            (assoc-in [::specs/outgoing ::specs/ackd-addr]
+                      stop))))
+    (do
+      ;; Q: Is this correct?
+      ;; At the very least, there might have been the
+      ;; previous message received.
+      (log/info "Nothing ACK'd")
+      ;; No change
+      state)))
 
 (s/fdef mark-block-ackd
         :args (s/cat :outgoing ::specs/outgoing
@@ -182,6 +203,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
   [{:keys [::specs/un-ackd-blocks]
     :as outgoing}
    block]
+  ;; It *is* updating the caller
   (log/warn "Marking\n" block "\nACK'd isn't working. Q: Why not?")
   (assert (contains? un-ackd-blocks block)
           (str "Can't mark\n"

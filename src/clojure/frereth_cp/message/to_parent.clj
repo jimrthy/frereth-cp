@@ -341,9 +341,9 @@
 "
   [{:keys [::specs/message-loop-name
            ::specs/recent]
-    {:keys [::specs/un-ackd-blocks
-            ::specs/earliest-time
-            ::specs/last-panic]
+    {:keys [::specs/earliest-time
+            ::specs/last-panic
+            ::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing
     {:keys [::specs/last-edge
             ::specs/n-sec-per-block
@@ -356,16 +356,24 @@
   (log/debug (str message-loop-name ": Checking for a block to resend"))
   ;; It's tempting to make adjustments in here using now vs. recent.
   ;; Q: How much impact would that really have?
-  ;; (There would definitely be *some*
+  ;; (There would definitely be *some*)
   (if (and (not= 0 earliest-time)
+           ;; I have at least one bug where earliest-time isn't getting
+           ;; correctly adjusted to 0 when all my un-ackd-blocks have been
+           ;; ACK'd. That doesn't seem like the most intuitive way to
+           ;; track this anyway.
+           (> 0 (count un-ackd-blocks))
            (>= recent (+ earliest-time n-sec-per-block))
            (>= recent (+ earliest-time rtt-timeout)))
     (do
-      (log/debug (str message-loop-name ": It has been long enough to justify resending"))
+      (log/debug (utils/pre-log message-loop-name)
+                 "It has been long enough to justify resending one of our"
+                 (count un-ackd-blocks)
+                 "un-ACK'd blocks")
       ;; This gets us to line 344
       ;; It finds the first block that matches earliest-time
       ;; It's going to re-send that block (it *does* exist...right?)
-      (let [block (first (get-in state [::specs/outgoing ::specs/un-ackd-blocks]))
+      (let [block (first un-ackd-blocks)
             state (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
         ;; But first, it might adjust some of the globals.
         (if (> recent (+ last-panic (* 4 rtt-timeout)))

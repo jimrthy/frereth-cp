@@ -250,10 +250,9 @@
         ;; Lines 302-305
         actual-next (max based-on-closed-child recent)
         end-time (System/nanoTime)]
-    (log/debug (utils/pre-log message-loop-name
-                              "Calculating next scheduled time took "
-                              (- end-time now)
-                              " nanoseconds"))
+    (log/debug (utils/pre-log message-loop-name)
+               (cl-format nil "Calculating next scheduled time took ~:d nanoseconds")
+               (- end-time now))
     actual-next))
 
 ;;; I really want to move schedule-next-timeout to flow-control.

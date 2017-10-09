@@ -565,7 +565,7 @@ Line 608"
                           un-ackd-blocks
                           "\nthat match message ID "
                           acked-message))
-          (let [ackd-blocks (remove #(= acked-message (::specs/message-id %))
+          (let [ackd-blocks (filter #(= acked-message (::specs/message-id %))
                                     un-ackd-blocks)
                 ;; This seems like it would be a good place to drop the
                 ;; message that's just been ACK'd.
@@ -584,9 +584,18 @@ Line 608"
                 ;; That seeming silliness is completely correct: this
                 ;; is the entire point behind a pure ACK.
                 with-acked-gaps (flag-acked-others! dropped-ackd packet)
+                ;; Wait. What?
+                ;; This looks like this is only updating the statistics
+                ;; for the last message to which this is a response.
+                ;; The main point here is that we need to update the
+                ;; stats for any previously un-ackd messages that
+                ;; we're getting ready to drop.
+                _ (throw (RuntimeException. "This is wrong"))
                 flagged (reduce flow-control/update-statistics
                                 ;; Remove parent->buffer.
                                 ;; It's been parsed into packet
+                                ;; Q: When/where did that happen?
+                                ;; TODO: Update this there instead
                                 (update with-acked-gaps
                                         ::specs/incoming
                                         dissoc
