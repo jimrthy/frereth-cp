@@ -1,4 +1,4 @@
-(ns from-child-test
+(ns frereth-cp.message.from-child-test
   (:require [clojure.test :refer (deftest is testing)]
             [frereth-cp.message.from-child :as from-child]
             [frereth-cp.message.specs :as specs])

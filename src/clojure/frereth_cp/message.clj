@@ -251,8 +251,8 @@
         actual-next (max based-on-closed-child recent)
         end-time (System/nanoTime)]
     (log/debug (utils/pre-log message-loop-name)
-               (cl-format nil "Calculating next scheduled time took ~:d nanoseconds")
-               (- end-time now))
+               (cl-format nil "Calculating next scheduled time took ~:d nanoseconds"
+                          (- end-time now)))
     actual-next))
 
 ;;; I really want to move schedule-next-timeout to flow-control.
@@ -543,12 +543,19 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [{{:keys [::specs/->child]} ::specs/incoming
+  [{{:keys [::specs/->child]
+     :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}
    state-agent  ; so we can forward downstream to trigger the next state change
    ^bytes message]
-  {:pre [->child]}
+  #_{:pre [->child]}
+  (when-not ->child
+    (throw (ex-info (str (utils/pre-log message-loop-name)
+                         "Missing ->child")
+                    {::detail-keys (keys incoming)
+                     ::top-level-keys (keys state)
+                     ::details state})))
 
   ;; It seems like I should call cancel-timer! here.
   ;; It's safer (albeit slower) than calling it immediately

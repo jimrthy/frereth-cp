@@ -255,70 +255,68 @@
     :keys [::specs/message-id]
     :as packet}]
   {:pre [start-byte]}
-  (when-let [calculated (calculate-start-stop-bytes state packet)]
-    (let [{:keys [::delta-k
-                  ::max-rcvd
-                  ::min-k]
-           overridden-recv-total-bytes ::receive-total-bytes
-           ^Long max-k ::max-k} calculated]
-      ;; There are at least a couple of curve balls in the air right here:
-      ;; 1. Only write bytes at stream addresses(?)
-      ;;    (< receive-written where (+ receive-written receive-buf-size))
+  (let [calculated (calculate-start-stop-bytes state packet)]
+    (if calculated
+      (let [{:keys [::delta-k
+                    ::max-rcvd
+                    ::min-k]
+             overridden-recv-total-bytes ::receive-total-bytes
+             ^Long max-k ::max-k} calculated]
+        ;; There are at least a couple of curve balls in the air right here:
+        ;; 1. Only write bytes at stream addresses(?)
+        ;;    (< receive-written where (+ receive-written receive-buf-size))
 
-      ;; Q: Why haven't I converted incoming-buf to a vector of bytes?
-      ;; Or even a byte-array?
-      ;; A: Because I still need to slice and dice later, when I'm doing
-      ;; gap consolidation.
-      (when (pos? min-k)
-        (.skipBytes incoming-buf min-k))
+        ;; Q: Why haven't I converted incoming-buf to a vector of bytes?
+        ;; Or even a byte-array?
+        ;; A: Because I still need to slice and dice later, when I'm doing
+        ;; gap consolidation.
+        (when (pos? min-k)
+          (.skipBytes incoming-buf min-k))
 
-      ;;          set the receivevalid flags
-      ;; 2. Update the receive-valid flag associated with each byte as we go
-      ;;    The receivevalid array is declared with this comment:
-      ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
-      ;; This point is moot, considering the way I'm using a priority queue.
-      ;; Keeping the comment around as a reminder that the ring buffer is probably
-      ;; quite a bit more efficient, and that I should look into using a buddy structure.
+        ;;          set the receivevalid flags
+        ;; 2. Update the receive-valid flag associated with each byte as we go
+        ;;    The receivevalid array is declared with this comment:
+        ;;    1 for byte successfully received; XXX: use buddy structure to speed this up --DJB
+        ;; This point is moot, considering the way I'm using a priority queue.
+        ;; Keeping the comment around as a reminder that the ring buffer is probably
+        ;; quite a bit more efficient, and that I should look into using a buddy structure.
 
-      ;; 3. The array of receivevalid flags is used in the loop between lines
-      ;;    589-593 to decide how much to increment strm-hwm (a.k.a receivebytes,
-      ;;    in the original).
-      ;;    It's cleared on line 630, after we've written the bytes to the
-      ;;    child pipe.
-      ;; I'm fairly certain this is what that for loop amounts to
+        ;; 3. The array of receivevalid flags is used in the loop between lines
+        ;;    589-593 to decide how much to increment strm-hwm (a.k.a receivebytes,
+        ;;    in the original).
+        ;;    It's cleared on line 630, after we've written the bytes to the
+        ;;    child pipe.
+        ;; I'm fairly certain this is what that for loop amounts to
 
-      (if (not= 0 message-id)
-        (do
-          (-> state
-              ;; It seems to make the most sense to do this here.
-              ;; But, really, we can't until after we've done gap-buffer
-              ;; consolidation.
-              ;; Which should not be based on the HWM.
-              (assoc-in [::specs/incoming ::specs/strm-hwm] (min max-rcvd
-                                                                 (+ strm-hwm delta-k)))
-              (update-in [::specs/incoming ::specs/receive-total-bytes]
-                         (fn [cur]
-                           ;; calculate-start-stop-bytes might have overriden for this
-                           ;; In the outer scope.
-                           (or overridden-recv-total-bytes
-                               cur)))
-              (update-in [::specs/incoming ::specs/gap-buffer]
-                         assoc
-                         ;; These are the absolute stream positions
-                         ;; of the values that are left
-                         [(+ start-byte min-k) (+ start-byte max-k)]
-                         incoming-buf)))
-        (do
-          ;; This seems problematic, but that's because
-          ;; it's easy to tangle up the outgoing vs. incoming buffers.
-          ;; The ACK was for the sake of the un-ackd-blocks in
-          ;; outgoing.
-          ;; The gap-buffer that we are *not* updating is about
-          ;; arriving messages that might have been dropped/misordered
-          ;; due to UDP issues.
-          (log/debug (utils/pre-log message-loop-name)
-                     "Pure ACK never updates gap-buffer")
-          state)))))
+        (if (not= 0 message-id)
+          (do
+            (-> state
+                (assoc-in [::specs/incoming ::specs/strm-hwm] (min max-rcvd
+                                                                   (+ strm-hwm delta-k)))
+                (update-in [::specs/incoming ::specs/receive-total-bytes]
+                           (fn [cur]
+                             ;; calculate-start-stop-bytes might have overriden for this
+                             ;; In the outer scope.
+                             (or overridden-recv-total-bytes
+                                 cur)))
+                (update-in [::specs/incoming ::specs/gap-buffer]
+                           assoc
+                           ;; These are the absolute stream positions
+                           ;; of the values that are left
+                           [(+ start-byte min-k) (+ start-byte max-k)]
+                           incoming-buf)))
+          (do
+            ;; This seems problematic, but that's because
+            ;; it's easy to tangle up the outgoing vs. incoming buffers.
+            ;; The ACK was for the sake of the un-ackd-blocks in
+            ;; outgoing.
+            ;; The gap-buffer that we are *not* updating is about
+            ;; arriving messages that might have been dropped/misordered
+            ;; due to UDP issues.
+            (log/debug (utils/pre-log message-loop-name)
+                       "Pure ACK never updates gap-buffer")
+            state)))
+      state)))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state
@@ -498,14 +496,66 @@ Line 608"
   ;; But we're limiting the buffer to ~256 messages at a time,
   ;; (depending on size) so it shouldn't happen here.
   (reduce (fn [acc ackd]
-            (log/debug (str message-loop-name
-                            ": Discarding "
-                            ackd
-                            " as ACK'd"))
+            (log/debug (utils/pre-log message-loop-name)
+                       "Marking"
+                       ackd
+                       "as ACK'd, due to its ID")
             (update acc ::specs/outgoing
                     #(help/mark-block-ackd % ackd)))
           state
           ackd-blocks))
+
+(s/fdef handle-incoming-ack
+        :args (s/cat :state ::specs/state
+                     :packet ::specs/packet)
+        :ret ::specs/state)
+(defn handle-incoming-ack
+  "Update outbound queues w/ new ACKs"
+  [{:keys [message-loop-name]
+    {:keys [::specs/un-ackd-blocks]
+     :as outgoing} ::specs/outgoing
+    :as initial-state}
+   {:keys [::specs/acked-message]
+    :as packet}]
+  (let [log-prefix (utils/pre-log message-loop-name)
+        ackd-blocks (filter #(= acked-message (::specs/message-id %))
+                            un-ackd-blocks)]
+    (log/debug
+     (str ": looking for un-acked blocks among\n"
+          un-ackd-blocks
+          "\nthat match message ID "
+          acked-message))
+    ;; The acked-message ID should only be 0 on the
+    ;; first outgoing message block, since we don't
+    ;; ACK pure ACKs
+    (as-> (if (not= 0 acked-message)
+            ;; Gaping open Q: Do I really want to do this?
+            (flag-blocks-ackd-by-id initial-state
+                                    ackd-blocks)
+            initial-state)
+        state
+      ;; That takes us down to line 544
+      ;; It seems more than a bit silly to calculate flag-acked-others!
+      ;; if the incoming message is a pure ACK (i.e. message ID 0).
+      ;; That seeming silliness is completely correct: this
+      ;; is the entire point behind a pure ACK.
+      (flag-acked-others! state packet)
+      (reduce flow-control/update-statistics
+              state
+              (filter ::specs/ackd?
+                      (get-in state
+                              [::specs/outgoing
+                               ::specs/un-ackd-blocks])))
+      (update-in state
+                 [::specs/outgoing ::specs/un-ackd-blocks]
+                 (fn [blocks]
+                   (reduce (fn [acc block]
+                             (log/debug log-prefix
+                                        "Dropping recently ACK'd"
+                                        block)
+                             (disj acc block))
+                           blocks
+                           (filter ::specs/ackd? blocks)))))))
 
 (s/fdef handle-comprehensible-message!
         :args (s/cat :state ::specs/state)
@@ -528,16 +578,18 @@ Line 608"
     :as state}]
   ;; Keep in mind that parent->buffer is an array of bytes that has
   ;; just been pulled off the wire
-  (let [len (count parent->buffer)]
-    (log/debug (str message-loop-name
-                    ": Handling a "
-                    len
-                    " byte message"))
+  (let [len (count parent->buffer)
+        log-prefix (utils/pre-log message-loop-name)]
+    (log/debug log-prefix
+               "Handling a"
+               len
+               "byte message")
     ;; Lines 452-453
     (if (and (>= len K/min-msg-len)
              (<= len K/max-msg-len))
       (do
-        (log/debug (str message-loop-name ": Deserializing parent->buffer: "
+        (log/debug log-prefix
+                   (str  "Deserializing parent->buffer: "
                         parent->buffer ", a " (class parent->buffer)
                         " containing " (count parent->buffer) " bytes"))
 
@@ -554,58 +606,25 @@ Line 608"
               ;; But the next real steps are
               ;; 1. updating the statistics and
               ;; 2. Set up the flags for sending an ACK
-              ;; So it's remained pretty faithful to the original
-              {:keys [::specs/acked-message]
-               :as packet} (deserialize message-loop-name parent->buffer)]
+              ;; So it has remained mostly faithful to the original
+              packet (deserialize message-loop-name parent->buffer)
+              ;; Discard the raw incoming byte array
+              state (update state
+                            ::specs/incoming
+                            dissoc
+                            ::specs/parent->buffer)]
           (assert packet (str message-loop-name
                               ": Unable to extract a packet from "
                               parent->buffer))
-          (log/debug (str message-loop-name
-                          ": looking for un-acked blocks among\n"
-                          un-ackd-blocks
-                          "\nthat match message ID "
-                          acked-message))
-          (let [ackd-blocks (filter #(= acked-message (::specs/message-id %))
-                                    un-ackd-blocks)
-                ;; This seems like it would be a good place to drop the
-                ;; message that's just been ACK'd.
-                ;; That would mean coping with gaps.
-                ;; Which, realistically, we have to do
-                ;; on this side anyway, even if the other
-                ;; side doesn't.
-                dropped-ackd (if (not= 0 acked-message)
-                               ;; Gaping open Q: Do I really want to do this?
-                               (flag-blocks-ackd-by-id state
-                                                       ackd-blocks)
-                               state)
-                ;; That takes us down to line 544
-                ;; It seems more than a bit silly to calculate flag-acked-others!
-                ;; if the incoming message is a pure ACK (i.e. message ID 0).
-                ;; That seeming silliness is completely correct: this
-                ;; is the entire point behind a pure ACK.
-                with-acked-gaps (flag-acked-others! dropped-ackd packet)
-                ;; Wait. What?
-                ;; This looks like this is only updating the statistics
-                ;; for the last message to which this is a response.
-                ;; The main point here is that we need to update the
-                ;; stats for any previously un-ackd messages that
-                ;; we're getting ready to drop.
-                _ (throw (RuntimeException. "This is wrong"))
-                flagged (reduce flow-control/update-statistics
-                                ;; Remove parent->buffer.
-                                ;; It's been parsed into packet
-                                ;; Q: When/where did that happen?
-                                ;; TODO: Update this there instead
-                                (update with-acked-gaps
-                                        ::specs/incoming
-                                        dissoc
-                                        ::specs/parent->buffer)
-                                ackd-blocks)
+
+          (let [state (handle-incoming-ack state packet)
+                starting-hwm (get-in state [::specs/incoming ::specs/strm-hwm])
                 {:keys [::specs/flow-control
-                        ::specs/incoming
                         ::specs/outgoing]
-                 :as extracted} (extract-message! flagged packet)]
-            (log/debug (utils/pre-log message-loop-name)
+                 {:keys [::specs/strm-hwm]
+                  :as incoming} ::specs/incoming
+                 :as extracted} (extract-message! state packet)]
+            (log/debug log-prefix
                        "handle-comprehensible message/extracted:\n"
                        "\n\tincoming:\n"
                        incoming
@@ -615,10 +634,11 @@ Line 608"
                        outgoing
                        "\n\tFields:\n"
                        (keys extracted))
-            (if extracted
+            ;; Q: Did fresh data arrive?
+            (if (not= starting-hwm strm-hwm)
               (or
                (let [msg-id (::specs/message-id packet)]
-                 (log/debug (utils/pre-log message-loop-name) (str "ACK message-id " msg-id "?"))
+                 (log/debug log-prefix (str "ACK message-id " msg-id "?"))
                  (when-not msg-id
                    ;; Note that 0 is legal: that's a pure ACK.
                    ;; We just have to have something.
@@ -631,13 +651,13 @@ Line 608"
                    ;; since this is called for side-effects, ignore the
                    ;; return value.
                    (send-ack! extracted ack-msg)
-                   (log/debug (utils/pre-log message-loop-name) "ACK'd")
+                   (log/debug log-prefix "ACK'd")
                    (update extracted
                            ::specs/incoming
                            dissoc
                            ::specs/packet)))
                extracted)
-              flagged))))
+              state))))
       (do
         (if (< 0 len)
           (log/warn (utils/pre-log message-loop-name)
