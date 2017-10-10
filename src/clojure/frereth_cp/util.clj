@@ -21,34 +21,6 @@
                     human-name
                     (Thread/currentThread)))
 
-;;; TODO: Make this go away. It hides even more about the
-;;; caller than standard logging
-(defmacro def-log-fn
-  "I'm starting to add enough boilerplate to be annoying"
-  [lvl-name]
-  (let [lvl lvl-name
-        loop-name (gensym)
-        args-name (gensym)]
-    ;; Adding an fdef doesn't seem like a terrible idea
-    `(defn ~lvl
-       [~loop-name & ~args-name]
-       (log/warn "Deprecated log call")
-       (~(symbol (str "log/" lvl)) (pre-log ~loop-name)
-        (string/join " " ~args-name)))))
-(doseq [wrapper-name '[trace debug info warn ]]
-  (eval `(def-log-fn ~wrapper-name)))
-
-(comment
-  (macroexpand-1 '(def-log-fn debug))
-  (def-log-fn debug)
-  (debug "here" "check")
-  (let [wrapper-name 'debug]
-    (macroexpand-1 `(def-log-fn ~wrapper-name)))
-  (debug "check" "abc" "def")
-)
-
-;;;; More traditional pieces
-
 ;; TODO: Rename this to seconds-in-millis
 (defn seconds [] 1000)  ; avoid collision w/ built-in second
 (defn minute [] (* 60 (seconds)))

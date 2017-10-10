@@ -182,13 +182,6 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                        block)
             ;; This is why the function name has a !
             (let [^ByteBuf buffer (::specs/buf block)]
-              ;; My "write big array" unit test fails during
-              ;; to-parent/build-message-block-description
-              ;; because it's trying to write to a ByteBuf with
-              ;; refCnt 0.
-              ;; This seems like the most likely culprit.
-              ;; Hypothesis: I need to add a .acquire call
-              ;; when I create a slice.
               (.release buffer)))
           (-> state
               (assoc-in [::specs/outgoing ::specs/earliest-time]

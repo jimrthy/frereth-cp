@@ -16,6 +16,30 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
+(s/fdef build-individual-block
+        :args (s/cat :buf ::specs/buf
+                     :length ::specs/length
+                     :start-pos ::specs/start-pos))
+(defn build-individual-block
+  [buf length start-pos]
+  {::specs/ackd? false
+   ::specs/buf buf
+   ;; Q: Is there any good justification for tracking this
+   ;; both here and in the buf?
+   ;; A: No.
+   ;; TODO: Make this go away.
+   ::specs/length length
+   ;; TODO: Add a signal for marking this true
+   ;; (It probably needs to involve a close! function
+   ;; in the message ns)
+   ::specs/send-eof false
+   ::specs/transmissions 0
+   ::specs/time (System/nanoTime)
+   ;; There's the possibility of using a Nagle
+   ;; algorithm later to consolidate smaller blocks,
+   ;; so maybe it doesn't make sense to mess with it here.
+   ::specs/start-pos start-pos})
+
 (s/fdef build-block-descriptions
         :args (s/cat :message-loop-name ::specs/message-loop-name
                      :strm-hwm ::specs/strm-hwm
@@ -38,44 +62,37 @@
                     max-block-length
                     "-byte buffer slice(s) from "
                     buf))
-    ;; Building a single block takes ~8 ms, which seems quite a bit longer than it should.
-    ;; Especially since this is setting up a lazy seq...is *that* what's taking so long?
-    ;; TODO: Compare with using (reduce), possibly on a transient
-    ;; (or ztellman's proteus?)
-    ;; Maybe it evens out when we're looking at larger data
-    (map (fn [n]
-           (let [length (if (< n (dec block-count))
-                          max-block-length
-                          (let [remainder (mod cap max-block-length)]
-                            ;; Final block is probably smaller than the rest,
-                            ;; except when I've been writing nice clean test
-                            ;; cases that wind up setting it up to be 0 bytes
-                            ;; long without this next check.
-                            (if (not= 0 remainder)
-                              remainder
-                              max-block-length)))]
-             {::specs/ackd? false
-              ::specs/buf (.slice buf (* n max-block-length) length)
-              ;; Q: Is there any good justification for tracking this
-              ;; both here and in the buf?
-              ;; A: No.
-              ;; TODO: Make this go away.
-              ::specs/length length
-              ;; TODO: Add a signal for marking this true
-              ;; (It probably needs to involve a close! function
-              ;; in the message ns)
-              ::specs/send-eof false
-              ::specs/transmissions 0
-              ::specs/time (System/nanoTime)
-              ;; There's the possibility of using a Nagle
-              ;; algorithm later to consolidate smaller blocks,
-              ;; so maybe it doesn't make sense to mess with it here.
-              ::specs/start-pos (+ strm-hwm (* n max-block-length))}))
-         (range block-count))))
-(let [base (byte-array (range 8192))
-      src (Unpooled/wrappedBuffer base)]
-  (.writerIndex src 8192)
-  (.slice src 0 1024))
+    (if (< 1 block-count)
+      (let [result
+            ;; Building a single block takes ~8 ms, which seems quite a bit longer than it should.
+            ;; Especially since this is setting up a lazy seq...is *that* what's taking so long?
+            ;; TODO: Compare with using (reduce), possibly on a transient
+            ;; (or ztellman's proteus?)
+            ;; Maybe it evens out when we're looking at larger data
+            (map (fn [n]
+                   (let [length (if (< n (dec block-count))
+                                  max-block-length
+                                  (let [remainder (mod cap max-block-length)]
+                                    ;; Final block is probably smaller than the rest,
+                                    ;; except when I've been writing nice clean test
+                                    ;; cases that wind up setting it up to be 0 bytes
+                                    ;; long without this next check.
+                                    (if (not= 0 remainder)
+                                      remainder
+                                      max-block-length)))
+                         slice (.slice buf (* n max-block-length) length)]
+                     (build-individual-block slice length (+ strm-hwm (* n max-block-length)))))
+                 (range block-count))]
+        ;; Make sure that releasing an individual slice
+        ;; doesn't release the entire thing
+        (.retain buf (dec block-count))
+        result)
+      [(build-individual-block buf cap strm-hwm)])))
+(comment
+  (let [base (byte-array (range 8192))
+        src (Unpooled/wrappedBuffer base)]
+    (.writerIndex src 8192)
+    (.slice src 0 1024)))
 
 (s/fdef count-buffered-bytes
         :args (s/cat :blocks ::specs/blocks)

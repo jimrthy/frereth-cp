@@ -870,11 +870,13 @@
     ;; that's really a vector that we can just conj onto.
     (let [{{:keys [::specs/->child-buffer]} ::specs/incoming
            :keys [::specs/message-loop-name]
-           :as state} @state-agent]
-      (log/info (str message-loop-name
-                     " ("
-                     (Thread/currentThread)
-                     "): Top of parent->"))
+           :as state} @state-agent
+          pre-log (utils/pre-log message-loop-name)]
+      (log/info pre-log
+                "Top of parent->")
+      (when-not state
+        (log/warn pre-log
+                  "nil state. Things went sideways recently"))
       ;; It seems very wrong to do this here. But I really need
       ;; it to happen as fast as possible, because it tends to
       ;; get triggered again while I'm in the middle of other
@@ -893,8 +895,8 @@
                                                     (map (fn [^bytes buf]
                                                            (count buf))
                                                          ->child-buffer))]
-          (log/debug (str message-loop-name
-                          ": There's room in the child buffer; possibly processing"))
+          (log/debug pre-log
+                     "There's room in the child buffer; possibly processing")
           ;; Probably need to do something with previously-buffered-message-bytes.
           ;; Definitely need to check the number of bytes that have not
           ;; been forwarded along yet.
@@ -908,20 +910,21 @@
               ;; into the agent handler.
               ;; That impulse seems wrong. Based on preliminary numbers,
               ;; any filtering I can do outside an an agent send is a win.
-              (log/debug (str message-loop-name
-                              ": Message is small enough. Tell agent to handle"))
+              (log/debug pre-log
+                         "Message is small enough. Tell agent to handle")
               ;; See comments in child-> re: send vs. send-off
               (send state-agent trigger-from-parent state-agent buf))
             (do
               ;; TODO: If there's
-              (log/warn (str "Message too large\n"
+              (log/warn pre-log
+                        (str "Message too large\n"
                              "Incoming message is " incoming-size
                              " / " K/max-msg-len))
               (schedule-next-timeout! state state-agent)
               state-agent)))
         (do
-          (log/warn (str message-loop-name
-                         ": Child buffer overflow\n"
+          (log/warn pre-log
+                    (str "Child buffer overflow\n"
                          "Have " (count ->child-buffer)
                          "/"
                          max-child-buffer-size
