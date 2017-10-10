@@ -223,15 +223,20 @@
      current-message-id ::specs/next-message-id
      :as outgoing} ::specs/outgoing
     :as state}]
-  ;; Really just for timing info
-  (log/debug (str message-loop-name ": top of pre-calculate after-send"))
-  (assert next-block-queue
-          (str message-loop-name
-               ": No next-block-queue to tell us what to send\nAvailable:\n"
-               (keys outgoing)))
-  ;; Starts with line 380 sendblock:
-  ;; Resending old block will goto this
-  ;; It's in the middle of a do {} while(0) loop
+  (let [pre-log (utils/pre-log message-loop-name)]
+    ;; Really just for timing info
+    (log/debug pre-log
+               "top of pre-calculate after-send")
+    (assert next-block-queue
+            (str pre-log
+                 "No next-block-queue to tell us what to send\nAvailable:\n"
+                 (keys outgoing)
+                 "\nHopeful: \""
+                 next-block-queue
+                 "\""))
+    ;; Starts with line 380 sendblock:
+    ;; Resending old block will goto this
+    ;; It's in the middle of a do {} while(0) loop
 
 ;;;      382-404:  Build the message packet
 ;;;                N.B.: Ignores most of the ACK bits
@@ -243,89 +248,91 @@
 ;;;                the write to FD9 at offset +7, which is the
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
-  (let [q (get-in state [::specs/outgoing next-block-queue])
-        current-message (first q)]
-    (log/debug (str message-loop-name
-                    ": Next message should come from "
-                    (count q)
-                    " block(s) in\n"
-                    next-block-queue
-                    "\ninside\n"
-                    (::specs/outgoing state)))
-    (let [transmission-count (::specs/transmissions current-message)]
-      (assert transmission-count
-              (str message-loop-name
-                   ": Missing ::transmissions under "
-                   next-block-queue)))
-    ;; Q: How much time could I save right here and now by making
-    ;; state transient?
-    ;; (possibly using something like proteus)
-    (let [next-message-id (let [n' (inc current-message-id)]
-                            ;; Stupid unsigned math
-                            ;; Actually, this seems even more problematic
-                            ;; than it looks at first glance.
-                            ;; Really shouldn't be reusing IDs.
-                            ;; Q: Does that matter?
-                            (if (> n' shared-K/max-32-uint)
-                              ;; TODO: Just roll with the negative IDs. The only
-                              ;; one that's special is 0
-                              1 n'))]
-      ;; It's tempting to pop that message off of whichever queue is its current home.
-      ;; That doesn't make sense here/yet.
-      ;; Either we're resending a previous message that never got ACK'd (in which
-      ;; case it must stay exactly where it is until we *do* get an ACK), or we're
-      ;; sending a new message.
-      ;; If it's the latter, it *does* need to move from the un-sent queue to the
-      ;; un-ackd queue.
-      ;; But that's an operation to handle elsewhere.
-      (assert current-message)
-      ;; It's tempting to try to re-use a previously sent message ID for a re-send.
-      ;; After all, if I send message 39, then resend it as message 50, then get
-      ;; an ACK for message 39, the only way I have to correlate that to message
-      ;; 50 is the stream address.
-      ;; Which should be good enough.
-      ;; And this seems like a better way to debug messages on the wire.
-      ;; And this is the way the reference implementation works.
-      (let [state' (assoc-in state [::specs/outgoing ::specs/next-message-id] next-message-id)
-            updated-message (-> current-message
-                                (update ::specs/transmissions inc)
-                                (assoc ::specs/time recent)
-                                (assoc ::specs/message-id current-message-id))]
-        (log/debug (str message-loop-name
-                    ": Getting ready to build message block for message "
-                        current-message-id
-                        "\nbased on:\n")
-                   (utils/pretty current-message))
-        (let [buf (build-message-block-description message-loop-name
-                                                   current-message-id
-                                                   updated-message)
-              ;; Reference implementation waits until after the actual write before setting any of
-              ;; the next pieces. But it's a single-threaded process that's going to block at the write,
-              ;; and this part's purely functional anyway. So it should be safe enough to set up
-              ;; this transition here
-              result (update state'
-                             ::specs/outgoing
-                             (fn [cur]
-                               (assoc cur
-                                      ;; Q: Is it really worth tracking this separately?
-                                      ;; A: Yes, absolutely.
-                                      ;; It *is* readily available in un-ackd-blocks,
-                                      ;; until the last block gets ACK'd.
-                                      ::specs/last-block-time recent
-                                      ;; Q: How wise is it to inject send-buf here?
-                                      ::specs/send-buf buf
-                                      ::specs/want-ping false)))]
-          (log/debug (utils/pre-log message-loop-name)
-                     "Next block built and control state updated to"
-                     result)
-          ;; It's tempting to split this part up to avoid the conditional.
-          ;; Maybe turn the call into a multimethod.
-          ;; The latter would be a mistake, since there are
-          ;; really only 2 possibilities (I'm sending a new block or
-          ;; resending one that had its ACK timeout)
-          (if (= ::specs/un-sent-blocks next-block-queue)
-            (mark-block-sent result updated-message)
-            (mark-block-resent result current-message updated-message)))))))
+    (let [q (get-in state [::specs/outgoing next-block-queue])
+          current-message (first q)]
+      (log/debug (str message-loop-name
+                      ": Next message should come from "
+                      (count q)
+                      " block(s) in\n"
+                      next-block-queue
+                      "\ninside\n"
+                      (::specs/outgoing state)))
+      (let [transmission-count (::specs/transmissions current-message)]
+        (assert transmission-count
+                (str message-loop-name
+                     ": Missing ::transmissions under "
+                     next-block-queue
+                     " for "
+                     current-message)))
+      ;; Q: How much time could I save right here and now by making
+      ;; state transient?
+      ;; (possibly using something like proteus)
+      (let [next-message-id (let [n' (inc current-message-id)]
+                              ;; Stupid unsigned math
+                              ;; Actually, this seems even more problematic
+                              ;; than it looks at first glance.
+                              ;; Really shouldn't be reusing IDs.
+                              ;; Q: Does that matter?
+                              (if (> n' shared-K/max-32-uint)
+                                ;; TODO: Just roll with the negative IDs. The only
+                                ;; one that's special is 0
+                                1 n'))]
+        ;; It's tempting to pop that message off of whichever queue is its current home.
+        ;; That doesn't make sense here/yet.
+        ;; Either we're resending a previous message that never got ACK'd (in which
+        ;; case it must stay exactly where it is until we *do* get an ACK), or we're
+        ;; sending a new message.
+        ;; If it's the latter, it *does* need to move from the un-sent queue to the
+        ;; un-ackd queue.
+        ;; But that's an operation to handle elsewhere.
+        (assert current-message)
+        ;; It's tempting to try to re-use a previously sent message ID for a re-send.
+        ;; After all, if I send message 39, then resend it as message 50, then get
+        ;; an ACK for message 39, the only way I have to correlate that to message
+        ;; 50 is the stream address.
+        ;; Which should be good enough.
+        ;; And this seems like a better way to debug messages on the wire.
+        ;; And this is the way the reference implementation works.
+        (let [state' (assoc-in state [::specs/outgoing ::specs/next-message-id] next-message-id)
+              updated-message (-> current-message
+                                  (update ::specs/transmissions inc)
+                                  (assoc ::specs/time recent)
+                                  (assoc ::specs/message-id current-message-id))]
+          (log/debug pre-log
+                     (str "Getting ready to build message block for message "
+                          current-message-id
+                          "\nbased on:\n")
+                     (utils/pretty current-message))
+          (let [buf (build-message-block-description message-loop-name
+                                                     current-message-id
+                                                     updated-message)
+                ;; Reference implementation waits until after the actual write before setting any of
+                ;; the next pieces. But it's a single-threaded process that's going to block at the write,
+                ;; and this part's purely functional anyway. So it should be safe enough to set up
+                ;; this transition here
+                result (update state'
+                               ::specs/outgoing
+                               (fn [cur]
+                                 (assoc cur
+                                        ;; Q: Is it really worth tracking this separately?
+                                        ;; A: Yes, absolutely.
+                                        ;; It *is* readily available in un-ackd-blocks,
+                                        ;; until the last block gets ACK'd.
+                                        ::specs/last-block-time recent
+                                        ;; Q: How wise is it to inject send-buf here?
+                                        ::specs/send-buf buf
+                                        ::specs/want-ping false)))]
+            (log/debug pre-log
+                       "Next block built and control state updated to"
+                       result)
+            ;; It's tempting to split this part up to avoid the conditional.
+            ;; Maybe turn the call into a multimethod.
+            ;; The latter would be a mistake, since there are
+            ;; really only 2 possibilities (I'm sending a new block or
+            ;; resending one that had its ACK timeout)
+            (if (= ::specs/un-sent-blocks next-block-queue)
+              (mark-block-sent result updated-message)
+              (mark-block-resent result current-message updated-message))))))))
 
 (s/fdef check-for-previous-block-to-resend
         :args ::specs/state
@@ -579,23 +586,23 @@
   ;; of having it return nil like this.
   ;; That seems like a better API.
   ;; TODO: Make that so.
-  (let [state' (pick-next-block-to-send state)
-        {{:keys [::specs/->parent
-                 ::specs/next-block-queue
-                 ::specs/send-buf
-                 ::specs/un-ackd-blocks]} ::specs/outgoing
-         :as state''} (pre-calculate-state-after-send state')]
+  (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
+         :as state'} (pick-next-block-to-send state)
+        pre-log (utils/pre-log message-loop-name)]
     (if next-block-queue
-      (do
-        (log/debug (str message-loop-name
-                        ": Sending "
-                        (count send-buf)
-                        " bytes to parent"))
+      (let [{{:keys [::specs/->parent
+                     ::specs/send-buf
+                     ::specs/un-ackd-blocks]} ::specs/outgoing
+             :as state''} (pre-calculate-state-after-send state')]
+        (log/debug pre-log
+                   "Sending"
+                   (count send-buf)
+                   "bytes to parent")
         ;; Note that this winds up doing a send to the message
         ;; loop's agent.
 
         (block->parent! ->parent send-buf)
-        (log/debug (utils/pre-log message-loop-name)
+        (log/debug pre-log
                    (str "Calculating earliest time among "
                         (count un-ackd-blocks)
                         " blocks\nthat have not been ACK'd in a "
@@ -609,4 +616,7 @@
             (assoc-in [::specs/outgoing ::specs/earliest-time]
                       (help/earliest-block-time message-loop-name un-ackd-blocks))
             (update ::specs/outgoing dissoc ::specs/next-block-queue)))
-      state)))
+      (do
+        (log/debug pre-log
+                   "Nothing to send")
+        state))))
