@@ -65,7 +65,7 @@
 ;;; Internal API
 
 ;;;; Q: what else is in the reference implementation?
-;;;; A:
+;;;; A: Lots. Scattered around quite a bit now
 ;;;; 186-654 main
 ;;;          186-204 boilerplate
 
@@ -75,19 +75,19 @@
 ;;;          652-653 exit codes
 
 ;;; 264-645 main event loop
-;;; 263-269: exit if done
-;;; 271-306: Decide what and when to poll, based on global state
+;;;     263-269: exit if done
+;;;     271-306: Decide what and when to poll, based on global state
 
 ;;; This next piece seems like it deserves a prominent place.
 ;;; But, really, it needs to be deeply hidden from the end-programmer.
 ;;; I want it to be easy for me to change out and swap around, but
 ;;; that means no one else should ever really even need to know that
 ;;; it happens (no matter how vital it obviously is)
-;;; 307-318: Poll for incoming data
-;;;     317 XXX: keepalives
+;;;     307-318: Poll for incoming data
+;;;         317 XXX: keepalives
 
-;;; 444-609 handle this message if it's comprehensible: (DJB)
-;;; (in more depth)
+;;;     444-609 handle this message if it's comprehensible: (DJB)
+;;;     (in more depth)
 ;;;         445-450: boilerplate
 ;;;         452-453: short-circuiting
 ;;;         455: extract ID
@@ -115,8 +115,8 @@
 ;;;                 Evidence:
 ;;;        606: /* XXX: incorporate selective acknowledgents */ (DJB)
 
-;;;  634-643: try closing pipe to child: (DJB)
-;;;           Well, maybe. If we're done with it
+;;;     634-643: try closing pipe to child: (DJB)
+;;;         Well, maybe. If we're done with it
 
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
@@ -134,6 +134,8 @@
     :keys [::specs/message-loop-name
            ::specs/recent]
     :as state}]
+  ;;; This amounts to lines 286-305
+
   ;; I should be able to just completely bypass this if there's
   ;; more new data pending.
   ;; TODO: Figure out how to make that work
@@ -222,6 +224,15 @@
                                 next-based-on-eof))
         ;; Lines 293-296
         rtt-resend-time (+ earliest-time rtt-timeout)
+        ;; In the reference implementation, 0 for a block's time
+        ;; means it's been ACK'd.
+        ;; => if earliest-time for all blocks is 0, they've all been
+        ;; ACK'd.
+        ;; This is another place where I'm botching that.
+        ;; I've started relying on a ::ackd? flag in each block
+        ;; instead.
+        ;; But calculating earliest-time based on that isn't working
+        ;; the way I expect/want.
         next-based-on-earliest-block-time (if (and (not= 0 earliest-time)
                                                    (> rtt-resend-time
                                                       min-resend-time))
@@ -249,10 +260,32 @@
                                 based-on-closed-child))
         ;; Lines 302-305
         actual-next (max based-on-closed-child recent)
+        mid-time (System/nanoTime)
+        alt (cond-> default-next
+              (= want-ping ::specs/second-1) (do (+ recent (utils/seconds->nanos 1)))
+              (= want-ping ::specs/immediate) (min min-resend-time)
+              ;; If the outgoing buffer is not full
+              ;; And:
+              ;;   If sendeof, but not sendeofprocessed
+              ;;   else (!sendeof):
+              ;;     if there are buffered bytes that have not been sent yet
+              (let [un-ackd-count (count un-ackd-blocks)
+                    un-sent-count(count un-sent-blocks)]
+                (and (< (+ un-ackd-count
+                           un-sent-count)
+                        K/max-outgoing-blocks)
+                     (if send-eof
+                       (not send-eof-processed)
+                       (< 0 un-sent-count)))) (min min-resend-time)
+              (and (not= 0 earliest-time)
+                   (>= rtt-resend-time min-resend-time)) (min rtt-resend-time))
         end-time (System/nanoTime)]
     (log/debug (utils/pre-log message-loop-name)
-               (cl-format nil "Calculating next scheduled time took ~:d nanoseconds"
-                          (- end-time now)))
+               (cl-format nil "Calculating next scheduled time took ~:d nanoseconds and calculated ~:d. Alt approach took ~:d and calculated ~:d"
+                          (- mid-time now)
+                          actual-next
+                          (- end-time mid-time)
+                          alt))
     actual-next))
 
 ;;; I really want to move schedule-next-timeout to flow-control.
@@ -294,7 +327,9 @@
               ;; (I keep running across bugs that have issues with this,
               ;; and it wreaks havoc with my REPL)
               delta-nanos (max 0 scheduled-delay)
-              delta (inc (utils/nanos->millis delta-nanos))
+              delta (if (< delta-nanos 0)
+                      0
+                      (inc (utils/nanos->millis delta-nanos)))
               delta_f (float delta)  ; For printing
               ;; Creating this isn't a huge overhead, but I'm skeptical
               ;; about this approach.
