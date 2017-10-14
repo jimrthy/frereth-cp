@@ -364,12 +364,12 @@
   ;; It's tempting to make adjustments in here using now vs. recent.
   ;; Q: How much impact would that really have?
   ;; (There would definitely be *some*)
-  (if (and (not= 0 earliest-time)
+  (if (and #_(not= 0 earliest-time)
            ;; I have at least one bug where earliest-time isn't getting
            ;; correctly adjusted to 0 when all my un-ackd-blocks have been
            ;; ACK'd. That doesn't seem like the most intuitive way to
            ;; track this anyway.
-           (> 0 (count un-ackd-blocks))
+           (< 0 (count un-ackd-blocks))
            (>= recent (+ earliest-time n-sec-per-block))
            (>= recent (+ earliest-time rtt-timeout)))
     (do

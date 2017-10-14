@@ -9,6 +9,11 @@
 
 ;; These seem like they'd make more sense under shared.constants
 
+(def k-div8
+  "aka 1/8 k"
+  ;; or (pow 2 7)
+  128)
+
 (def k-div4
   "aka 1/4 k"
   256)

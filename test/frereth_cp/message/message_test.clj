@@ -348,164 +348,170 @@
   ;; Flip-side of echo: I want to see what happens
   ;; when the child sends bytes that don't fit into
   ;; a single message packet.
-  (log/info "Start testing writing big chunk of outbound data")
-  ;; TODO: split this into 2 tests
-  ;; 1 should stall out like the current implementation,
-  ;; waiting for ACKs (maybe drop every other packet?
-  ;; maybe send ACKs out of order?)
-  ;; The other should just send ACKs to get this working
-  ;; the way it did originally again
-  ;; TODO: Figure out a nice way to streamline the
-  ;; component setup without bringing in another 3rd
-  ;; party library
-  (let [start-time (System/nanoTime)
-        packet-count 9  ; trying to make life interesting
-        response (promise)
-        srvr-child-state (atom {:count 0
-                                :buffer []})
-        ;; I have a circular dependency between
-        ;; the client's child-cb, server-parent-cb,
-        ;; and initialized.
-        ;; The callbacks get called inside an
-        ;; agent send handler,
-        ;; which means I have the agent state
-        ;; directly available, but not the actual
-        ;; agent.
-        ;; That's what it needs, because child->
-        ;; is going to trigger another send.
-        ;; Wrapping it inside an atom is obnoxious, but
-        ;; it works.
-        ;; Don't do anything like this for anything real.
-        state-agent-atom (atom nil)
-        server-parent-cb (fn [bs]
-                           (log/info "Message from server to client."
-                                     "This really should just be an ACK")
-                           (message/parent-> @state-agent-atom bs))
-        server-child-cb (fn [incoming]
-                          (log/info "Incoming to server's child")
+  (let [test-run (gensym)]
+    (log/info test-run "Start testing writing big chunk of outbound data")
+    ;; TODO: split this into 2 tests
+    ;; 1 should stall out like the current implementation,
+    ;; waiting for ACKs (maybe drop every other packet?
+    ;; maybe send ACKs out of order?)
+    ;; The other should just send ACKs to get this working
+    ;; the way it did originally again
+    ;; TODO: Figure out a nice way to streamline the
+    ;; component setup without bringing in another 3rd
+    ;; party library
+    (let [start-time (System/nanoTime)
+          packet-count 9  ; trying to make life interesting
+          response (promise)
+          srvr-child-state (atom {:count 0
+                                  :buffer []})
+          ;; I have a circular dependency between
+          ;; the client's child-cb, server-parent-cb,
+          ;; and initialized.
+          ;; The callbacks get called inside an
+          ;; agent send handler,
+          ;; which means I have the agent state
+          ;; directly available, but not the actual
+          ;; agent.
+          ;; That's what it needs, because child->
+          ;; is going to trigger another send.
+          ;; Wrapping it inside an atom is obnoxious, but
+          ;; it works.
+          ;; Don't do anything like this for anything real.
+          state-agent-atom (atom nil)
+          server-parent-cb (fn [bs]
+                             (log/info test-run
+                                       "Message from server to client."
+                                       "\nThis really should just be an ACK")
+                             (message/parent-> @state-agent-atom bs))
+          server-child-cb (fn [incoming]
+                            (log/info test-run "Incoming to server's child")
 
-                          ;; Q: Which version better depicts how the reference implementation works?
-                          ;; Better Q: Which approach makes more sense?
-                          ;; (Seems obvious...don't want to waste bandwidth if it's just going
-                          ;; to a broken router that will never deliver. But there's a lot of
-                          ;; experience behind this sort of thing, and it would be a terrible
-                          ;; mistake to ignore that accumulated wisdom)
+                            ;; Q: Which version better depicts how the reference implementation works?
+                            ;; Better Q: Which approach makes more sense?
+                            ;; (Seems obvious...don't want to waste bandwidth if it's just going
+                            ;; to a broken router that will never deliver. But there's a lot of
+                            ;; experience behind this sort of thing, and it would be a terrible
+                            ;; mistake to ignore that accumulated wisdom)
 
 
-                          (let [response-state @srvr-child-state]
-                            (log/debug (str "parent-cb ("
-                                            (count incoming)
-                                            " bytes): "
-                                            (-> response-state
-                                                (dissoc :buffer)
-                                                (assoc :buffer-size (count (:buffer response-state))))))
-                            ;; The first few blocks should max out the message size.
-                            ;; The way the test is set up, the last will be
-                            ;; (+ 512 64).
-                            ;; It doesn't seem worth the hoops it would take to validate that.
-                            (swap! srvr-child-state
-                                   (fn [cur]
-                                     (log/info "Incrementing state count")
-                                     (-> cur
-                                         (update :count inc)
-                                         ;; Seems a little silly to include the ACKs.
-                                         ;; Should probably think this through more thoroughly
-                                         (update :buffer conj (vec incoming)))))
-                            ;; I would like to get 8 callbacks here:
-                            ;; 1 for each kilobyte of message the child tries to send.
-                            (when (= packet-count (:count @srvr-child-state))
-                              (log/info "Received all expected packets"))))
-        srvr-initialized (message/initial-state "(test) Server w/ Big Inbound"
-                                                server-parent-cb
-                                                server-child-cb
-                                                true)
-        srvr-state (message/start! srvr-initialized)
+                            (let [response-state @srvr-child-state]
+                              (log/debug (str test-run
+                                              "::parent-cb ("
+                                              (count incoming)
+                                              " bytes): "
+                                              (-> response-state
+                                                  (dissoc :buffer)
+                                                  (assoc :buffer-size (count (:buffer response-state))))))
+                              ;; The first few blocks should max out the message size.
+                              ;; The way the test is set up, the last will be
+                              ;; (+ 512 64).
+                              ;; It doesn't seem worth the hoops it would take to validate that.
+                              (swap! srvr-child-state
+                                     (fn [cur]
+                                       (log/info test-run "Incrementing state count")
+                                       (-> cur
+                                           (update :count inc)
+                                           ;; Seems a little silly to include the ACKs.
+                                           ;; Should probably think this through more thoroughly
+                                           (update :buffer conj (vec incoming)))))
+                              ;; I would like to get 8 callbacks here:
+                              ;; 1 for each kilobyte of message the child tries to send.
+                              (when (= packet-count (:count @srvr-child-state))
+                                (log/info test-run "Received all expected packets"))))
+          srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
+                                                  server-parent-cb
+                                                  server-child-cb
+                                                  true)
+          srvr-state (message/start! srvr-initialized)
 
-        parent-cb (fn [bs]
-                    (log/info "Forwarding buffer to server")
-                    (message/parent-> srvr-state bs))
-        child-message-counter (atom 0)
-        strm-address (atom 0)
-        child-cb (fn [_]
-                   ;; This is for messages from elsewhere to the child.
-                   ;; This test is all about the child spewing "lots" of data
-                   ;; TODO: Honestly, need a test that really does just start off by
-                   ;; sending megabytes (or gigabytes) of data as soon as the connection
-                   ;; is warmed up.
-                   ;; Library should be robust enough to handle that failure.
-                   (is false "This should never get called"))
-        client-initialized (message/initial-state "(test) Client w/ Big Outbound" parent-cb child-cb false)
-        client-state (message/start! client-initialized)]
-    (reset! state-agent-atom client-state)
-    (try
-      ;; Add an extra half-K just for giggles
-      (let [msg-len (+ (* (dec packet-count) K/k-1) K/k-div2)
-            ;; Note that this is what the child sender should be supplying
-            message-body (byte-array (range msg-len))]
-        (log/debug "Replicating child-send to " client-state)
-        (message/child-> client-state message-body)
-        (let [outcome (deref response 10000 ::timeout)
-              end-time (System/nanoTime)]
-          (log/info "Verifying that state hasn't errored out after"
-                    (float (utils/nanos->millis (- end-time start-time))) "milliseconds")
-          (if-let [err (agent-error client-state)]
-            (is (not err))
-            (do
-              (is (not= outcome ::timeout))
-              (when-not (= outcome ::timeout)
-                ;; TODO: What do I need to set up a full-blown i/o
-                ;; loop to make this accurate?
-                (is (= packet-count (count outcome)))
-                (is (= K/max-msg-len (count (first outcome))))
-                (doseq [packet (butlast outcome)]
-                  (is (= (count packet) (+ K/k-1 K/header-length K/min-padding-length))))
-                (let [final (last outcome)]
-                  (is (= (count final) (+ K/k-div2 K/header-length K/min-padding-length))))
-                (let [rcvd-strm
-                      (reduce (fn [acc with-header]
-                                (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
-                                                                       with-header))]
-                                  (conj acc without-header)))
-                              []
-                              outcome)]
-                  (is (b-t/bytes= (->> rcvd-strm
-                                       first
-                                       byte-array)
-                                  (->> message-body
-                                       vec
-                                       (take K/standard-max-block-length)
-                                       byte-array)))))
-              (let [state-agent @state-agent-atom
-                    _ (log/info "Deref'ing the state-agent")
-                    {:keys [::specs/incoming
-                            ::specs/outgoing]
-                     :as outcome} @state-agent]
-                (is (= msg-len (::specs/contiguous-stream-count outgoing)))
-                (let [n-m-id (::specs/next-message-id outgoing)]
-                  ;; There's a timing issue with the next check.
-                  ;; There's a good chance we'll get here before
-                  ;; the agent is through updating its state due
-                  ;; to the last message we fed from the child.
-                  ;; So it might be one or the other
-                  (is (or (= (inc packet-count) n-m-id)
-                          (= packet-count n-m-id)))
-                  ;; Either way, this relationship won't be impacted
-                  ;; by timing issues
-                  (is (= (inc (count (::specs/un-ackd-blocks outgoing)))
-                         n-m-id)))
-                ;; I'm not sending back any ACKs, so the bytes
-                ;; should all remain buffered
-                (is (= (from-child/buffer-size outcome) msg-len))
-                ;; TODO: I do need a test that triggers EOF
-                (is (not (::specs/send-eof outgoing)))
-                (is (= (::specs/contiguous-stream-count outgoing) msg-len))
-                ;; Keeping around as a reminder for when the implementation changes
-                ;; and I need to see what's really going on again
-                (comment (is (not outcome) "What should we have here?")))))))
-      (finally
-        (log/info "Ending the test")
-        (message/halt! client-state)
-        (message/halt! srvr-state)))))
+          parent-cb (fn [bs]
+                      (log/info test-run "Forwarding buffer to server")
+                      (message/parent-> srvr-state bs))
+          child-message-counter (atom 0)
+          strm-address (atom 0)
+          child-cb (fn [_]
+                     ;; This is for messages from elsewhere to the child.
+                     ;; This test is all about the child spewing "lots" of data
+                     ;; TODO: Honestly, need a test that really does just start off by
+                     ;; sending megabytes (or gigabytes) of data as soon as the connection
+                     ;; is warmed up.
+                     ;; Library should be robust enough to handle that failure.
+                     ;; Q: (which failure? feature?)
+                     (is false "This should never get called"))
+          client-initialized (message/initial-state (str "(test " test-run ") Client w/ Big Outbound")
+                                                    parent-cb child-cb false)
+          client-state (message/start! client-initialized)]
+      (reset! state-agent-atom client-state)
+      (try
+        ;; Add an extra quarter-K just for giggles
+        (let [msg-len (+ (* (dec packet-count) K/k-div2) K/k-div4)
+              ;; Note that this is what the child sender should be supplying
+              message-body (byte-array (range msg-len))]
+          (log/debug test-run "Replicating child-send to " client-state)
+          (message/child-> client-state message-body)
+          (let [outcome (deref response 10000 ::timeout)
+                end-time (System/nanoTime)]
+            (log/info test-run
+                      "Verifying that state hasn't errored out after"
+                      (float (utils/nanos->millis (- end-time start-time))) "milliseconds")
+            (if-let [err (agent-error client-state)]
+              (is (not err))
+              (do
+                (is (not= outcome ::timeout))
+                (when-not (= outcome ::timeout)
+                  ;; TODO: What do I need to set up a full-blown i/o
+                  ;; loop to make this accurate?
+                  (is (= packet-count (count outcome)))
+                  (is (= K/max-msg-len (count (first outcome))))
+                  (doseq [packet (butlast outcome)]
+                    (is (= (count packet) (+ K/k-1 K/header-length K/min-padding-length))))
+                  (let [final (last outcome)]
+                    (is (= (count final) (+ K/k-div2 K/header-length K/min-padding-length))))
+                  (let [rcvd-strm
+                        (reduce (fn [acc with-header]
+                                  (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
+                                                                         with-header))]
+                                    (conj acc without-header)))
+                                []
+                                outcome)]
+                    (is (b-t/bytes= (->> rcvd-strm
+                                         first
+                                         byte-array)
+                                    (->> message-body
+                                         vec
+                                         (take K/standard-max-block-length)
+                                         byte-array)))))
+                (log/info test-run "Deref'ing the state-agent")
+                (let [state-agent @state-agent-atom
+                      {:keys [::specs/incoming
+                              ::specs/outgoing]
+                       :as outcome} @state-agent]
+                  (is (= msg-len (::specs/contiguous-stream-count outgoing)))
+                  (let [n-m-id (::specs/next-message-id outgoing)]
+                    ;; There's a timing issue with the next check.
+                    ;; There's a good chance we'll get here before
+                    ;; the agent is through updating its state due
+                    ;; to the last message we fed from the child.
+                    ;; So it might be one or the other
+                    (is (or (= (inc packet-count) n-m-id)
+                            (= packet-count n-m-id)))
+                    ;; Either way, this relationship won't be impacted
+                    ;; by timing issues
+                    (is (= (inc (count (::specs/un-ackd-blocks outgoing)))
+                           n-m-id)))
+                  ;; I'm not sending back any ACKs, so the bytes
+                  ;; should all remain buffered
+                  (is (= (from-child/buffer-size outcome) msg-len))
+                  ;; TODO: I do need a test that triggers EOF
+                  (is (not (::specs/send-eof outgoing)))
+                  (is (= (::specs/contiguous-stream-count outgoing) msg-len))
+                  ;; Keeping around as a reminder for when the implementation changes
+                  ;; and I need to see what's really going on again
+                  (comment (is (not outcome) "What should we have here?")))))))
+        (finally
+          (log/info "Ending test" test-run)
+          (message/halt! client-state)
+          (message/halt! srvr-state))))))
 (comment (bigger-echo))
 
 (comment

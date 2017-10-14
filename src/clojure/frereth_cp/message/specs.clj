@@ -133,6 +133,12 @@
 
 ;; If nonzero: minimum of active ::time values
 ;; Corresponds to earliestblocktime in original
+;; This had 2 purposes there
+;; 1) signal that there are blocks to resend to parent
+;; 2) baseline for poll timeout. Just do that resend
+;;    because input hasn't arrived quickly enough to
+;;    trigger it.
+;; Q: Does this serve any useful purpose any longer?
 (s/def ::earliest-time int?)
 ;; Corresponds to lastblocktime in original
 ;; Undocumented, but it looks like the value of recent
