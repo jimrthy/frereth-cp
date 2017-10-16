@@ -54,9 +54,10 @@
    max-block-length]
   {:pre [#(< 0 max-block-length)]}
   (let [cap (.capacity buf)
+        remainder (mod cap max-block-length)
         block-count (int (Math/ceil (/ cap max-block-length)))]
-    (log/debug (str message-loop-name
-                    ": Building "
+    (log/debug (utils/pre-log message-loop-name)
+               (str "Building "
                     block-count
                     " "
                     max-block-length
@@ -65,6 +66,8 @@
     (if (< 1 block-count)
       (let [result
             ;; Building a single block takes ~8 ms, which seems quite a bit longer than it should.
+            ;; Building 17 blocks is taking 13 milliseconds.
+            ;; That's ridiculous.
             ;; Especially since this is setting up a lazy seq...is *that* what's taking so long?
             ;; TODO: Compare with using (reduce), possibly on a transient
             ;; (or ztellman's proteus?)
@@ -72,19 +75,19 @@
             (map (fn [n]
                    (let [length (if (< n (dec block-count))
                                   max-block-length
-                                  (let [remainder (mod cap max-block-length)]
-                                    ;; Final block is probably smaller than the rest,
-                                    ;; except when I've been writing nice clean test
-                                    ;; cases that wind up setting it up to be 0 bytes
-                                    ;; long without this next check.
-                                    (if (not= 0 remainder)
-                                      remainder
-                                      max-block-length)))
+                                  ;; Final block is probably smaller than the rest,
+                                  ;; except when I've been writing nice clean test
+                                  ;; cases that wind up setting it up to be 0 bytes
+                                  ;; long without this next check.
+                                  (if (not= 0 remainder)
+                                    remainder
+                                    max-block-length))
                          slice (.slice buf (* n max-block-length) length)]
                      (build-individual-block slice length (+ strm-hwm (* n max-block-length)))))
                  (range block-count))]
         ;; Make sure that releasing an individual slice
         ;; doesn't release the entire thing
+        ;; Q: How long does this take?
         (.retain buf (dec block-count))
         result)
       [(build-individual-block buf cap strm-hwm)])))
@@ -229,10 +232,12 @@
         ;; client?
         bytes-to-read (min available-buffer-space buf-size)
         blocks (build-block-descriptions message-loop-name strm-hwm buf max-block-length)]
-    (log/debug (str message-loop-name
-                    " ("
-                    (Thread/currentThread)
-                    "): " (count blocks) " Block(s) to add:\n"
+    ;; Q: What are the odds that calling pretty here accounts for
+    ;; the huge timing delays I'm seeing between this log message
+    ;; and the one at the top of build-block-descriptions?
+    (log/debug (utils/log-prefix message-loop-name)
+               (str (count blocks)
+                    " Block(s) to add:\n"
                     (utils/pretty blocks)))
     (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
       ;; Want to be sure standard error handlers don't catch

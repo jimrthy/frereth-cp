@@ -17,7 +17,7 @@
 (defn pre-log
   [human-name]
   (pprint/cl-format nil
-                    "~a (~a):"
+                    "~a (~a):\n"
                     human-name
                     (Thread/currentThread)))
 

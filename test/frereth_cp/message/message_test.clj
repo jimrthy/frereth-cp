@@ -426,6 +426,13 @@
 
           parent-cb (fn [bs]
                       (log/info test-run "Forwarding buffer to server")
+                      ;; This approach is over-simplified for the sake
+                      ;; of testing.
+                      ;; In reality, we need to pull off this queue as
+                      ;; fast as possible.
+                      ;; And, realistically, push the message onto another
+                      ;; queue that handles all the details like encrypting
+                      ;; and actually writing bytes to the wire.
                       (message/parent-> srvr-state bs))
           child-message-counter (atom 0)
           strm-address (atom 0)

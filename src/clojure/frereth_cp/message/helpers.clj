@@ -107,10 +107,10 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     (log/debug log-prefix
                "Setting ACK flags on blocks with addresses from"
                start "to" stop)
-    ;; This is definitely a bug.
-    ;; TODO: Figure out something more extreme to do here.
     (when (< (get-in state [::specs/outgoing ::specs/strm-hwm])
              stop)
+      ;; This is definitely a bug.
+      ;; TODO: Figure out something more extreme to do here.
       (log/error log-prefix "Other side ACK'd bytes we haven't sent yet"))
     (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
@@ -205,8 +205,6 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
   [{:keys [::specs/un-ackd-blocks]
     :as outgoing}
    block]
-  ;; It *is* updating the caller
-  (log/warn "Marking\n" block "\nACK'd isn't working. Q: Why not?")
   (assert (contains? un-ackd-blocks block)
           (str "Can't mark\n"
                block

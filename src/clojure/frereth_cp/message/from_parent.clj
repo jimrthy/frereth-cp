@@ -511,20 +511,20 @@ Line 608"
         :ret ::specs/state)
 (defn handle-incoming-ack
   "Update outbound queues w/ new ACKs"
-  [{:keys [message-loop-name]
+  [{:keys [::specs/message-loop-name]
     {:keys [::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing
     :as initial-state}
    {:keys [::specs/acked-message]
     :as packet}]
+  (log/debug log-prefix
+             (str "looking for un-acked blocks among\n"
+                  un-ackd-blocks
+                  "\nthat match message ID "
+                  acked-message))
   (let [log-prefix (utils/pre-log message-loop-name)
         ackd-blocks (filter #(= acked-message (::specs/message-id %))
                             un-ackd-blocks)]
-    (log/debug
-     (str ": looking for un-acked blocks among\n"
-          un-ackd-blocks
-          "\nthat match message ID "
-          acked-message))
     ;; The acked-message ID should only be 0 on the
     ;; first outgoing message block, since we don't
     ;; ACK pure ACKs

@@ -250,8 +250,8 @@
 ;;;                So everything else is shifted right by 8 bytes
     (let [q (get-in state [::specs/outgoing next-block-queue])
           current-message (first q)]
-      (log/debug (str message-loop-name
-                      ": Next message should come from "
+      (log/debug pre-log
+                 (str "Next message should come from "
                       (count q)
                       " block(s) in\n"
                       next-block-queue
@@ -259,8 +259,8 @@
                       (::specs/outgoing state)))
       (let [transmission-count (::specs/transmissions current-message)]
         (assert transmission-count
-                (str message-loop-name
-                     ": Missing ::transmissions under "
+                (str pre-log
+                     "Missing ::transmissions under "
                      next-block-queue
                      " for "
                      current-message)))
@@ -605,7 +605,7 @@
         (log/debug pre-log
                    (str "Calculating earliest time among "
                         (count un-ackd-blocks)
-                        " blocks\nthat have not been ACK'd in a "
+                        " block(s)\nthat have not been ACK'd in a "
                         (class un-ackd-blocks)
                         ".\nThis is very distinct from the "
                         (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))

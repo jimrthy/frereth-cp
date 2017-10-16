@@ -192,108 +192,109 @@
    {:keys [::specs/incoming
            ::specs/message-loop-name]
     :as state}]
-  ;; Major piece of the puzzle that I'm currently missing:
-  ;; line 617 will generally update receive-written.
-  ;; TODO: expand it to include the pieces I haven't translated yet
-  ;; (such as sending some signal, like a nil, to indicate that
-  ;; we've hit EOF).
-  (log/warn "TODO: Should update receive-written sometime soon")
-  (let [consolidated (consolidate-gap-buffer state)
-        ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])
-        block-count (count ->child-buffer)]
-    (log/debug (utils/pre-log message-loop-name)
+  (let [pre-log (utils/pre-log message-loop-name)]
+    ;; Major piece of the puzzle that I'm currently missing:
+    ;; line 617 will generally update receive-written.
+    ;; TODO: expand it to include the pieces I haven't translated yet
+    ;; (such as sending some signal, like a nil, to indicate that
+    ;; we've hit EOF).
+    ;; Q: Is receive-written still a thing?
+    ;; (How does it compare w/ HWM?)
+    (log/warn pre-log "TODO: Should update receive-written sometime soon")
+    (let [consolidated (consolidate-gap-buffer state)
+          ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])
+          block-count (count ->child-buffer)]
+      (log/debug pre-log
                  "Have"
                  block-count
                  "consolidated blocks ready to go to child")
-    (if (< 0 block-count)
-      ;; Q: If I have a ton of messages to deliver, do I really want to call the child
-      ;; repeatedly right here and now?
-      ;; The reference implementation actually puts the bytes that are ready
-      ;; to write into its circular buffer and tries to write as many as possible
-      ;; (up to the end of the circular buffer) all at once. It flags the
-      ;; written bytes as invalid and moves on.
-      ;; In that world, anything that didn't get written this time will happen
-      ;; on the next loop iteration.
-      ;; Which looks like it might not happen for another minute.
-      (reduce (fn [state' ^ByteBuf buf]
-                ;; Forward the byte-array inside the buffer
-                (try
-                  ;; It's tempting to special-case this to avoid the
-                  ;; copy, if we have a buffer that's backed by a byte-array.
-                  ;; But that winds up sending along extra data that we don't
-                  ;; want, like the header and pieces that we should have
-                  ;; skipped due to gap buffering
-                  (let [bs (byte-array (.readableBytes buf))]
-                    (.readBytes buf bs)
-                    (log/info (utils/pre-log message-loop-name)
-                              "triggering child's callback with"
-                              (count bs)
-                              "bytes")
-                    ;; Really need to isolate this in its own
-                    ;; try-catch block. Problems in the provided callback are
-                    ;; very different than problems at this level.
-                    ;; The former should probably fail immediately.
-                    ;; The latter should probably fail even more
-                    ;; catastrophically, and be even more obvious.
+      (if (< 0 block-count)
+        ;; Q: If I have a ton of messages to deliver, do I really want to call the child
+        ;; repeatedly right here and now?
+        ;; The reference implementation actually puts the bytes that are ready
+        ;; to write into its circular buffer and tries to write as many as possible
+        ;; (up to the end of the circular buffer) all at once. It flags the
+        ;; written bytes as invalid and moves on.
+        ;; In that world, anything that didn't get written this time will happen
+        ;; on the next loop iteration.
+        ;; Which looks like it might not happen for another minute.
+        (reduce (fn [state' ^ByteBuf buf]
+                  ;; Forward the byte-array inside the buffer
+                  (try
+                    ;; It's tempting to special-case this to avoid the
+                    ;; copy, if we have a buffer that's backed by a byte-array.
+                    ;; But that winds up sending along extra data that we don't
+                    ;; want, like the header and pieces that we should have
+                    ;; skipped due to gap buffering
+                    (let [bs (byte-array (.readableBytes buf))]
+                      (.readBytes buf bs)
+                      (log/info pre-log
+                                "triggering child's callback with"
+                                (count bs)
+                                "bytes")
+                      ;; Really need to isolate this in its own
+                      ;; try-catch block. Problems in the provided callback are
+                      ;; very different than problems at this level.
+                      ;; The former should probably fail immediately.
+                      ;; The latter should probably fail even more
+                      ;; catastrophically, and be even more obvious.
 
-                    ;; Problems in the client code using this library
-                    ;; are bad, and I should help the devs who wrote
-                    ;; that code find their bugs. At the same time, there
-                    ;; could very well be multiple clients using this
-                    ;; library at the same time. One misbehaving
-                    ;; client shouldn't cause problems for the rest.
+                      ;; Problems in the client code using this library
+                      ;; are bad, and I should help the devs who wrote
+                      ;; that code find their bugs. At the same time, there
+                      ;; could very well be multiple clients using this
+                      ;; library at the same time. One misbehaving
+                      ;; client shouldn't cause problems for the rest.
 
-                    ;; The flip side of this is that problems *here*
-                    ;; indicate a bug that affects everyone using the
-                    ;; library. The sooner those can be nailed down,
-                    ;; the happier it will be for everyone.
-                    (try
-                      ;; Use milliseconds here because it's supposedly
-                      ;; ~2x faster than nanoTime, and this resolution
-                      ;; as plenty granular
-                      (let [start-time (System/currentTimeMillis)]
-                        (->child bs)
-                        (let [end-time (System/currentTimeMillis)
-                              delta (- end-time start-time)
-                              prefix (utils/pre-log message-loop-name)
-                              msg (str "Child callback took " delta " ms")]
-                          (if (< callback-threshold-warning delta)
-                            (if (< callback-threshold-error delta)
-                              (log/error prefix msg)
-                              (log/warn prefix msg))
-                            (log/debug prefix msg))))
-                      (catch RuntimeException ex
-                        ;; It's very tempting to just re-raise this exception,
-                        ;; especially if I'm inside an agent.
-                        ;; For now, just log and swallow it.
-                        (log/error ex
-                                   (utils/pre-log message-loop-name)
-                                   "Failure in child callback."))))
-                  ;; And drop the consolidated blocks
-                  (log/debug (utils/pre-log message-loop-name)
-                             "Dropping block we just finished sending to child")
-                  (.release buf)
-                  (update-in state'
-                             ;; Yes, this is already a vector
-                             [::specs/incoming ::specs/->child-buffer]
-                             (comp vec rest))
-                  (catch RuntimeException ex
-                    ;; Reference implementation specifically copes with
-                    ;; EINTR, EWOULDBLOCK, and EAGAIN.
-                    ;; Any other failure means just closing the child pipe.
-                    ;; This is the reason that ->child-buffer has to be a
-                    ;; seq.
-                    ;; It's very tempting to just combine the arrays and
-                    ;; send them all as a single ByteBuf.
-                    ;; But that tightly couples children to this implementation
-                    ;; detail.
-                    ;; It's more tempting to merge the byte arrays into a
-                    ;; single vector of bytes, but the performance implications
-                    ;; of that don't seem worth imposing.
-                    (log/error ex "Failed to forward message to child")
-                    (reduced state'))))
-              consolidated
-              ->child-buffer)
-      consolidated)
-    ;; 610-614: counters/looping
-    ))
+                      ;; The flip side of this is that problems *here*
+                      ;; indicate a bug that affects everyone using the
+                      ;; library. The sooner those can be nailed down,
+                      ;; the happier it will be for everyone.
+                      (try
+                        ;; Use milliseconds here because it's supposedly
+                        ;; ~2x faster than nanoTime, and this resolution
+                        ;; as plenty granular
+                        (let [start-time (System/currentTimeMillis)]
+                          (->child bs)
+                          (let [end-time (System/currentTimeMillis)
+                                delta (- end-time start-time)
+                                msg (str "Child callback took " delta " ms")]
+                            (if (< callback-threshold-warning delta)
+                              (if (< callback-threshold-error delta)
+                                (log/error pre-log msg)
+                                (log/warn pre-log msg))
+                              (log/debug pre-log msg))))
+                        (catch RuntimeException ex
+                          ;; It's very tempting to just re-raise this exception,
+                          ;; especially if I'm inside an agent.
+                          ;; For now, just log and swallow it.
+                          (log/error ex
+                                     pre-log
+                                     "Failure in child callback."))))
+                    ;; And drop the consolidated blocks
+                    (log/debug pre-log "Dropping block we just finished sending to child")
+                    (.release buf)
+                    (update-in state'
+                               ;; Yes, this is already a vector
+                               [::specs/incoming ::specs/->child-buffer]
+                               (comp vec rest))
+                    (catch RuntimeException ex
+                      ;; Reference implementation specifically copes with
+                      ;; EINTR, EWOULDBLOCK, and EAGAIN.
+                      ;; Any other failure means just closing the child pipe.
+                      ;; This is the reason that ->child-buffer has to be a
+                      ;; seq.
+                      ;; It's very tempting to just combine the arrays and
+                      ;; send them all as a single ByteBuf.
+                      ;; But that tightly couples children to this implementation
+                      ;; detail.
+                      ;; It's more tempting to merge the byte arrays into a
+                      ;; single vector of bytes, but the performance implications
+                      ;; of that don't seem worth imposing.
+                      (log/error ex pre-log "Failed to forward message to child")
+                      (reduced state'))))
+                consolidated
+                ->child-buffer)
+        consolidated)
+      ;; 610-614: counters/looping
+      )))

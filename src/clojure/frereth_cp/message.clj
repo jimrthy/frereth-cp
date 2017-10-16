@@ -155,14 +155,12 @@
   (let [now (System/nanoTime)
         ;; TODO: This seems to be screaming for cond->
         min-resend-time (+ last-block-time n-sec-per-block)
-        _ (log/debug (cl-format nil
-                                (str "~a (~a) at ~:d: Minimum resend time: ~:d\n"
+        _ (log/debug (utils/pre-log message-loop-name)
+                     (cl-format nil
+                                (str "Minimum resend time: ~:d\n"
                                      "which is ~:d nanoseconds\n"
                                      "after last block time ~:d.\n"
                                      "Recent was ~:d ns in the past")
-                                message-loop-name
-                                (Thread/currentThread)
-                                now
                                 min-resend-time
                                 n-sec-per-block
                                 ;; I'm calculating last-block-time
@@ -313,6 +311,9 @@
                           now))
     (if (not= next-action ::completed)
       (do
+        ;; TODO: add a debugging step that stores state and the
+        ;; calculated time so I can just look at exactly what I have
+        ;; when everything goes sideways
         (let [actual-next (choose-next-scheduled-time state)
               ;; It seems like it would make more sense to have the delay happen from
               ;; "now" instead of "recent"
@@ -370,7 +371,7 @@
                                   ;; It just tripped the timer, so it's
                                   ;; time to do it again.
                                   (log/debug (cl-format nil
-                                                        "~a: Timer for ~:d ms after ~:d timed out. Re-triggering I/O"
+                                                        "~a: Timer for ~:d ms after ~:d timed out. Re-triggering Output"
                                                         message-loop-name
                                                         delta_f
                                                         now))
@@ -926,12 +927,20 @@
       ;; happens with a pure ACK. I think I may have botched
       ;; this aspect of the translation.
       (if (< (count ->child-buffer) max-child-buffer-size)
+        ;; Unless I'm missing something,
+        ;; this next calculation took 42 ms in my last test run.
+        ;; That's ludicrous.
+        ;; Q: Will ->child-buffer ever have more than one array?
         (let [previously-buffered-message-bytes (reduce + 0
                                                     (map (fn [^bytes buf]
                                                            (count buf))
                                                          ->child-buffer))]
           (log/debug pre-log
-                     "There's room in the child buffer; possibly processing")
+                     "Have"
+                     previously-buffered-message-bytes
+                     "bytes in"
+                     (count ->child-buffer)
+                     " child buffers; possibly processing")
           ;; Probably need to do something with previously-buffered-message-bytes.
           ;; Definitely need to check the number of bytes that have not
           ;; been forwarded along yet.
