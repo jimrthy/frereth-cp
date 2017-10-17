@@ -829,7 +829,7 @@
           :as flow-control} ::specs/flow-control
          :keys [::specs/message-loop-name]
          :as state} @state-agent]
-    (log/info (debug/pre-log message-loop-name) "Halting")
+    (log/info (utils/pre-log message-loop-name) "Halting")
     ;; This seems to work on the server, but it fails when
     ;; the client's cranking through messages faster than
     ;; emacs can track.

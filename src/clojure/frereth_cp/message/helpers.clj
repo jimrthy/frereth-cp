@@ -86,6 +86,8 @@ Based on earliestblocktime_compute, in lines 138-153
         :ret ::specs/state)
 (defn drop-ackd!
   [{:keys [::specs/message-loop-name]
+    {:keys [::specs/send-eof
+            ::specs/un-ackd-blocks]} ::specs/outgoing
     :as acked}]
   ;; To match the next block, the main point is to discard
   ;; the first sequence of blocks that have been ACK'd
@@ -100,9 +102,8 @@ Based on earliestblocktime_compute, in lines 138-153
 ;;;                        sendprocessed (pointless, due to un-*-blocks
 ;;;                        blockfirst
   (let [log-prefix (utils/pre-log message-loop-name)
-        possibly-ackd (get-in acked [::specs/outgoing ::specs/un-ackd-blocks])
-        to-drop (filter ::specs/ackd? possibly-ackd)
-        to-keep (remove ::specs/ackd? possibly-ackd)
+        to-drop (filter ::specs/ackd? un-ackd-blocks)
+        to-keep (remove ::specs/ackd? un-ackd-blocks)
         _ (log/debug log-prefix
                      (str "mark-ack'd Keeping "
                           (count to-keep)
@@ -112,7 +113,7 @@ Based on earliestblocktime_compute, in lines 138-153
                                   ""
                                   to-keep)
                           "\nout of\n"
-                          (count possibly-ackd)))
+                          (count un-ackd-blocks)))
         dropped-block-lengths (apply + (map (fn [b]
                                               (-> b ::specs/buf .readableBytes))
                                             to-drop))
@@ -120,6 +121,7 @@ Based on earliestblocktime_compute, in lines 138-153
                        (disj acc dropped))
                      un-ackd-blocks
                      to-drop)
+        _ (log/warn "Really should be smarter re: ::ackd-addr here")
         state (-> acked
                   ;; Note that this really needs to be the stream address of the
                   ;; highest contiguous block that's been ACK'd.
@@ -129,16 +131,7 @@ Based on earliestblocktime_compute, in lines 138-153
                   ;; that have been ACK'd.
                   ;; For these purposes, that doesn't accomplish much.
                   (update-in [::specs/outgoing ::specs/ackd-addr] + dropped-block-lengths)
-                  (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] kept))
-;;;           177-182: Possibly set sendeofacked flag
-        state (if (and send-eof
-                       (= start 0)
-                       ;; It seems like this next check should be >=
-                       ;; But this is what the reference implementation checks.
-                       (> stop (get-in state [::specs/outgoing ::specs/strm-hwm]))
-                       (not send-eof-acked))
-                (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
-                state)]
+                  (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] kept))]
     (log/warn log-prefix "ackd-addr handling is still broken")
 ;;;           183: earliestblocktime_compute()
     (doseq [block to-drop]
@@ -148,11 +141,9 @@ Based on earliestblocktime_compute, in lines 138-153
       ;; This is why the function name has a !
       (let [^ByteBuf buffer (::specs/buf block)]
         (.release buffer)))
-    (-> state
-        (assoc-in [::specs/outgoing ::specs/earliest-time]
-                  (earliest-block-time message-loop-name un-ackd-blocks))
-        (assoc-in [::specs/outgoing ::specs/ackd-addr]
-                  stop))))
+    (assoc-in state
+              [::specs/outgoing ::specs/earliest-time]
+              (earliest-block-time message-loop-name un-ackd-blocks))))
 
 ;;;; 155-185: acknowledged(start, stop)
 (s/fdef mark-ackd-by-addr
@@ -189,13 +180,26 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
 ;;;                    Updates totalblocktransmissions and totalblocks
-      (let [acked (reduce (partial flag-acked-blocks start stop)
+      (let [state (reduce (partial flag-acked-blocks start stop)
                           state
-                          un-ackd-blocks)]
+                          un-ackd-blocks)
+            ;;;           177-182: Possibly set sendeofacked flag
+            state (if (and send-eof
+                           (= start 0)
+                           ;; It seems like this next check should be >=
+                           ;; But this is what the reference implementation checks.
+                           (> stop (get-in state [::specs/outgoing ::specs/strm-hwm]))
+                           (not send-eof-acked))
+                    (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
+                    state)]
         (log/debug log-prefix
                    "Done w/ initial flag reduce:\n"
-                   acked)
-        acked)
+                   state)
+        ;; Again, gaps kill it
+        (log/warn "This treatment of ::ackd-addr also fails")
+        (assoc-in state
+                  [::specs/outgoing ::specs/ackd-addr]
+                  stop))
       (do
         ;; Q: Is this correct?
         ;; At the very least, there might have been the
