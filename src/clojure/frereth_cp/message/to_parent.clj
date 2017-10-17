@@ -607,9 +607,8 @@
         (log/debug pre-log
                    (str "Calculating earliest time among "
                         (count un-ackd-blocks)
-                        " block(s)\nthat have not been ACK'd in a "
-                        (class un-ackd-blocks)
-                        ".\nThis is very distinct from the "
+                        " un-ACK'd block(s)"
+                        ".\nThose are very distinct from the "
                         (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
                         " that is/are left in un-sent-blocks"))
 ;;;      408: earliestblocktime_compute()

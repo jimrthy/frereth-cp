@@ -379,6 +379,9 @@
           ;; Don't do anything like this for anything real.
           state-agent-atom (atom nil)
           server-parent-cb (fn [bs]
+                             ;; TODO: Add a test that buffers these
+                             ;; up and then sends them
+                             ;; all at once
                              (log/info test-run
                                        "Message from server to client."
                                        "\nThis really should just be an ACK")
@@ -417,7 +420,8 @@
                               ;; I would like to get 8 callbacks here:
                               ;; 1 for each kilobyte of message the child tries to send.
                               (when (= packet-count (:count @srvr-child-state))
-                                (log/info test-run "Received all expected packets"))))
+                                (log/info (str test-run "::srvr-child-cb Received all expected packets"))
+                                (deliver response @srvr-child-state))))
           srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
                                                   server-parent-cb
                                                   server-child-cb

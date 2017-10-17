@@ -81,13 +81,86 @@ Based on earliestblocktime_compute, in lines 138-153
                       un-flagged))
       0)))
 
+(s/fdef drop-ackd!
+        :args (s/cat :acked ::specs/state)
+        :ret ::specs/state)
+(defn drop-ackd!
+  [{:keys [::specs/message-loop-name]
+    :as acked}]
+  ;; To match the next block, the main point is to discard
+  ;; the first sequence of blocks that have been ACK'd
+  ;; drop-while seems obvious
+  ;; However, we also need to update ackd-addr
+;;;           168-176: Updates globals for adjacent blocks that
+;;;                    have been ACK'd
+;;;                    This includes some counters that seem important:
+;;;                        blocknum
+;;;                        sendacked (ackd-addr, here)
+;;;                        sendbytes (obsoleted replaced by strm-hwm)
+;;;                        sendprocessed (pointless, due to un-*-blocks
+;;;                        blockfirst
+  (let [log-prefix (utils/pre-log message-loop-name)
+        possibly-ackd (get-in acked [::specs/outgoing ::specs/un-ackd-blocks])
+        to-drop (filter ::specs/ackd? possibly-ackd)
+        to-keep (remove ::specs/ackd? possibly-ackd)
+        _ (log/debug log-prefix
+                     (str "mark-ack'd Keeping "
+                          (count to-keep)
+                          " block(s):\n"
+                          (reduce (fn [acc b]
+                                    (str acc "\n" b))
+                                  ""
+                                  to-keep)
+                          "\nout of\n"
+                          (count possibly-ackd)))
+        dropped-block-lengths (apply + (map (fn [b]
+                                              (-> b ::specs/buf .readableBytes))
+                                            to-drop))
+        kept (reduce (fn [acc dropped]
+                       (disj acc dropped))
+                     un-ackd-blocks
+                     to-drop)
+        state (-> acked
+                  ;; Note that this really needs to be the stream address of the
+                  ;; highest contiguous block that's been ACK'd.
+                  ;; This makes any scheme for ACK'ing pieces out of
+                  ;; order more complicated.
+                  ;; As-is, this is really tracking the count of bytes
+                  ;; that have been ACK'd.
+                  ;; For these purposes, that doesn't accomplish much.
+                  (update-in [::specs/outgoing ::specs/ackd-addr] + dropped-block-lengths)
+                  (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] kept))
+;;;           177-182: Possibly set sendeofacked flag
+        state (if (and send-eof
+                       (= start 0)
+                       ;; It seems like this next check should be >=
+                       ;; But this is what the reference implementation checks.
+                       (> stop (get-in state [::specs/outgoing ::specs/strm-hwm]))
+                       (not send-eof-acked))
+                (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
+                state)]
+    (log/warn log-prefix "ackd-addr handling is still broken")
+;;;           183: earliestblocktime_compute()
+    (doseq [block to-drop]
+      (log/debug log-prefix
+                 "Releasing the buf associated with"
+                 block)
+      ;; This is why the function name has a !
+      (let [^ByteBuf buffer (::specs/buf block)]
+        (.release buffer)))
+    (-> state
+        (assoc-in [::specs/outgoing ::specs/earliest-time]
+                  (earliest-block-time message-loop-name un-ackd-blocks))
+        (assoc-in [::specs/outgoing ::specs/ackd-addr]
+                  stop))))
+
 ;;;; 155-185: acknowledged(start, stop)
-(s/fdef mark-acknowledged!
+(s/fdef mark-ackd-by-addr
         :args (s/cat :state ::specs/state
                      :start int?
                      :stop int?)
         :ret ::specs/state)
-(defn mark-acknowledged!
+(defn mark-ackd-by-addr
   "Mark sent blocks between positions start and stop as ACK'd
 
 Based [cleverly] on acknowledged(), running from lines 155-185"
@@ -122,72 +195,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
         (log/debug log-prefix
                    "Done w/ initial flag reduce:\n"
                    acked)
-        ;; To match the next block, the main point is to discard
-        ;; the first sequence of blocks that have been ACK'd
-        ;; drop-while seems obvious
-        ;; However, we also need to update ackd-addr
-;;;           168-176: Updates globals for adjacent blocks that
-;;;                    have been ACK'd
-;;;                    This includes some counters that seem important:
-;;;                        blocknum
-;;;                        sendacked (ackd-addr, here)
-;;;                        sendbytes (obsoleted replaced by strm-hwm)
-;;;                        sendprocessed (pointless, due to un-*-blocks
-;;;                        blockfirst
-        (let [possibly-ackd (get-in acked [::specs/outgoing ::specs/un-ackd-blocks])
-              to-drop (filter ::specs/ackd? possibly-ackd)
-              to-keep (remove ::specs/ackd? possibly-ackd)
-              _ (log/debug log-prefix
-                           (str "mark-ack'd Keeping "
-                                (count to-keep)
-                                " blocks:\n"
-                                (reduce (fn [acc b]
-                                          (str acc "\n" b))
-                                        ""
-                                        to-keep)
-                                "\nout of\n"
-                                possibly-ackd
-                                "\n\n"))
-              dropped-block-lengths (apply + (map (fn [b]
-                                                    (-> b ::specs/buf .readableBytes))
-                                                  to-drop))
-              kept (reduce (fn [acc dropped]
-                             (disj acc dropped))
-                           un-ackd-blocks
-                           to-drop)
-              state (-> acked
-                        ;; Note that this really needs to be the stream address of the
-                        ;; highest contiguous block that's been ACK'd.
-                        ;; This makes any scheme for ACK'ing pieces out of
-                        ;; order more complicated.
-                        ;; As-is, this is really tracking the count of bytes
-                        ;; that have been ACK'd.
-                        ;; For these purposes, that doesn't accomplish much.
-                        (update-in [::specs/outgoing ::specs/ackd-addr] + dropped-block-lengths)
-                        (assoc-in [::specs/outgoing ::specs/un-ackd-blocks] kept))
-;;;           177-182: Possibly set sendeofacked flag
-              state (if (and send-eof
-                             (= start 0)
-                             ;; It seems like this next check should be >=
-                             ;; But this is what the reference implementation checks.
-                             (> stop (get-in state [::specs/outgoing ::specs/strm-hwm]))
-                             (not send-eof-acked))
-                      (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
-                      state)]
-          (log/warn log-prefix "Get back to ackd-addr handling")
-;;;           183: earliestblocktime_compute()
-          (doseq [block to-drop]
-            (log/debug log-prefix
-                       "Releasing the buf associated with"
-                       block)
-            ;; This is why the function name has a !
-            (let [^ByteBuf buffer (::specs/buf block)]
-              (.release buffer)))
-          (-> state
-              (assoc-in [::specs/outgoing ::specs/earliest-time]
-                        (earliest-block-time message-loop-name un-ackd-blocks))
-              (assoc-in [::specs/outgoing ::specs/ackd-addr]
-                        stop))))
+        acked)
       (do
         ;; Q: Is this correct?
         ;; At the very least, there might have been the

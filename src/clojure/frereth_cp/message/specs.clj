@@ -279,7 +279,6 @@
                                     ::last-edge
                                     ::last-speed-adjustment
                                     ::n-sec-per-block
-                                    ::next-action
                                     ::rtt
                                     ::rtt-average
                                     ;; Q: Does rtt-delta belong in here?
@@ -292,7 +291,8 @@
                                     ::rtt-seen-recent-high
                                     ::rtt-seen-recent-low
                                     ::rtt-timeout
-                                    ::schedule-pool]))
+                                    ::schedule-pool]
+                              :opt [::next-action]))
 
 ;; 2. Buffers of bytes from the parent that we have not
 ;;    yet managed to write to the child

@@ -19,7 +19,7 @@
   (pprint/cl-format nil
                     "~a (~a):\n"
                     human-name
-                    (Thread/currentThread)))
+                    (.getName (Thread/currentThread))))
 
 ;; TODO: Rename this to seconds-in-millis
 (defn seconds [] 1000)  ; avoid collision w/ built-in second

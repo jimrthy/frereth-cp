@@ -100,7 +100,7 @@
                         buf)
               (.skipBytes buf bytes-to-skip)))
           (log/debug (utils/pre-log message-loop-name)
-                     (str "Moving entry 0/"
+                     (str "Consolidating entry 0/"
                           (count (::specs/gap-buffer
                                   incoming))))
           (-> incoming

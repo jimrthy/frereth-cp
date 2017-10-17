@@ -157,7 +157,7 @@
         min-resend-time (+ last-block-time n-sec-per-block)
         _ (log/debug (utils/pre-log message-loop-name)
                      (cl-format nil
-                                (str "Minimum resend time: ~:d\n"
+                                (str "Minimum send time: ~:d\n"
                                      "which is ~:d nanoseconds\n"
                                      "after last block time ~:d.\n"
                                      "Recent was ~:d ns in the past")
@@ -195,18 +195,31 @@
         ;; Q: What is the actual point to this?
         ;; (the logic seems really screwy, but that's almost definitely
         ;; a lack of understanding on my part)
-        next-based-on-eof (let [un-ackd-count (count un-ackd-blocks)
-                                un-sent-count(count un-sent-blocks)]
+        ;; A: There are at least 3 different moving parts involved here
+        ;; 1. Are there unsent blocks that need to be sent?
+        ;; 2. Do we have previously sent blocks that might need to re-send?
+        ;; 3. Have we sent an un-ACK'd EOF?
+        un-ackd-count (count un-ackd-blocks)
+        next-based-on-eof (let [un-sent-count(count un-sent-blocks)]
                             (if (and (< (+ un-ackd-count
                                            un-sent-count)
                                         K/max-outgoing-blocks)
                                      (if send-eof
                                        (not send-eof-processed)
-                                       (or (< 0 un-ackd-count)
-                                           (< 0 un-sent-count))))
+                                       (< 0 un-sent-count)))
                               (let [next-time
+                                    ;; This is overly aggressive when
+                                    ;; the unsent buffer is empty and we're
+                                    ;; just twiddling our thumbs waiting
+                                    ;; for an ACK.
+                                    ;; In that case, it needs to be the RTT
+                                    ;; timeout.
+                                    ;; (At least, that seems like it would
+                                    ;; make sense. And my 2nd translation
+                                    ;; attempt seems to agree).
+                                    ;; TODO: Double-check the reference
                                     (min next-based-on-ping min-resend-time)]
-                                (log/debug "EOF criteria:\nun-ackd-count:"
+                                (log/debug "EOF/unsent criteria:\nun-ackd-count:"
                                            un-ackd-count
                                            "\nun-sent-count:"
                                            un-sent-count
@@ -214,6 +227,8 @@
                                            send-eof
                                            "\nsend-eof-processed:"
                                            send-eof-processed)
+                                (when (= 0 un-sent-count)
+                                  (log/warn "Double-check reference against empty un-ACK'd"))
                                 next-time)
                               next-based-on-ping))
         _ (log/debug (cl-format nil
@@ -231,15 +246,15 @@
         ;; instead.
         ;; But calculating earliest-time based on that isn't working
         ;; the way I expect/want.
-        next-based-on-earliest-block-time (if (and (not= 0 earliest-time)
+        next-based-on-earliest-block-time (if (and (not= 0 un-ackd-count)
                                                    (> rtt-resend-time
                                                       min-resend-time))
                                             (min next-based-on-eof rtt-resend-time)
                                             next-based-on-eof)
         _ (log/debug (cl-format nil
-                                "~a: Adjusted for RTT: ~:d"
-                                 message-loop-name
-                                 next-based-on-earliest-block-time))
+                                  "~a: Adjusted for RTT: ~:d"
+                                  message-loop-name
+                                  next-based-on-earliest-block-time))
         ;; There's one last caveat, from 298-300:
         ;; It all swirls around watchtochild, which gets set up
         ;; between lines 276-279.
@@ -259,6 +274,7 @@
         ;; Lines 302-305
         actual-next (max based-on-closed-child recent)
         mid-time (System/nanoTime)
+        un-ackd-count (count un-ackd-blocks)
         alt (cond-> default-next
               (= want-ping ::specs/second-1) (do (+ recent (utils/seconds->nanos 1)))
               (= want-ping ::specs/immediate) (min min-resend-time)
@@ -267,17 +283,19 @@
               ;;   If sendeof, but not sendeofprocessed
               ;;   else (!sendeof):
               ;;     if there are buffered bytes that have not been sent yet
-              (let [un-ackd-count (count un-ackd-blocks)
-                    un-sent-count(count un-sent-blocks)]
+              (let [un-sent-count(count un-sent-blocks)]
                 (and (< (+ un-ackd-count
                            un-sent-count)
                         K/max-outgoing-blocks)
                      (if send-eof
                        (not send-eof-processed)
                        (< 0 un-sent-count)))) (min min-resend-time)
-              (and (not= 0 earliest-time)
+              (and (not= un-ackd-count)
                    (>= rtt-resend-time min-resend-time)) (min rtt-resend-time))
         end-time (System/nanoTime)]
+    (when-not (= actual-next alt)
+      (log/warn (utils/pre-log message-loop-name)
+                "Scheduling Mismatch!"))
     (log/debug (utils/pre-log message-loop-name)
                ;; alt approach seems ~4 orders of magnitude
                ;; faster.
@@ -375,9 +393,9 @@
                                   ;; This actually wasn't a failure.
                                   ;; It just tripped the timer, so it's
                                   ;; time to do it again.
-                                  (log/debug (cl-format nil
-                                                        "~a: Timer for ~:d ms after ~:d timed out. Re-triggering Output"
-                                                        message-loop-name
+                                  (log/debug (utils/pre-log message-loop-name)
+                                             (cl-format nil
+                                                        "~Timer for ~:d ms after ~:d timed out. Re-triggering Output"
                                                         delta_f
                                                         now))
                                   (send state-agent trigger-from-timer state-agent))
@@ -428,7 +446,7 @@
 (s/fdef cancel-timer!
         :args (s/cat :state ::specs/state
                      :source ::timer-canceller)
-        :ret any?)
+        :ret ::specs/state)
 (defn cancel-timer!
   "Cancels the next pending timer"
   [{{:keys [::specs/next-action]} ::specs/flow-control
@@ -462,10 +480,17 @@
       (if-not (realized? next-action)
         ;; Note that this is still subject to race conditions,
         ;; depending on which thread is running it.
+        ;; Which is why it must happen during the agent update
         (dfrd/success! next-action source)
         (do
+          ;; Q: What could we possibly do here to make this correct?
           (log/error pre-log
-                     "Can't cancel a deferred that has already "))))))
+                     "Can't cancel a deferred that has already triggered")
+          ;; I know I have this race condition. I've seen it in action.
+          ;; Fixing the overly aggressive scheduler may sweep it
+          ;; under the rug, but that doesn't fix the problem.
+          (throw (RuntimeException. "Well, that's broken"))))
+      (update state ::specs/flow-control dissoc ::specs/next-action))))
 
 (s/fdef trigger-output
         :args (s/cat :state-agent ::specs/state-agent
@@ -555,34 +580,34 @@
   ;; we call send and this gets called.
   ;; That's in contrast with the craziness of updating the
   ;; state outside of the agent's handler.
-  (cancel-timer! state ::from-child)
-  (log/info (utils/pre-log message-loop-name)
-            "trigger-from-child\nSent stream address: "
-            strm-hwm)
-  (let [state' (if (from-child/room-for-child-bytes? state)
-                 (do
-                   (log/debug (utils/pre-log message-loop-name)
-                              "There is room for another message")
-                   (let [result (from-child/consume-from-child state array-o-bytes)]
-                     result))
-                 ;; trigger-output does some state management, even
-                 ;; if we discard the incoming bytes because our
-                 ;; buffer is full.
-                 ;; TODO: Need a way to signal the child to
-                 ;; try again shortly
-                 (do
-                   (log/error (utils/pre-log message-loop-name)
-                              "Discarding incoming bytes, silently")
-                   state))]
-    ;; TODO: check whether we can do output now.
-    ;; It's pointless to call this if we just have
-    ;; to wait for the timer to expire.
-    (let [state'' (trigger-output
-                   state-agent
-                   state')]
-      (log/debug (utils/pre-log message-loop-name)
-                 "Truly updating agent state due to input from child")
-      state'')))
+  (let [state (cancel-timer! state ::from-child)]
+    (log/info (utils/pre-log message-loop-name)
+              "trigger-from-child\nSent stream address: "
+              strm-hwm)
+    (let [state' (if (from-child/room-for-child-bytes? state)
+                   (do
+                     (log/debug (utils/pre-log message-loop-name)
+                                "There is room for another message")
+                     (let [result (from-child/consume-from-child state array-o-bytes)]
+                       result))
+                   ;; trigger-output does some state management, even
+                   ;; if we discard the incoming bytes because our
+                   ;; buffer is full.
+                   ;; TODO: Need a way to signal the child to
+                   ;; try again shortly
+                   (do
+                     (log/error (utils/pre-log message-loop-name)
+                                "Discarding incoming bytes, silently")
+                     state))]
+      ;; TODO: check whether we can do output now.
+      ;; It's pointless to call this if we just have
+      ;; to wait for the timer to expire.
+      (let [state'' (trigger-output
+                     state-agent
+                     state')]
+        (log/debug (utils/pre-log message-loop-name)
+                   "Truly updating agent state due to input from child")
+        state''))))
 
 (s/fdef trigger-from-parent
         :args (s/cat :state ::specs/state
@@ -616,50 +641,50 @@
   ;; Mingling this sort of interaction is terrible.
   ;; TODO: It's time to ditch the agent approach in this segment and
   ;; just embrace manifold.
-  (cancel-timer! state ::from-parent)
-  (log/debug (str message-loop-name ": Incoming from parent"))
+  (let [state (cancel-timer! state ::from-parent)]
+    (log/debug (str message-loop-name ": Incoming from parent"))
 
-  ;; This is basically an iteration of the top-level
-  ;; event-loop handler from main().
-  ;; I can skip the pieces that only relate to reading
-  ;; from the child, because I'm using an active callback
-  ;; approach, and this was triggered by a block of
-  ;; data coming from the parent.
+    ;; This is basically an iteration of the top-level
+    ;; event-loop handler from main().
+    ;; I can skip the pieces that only relate to reading
+    ;; from the child, because I'm using an active callback
+    ;; approach, and this was triggered by a block of
+    ;; data coming from the parent.
 
-  ;; However, there *is* the need to handle packets that the
-  ;; child has buffered up to send to the parent.
+    ;; However, there *is* the need to handle packets that the
+    ;; child has buffered up to send to the parent.
 
-  ;; Except that we can't do this here/now. That part's
-  ;; limited by the flow-control logic (handled by the
-  ;; timer) and the callbacks arriving from the child.
-  ;; It seems like we probably should cancel/reschedule,
-  ;; since whatever ACK just arrived might adjust the RTT
-  ;; logic.
+    ;; Except that we can't do this here/now. That part's
+    ;; limited by the flow-control logic (handled by the
+    ;; timer) and the callbacks arriving from the child.
+    ;; It seems like we probably should cancel/reschedule,
+    ;; since whatever ACK just arrived might adjust the RTT
+    ;; logic.
 
-  (try
-    (let [pre-processed (from-parent/try-processing-message!
-                         (assoc-in state
-                                   [::specs/incoming ::specs/parent->buffer]
-                                   message))
-          state' (to-child/forward! ->child (or pre-processed
-                                                state))]
-      ;; This will update recent.
-      ;; In the reference implementation, that happens immediately
-      ;; after trying to read from the child.
-      ;; Q: Am I setting up any problems for myself by waiting
-      ;; this long?
-      ;; i.e. Is it worth doing that at the top of the trigger
-      ;; functions instead?
-      (trigger-output state-agent state'))
-    (catch RuntimeException ex
-      (log/error ex
-                 "Trying to cope with a message arriving from parent"))))
+    (try
+      (let [pre-processed (from-parent/try-processing-message!
+                           (assoc-in state
+                                     [::specs/incoming ::specs/parent->buffer]
+                                     message))
+            state' (to-child/forward! ->child (or pre-processed
+                                                  state))]
+        ;; This will update recent.
+        ;; In the reference implementation, that happens immediately
+        ;; after trying to read from the child.
+        ;; Q: Am I setting up any problems for myself by waiting
+        ;; this long?
+        ;; i.e. Is it worth doing that at the top of the trigger
+        ;; functions instead?
+        (trigger-output state-agent state'))
+      (catch RuntimeException ex
+        (log/error ex
+                   "Trying to cope with a message arriving from parent")))))
 
 (defn trigger-from-timer
   [{:keys [::specs/message-loop-name]
     :as state}
    state-agent]
-  (log/debug (str message-loop-name ": I/O triggered by timer"))
+  (log/debug (utils/pre-log message-loop-name) "I/O triggered by timer")
   ;; I keep thinking that I need to check data arriving from
   ;; the child, but the main point to this logic branch is
   ;; to resend an outbound block that hasn't been ACK'd yet.
@@ -702,7 +727,6 @@
                                  ::specs/last-speed-adjustment 0
                                  ;; Seems vital, albeit undocumented
                                  ::specs/n-sec-per-block K/sec->n-sec
-                                 ::specs/next-action nil
                                  ::specs/rtt 0
                                  ::specs/rtt-average 0
                                  ::specs/rtt-deviation 0
@@ -805,13 +829,13 @@
           :as flow-control} ::specs/flow-control
          :keys [::specs/message-loop-name]
          :as state} @state-agent]
-    (log/info "Halting" message-loop-name)
+    (log/info (debug/pre-log message-loop-name) "Halting")
     ;; This seems to work on the server, but it fails when
     ;; the client's cranking through messages faster than
     ;; emacs can track.
-    (cancel-timer! state ::completed)
-    (update-in state [::specs/flow-control ::specs/next-action]
-               (constantly ::completed))))
+    (let [state (cancel-timer! state ::completed)]
+      (update-in state [::specs/flow-control ::specs/next-action]
+                 (constantly ::completed)))))
 
 (s/fdef child->
         :args (s/cat :state-agent ::specs/state-agent
