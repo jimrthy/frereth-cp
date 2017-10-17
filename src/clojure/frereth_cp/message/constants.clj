@@ -52,7 +52,7 @@
 
 ;; (dec (pow 2 32))
 ;; TODO: Eliminate this duplication
-(def max-32-uint K/max-32-uint)
+(def max-32-uint-obsolete K/max-32-uint)
 
 (def ms-5
   "5 milliseconds, in nanoseconds

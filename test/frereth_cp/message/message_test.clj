@@ -472,57 +472,64 @@
                 (when-not (= outcome ::timeout)
                   ;; TODO: What do I need to set up a full-blown i/o
                   ;; loop to make this accurate?
-                  (is (= packet-count (count outcome)))
-                  (is (= K/max-msg-len (count (first outcome))))
-                  (doseq [packet (butlast outcome)]
-                    (is (= (count packet) (+ K/k-1 K/header-length K/min-padding-length))))
-                  (let [final (last outcome)]
-                    (is (= (count final) (+ K/k-div2 K/header-length K/min-padding-length))))
-                  (let [rcvd-strm
-                        (reduce (fn [acc with-header]
-                                  (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
-                                                                         with-header))]
-                                    (conj acc without-header)))
-                                []
-                                outcome)]
-                    (is (b-t/bytes= (->> rcvd-strm
-                                         first
-                                         byte-array)
-                                    (->> message-body
-                                         vec
-                                         (take K/standard-max-block-length)
-                                         byte-array)))))
+                  (let [result-buffer (:buffer outcome)]
+                    (is (= packet-count (count result-buffer)))
+                    (is (= K/initial-max-block-length (count (first result-buffer))))
+                    (doseq [packet (butlast result-buffer)]
+                      (is (= (count packet) K/k-div2)))
+                    (let [final (last result-buffer)]
+                      (is (= (count final) K/k-div4)))
+                    (let [rcvd-strm
+                          (reduce (fn [acc block]
+                                    (conj acc block))
+                                  []
+                                  result-buffer)]
+                      (is (b-t/bytes= (->> rcvd-strm
+                                           first
+                                           byte-array)
+                                      (->> message-body
+                                           vec
+                                           (take K/initial-max-block-length)
+                                           byte-array))))))
                 (log/info test-run "Deref'ing the state-agent")
-                (let [state-agent @state-agent-atom
-                      {:keys [::specs/incoming
-                              ::specs/outgoing]
-                       :as outcome} @state-agent]
-                  (is (= msg-len (::specs/contiguous-stream-count outgoing)))
-                  (let [n-m-id (::specs/next-message-id outgoing)]
-                    ;; There's a timing issue with the next check.
-                    ;; There's a good chance we'll get here before
-                    ;; the agent is through updating its state due
-                    ;; to the last message we fed from the child.
-                    ;; So it might be one or the other
-                    (is (or (= (inc packet-count) n-m-id)
-                            (= packet-count n-m-id)))
-                    ;; Either way, this relationship won't be impacted
-                    ;; by timing issues
-                    (is (= (inc (count (::specs/un-ackd-blocks outgoing)))
-                           n-m-id)))
-                  ;; I'm not sending back any ACKs, so the bytes
-                  ;; should all remain buffered
-                  (is (= (from-child/buffer-size outcome) msg-len))
-                  ;; TODO: I do need a test that triggers EOF
-                  (is (not (::specs/send-eof outgoing)))
-                  (is (= (::specs/contiguous-stream-count outgoing) msg-len))
-                  ;; Keeping around as a reminder for when the implementation changes
-                  ;; and I need to see what's really going on again
-                  (comment (is (not outcome) "What should we have here?")))))))
+                (let [state-agent @state-agent-atom]
+                  (let [{:keys [::specs/incoming
+                                ::specs/outgoing]
+                         :as outcome} @state-agent]
+                    (await state-agent)
+                    (is (= msg-len (::specs/ackd-addr outgoing)))
+                    (let [n-m-id (::specs/next-message-id outgoing)]
+                      ;; There's a timing issue with the next check.
+                      ;; There's a good chance we'll get here before
+                      ;; the agent is through updating its state due
+                      ;; to the last message we fed from the child.
+                      ;; So it might be one or the other
+                      (is (or (= (inc packet-count) n-m-id)
+                              (= packet-count n-m-id)))
+                      ;; Either way, this relationship won't be impacted
+                      ;; by timing issues.
+                      ;; Except that it totally is.
+                      ;; We need to do an await on the client/server
+                      ;; agents for this kind of approach to make
+                      ;; any sense at all.
+                      (is (= (- n-m-id packet-count)
+                             (count (::specs/un-ackd-blocks outgoing)))))
+                    (is (= 0 (from-child/buffer-size outcome)))
+                    ;; TODO: I do need a test that triggers EOF
+                    (is (not (::specs/send-eof outgoing)))
+                    ;; Keeping around as a reminder for when the implementation changes
+                    ;; and I need to see what's really going on again
+                    (comment (is (not outcome) "What should we have here?"))))))))
         (finally
           (log/info "Ending test" test-run)
-          (message/halt! client-state)
-          (message/halt! srvr-state))))))
+          (try
+            (message/halt! client-state)
+            (catch RuntimeException ex
+              (is not ex)))
+          (try
+            (message/halt! srvr-state)
+            (catch RuntimeException ex
+              (is not ex))))))))
 (comment (bigger-echo))
 
 (comment
