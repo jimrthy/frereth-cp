@@ -486,6 +486,15 @@ Line 608"
      :as outgoing} ::specs/outgoing
     :as state}
    ackd-blocks]
+  (let [problem "Not updating ackd-addr"]
+    ;; The parameters are wrong for calling that from here.
+    ;; Well, I could slap something together.
+    ;; But the basic idea/abstraction is wrong.
+    ;; I really want to
+    ;; a) set the flags on ACK'd messages
+    ;; b) disj them from the sorted set based on the flag
+    (throw (ex-info problem
+                    {::what-does? 'helpers/mark-acknowledged!})))
   ;; Note that, in theory, we *could*
   ;; have multiple blocks with the same message ID.
   ;; But probably not inside the available 128K buffer space.
@@ -517,45 +526,45 @@ Line 608"
     :as initial-state}
    {:keys [::specs/acked-message]
     :as packet}]
-  (log/debug log-prefix
-             (str "looking for un-acked blocks among\n"
-                  un-ackd-blocks
-                  "\nthat match message ID "
-                  acked-message))
-  (let [log-prefix (utils/pre-log message-loop-name)
-        ackd-blocks (filter #(= acked-message (::specs/message-id %))
-                            un-ackd-blocks)]
-    ;; The acked-message ID should only be 0 on the
-    ;; first outgoing message block, since we don't
-    ;; ACK pure ACKs
-    (as-> (if (not= 0 acked-message)
-            ;; Gaping open Q: Do I really want to do this?
-            (flag-blocks-ackd-by-id initial-state
-                                    ackd-blocks)
-            initial-state)
-        state
-      ;; That takes us down to line 544
-      ;; It seems more than a bit silly to calculate flag-acked-others!
-      ;; if the incoming message is a pure ACK (i.e. message ID 0).
-      ;; That seeming silliness is completely correct: this
-      ;; is the entire point behind a pure ACK.
-      (flag-acked-others! state packet)
-      (reduce flow-control/update-statistics
-              state
-              (filter ::specs/ackd?
-                      (get-in state
-                              [::specs/outgoing
-                               ::specs/un-ackd-blocks])))
-      (update-in state
-                 [::specs/outgoing ::specs/un-ackd-blocks]
-                 (fn [blocks]
-                   (reduce (fn [acc block]
-                             (log/debug log-prefix
-                                        "Dropping recently ACK'd"
-                                        block)
-                             (disj acc block))
-                           blocks
-                           (filter ::specs/ackd? blocks)))))))
+  (let [log-prefix (utils/pre-log message-loop-name)]
+    (log/debug log-prefix
+               (str "looking for un-acked blocks among\n"
+                    un-ackd-blocks
+                    "\nthat match message ID "
+                    acked-message))
+    (let [ackd-blocks (filter #(= acked-message (::specs/message-id %))
+                              un-ackd-blocks)]
+      ;; The acked-message ID should only be 0 on the
+      ;; first outgoing message block, since we don't
+      ;; ACK pure ACKs
+      (as-> (if (not= 0 acked-message)
+              ;; Gaping open Q: Do I really want to do this?
+              (flag-blocks-ackd-by-id initial-state
+                                      ackd-blocks)
+              initial-state)
+          state
+        ;; That takes us down to line 544
+        ;; It seems more than a bit silly to calculate flag-acked-others!
+        ;; if the incoming message is a pure ACK (i.e. message ID 0).
+        ;; That seeming silliness is completely correct: this
+        ;; is the entire point behind a pure ACK.
+        (flag-acked-others! state packet)
+        (reduce flow-control/update-statistics
+                state
+                (filter ::specs/ackd?
+                        (get-in state
+                                [::specs/outgoing
+                                 ::specs/un-ackd-blocks])))
+        (update-in state
+                   [::specs/outgoing ::specs/un-ackd-blocks]
+                   (fn [blocks]
+                     (reduce (fn [acc block]
+                               (log/debug log-prefix
+                                          "Dropping recently ACK'd"
+                                          block)
+                               (disj acc block))
+                             blocks
+                             (filter ::specs/ackd? blocks))))))))
 
 (s/fdef handle-comprehensible-message!
         :args (s/cat :state ::specs/state)
@@ -682,8 +691,9 @@ Line 608"
             ::specs/strm-hwm]} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}]
-  (let [child-buffer-count (count ->child-buffer)]
-    (log/debug (utils/pre-log message-loop-name)
+  (let [pre-log (utils/pre-log message-loop-name)
+        child-buffer-count (count ->child-buffer)]
+    (log/debug pre-log
                (str "try-processing-message"
                     "\nchild-buffer-count: " child-buffer-count
                     "\nparent->buffer count: " (count parent->buffer)
@@ -715,7 +725,8 @@ Line 608"
       ;; client layer. This part receives the decrypted message payloads
       ;; and reassembles them into the stream.
       (let [state' (assoc-in state [::specs/outgoing ::specs/max-block-length] K/k-1)]
-        (log/debug (str message-loop-name ": Handling incoming message, if it's comprehensible"))
+        (log/debug pre-log
+                   "Handling incoming message, if it's comprehensible")
         ;; Move on to line 444
         ;; It seems as though this should forward the incoming message
         ;; along to the child. But it's really just setting up the
@@ -723,5 +734,6 @@ Line 608"
         (handle-comprehensible-message! state'))
       (do
         ;; Nothing to do.
-        (log/debug (str message-loop-name ": No pending messages from parent to send to child"))
+        (log/debug pre-log
+                   "No pending messages from parent to send to child")
         state))))

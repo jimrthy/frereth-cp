@@ -396,7 +396,7 @@
 
                             (let [response-state @srvr-child-state]
                               (log/debug (str test-run
-                                              "::parent-cb ("
+                                              "::server-child-cb ("
                                               (count incoming)
                                               " bytes): "
                                               (-> response-state

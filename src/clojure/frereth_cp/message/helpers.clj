@@ -138,7 +138,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
               to-drop (filter ::specs/ackd? possibly-ackd)
               to-keep (remove ::specs/ackd? possibly-ackd)
               _ (log/debug log-prefix
-                           (str "Keeping "
+                           (str "mark-ack'd Keeping "
                                 (count to-keep)
                                 " blocks:\n"
                                 (reduce (fn [acc b]

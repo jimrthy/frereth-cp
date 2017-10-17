@@ -279,7 +279,12 @@
                    (>= rtt-resend-time min-resend-time)) (min rtt-resend-time))
         end-time (System/nanoTime)]
     (log/debug (utils/pre-log message-loop-name)
-               (cl-format nil "Calculating next scheduled time took ~:d nanoseconds and calculated ~:d. Alt approach took ~:d and calculated ~:d"
+               ;; alt approach seems ~4 orders of magnitude
+               ;; faster.
+               ;; Q: Is that due to reduced logging?
+               (cl-format nil (str "Calculating next scheduled time took"
+                                   " ~:d nanoseconds and calculated ~:d."
+                                   " Alt approach took ~:d and calculated ~:d")
                           (- mid-time now)
                           actual-next
                           (- end-time mid-time)
@@ -430,26 +435,37 @@
     :keys [::specs/message-loop-name]
     :as state}
    source]
-  (log/debug (str message-loop-name
-                  ": Cancelling(?) "
-                  next-action
-                  " because "
-                  source))
-  (when (and next-action
-             (not= next-action ::completed))
-    ;; Altering the agent's state outside the agent like this
-    ;; is wrong on pretty much every level.
-    ;; But I'm seeing at least 1 timer loop go through before
-    ;; this can, and that's wasting 9-10 ms.
+  (let [pre-log (utils/pre-log message-loop-name)]
+    (log/debug pre-log
+               (str
+                "Cancelling(?) "
+                next-action
+                " because "
+                source))
+    (when (and next-action
+               (not= next-action ::completed))
+      ;; Altering the agent's state outside the agent like this
+      ;; is wrong on pretty much every level.
+      ;; But I'm seeing at least 1 timer loop go through before
+      ;; this can, and that's wasting 9-10 ms.
 
-    ;; This doesn't help much for the initial client loop that's
-    ;; eagerly waiting for input from the child. I think there's
-    ;; something badly wrong with the details behind that.
+      ;; This doesn't help much for the initial client loop that's
+      ;; eagerly waiting for input from the child. I think there's
+      ;; something badly wrong with the details behind that.
 
-    (log/info (str message-loop-name ": cancelling I/O timer "
-                   next-action
-                   ", a " (class next-action)))
-    (dfrd/success! next-action source)))
+      (log/info pre-log
+                (str "cancelling I/O timer "
+                     next-action
+                     ", a " (class next-action)))
+      ;; This doesn't work if next-action has already
+      ;; timed out.
+      (if-not (realized? next-action)
+        ;; Note that this is still subject to race conditions,
+        ;; depending on which thread is running it.
+        (dfrd/success! next-action source)
+        (do
+          (log/error pre-log
+                     "Can't cancel a deferred that has already "))))))
 
 (s/fdef trigger-output
         :args (s/cat :state-agent ::specs/state-agent
@@ -957,6 +973,8 @@
               (log/debug pre-log
                          "Message is small enough. Tell agent to handle")
               ;; See comments in child-> re: send vs. send-off
+              ;; TODO: Experiment with just embracing manifold instead
+              ;; of using agents here.
               (send state-agent trigger-from-parent state-agent buf))
             (do
               ;; TODO: If there's

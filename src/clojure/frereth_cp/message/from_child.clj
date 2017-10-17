@@ -231,11 +231,19 @@
         ;; Q: If I drop the extra bytes, how do I inform the
         ;; client?
         bytes-to-read (min available-buffer-space buf-size)
+        ;; Major(?) issue with this approach:
+        ;; If the client child starts by writing (for example), 16K bytes
+        ;; all at once, we'll break that into 32 blocks to send.
+        ;; After the server responds with the first message packet (which
+        ;; is probably the ACK), the available message size increases
+        ;; significantly.
+        ;; This seems like a good reason to rethink the big picture
+        ;; strategy I'm using here.
         blocks (build-block-descriptions message-loop-name strm-hwm buf max-block-length)]
     ;; Q: What are the odds that calling pretty here accounts for
     ;; the huge timing delays I'm seeing between this log message
     ;; and the one at the top of build-block-descriptions?
-    (log/debug (utils/log-prefix message-loop-name)
+    (log/debug (utils/pre-log message-loop-name)
                (str (count blocks)
                     " Block(s) to add:\n"
                     (utils/pretty blocks)))

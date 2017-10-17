@@ -183,7 +183,9 @@
                     block-to-move
                     ")\nfrom\na queue of "
                     (count un-sent-blocks)
-                    " unsent\nto\n"
+                    " unsent\nto join "
+                    (count un-ackd-blocks)
+                    " un-ACK'd blocks among\n"
                     un-ackd-blocks
                     "\nas\n"
                     updated-block))
