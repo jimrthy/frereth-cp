@@ -234,7 +234,7 @@
 
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
-;; deferred for triggering I/O on a timer
+;; deferred for next event-loop trigger
 (s/def ::next-action dfrd/deferred?)
 ;; These feed off recent, but are basically undocumented
 (s/def ::last-doubling int?)
@@ -344,5 +344,5 @@
                              ;; Q: Does this make more sense anywhere else?
                              ::recent]))
 
-(s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
-                            #(s/valid? ::state (deref %))))
+(s/def ::state-atom (s/and #(instance? clojure.lang.Atom %)
+                           #(s/valid? ::state (deref %))))

@@ -90,11 +90,11 @@
                                         ::actual msg-len
                                         ::details (vec array-o-bytes)}))
                          ;; Just echo it directly back.
-                         (let [state-agent @state-agent-atom]
-                           (is state-agent)
+                         (let [state-wrapper @state-agent-atom]
+                           (is state-wrapper)
                            (swap! child-message-counter inc)
                            (swap! strm-address + msg-len)
-                           (message/child-> state-agent array-o-bytes))))
+                           (message/child-> state-wrapper array-o-bytes))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.
@@ -110,51 +110,51 @@
             ;; TODO: Add tests that send a variety of gibberish messages
             (let [wrote (future (message/parent-> state incoming))
                   outcome (deref response 1000 ::timeout)]
-              (if-let [err (agent-error state)]
-                (is (not err))
-                (do
-                  (is (not= outcome ::timeout))
-                  (when-not (= outcome ::timeout)
-                    (is (= @parent-state 2))
-                    ;; I'm getting the response message header here, which is
-                    ;; correct, even though it seems wrong.
-                    ;; In the real thing, these are the bytes I'm getting ready
-                    ;; to send over the wire
-                    (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
-                    (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
-                                                           (vec outcome)))]
-                      (is (= (count message-body) (count without-header)))
-                      (is (b-t/bytes= message-body without-header))))
-                  (is (realized? wrote))
-                  (when (realized? wrote)
-                    (let [outcome-agent @wrote]
-                      (is (not (agent-error outcome-agent)))
-                      (when-not (agent-error outcome-agent)
-                        (await state)
-                        (log/info "Checking test outcome")
-                        ;; Fun detail:
-                        ;; wrote is a promise.
-                        ;; When I deref that, there's an agent
-                        ;; that I need to deref again to get
-                        ;; the actual end-state
-                        (let [{:keys [::specs/incoming
-                                      ::specs/outgoing]
-                               :as child-outcome} @state]
-                          (is incoming)
-                          (is (= msg-len (inc (::specs/strm-hwm incoming))))
-                          (is (= msg-len (::specs/contiguous-stream-count incoming)))
-                          (is (= (inc (::specs/strm-hwm incoming))
-                                 (::specs/contiguous-stream-count incoming)))
-                          (is (= 2 (::specs/next-message-id outgoing)))
-                          ;; Still have the message buffered.
-                          (is (= msg-len (from-child/buffer-size outgoing)))
-                          (is (= 0 (count (::specs/un-sent-blocks outgoing))))
-                          (is (= 1 (count (::specs/un-ackd-blocks outgoing))))
-                          (is (not (::specs/send-eof outgoing)))
-                          (is (= msg-len (::specs/strm-hwm outgoing)))
-                          ;; Keeping around as a reminder for when the implementation changes
-                          ;; and I need to see what's really going on again
-                          (comment (is (not outcome) "What should we have here?"))))))))))
+              (is (not= outcome ::timeout))
+              (when-not (= outcome ::timeout)
+                (is (= @parent-state 2))
+                ;; I'm getting the response message header here, which is
+                ;; correct, even though it seems wrong.
+                ;; In the real thing, these are the bytes I'm getting ready
+                ;; to send over the wire
+                (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
+                (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
+                                                       (vec outcome)))]
+                  (is (= (count message-body) (count without-header)))
+                  (is (b-t/bytes= message-body without-header))))
+              (is (realized? wrote))
+              (when (realized? wrote)
+                (let [outcome-wrapper @wrote]
+                  ;; Just to see what we have here
+                  (is (not @outcome-wrapper))
+                  ;; This next line can't possibly pass.
+                  ;; Q: What's the best way to do this sort of thing now?
+                  (await state)
+                  (log/info "Checking test outcome")
+                    ;; Fun detail:
+                    ;; wrote is a promise.
+                    ;; When I deref that, there's an agent
+                    ;; that I need to deref again to get
+                    ;; the actual end-state
+
+                  (let [{:keys [::specs/incoming
+                                ::specs/outgoing]
+                         :as child-outcome} @state]
+                    (is incoming)
+                    (is (= msg-len (inc (::specs/strm-hwm incoming))))
+                    (is (= msg-len (::specs/contiguous-stream-count incoming)))
+                    (is (= (inc (::specs/strm-hwm incoming))
+                           (::specs/contiguous-stream-count incoming)))
+                    (is (= 2 (::specs/next-message-id outgoing)))
+                    ;; Still have the message buffered.
+                    (is (= msg-len (from-child/buffer-size outgoing)))
+                    (is (= 0 (count (::specs/un-sent-blocks outgoing))))
+                    (is (= 1 (count (::specs/un-ackd-blocks outgoing))))
+                    (is (not (::specs/send-eof outgoing)))
+                    (is (= msg-len (::specs/strm-hwm outgoing)))
+                    ;; Keeping around as a reminder for when the implementation changes
+                    ;; and I need to see what's really going on again
+                    (comment (is (not outcome) "What should we have here?")))))))
           (catch ExceptionInfo ex
             (log/error loop-name ex "Starting the event loop"))
           (finally

@@ -562,6 +562,7 @@ Line 608"
 
 (s/fdef handle-comprehensible-message!
         :args (s/cat :state ::specs/state)
+        ;; TODO: This should not be nilable
         :ret (s/nilable ::specs/state))
 (defn handle-comprehensible-message!
   "handle this message if it's comprehensible: (DJB)
@@ -676,6 +677,9 @@ Line 608"
 
 (s/fdef try-processing-message!
         :args (s/cat :state ::specs/state)
+        ;; TODO: This should not be nilable
+        ;; (it is, due to handle-comprehensible-message.
+        ;; Which also shouldn't be)
         :ret (s/nilable ::specs/state))
 (defn try-processing-message!
   "436-613: try processing a message: --DJB"
