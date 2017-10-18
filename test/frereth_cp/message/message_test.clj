@@ -361,6 +361,8 @@
     ;; party library
     (let [start-time (System/nanoTime)
           packet-count 9  ; trying to make life interesting
+          ;; Add an extra quarter-K just for giggles
+          msg-len (+ (* (dec packet-count) K/k-div2) K/k-div4)
           response (promise)
           srvr-child-state (atom {:count 0
                                   :buffer []})
@@ -454,9 +456,7 @@
           client-state (message/start! client-initialized)]
       (reset! state-agent-atom client-state)
       (try
-        ;; Add an extra quarter-K just for giggles
-        (let [msg-len (+ (* (dec packet-count) K/k-div2) K/k-div4)
-              ;; Note that this is what the child sender should be supplying
+        (let [;; Note that this is what the child sender should be supplying
               message-body (byte-array (range msg-len))]
           (log/debug test-run "Replicating child-send to " client-state)
           (message/child-> client-state message-body)
@@ -490,36 +490,7 @@
                                       (->> message-body
                                            vec
                                            (take K/initial-max-block-length)
-                                           byte-array))))))
-                (log/info test-run "Deref'ing the state-agent")
-                (let [state-agent @state-agent-atom]
-                  (let [{:keys [::specs/incoming
-                                ::specs/outgoing]
-                         :as outcome} @state-agent]
-                    (await state-agent)
-                    (is (= msg-len (::specs/ackd-addr outgoing)))
-                    (let [n-m-id (::specs/next-message-id outgoing)]
-                      ;; There's a timing issue with the next check.
-                      ;; There's a good chance we'll get here before
-                      ;; the agent is through updating its state due
-                      ;; to the last message we fed from the child.
-                      ;; So it might be one or the other
-                      (is (or (= (inc packet-count) n-m-id)
-                              (= packet-count n-m-id)))
-                      ;; Either way, this relationship won't be impacted
-                      ;; by timing issues.
-                      ;; Except that it totally is.
-                      ;; We need to do an await on the client/server
-                      ;; agents for this kind of approach to make
-                      ;; any sense at all.
-                      (is (= (- n-m-id packet-count)
-                             (count (::specs/un-ackd-blocks outgoing)))))
-                    (is (= 0 (from-child/buffer-size outcome)))
-                    ;; TODO: I do need a test that triggers EOF
-                    (is (not (::specs/send-eof outgoing)))
-                    ;; Keeping around as a reminder for when the implementation changes
-                    ;; and I need to see what's really going on again
-                    (comment (is (not outcome) "What should we have here?"))))))))
+                                           byte-array))))))))))
         (finally
           (log/info "Ending test" test-run)
           (try
@@ -529,7 +500,37 @@
           (try
             (message/halt! srvr-state)
             (catch RuntimeException ex
-              (is not ex))))))))
+              (is not ex)))))
+      (let [state-agent @state-agent-atom]
+        (await state-agent)
+        (await srvr-state)
+        (log/info test-run "Deref'ing the state-agent")
+        (let [{:keys [::specs/incoming
+                      ::specs/outgoing]
+               :as outcome} @state-agent]
+          (is (= msg-len (::specs/ackd-addr outgoing)))
+          (let [n-m-id (::specs/next-message-id outgoing)]
+            ;; There's a timing issue with the next check.
+            ;; There's a good chance we'll get here before
+            ;; the agent is through updating its state due
+            ;; to the last message we fed from the child.
+            ;; So it might be one or the other
+            (is (or (= (inc packet-count) n-m-id)
+                    (= packet-count n-m-id)))
+            ;; Either way, this relationship won't be impacted
+            ;; by timing issues.
+            ;; Except that it totally is.
+            ;; We need to do an await on the client/server
+            ;; agents for this kind of approach to make
+            ;; any sense at all.
+            (is (= (- n-m-id packet-count)
+                   (count (::specs/un-ackd-blocks outgoing)))))
+          (is (= 0 (from-child/buffer-size outcome)))
+          ;; TODO: I do need a test that triggers EOF
+          (is (not (::specs/send-eof outgoing)))
+          ;; Keeping around as a reminder for when the implementation changes
+          ;; and I need to see what's really going on again
+          (comment (is (not outcome) "What should we have here?")))))))
 (comment (bigger-echo))
 
 (comment

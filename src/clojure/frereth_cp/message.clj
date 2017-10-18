@@ -489,7 +489,8 @@
           ;; I know I have this race condition. I've seen it in action.
           ;; Fixing the overly aggressive scheduler may sweep it
           ;; under the rug, but that doesn't fix the problem.
-          (throw (RuntimeException. "Well, that's broken"))))
+          (throw (ex-info (str pre-log "Can't cancel next-action")
+                          {::problem @next-action}))))
       (update state ::specs/flow-control dissoc ::specs/next-action))))
 
 (s/fdef trigger-output
