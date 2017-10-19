@@ -80,6 +80,21 @@
       ::specs/message-loop-name
       utils/pre-log))
 
+(defn build-un-ackd-blocks
+  []
+  (sorted-set-by (fn [x y]
+                   (let [x-time (::specs/time x)
+                         y-time (::specs/time y)]
+                     (if (= x-time y-time)
+                       ;; Assume that we never have multiple messages with the
+                       ;; same timestamp.
+                       ;; We do hit this case when disj is trying to
+                       ;; remove an existing block.
+                       0
+                       (if (< x-time y-time)
+                         -1
+                         1))))))
+
 ;;;; Q: what else is in the reference implementation?
 ;;;; A: Lots. Scattered around quite a bit now
 ;;;; 186-654 main
@@ -133,6 +148,180 @@
 
 ;;;     634-643: try closing pipe to child: (DJB)
 ;;;         Well, maybe. If we're done with it
+
+(s/fdef trigger-output
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn trigger-output
+  [{{:keys [::specs/->child]} ::specs/incoming
+    {:keys [::specs/next-action]} ::specs/flow-control
+    :keys [::specs/message-loop-name]
+    :as state}]
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/debug prelog "Triggering Output")
+    ;; Originally, it seemed like it would make sense to cancel
+    ;; the timer here, to avoid duplicating the call when I
+    ;; get input from either the parent or the child.
+    ;; Doing it that way entails too much delay. If the
+    ;; timer is running in a tight loop, it might trigger
+    ;; several more times before they get around to
+    ;; actually calling this.
+    (let [state
+          (as-> state state
+            (assoc state ::specs/recent (System/nanoTime))
+            ;; It doesn't make any sense to call this if
+            ;; we were triggered by a message coming in from
+            ;; the parent.
+            ;; Even if there pending blocks are ready to
+            ;; send, outgoing messages are throttled by
+            ;; the flow-control logic.
+            ;; Likewise, there isn't a lot of sense in
+            ;; calling it from the child, due to the same
+            ;; throttling issues.
+            ;; This really only makes sense when the
+            ;; timer triggers to let us know that it's
+            ;; OK to send a new message.
+            ;; The timeout on that may completely change
+            ;; when the child schedules another send,
+            ;; or a message arrives from parent to
+            ;; update the RTT.
+            (to-parent/maybe-send-block! state))]
+      ;; At the end of the main ioloop in the refernce
+      ;; implementation, there's a block that closes the pipe
+      ;; to the child if we're done.
+      ;; I think the point is that we'll quit polling on
+      ;; that and start short-circuiting out of the blocks
+      ;; that might do the send, once we've hit EOF
+      ;; Q: What can I do here to
+      ;; produce the same effect?
+      ;; TODO: Worry about that once the basic idea works.
+
+      ;; If the child sent a big batch of data to go out
+      ;; all at once, don't waste time setting up a timeout
+      ;; scheduler. The poll in the original would have
+      ;; returned immediately anyway.
+      ;; Except that n-sec-per-block puts a hard limit on how
+      ;; fast we can send.
+      (comment
+        (let [unsent-blocks-from-child? (from-child/blocks-not-sent? state)]
+          (if unsent-blocks-from-child?
+            (recur state)
+            (schedule-next-timeout! state))))
+      state)))
+
+(s/fdef trigger-from-child
+        :args (s/cat :array-o-bytes bytes?
+                     :state ::specs/state)
+        :ret ::specs/state)
+(defn trigger-from-child
+  [^bytes array-o-bytes
+   {{:keys [::specs/strm-hwm]
+     :as outgoing} ::specs/outgoing
+    :keys [::specs/message-loop-name]
+    :as state}]
+  {:pre [array-o-bytes]}
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/info prelog
+              "trigger-from-child\nSent stream address: "
+              strm-hwm)
+    (let [state' (if (from-child/room-for-child-bytes? state)
+                   (do
+                     (log/debug prelog
+                                "There is room for another message")
+                     (let [result (from-child/consume-from-child state array-o-bytes)]
+                       result))
+                   ;; trigger-output does some state management, even
+                   ;; if we discard the incoming bytes because our
+                   ;; buffer is full.
+                   ;; TODO: Need a way to signal the child to
+                   ;; try again shortly
+                   (do
+                     (log/error prelog
+                                "Discarding incoming bytes, silently")
+                     state))]
+      ;; TODO: check whether we can do output now.
+      ;; It's pointless to call this if we just have
+      ;; to wait for the timer to expire.
+      (let [state'' (trigger-output
+                     state')]
+        (log/debug prelog
+                   "Truly updating agent state due to input from child")
+        state''))))
+
+(s/fdef trigger-from-parent
+        :args (s/cat :array-o-bytes bytes?
+                     :specs/state ::specs/state)
+        :ret ::specs/state)
+(defn trigger-from-parent
+  "Message block arrived from parent. Agent has been handed work"
+  ;; TODO: Move as much of this as possible into from-parent
+  ;; The only reason I haven't already moved the whole thing
+  ;; is that we need to use to-parent to send the ACK, and I'd
+  ;; really rather not introduce dependencies between those namespaces
+  [^bytes message
+   {{:keys [::specs/->child]
+     :as incoming} ::specs/incoming
+    :keys [::specs/message-loop-name]
+    :as state}
+   ]
+  (let [prelog (utils/pre-log message-loop-name)]
+    (when-not ->child
+      (throw (ex-info (str prelog
+                           "Missing ->child")
+                      {::detail-keys (keys incoming)
+                       ::top-level-keys (keys state)
+                       ::details state})))
+
+    (log/debug prelog "Incoming from parent")
+
+    ;; This is basically an iteration of the top-level
+    ;; event-loop handler from main().
+    ;; I can skip the pieces that only relate to reading
+    ;; from the child, because I'm using an active callback
+    ;; approach, and this was triggered by a block of
+    ;; data coming from the parent.
+
+    ;; However, there *is* the need to handle packets that the
+    ;; child has buffered up to send to the parent.
+
+    ;; Except that we can't do this here/now. That part's
+    ;; limited by the flow-control logic (handled by the
+    ;; timer) and the callbacks arriving from the child.
+    ;; It seems like we probably should cancel/reschedule,
+    ;; since whatever ACK just arrived might adjust the RTT
+    ;; logic.
+    (try
+      (let [pre-processed (from-parent/try-processing-message!
+                           (assoc-in state
+                                     [::specs/incoming ::specs/parent->buffer]
+                                     message))
+            state' (to-child/forward! ->child (or pre-processed
+                                                  state))]
+        ;; This will update recent.
+        ;; In the reference implementation, that happens immediately
+        ;; after trying to read from the child.
+        ;; Q: Am I setting up any problems for myself by waiting
+        ;; this long?
+        ;; i.e. Is it worth doing that at the top of the trigger
+        ;; functions instead?
+        (trigger-output state'))
+      (catch RuntimeException ex
+        (log/error ex
+                   (str prelog
+                        "Trying to cope with a message arriving from parent"))))))
+
+(defn trigger-from-timer
+  [{:keys [::specs/message-loop-name]
+    :as state}]
+  ;; It's really tempting to move this to to-parent.
+  ;; But (at least in theory) it could also trigger
+  ;; output to-child.
+  ;; So leave it be for now.
+  (log/debug (utils/pre-log message-loop-name) "I/O triggered by timer")
+  ;; I keep thinking that I need to check data arriving from
+  ;; the child, but the main point to this logic branch is
+  ;; to resend an outbound block that hasn't been ACK'd yet.
+  (trigger-output state))
 
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
@@ -334,14 +523,7 @@
 ;;; Which...honestly also belongs in there.
 ;;; Q: How much more badly would this break things?
 ;;; TODO: Find out.
-(declare trigger-from-child
-         trigger-from-parent
-         trigger-from-timer)
-;; Those functions pretty much all require the
-;; full-blown state-wrapper parameter, since
-;; they recurse back into here.
-;; Pretty much nothing else anywhere should.
-;; TODO: Track that down and make it so.
+
 (s/fdef schedule-next-timeout!
         :args (s/cat :state-wrapper ::state-wrapper)
         :ret ::state-wrapper)
@@ -408,38 +590,45 @@
                                                       actual-next
                                                       (System/nanoTime)
                                                       success))
-                                (case tag
-                                  ::drained (do (log/warn prelog
-                                                          ;; Actually, this seems like a strong argument for
-                                                          ;; having a pair of streams. Child could still have
-                                                          ;; bytes to send to the parent after the latter's
-                                                          ;; stopped sending, or vice versa.
-                                                          ;; I'm pretty sure the complexity I haven't finished
-                                                          ;; translating stems from that case.
-                                                          ;; TODO: Another piece to revisit once the basics
-                                                          ;; work.
-                                                          "Stream closed. Surely there's more to do"))
-                                  ::timed-out (do
-                                                (log/debug prelog
-                                                           (cl-format nil
-                                                                      "~Timer for ~:d ms after ~:d timed out. Re-triggering Output"
-                                                                      delta_f
-                                                                      now))
-                                                (trigger-from-timer state))
-                                  ::parent-> (trigger-from-parent state (second success))
-                                  ::child-> (trigger-from-child state (second success)))
-                                (when (not= tag ::drained)
-                                        (log/debug prelog "Scheduling next timeout")
-                                        ;; This is taking a ludicrous amount of time.
-                                        (let [start (System/nanoTime)
-                                              ;; Q: How much should I blame on logging?
-                                              result (schedule-next-timeout! state-wrapper)
-                                              end (System/nanoTime)]
-                                          (log/debug prelog
-                                                     (cl-format nil
-                                                                "Scheduling next timeout took ~:d  nanoseconds"
-                                                                (- end start)))
-                                          result))))
+                                (let [updater
+                                      (case tag
+                                        ::drained (do (log/warn prelog
+                                                                ;; Actually, this seems like a strong argument for
+                                                                ;; having a pair of streams. Child could still have
+                                                                ;; bytes to send to the parent after the latter's
+                                                                ;; stopped sending, or vice versa.
+                                                                ;; I'm pretty sure the complexity I haven't finished
+                                                                ;; translating stems from that case.
+                                                                ;; TODO: Another piece to revisit once the basics
+                                                                ;; work.
+                                                                "Stream closed. Surely there's more to do")
+                                                      (constantly nil))
+                                        ::timed-out (do
+                                                      (log/debug prelog
+                                                                 (cl-format nil
+                                                                            "~Timer for ~:d ms after ~:d timed out. Re-triggering Output"
+                                                                            delta_f
+                                                                            now))
+                                                      trigger-from-timer)
+                                        ::parent-> (partial trigger-from-parent (second success))
+                                        ::child-> (partial trigger-from-child (second success)))]
+                                  (when (not= tag ::drained)
+                                    (log/debug prelog "Processing event")
+                                    (let [start (System/nanoTime)
+                                          _ (swap! state-atom updater)
+                                          mid (System/nanoTime)
+                                          ;; This is taking a ludicrous amount of time.
+                                          ;; Q: How much should I blame on logging?
+                                          result (schedule-next-timeout! state-wrapper)
+                                          end (System/nanoTime)]
+                                      (log/debug prelog
+                                                 (cl-format nil
+                                                            (str
+                                                             "Event handling took ~:d nanoseconds\n"
+                                                             "Scheduling next timeout took ~:d  nanoseconds")
+                                                            (- mid start)
+                                                            (- end mid)))
+                                      result)))))
                             (fn [failure]
                               (log/error failure
                                          prelog
@@ -486,194 +675,6 @@
     ;; This covers line 260
     (swap! state-atom assoc ::specs/recent recent)
     (schedule-next-timeout! (assoc state-wrapper ::stream io-stream))))
-
-(s/fdef trigger-output
-        :args (s/cat :state ::specs/state)
-        :ret ::specs/state)
-(defn trigger-output
-  [{{:keys [::specs/->child]} ::specs/incoming
-    {:keys [::specs/next-action]} ::specs/flow-control
-    :keys [::specs/message-loop-name]
-    :as state}]
-  (let [prelog (utils/pre-log message-loop-name)]
-    (log/debug prelog "Triggering Output")
-    ;; Originally, it seemed like it would make sense to cancel
-    ;; the timer here, to avoid duplicating the call when I
-    ;; get input from either the parent or the child.
-    ;; Doing it that way entails too much delay. If the
-    ;; timer is running in a tight loop, it might trigger
-    ;; several more times before they get around to
-    ;; actually calling this.
-    (let [state
-          (as-> state state
-            (assoc state ::specs/recent (System/nanoTime))
-            ;; It doesn't make any sense to call this if
-            ;; we were triggered by a message coming in from
-            ;; the parent.
-            ;; Even if there pending blocks are ready to
-            ;; send, outgoing messages are throttled by
-            ;; the flow-control logic.
-            ;; Likewise, there isn't a lot of sense in
-            ;; calling it from the child, due to the same
-            ;; throttling issues.
-            ;; This really only makes sense when the
-            ;; timer triggers to let us know that it's
-            ;; OK to send a new message.
-            ;; The timeout on that may completely change
-            ;; when the child schedules another send,
-            ;; or a message arrives from parent to
-            ;; update the RTT.
-            (to-parent/maybe-send-block! state))]
-      ;; At the end of the main ioloop in the refernce
-      ;; implementation, there's a block that closes the pipe
-      ;; to the child if we're done.
-      ;; I think the point is that we'll quit polling on
-      ;; that and start short-circuiting out of the blocks
-      ;; that might do the send, once we've hit EOF
-      ;; Q: What can I do here to
-      ;; produce the same effect?
-      ;; TODO: Worry about that once the basic idea works.
-
-      ;; If the child sent a big batch of data to go out
-      ;; all at once, don't waste time setting up a timeout
-      ;; scheduler. The poll in the original would have
-      ;; returned immediately anyway.
-      ;; Except that n-sec-per-block puts a hard limit on how
-      ;; fast we can send.
-      (comment
-        (let [unsent-blocks-from-child? (from-child/blocks-not-sent? state)]
-          (if unsent-blocks-from-child?
-            (recur state)
-            (schedule-next-timeout! state))))
-      state)))
-
-(s/fdef trigger-from-child
-        :args (s/cat :state ::specs/state
-                     :array-o-bytes bytes?)
-        :ret ::specs/state)
-(defn trigger-from-child
-  [{{:keys [::specs/strm-hwm]
-     :as outgoing} ::specs/outgoing
-    :keys [::specs/message-loop-name]
-    :as state}
-   array-o-bytes]
-  {:pre [array-o-bytes]}
-  (let [prelog (utils/pre-log message-loop-name)]
-    (log/info prelog
-              "trigger-from-child\nSent stream address: "
-              strm-hwm)
-    (let [state' (if (from-child/room-for-child-bytes? state)
-                   (do
-                     (log/debug prelog
-                                "There is room for another message")
-                     (let [result (from-child/consume-from-child state array-o-bytes)]
-                       result))
-                   ;; trigger-output does some state management, even
-                   ;; if we discard the incoming bytes because our
-                   ;; buffer is full.
-                   ;; TODO: Need a way to signal the child to
-                   ;; try again shortly
-                   (do
-                     (log/error prelog
-                                "Discarding incoming bytes, silently")
-                     state))]
-      ;; TODO: check whether we can do output now.
-      ;; It's pointless to call this if we just have
-      ;; to wait for the timer to expire.
-      (let [state'' (trigger-output
-                     state')]
-        (log/debug prelog
-                   "Truly updating agent state due to input from child")
-        state''))))
-
-(s/fdef trigger-from-parent
-        :args (s/cat :specs/state ::specs/state
-                     :array-o-bytes bytes?)
-        :ret ::specs/state)
-(defn trigger-from-parent
-  "Message block arrived from parent. Agent has been handed work"
-  ;; TODO: Move as much of this as possible into from-parent
-  ;; The only reason I haven't already moved the whole thing
-  ;; is that we need to use to-parent to send the ACK, and I'd
-  ;; really rather not introduce dependencies between those namespaces
-  [{{:keys [::specs/->child]
-     :as incoming} ::specs/incoming
-    :keys [::specs/message-loop-name]
-    :as state}
-   ^bytes message]
-  (let [prelog (utils/pre-log message-loop-name)]
-    (when-not ->child
-      (throw (ex-info (str prelog
-                           "Missing ->child")
-                      {::detail-keys (keys incoming)
-                       ::top-level-keys (keys state)
-                       ::details state})))
-
-    (log/debug prelog "Incoming from parent")
-
-    ;; This is basically an iteration of the top-level
-    ;; event-loop handler from main().
-    ;; I can skip the pieces that only relate to reading
-    ;; from the child, because I'm using an active callback
-    ;; approach, and this was triggered by a block of
-    ;; data coming from the parent.
-
-    ;; However, there *is* the need to handle packets that the
-    ;; child has buffered up to send to the parent.
-
-    ;; Except that we can't do this here/now. That part's
-    ;; limited by the flow-control logic (handled by the
-    ;; timer) and the callbacks arriving from the child.
-    ;; It seems like we probably should cancel/reschedule,
-    ;; since whatever ACK just arrived might adjust the RTT
-    ;; logic.
-    (try
-      (let [pre-processed (from-parent/try-processing-message!
-                           (assoc-in state
-                                     [::specs/incoming ::specs/parent->buffer]
-                                     message))
-            state' (to-child/forward! ->child (or pre-processed
-                                                  state))]
-        ;; This will update recent.
-        ;; In the reference implementation, that happens immediately
-        ;; after trying to read from the child.
-        ;; Q: Am I setting up any problems for myself by waiting
-        ;; this long?
-        ;; i.e. Is it worth doing that at the top of the trigger
-        ;; functions instead?
-        (trigger-output state'))
-      (catch RuntimeException ex
-        (log/error ex
-                   (str prelog
-                        "Trying to cope with a message arriving from parent"))))))
-
-(defn trigger-from-timer
-  [{:keys [::specs/message-loop-name]
-    :as state}]
-  ;; It's really tempting to move this to to-parent.
-  ;; But (at least in theory) it could also trigger
-  ;; output to-child.
-  ;; So leave it be for now.
-  (log/debug (utils/pre-log message-loop-name) "I/O triggered by timer")
-  ;; I keep thinking that I need to check data arriving from
-  ;; the child, but the main point to this logic branch is
-  ;; to resend an outbound block that hasn't been ACK'd yet.
-  (trigger-output state))
-
-(defn build-un-ackd-blocks
-  []
-  (sorted-set-by (fn [x y]
-                   (let [x-time (::specs/time x)
-                         y-time (::specs/time y)]
-                     (if (= x-time y-time)
-                       ;; Assume that we never have multiple messages with the
-                       ;; same timestamp.
-                       ;; We do hit this case when disj is trying to
-                       ;; remove an existing block.
-                       0
-                       (if (< x-time y-time)
-                         -1
-                         1))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
