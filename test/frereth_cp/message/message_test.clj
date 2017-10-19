@@ -2,6 +2,7 @@
   (:require [clojure.data]
             [clojure.edn :as edn]
             [clojure.pprint :refer (pprint)]
+            [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
             [clojure.tools.logging :as log]
             [frereth-cp.message :as message]
@@ -104,10 +105,11 @@
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
             initialized (message/initial-state loop-name parent-cb child-cb true)]
-        (try
-          (let [state (message/start! initialized)]
+        (let [state (message/start! initialized)]
+          (try
             (reset! state-agent-atom state)
             ;; TODO: Add tests that send a variety of gibberish messages
+
             (let [wrote (future (message/parent-> state incoming))
                   outcome (deref response 1000 ::timeout)]
               (is (not= outcome ::timeout))
@@ -124,22 +126,35 @@
                   (is (b-t/bytes= message-body without-header))))
               (is (realized? wrote))
               (when (realized? wrote)
-                (let [outcome-wrapper @wrote]
-                  ;; Just to see what we have here
-                  (is (not @outcome-wrapper))
-                  ;; This next line can't possibly pass.
-                  ;; Q: What's the best way to do this sort of thing now?
-                  (await state)
+                ;; Fun detail:
+                ;; wrote is a future.
+                ;; When I deref that, there's an atom
+                ;; that I need to deref again to get
+                ;; the actual end-state
+                (let [{:keys [::specs/state-atom]
+                       :as outcome-wrapper} @wrote]
+                  (is (not
+                       (s/explain-data ::message/state-wrapper outcome-wrapper)))
+                  ;; I really have to wait until the event loops exit.
+                  ;; Obviously can't do this any longer.
+                  (comment (await @state-agent))
+                  ;; It seems like the best way to handle that is to
+                  ;; call close! with a deferred. That should put the
+                  ;; closed signal onto the stream (and, actually, it
+                  ;; should probably be ::parent->eof and ::child->eof,
+                  ;; because I really do want to wait to hear from
+                  ;; both before really closing the stream). Then I
+                  ;; wait on the deferred here.
+                  (comment (is (not @state-atom)))
                   (log/info "Checking test outcome")
-                    ;; Fun detail:
-                    ;; wrote is a promise.
-                    ;; When I deref that, there's an agent
-                    ;; that I need to deref again to get
-                    ;; the actual end-state
+
+                  ;; Q: Is there anything useful to get out of this?
+                  (is (= state-atom
+                         state-agent-atom))
 
                   (let [{:keys [::specs/incoming
                                 ::specs/outgoing]
-                         :as child-outcome} @state]
+                         :as child-outcome} @(::specs/state-atom state)]
                     (is incoming)
                     (is (= msg-len (inc (::specs/strm-hwm incoming))))
                     (is (= msg-len (::specs/contiguous-stream-count incoming)))
@@ -154,11 +169,11 @@
                     (is (= msg-len (::specs/strm-hwm outgoing)))
                     ;; Keeping around as a reminder for when the implementation changes
                     ;; and I need to see what's really going on again
-                    (comment (is (not outcome) "What should we have here?")))))))
-          (catch ExceptionInfo ex
-            (log/error loop-name ex "Starting the event loop"))
-          (finally
-            (message/halt! initialized)))))))
+                    (comment (is (not outcome) "What should we have here?"))))))
+            (catch ExceptionInfo ex
+              (log/error loop-name ex "Starting the event loop"))
+            (finally
+              (message/halt! state))))))))
 (comment (basic-echo))
 
 (deftest check-eof

@@ -36,10 +36,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
-(def default-start-timeout
-  "Milliseconds to wait for agent to finish startup sequence"
-  250)
-
 (def max-child-buffer-size
   "Maximum message blocks from parent to child that we'll buffer before dropping
 
@@ -186,27 +182,6 @@
             ;; or a message arrives from parent to
             ;; update the RTT.
             (to-parent/maybe-send-block! state))]
-      ;; At the end of the main ioloop in the refernce
-      ;; implementation, there's a block that closes the pipe
-      ;; to the child if we're done.
-      ;; I think the point is that we'll quit polling on
-      ;; that and start short-circuiting out of the blocks
-      ;; that might do the send, once we've hit EOF
-      ;; Q: What can I do here to
-      ;; produce the same effect?
-      ;; TODO: Worry about that once the basic idea works.
-
-      ;; If the child sent a big batch of data to go out
-      ;; all at once, don't waste time setting up a timeout
-      ;; scheduler. The poll in the original would have
-      ;; returned immediately anyway.
-      ;; Except that n-sec-per-block puts a hard limit on how
-      ;; fast we can send.
-      (comment
-        (let [unsent-blocks-from-child? (from-child/blocks-not-sent? state)]
-          (if unsent-blocks-from-child?
-            (recur state)
-            (schedule-next-timeout! state))))
       state)))
 
 (s/fdef trigger-from-child
@@ -262,8 +237,7 @@
    {{:keys [::specs/->child]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
-    :as state}
-   ]
+    :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
     (when-not ->child
       (throw (ex-info (str prelog
@@ -614,8 +588,61 @@
                                         ::child-> (partial trigger-from-child (second success)))]
                                   (when (not= tag ::drained)
                                     (log/debug prelog "Processing event")
+                                    ;; At the end of the main ioloop in the refernce
+                                    ;; implementation, there's a block that closes the pipe
+                                    ;; to the child if we're done.
+                                    ;; I think the point is that we'll quit polling on
+                                    ;; that and start short-circuiting out of the blocks
+                                    ;; that might do the send, once we've hit EOF
+                                    ;; Q: What can I do here to
+                                    ;; produce the same effect?
+                                    ;; TODO: Worry about that once the basic idea works.
+
+                                    ;; If the child sent a big batch of data to go out
+                                    ;; all at once, don't waste time setting up a timeout
+                                    ;; scheduler. The poll in the original would have
+                                    ;; returned immediately anyway.
+                                    ;; Except that n-sec-per-block puts a hard limit on how
+                                    ;; fast we can send.
                                     (let [start (System/nanoTime)
-                                          _ (swap! state-atom updater)
+                                          ;; I'd prefer to do these next two
+                                          ;; pieces in a single step.
+                                          ;; But the fn passed to swap! must
+                                          ;; be functionally pure, which definitely
+                                          ;; is not the case with what's going on here.
+                                          ;; TODO: Break these pieces into something
+                                          ;; like the interceptor-chain idea. They should
+                                          ;; return a value that includes a key for a
+                                          ;; seq of functions to run to perform the
+                                          ;; side-effects.
+                                          ;; I'd still have to call updater, get
+                                          ;; that updating seq, update the state,
+                                          ;; and then modify the atom (well, modifying
+                                          ;; the atom first seems safer to avoid
+                                          ;; race conditions)
+                                          ;; Q: How long before I get bitten by that?
+                                          ;; Better Q: Is there a way to avoid it
+                                          ;; by scrapping the atom?
+                                          ;; A2: Yes. Add a ::get-state tag to
+                                          ;; the available tags above. The 'success'
+                                          ;; parameter is a deferred. (fulfill) that
+                                          ;; with the current state and go straight
+                                          ;; to scheduling the next timeout.
+                                          ;; Then the state atom turns into a normal
+                                          ;; value.
+                                          ;; TODO: That needs to happen fairly quickly.
+                                          ;; TODO: Read up on Executors. I could wind up
+                                          ;; with really nasty interactions now that I
+                                          ;; don't have an agent to keep this single-
+                                          ;; threaded.
+                                          ;; Actually, it should be safe as written.
+                                          ;; Just be sure to keep everything synchronized
+                                          ;; around takes from the i/o stream. (Not
+                                          ;; needing to do that manually is
+                                          ;; a great reason to not introduce a second
+                                          ;; one for bytes travelling the other direction)
+                                          state' (updater @state)  ; for now, deref again to be safe
+                                          _ (reset! state-atom state')
                                           mid (System/nanoTime)
                                           ;; This is taking a ludicrous amount of time.
                                           ;; Q: How much should I blame on logging?
@@ -658,8 +685,7 @@
 ;;; abstraction that just don't fit.
 ;;;          205-259 fork child
 (defn start-event-loops!
-  [{:keys [::specs/state-atom]
-    :as state-wrapper}]
+  [state-atom]
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
   ;; That checks for input on:
@@ -674,7 +700,8 @@
 
     ;; This covers line 260
     (swap! state-atom assoc ::specs/recent recent)
-    (schedule-next-timeout! (assoc state-wrapper ::stream io-stream))))
+    (schedule-next-timeout! {::specs/state-atom state-atom
+                             ::stream io-stream})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -778,10 +805,8 @@
         :args (s/cat :state ::specs/state)
         :ret ::state-wrapper)
 (defn start!
-  ([state timeout]
-   (start-event-loops! (atom state) timeout))
-  ([state]
-   (start! state default-start-timeout)))
+  [state]
+  (start-event-loops! (atom state)))
 
 (s/fdef close!
         :args (s/cat :state ::state-wrapper)
@@ -799,7 +824,7 @@
 (defn halt!
   [{:keys [::stream]
     :as state-wrapper}]
-  (log/info (pre-log (::specs/state-atem state-wrapper)) "Halting")
+  (log/info (pre-log (::specs/state-atom state-wrapper)) "Halting")
   (strm/close! stream))
 
 (s/fdef child->
