@@ -571,6 +571,8 @@
   ;; This part is building the actual Message,
   ;; which will later get tucked into a Message
   ;; Packet as a crypto box.
+
+  ;; There used to be more involved in this
   (->parent send-buf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -600,9 +602,6 @@
                    "Sending"
                    (count send-buf)
                    "bytes to parent")
-        ;; Note that this winds up doing a send to the message
-        ;; loop's agent.
-
         (block->parent! ->parent send-buf)
         (log/debug pre-log
                    (str "Calculating earliest time among "

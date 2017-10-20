@@ -219,8 +219,6 @@
       ;; to wait for the timer to expire.
       (let [state'' (trigger-output
                      state')]
-        (log/debug prelog
-                   "Truly updating agent state due to input from child")
         state''))))
 
 (s/fdef trigger-from-parent
@@ -501,6 +499,13 @@
 (s/fdef schedule-next-timeout!
         :args (s/cat :state-wrapper ::state-wrapper)
         :ret ::state-wrapper)
+;;; This was originally just for setting up a
+;;; timeout trigger to signal an agent to try
+;;; (re-)sending any pending i/o.
+;;; It's gotten repurposed since then, and
+;;; probably needs a rename.
+;;; Definitely needs some refactoring to trim
+;;; it down to a reasonable size
 (defn schedule-next-timeout!
   [{:keys [::specs/state-atom
            ::stream]
@@ -641,7 +646,8 @@
                                           ;; needing to do that manually is
                                           ;; a great reason to not introduce a second
                                           ;; one for bytes travelling the other direction)
-                                          state' (updater @state)  ; for now, deref again to be safe
+                                          state' (updater state)  ; for now, deref again to be safe
+                                          _ (log/debug prelog "Updating state atom")
                                           _ (reset! state-atom state')
                                           mid (System/nanoTime)
                                           ;; This is taking a ludicrous amount of time.
@@ -806,6 +812,14 @@
         :ret ::state-wrapper)
 (defn start!
   [state]
+  ;; I have at least 1 unit test that fails because
+  ;; this is returning nil.
+  ;; This ties in with my basic need to just ditch
+  ;; the idea of a state atom and switch completely
+  ;; to the actor model for this.
+  ;; This is called for side-effects, so callers
+  ;; should *not* be relying on the return value.
+  (throw (RuntimeException. "Switch to actor model"))
   (start-event-loops! (atom state)))
 
 (s/fdef close!
@@ -863,8 +877,16 @@
     (log/debug (utils/pre-log message-loop-name)
                "Incoming message from child to\n"
                state)
+    (throw (RuntimeException. "Add a success/failure handler for this"))
     (strm/put! stream [::child-> array-o-bytes])))
 
+;;; This is really just called for side-effects now.
+;;; Should probably rename it to parent->!
+;;; and have it return nil.
+;;; Same thing really applies to child->
+;;; TODO: That.
+;;; Although they both need to register a handler
+;;; for the deferred returned by strm/put!
 (s/fdef parent->
         :args (s/cat :state ::state-wrapper
                      :buf bytes?)
@@ -917,24 +939,9 @@
       (when-not state
         (log/warn prelog
                   "nil state. Things went sideways recently"))
-      ;; It seems very wrong to do this here. But I really need
-      ;; it to happen as fast as possible, because it tends to
-      ;; get triggered again while I'm in the middle of other
-      ;; things when it's running aggressively at the beginning.
-      ;; Actually, this adds back in all the nasty multi-
-      ;; threading issues that clojure should prevent.
-      ;; I think I may have to ditch agents completely to make
-      ;; this work at all.
-      ;; For now, at least do this inside the agent thread instead.
-      #_(cancel-timer! state ::from-parent)
-      ;; One flaw with these buffer checks stems from what
-      ;; happens with a pure ACK. I think I may have botched
-      ;; this aspect of the translation.
       (if (< (count ->child-buffer) max-child-buffer-size)
-        ;; Unless I'm missing something,
-        ;; this next calculation took 42 ms in my last test run.
-        ;; That's ludicrous.
         ;; Q: Will ->child-buffer ever have more than one array?
+        ;; It would be faster to skip the map/reduce
         (let [previously-buffered-message-bytes (reduce + 0
                                                     (map (fn [^bytes buf]
                                                            (count buf))
@@ -962,6 +969,7 @@
               ;; that decision.
               (log/debug prelog
                          "Message is small enough. Passing along to stream to handle")
+              (throw (RuntimeException. "Add a success/failure handler for this"))
               (strm/put! stream [::parent-> buf]))
             (do
               ;; This is actually pretty serious.
@@ -972,15 +980,12 @@
               (log/warn prelog
                         (str "Message too large\n"
                              "Incoming message is " incoming-size
-                             " / " K/max-msg-len))
-              (schedule-next-timeout! state-wrapper))))
+                             " / " K/max-msg-len)))))
         (do
           (log/warn prelog
                     (str "Child buffer overflow\n"
                          "Have " (count ->child-buffer)
                          "/"
                          max-child-buffer-size
-                         " messages buffered. Wait!"))
-          (schedule-next-timeout! state-wrapper)))
-
+                         " messages buffered. Wait!"))))
       state-wrapper)))

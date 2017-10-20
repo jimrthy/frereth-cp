@@ -16,7 +16,8 @@
 
 (s/def ::ackd? boolean?)
 
-(s/def ::big-int #(instance? BigInt %))
+(s/def ::big-int (s/or :int int?
+                       :big-int #(instance? BigInt %)))
 (s/def ::buf #(instance? ByteBuf %))
 
 ;;; Just something human-readable to help me track which log
@@ -290,8 +291,7 @@
                                     ::rtt-seen-older-low
                                     ::rtt-seen-recent-high
                                     ::rtt-seen-recent-low
-                                    ::rtt-timeout
-                                    ::schedule-pool]
+                                    ::rtt-timeout]
                               :opt [::next-action]))
 
 ;; 2. Buffers of bytes from the parent that we have not

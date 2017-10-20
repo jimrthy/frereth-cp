@@ -9,6 +9,7 @@
                             [org.apache.logging.log4j/log4j-1.2-api "2.8.2" :scope "test"]
                             [org.clojure/clojure "1.9.0-beta1"]
                             [org.clojure/spec.alpha "0.1.123"]
+                            [org.clojure/test.check "0.10.0-alpha2" :scope "test"]
                             [org.clojure/tools.logging "0.4.0"]
                             [samestep/boot-refresh "0.1.0" :scope "test"]
                             [tolitius/boot-check "0.1.4" :scope "test"]])

@@ -106,15 +106,18 @@
             ;; message quickly, but the behavior seems suspicious.
             initialized (message/initial-state loop-name parent-cb child-cb true)]
         (let [state (message/start! initialized)]
+          (reset! state-agent-atom state)
           (try
-            (reset! state-agent-atom state)
+            (is (not
+                 #_(s/explain-data ::message/state-wrapper state)
+                 (s/explain-data ::specs/state (-> state ::specs/state-atom deref))))
             ;; TODO: Add tests that send a variety of gibberish messages
 
             (let [wrote (future (message/parent-> state incoming))
                   outcome (deref response 1000 ::timeout)]
               (is (not= outcome ::timeout))
               (when-not (= outcome ::timeout)
-                (is (= @parent-state 2))
+                (is (= 2 @parent-state))
                 ;; I'm getting the response message header here, which is
                 ;; correct, even though it seems wrong.
                 ;; In the real thing, these are the bytes I'm getting ready
@@ -133,6 +136,8 @@
                 ;; the actual end-state
                 (let [{:keys [::specs/state-atom]
                        :as outcome-wrapper} @wrote]
+                  ;; It looks like I have a nested atom here
+                  (is (not (-> outcome-wrapper ::message/state-wrapper ::specs/state-atom deref)))
                   (is (not
                        (s/explain-data ::message/state-wrapper outcome-wrapper)))
                   ;; I really have to wait until the event loops exit.
@@ -149,7 +154,7 @@
                   (log/info "Checking test outcome")
 
                   ;; Q: Is there anything useful to get out of this?
-                  (is (= state-atom
+                  (is (not= state-atom
                          state-agent-atom))
 
                   (let [{:keys [::specs/incoming
