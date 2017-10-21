@@ -4,7 +4,8 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.shared.constants :as K-shared]
             [frereth-cp.util :as util]
-            [manifold.deferred :as dfrd])
+            [manifold.deferred :as dfrd]
+            [manifold.stream :as strm])
   (:import clojure.lang.BigInt
            io.netty.buffer.ByteBuf))
 
@@ -24,6 +25,11 @@
 ;;; messages go where during intertwined tests.
 ;;; Though it certainly isn't a bad idea in general
 (s/def ::message-loop-name string?)
+
+;;; Used for sending requests to the message-buffering
+;;; Actor
+(s/def ::stream (s/and strm/sink?
+                       strm/source?))
 
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
@@ -342,7 +348,10 @@
                              ::message-loop-name
 
                              ;; Q: Does this make more sense anywhere else?
-                             ::recent]))
+                             ;; Nested under ::flow-control seems like a better
+                             ;; choice.
+                             ::recent
+                             ::stream]))
 
-(s/def ::state-atom (s/and #(instance? clojure.lang.Atom %)
+#_(s/def ::state-atom (s/and #(instance? clojure.lang.Atom %)
                            #(s/valid? ::state (deref %))))

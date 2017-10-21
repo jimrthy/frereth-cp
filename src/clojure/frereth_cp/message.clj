@@ -53,28 +53,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(s/def ::stream (s/and strm/sink?
-                       strm/source?))
-
-(s/def ::unstarted-state-wrapper (s/keys :req [::specs/state-atom]))
-(s/def ::state-wrapper (s/merge ::unstarted-state-wrapper
-                                (s/keys :req [::stream])))
-
-(s/def ::source-tags #{::child-> ::parent->})
+(s/def ::source-tags #{::child-> ::parent-> ::query-state})
 (s/def ::input (s/tuple ::source-tags bytes?))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal API
-
-(s/fdef pre-log
-        :args (s/cat :wrapper ::state-atom)
-        :ret string?)
-(defn pre-log
-  [state-atom]
-  (-> state-atom
-      deref
-      ::specs/message-loop-name
-      utils/pre-log))
 
 (defn build-un-ackd-blocks
   []
@@ -497,8 +480,8 @@
 ;;; TODO: Find out.
 
 (s/fdef schedule-next-timeout!
-        :args (s/cat :state-wrapper ::state-wrapper)
-        :ret ::state-wrapper)
+        :args (s/cat :state ::specs/state)
+        :ret any?)
 ;;; This was originally just for setting up a
 ;;; timeout trigger to signal an agent to try
 ;;; (re-)sending any pending i/o.
@@ -507,17 +490,15 @@
 ;;; Definitely needs some refactoring to trim
 ;;; it down to a reasonable size
 (defn schedule-next-timeout!
-  [{:keys [::specs/state-atom
-           ::stream]
-    :as
-    state-wrapper}]
-  (let [{:keys [::specs/recent]
-         {:keys [::specs/next-action]
-          :as flow-control} ::specs/flow-control
-         :as state} @state-atom
-        prelog (pre-log (::specs/state-atom state-wrapper))
+  [{:keys [::specs/message-loop-name
+           ::specs/recent
+           ::specs/stream]
+    :as state}]
+  {:pre [recent]}
+  (let [{{:keys [::specs/next-action]
+          :as flow-control} ::specs/flow-control} state
+        prelog (utils/pre-log message-loop-name)
         now (System/nanoTime)]
-    (assert recent)
     (log/debug prelog
                (cl-format nil
                           "Top of scheduler at ~:d"
@@ -554,6 +535,7 @@
                                 recent
                                 now))
           (dfrd/on-realized next-action
+                            ;; TODO: Refactor this to top-level
                             (fn [success]
                               (let [fmt (str "Event loop waiting for ~:d ms "
                                              "after ~:d at ~:d "
@@ -589,8 +571,88 @@
                                                                             delta_f
                                                                             now))
                                                       trigger-from-timer)
-                                        ::parent-> (partial trigger-from-parent (second success))
-                                        ::child-> (partial trigger-from-child (second success)))]
+                                        ::parent-> (fn [{{:keys [::specs/->child-buffer]} ::specs/incoming
+                                                         :as state}]
+;;;           From parent (over watch8)
+;;;           417-433: for loop from 0-bytes read
+;;;                    Copies bytes from incoming message buffer to message[][]
+                                                     (let [buf (second success)
+                                                           incoming-size (count buf)]
+                                                       (when (= 0 incoming-size)
+                                                         ;; This is supposed to kill the entire process
+                                                         ;; TODO: Be more graceful
+                                                         (throw (AssertionError. "Bad Message")))
+
+                                                       ;; Reference implementation is really reading bytes from
+                                                       ;; a stream.
+                                                       ;; It reads the first byte to get the length of the block,
+                                                       ;; pulls the next byte from the stream, calculates the stream
+                                                       ;; length, double-checks for failure conditions, and then copies
+                                                       ;; the bytes into the last spot in the global message array
+                                                       ;; (assuming that array/buffer hasn't filled up waiting for the
+                                                       ;; client to process it).
+
+                                                       ;; I'm going to take a simpler and easier approach, at least for
+                                                       ;; the first pass.
+
+                                                       ;; trigger-from-parent is expecting to have a ::->child-buffer key
+                                                       ;; that's really a vector that we can just conj onto.
+                                                       (when-not state
+                                                         (log/warn prelog
+                                                                   "nil state. Things went sideways recently"))
+
+                                                       (if (< (count ->child-buffer) max-child-buffer-size)
+                                                         ;; Q: Will ->child-buffer ever have more than one array?
+                                                         ;; It would be faster to skip the map/reduce
+                                                         (let [previously-buffered-message-bytes (reduce + 0
+                                                                                                         (map (fn [^bytes buf]
+                                                                                                                (count buf))
+                                                                                                              ->child-buffer))]
+                                                           (log/debug prelog
+                                                                      "Have"
+                                                                      previously-buffered-message-bytes
+                                                                      "bytes in"
+                                                                      (count ->child-buffer)
+                                                                      " child buffers; possibly processing")
+                                                           ;; Probably need to do something with previously-buffered-message-bytes.
+                                                           ;; Definitely need to check the number of bytes that have not
+                                                           ;; been forwarded along yet.
+                                                           ;; However, the reference implementation does not.
+                                                           ;; Then again...it's basically a self-enforcing
+                                                           ;; 64K buffer, so maybe it's already covered, and I just wasted
+                                                           ;; CPU cycles calculating it.
+                                                           (if (<= incoming-size K/max-msg-len)
+                                                             (do
+                                                               ;; It's tempting to move as much as possible from here
+                                                               ;; into the (now defunct) agent handler.
+                                                               ;; That impulse seems wrong. Based on preliminary numbers,
+                                                               ;; any filtering I can do outside an an agent send is a win.
+                                                               ;; TODO: As soon as the manifold version is working, revisit
+                                                               ;; that decision.
+                                                               (log/debug prelog
+                                                                          "Message is small enough. Passing along to stream to handle")
+                                                               (trigger-from-parent buf state))
+                                                             (do
+                                                               ;; This is actually pretty serious.
+                                                               ;; All sorts of things had to go wrong for us to get here.
+                                                               ;; TODO: More extensive error handling.
+                                                               ;; Actually, should probably add an optional client-supplied
+                                                               ;; error handler for situations like this
+                                                               (log/warn prelog
+                                                                         (str "Message too large\n"
+                                                                              "Incoming message is " incoming-size
+                                                                              " / " K/max-msg-len)))))
+                                                         (do
+                                                           (log/warn prelog
+                                                                     (str "Child buffer overflow\n"
+                                                                          "Have " (count ->child-buffer)
+                                                                          "/"
+                                                                          max-child-buffer-size
+                                                                          " messages buffered. Wait!"))))))
+                                        ::child-> (partial trigger-from-child (second success))
+                                        ::query-state (fn [state]
+                                                        (let [dst (second success)]
+                                                          (dfrd/success! dst state))))]
                                   (when (not= tag ::drained)
                                     (log/debug prelog "Processing event")
                                     ;; At the end of the main ioloop in the refernce
@@ -647,12 +709,10 @@
                                           ;; a great reason to not introduce a second
                                           ;; one for bytes travelling the other direction)
                                           state' (updater state)  ; for now, deref again to be safe
-                                          _ (log/debug prelog "Updating state atom")
-                                          _ (reset! state-atom state')
                                           mid (System/nanoTime)
                                           ;; This is taking a ludicrous amount of time.
                                           ;; Q: How much should I blame on logging?
-                                          result (schedule-next-timeout! state-wrapper)
+                                          result (schedule-next-timeout! state')
                                           end (System/nanoTime)]
                                       (log/debug prelog
                                                  (cl-format nil
@@ -669,21 +729,19 @@
                                                     "~a: Waiting on some I/O to happen in timeout ~:d ms after ~:d"
                                                     delta_f
                                                     now))
-                              (reset! state-atom failure)))
+                              (strm/close! stream)))
           (log/debug prelog
                      (cl-format nil
-                                "Setting timer to trigger in ~:d ms (vs ~:d scheduled)"
+                                "Set timer to trigger in ~:d ms (vs ~:d scheduled)"
                                 delta_f
-                                (float (utils/nanos->millis scheduled-delay))))
-          (swap! state-atom (fn [{:keys [::specs/flow-control]
-                                  :as cur}]
-                              (assoc-in cur [::specs/flow-control ::specs/next-action] next-action)))))
+                                (float (utils/nanos->millis scheduled-delay))))))
       (log/warn prelog "I/O Stream closed"))
-    state-wrapper))
+    ;; Don't rely on the return value of a function called for side-effects
+    nil))
 
 (s/fdef start-event-loops!
-        :args (s/cat :state-wrapper ::unstarted-state-wrapper)
-        :ret ::state-wrapper)
+        :args (s/cat :state ::specs/state)
+        :ret any?)
 ;;; TODO: This next lineno reference needs to move elsewhere.
 ;;; Although, really, it isn't even applicable any more.
 ;;; Caller provides ->parent and ->child callbacks for us
@@ -691,7 +749,7 @@
 ;;; abstraction that just don't fit.
 ;;;          205-259 fork child
 (defn start-event-loops!
-  [state-atom]
+  [state]
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
   ;; That checks for input on:
@@ -699,15 +757,14 @@
   ;; tochild[1] (to child)
   ;; fromchild[0] (from child)
   ;; and a timeout (based on the messaging state).
-  (let [recent (System/nanoTime)
-        io-stream (strm/stream)]
+  (let [recent (System/nanoTime)]
     ;; This is nowhere near as exciting as I
     ;; expect every time I look at it
 
     ;; This covers line 260
-    (swap! state-atom assoc ::specs/recent recent)
-    (schedule-next-timeout! {::specs/state-atom state-atom
-                             ::stream io-stream})))
+    ;; Although it seems a bit silly to do it here
+    (let [state (assoc state ::specs/recent recent)]
+      (schedule-next-timeout! state))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -803,24 +860,26 @@
     ;; as "global", since it really is involved whether we're
     ;; talking about incoming/outgoing buffer management or
     ;; flow control.
-    ::specs/recent 0})
+    ::specs/recent 0
+    ::specs/stream (strm/stream)})
   ([human-name parent-callback child-callback]
    (initial-state human-name parent-callback child-callback false)))
 
 (s/fdef start!
         :args (s/cat :state ::specs/state)
-        :ret ::state-wrapper)
+        :ret any?)
 (defn start!
   [state]
-  ;; I have at least 1 unit test that fails because
-  ;; this is returning nil.
-  ;; This ties in with my basic need to just ditch
-  ;; the idea of a state atom and switch completely
-  ;; to the actor model for this.
-  ;; This is called for side-effects, so callers
-  ;; should *not* be relying on the return value.
-  (throw (RuntimeException. "Switch to actor model"))
-  (start-event-loops! (atom state)))
+  ;; This function is probably pointless now.
+  ;; Except as a wrapper abstraction, in case it
+  ;; turns out that I need to do more.
+  ;; Once this all settles down, if this is still
+  ;; this minimalist, refactor the start-event-loops!
+  ;; functionality into here to avoid the pointless
+  ;; indirection.
+  ;; TODO: That.
+  (start-event-loops! state)
+  nil)
 
 (s/fdef close!
         :args (s/cat :state ::state-wrapper)
@@ -828,25 +887,31 @@
 (defn close!
   "Flush buffer and send EOF"
   [state]
-  ;; Actually, I don't think there's any "flush buffer" concept
-  ;; Though there probably should be
+  ;; Actually, I don't think there's any "flush buffer" concept.
+  ;; Though there probably should be.
+  ;; TODO: This needs to send a signal to the stream
+  ;; telling it which direction got closed.
+  ;; I obviously need to put more time/effort into this
   (throw (RuntimeException. "Q: How should this work?")))
 
 (s/fdef halt!
         :args (s/cat :state-wrapper ::state-wrapper)
         :ret any?)
 (defn halt!
-  [{:keys [::stream]
+  [{:keys [::stream
+           ::specs/state]
     :as state-wrapper}]
-  (log/info (pre-log (::specs/state-atom state-wrapper)) "Halting")
+  (let [{:keys [::specs/message-loop-name]} state]
+    (log/info (utils/pre-log message-loop-name) "Halting"))
+  ;; Q: Do I want to do this?
   (strm/close! stream))
 
-(s/fdef child->
-        :args (s/cat :state ::state-wrapper
+(s/fdef child->!
+        :args (s/cat :state ::specs/state
                      :array-o-bytes bytes?)
-        :ret ::state-wrapper)
-(defn child->
-  ;; TODO: Add a capturing version of this and parent->
+        :ret any?)
+(defn child->!
+  ;; TODO: Add a capturing version of this and parent->!
   ;; that can store inputs for later playback.
   ;; Although, really, that's only half the equation.
   ;; The client-provided callbacks really need to support
@@ -868,30 +933,34 @@
   ;; Prior to that, it was limited to 4K.
 
 ;;;  319-336: Maybe read bytes from child
-  [{:keys [::specs/state-atom
-           ::stream]
-    :as state-wrapper}
+  [{:keys [::specs/message-loop-name
+           ::specs/stream]
+    :as state}
    array-o-bytes]
-  (let [{:keys [::specs/message-loop-name]
-         :as state} @state-atom]
-    (log/debug (utils/pre-log message-loop-name)
-               "Incoming message from child to\n"
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/debug prelog
+               "Top of child->!\n"
                state)
-    (throw (RuntimeException. "Add a success/failure handler for this"))
-    (strm/put! stream [::child-> array-o-bytes])))
+    (when (strm/closed? stream)
+      (throw (RuntimeException. "Can't write to a closed stream")))
+    (let [success
+          (strm/put! stream [::child-> array-o-bytes])]
+      (dfrd/on-realized success
+                        (fn [x]
+                          (log/debug (utils/pre-log message-loop-name)
+                                     "Sent bytes from child to buffer, triggered from\n"
+                                     prelog))
+                        (fn [x]
+                          (log/warn (utils/pre-log message-loop-name)
+                                    "Failed sending bytes from child to buffer, triggered from\n"
+                                    prelog))))
+    nil))
 
-;;; This is really just called for side-effects now.
-;;; Should probably rename it to parent->!
-;;; and have it return nil.
-;;; Same thing really applies to child->
-;;; TODO: That.
-;;; Although they both need to register a handler
-;;; for the deferred returned by strm/put!
-(s/fdef parent->
-        :args (s/cat :state ::state-wrapper
+(s/fdef parent->!
+        :args (s/cat :state ::specs/state
                      :buf bytes?)
-        :ret ::state-wrapper)
-(defn parent->
+        :ret any?)
+(defn parent->!
   "Receive a byte array from parent
 
   411-435: try receiving messages: (DJB)
@@ -903,89 +972,23 @@
   It's replacing one of the polling triggers that
   set off the main() event loop. Need to account for
   that fundamental strategic change"
-  [{:keys [::specs/state-atom
-           ::stream]
-    :as state-wrapper}
-   ^bytes buf]
-;;;           From parent (over watch8)
-;;;           417-433: for loop from 0-bytes read
-;;;                    Copies bytes from incoming message buffer to message[][]
-  (let [incoming-size (count buf)]
-    (when (= 0 incoming-size)
-      ;; This is supposed to kill the entire process
-      ;; TODO: Be more graceful
-      (throw (AssertionError. "Bad Message")))
+  [{:keys [::specs/message-loop-name
+           ::specs/stream]
+    :as state}
+   ^bytes array-o-bytes]
 
-    ;; Reference implementation is really reading bytes from
-    ;; a stream.
-    ;; It reads the first byte to get the length of the block,
-    ;; pulls the next byte from the stream, calculates the stream
-    ;; length, double-checks for failure conditions, and then copies
-    ;; the bytes into the last spot in the global message array
-    ;; (assuming that array/buffer hasn't filled up waiting for the
-    ;; client to process it).
-
-    ;; I'm going to take a simpler and easier approach, at least for
-    ;; the first pass.
-
-    ;; trigger-from-parent is expecting to have a ::->child-buffer key
-    ;; that's really a vector that we can just conj onto.
-    (let [{{:keys [::specs/->child-buffer]} ::specs/incoming
-           :keys [::specs/message-loop-name]
-           :as state} @state-atom
-          prelog (utils/pre-log message-loop-name)]
-      (log/info prelog
-                "Top of parent->")
-      (when-not state
-        (log/warn prelog
-                  "nil state. Things went sideways recently"))
-      (if (< (count ->child-buffer) max-child-buffer-size)
-        ;; Q: Will ->child-buffer ever have more than one array?
-        ;; It would be faster to skip the map/reduce
-        (let [previously-buffered-message-bytes (reduce + 0
-                                                    (map (fn [^bytes buf]
-                                                           (count buf))
-                                                         ->child-buffer))]
-          (log/debug prelog
-                     "Have"
-                     previously-buffered-message-bytes
-                     "bytes in"
-                     (count ->child-buffer)
-                     " child buffers; possibly processing")
-          ;; Probably need to do something with previously-buffered-message-bytes.
-          ;; Definitely need to check the number of bytes that have not
-          ;; been forwarded along yet.
-          ;; However, the reference implementation does not.
-          ;; Then again...it's basically a self-enforcing
-          ;; 64K buffer, so maybe it's already covered, and I just wasted
-          ;; CPU cycles calculating it.
-          (if (<= incoming-size K/max-msg-len)
-            (do
-              ;; It's tempting to move as much as possible from here
-              ;; into the (now defunct) agent handler.
-              ;; That impulse seems wrong. Based on preliminary numbers,
-              ;; any filtering I can do outside an an agent send is a win.
-              ;; TODO: As soon as the manifold version is working, revisit
-              ;; that decision.
-              (log/debug prelog
-                         "Message is small enough. Passing along to stream to handle")
-              (throw (RuntimeException. "Add a success/failure handler for this"))
-              (strm/put! stream [::parent-> buf]))
-            (do
-              ;; This is actually pretty serious.
-              ;; All sorts of things had to go wrong for us to get here.
-              ;; TODO: More extensive error handling.
-              ;; Actually, should probably add an optional client-supplied
-              ;; error handler for situations like this
-              (log/warn prelog
-                        (str "Message too large\n"
-                             "Incoming message is " incoming-size
-                             " / " K/max-msg-len)))))
-        (do
-          (log/warn prelog
-                    (str "Child buffer overflow\n"
-                         "Have " (count ->child-buffer)
-                         "/"
-                         max-child-buffer-size
-                         " messages buffered. Wait!"))))
-      state-wrapper)))
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/info prelog
+              "Top of parent->!")
+    (let [success
+          (strm/put! stream [::parent-> array-o-bytes])]
+      (dfrd/on-realized success
+                        (fn [x]
+                          (log/debug (utils/pre-log message-loop-name)
+                                     "Buffered bytes from parent, triggered from\n"
+                                     prelog))
+                        (fn [x]
+                          (log/warn (utils/pre-log message-loop-name)
+                                    "Failed  to buffer bytes from parent, triggered from\n"
+                                    prelog))))
+    nil))

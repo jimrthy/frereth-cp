@@ -62,7 +62,7 @@
             ;; which means I have the agent state
             ;; directly available, but not the actual
             ;; agent.
-            ;; That's what it needs, because child->
+            ;; That's what it needs, because child->!
             ;; is going to trigger another send.
             ;; Wrapping it inside an atom is obnoxious, but
             ;; it works.
@@ -95,7 +95,7 @@
                            (is state-wrapper)
                            (swap! child-message-counter inc)
                            (swap! strm-address + msg-len)
-                           (message/child-> state-wrapper array-o-bytes))))
+                           (message/child->! state-wrapper array-o-bytes))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.
@@ -113,7 +113,7 @@
                  (s/explain-data ::specs/state (-> state ::specs/state-atom deref))))
             ;; TODO: Add tests that send a variety of gibberish messages
 
-            (let [wrote (future (message/parent-> state incoming))
+            (let [wrote (future (message/parent->! state incoming))
                   outcome (deref response 1000 ::timeout)]
               (is (not= outcome ::timeout))
               (when-not (= outcome ::timeout)
@@ -263,7 +263,7 @@
                               ;; Q: Is this a problem with my architecture, or just
                               ;; a testing artifact?
                               (when next-message
-                                (message/child-> @client-atom (.getBytes (pr-str next-message)))))))
+                                (message/child->! @client-atom (.getBytes (pr-str next-message)))))))
 
         server-atom (atom nil)
         server-parent-cb (fn [bs]
@@ -291,11 +291,11 @@
                                       incoming
                                       "\nwhich triggers"
                                       rsp)
-                            (message/child-> @server-atom (.getBytes (pr-str rsp)))
+                            (message/child->! @server-atom (.getBytes (pr-str rsp)))
                             (when (= incoming ::icanhazchzbrgr?)
                               ;; One of the main points is that this doesn't need to be a lock-step
                               ;; request/response.
-                              (message/child-> @server-atom (byte-array (range cheezburgr-length))))))]
+                              (message/child->! @server-atom (byte-array (range cheezburgr-length))))))]
     (dfrd/on-realized succeeded?
                       (fn [good]
                         (log/info "Success!"))
@@ -319,7 +319,7 @@
                           (do
                             (log/error "Server failed!")
                             (dfrd/error! succeeded? err))
-                          (message/parent-> srvr-agent bs))))
+                          (message/parent->! srvr-agent bs))))
                     client->server)
       (strm/consume (fn [bs]
                       (log/info "Message from server to client")
@@ -328,13 +328,13 @@
                           (do
                             (log/error "Client failed!")
                             (dfrd/error! succeeded? err))
-                          (message/parent-> client-agent bs))))
+                          (message/parent->! client-agent bs))))
                     server->client)
 
       (let [initial-message (Unpooled/buffer K/k-1)
             helo (.getBytes (pr-str ::ohai!))]
         ;; Kick off the exchange
-        (message/child-> @client-atom helo)
+        (message/child->! @client-atom helo)
         ;; TODO: Find a reasonable value for this timeout
         (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
           (log/info "Bottom of message-test")
@@ -394,7 +394,7 @@
           ;; which means I have the agent state
           ;; directly available, but not the actual
           ;; agent.
-          ;; That's what it needs, because child->
+          ;; That's what it needs, because child->!
           ;; is going to trigger another send.
           ;; Wrapping it inside an atom is obnoxious, but
           ;; it works.
@@ -407,7 +407,7 @@
                              (log/info test-run
                                        "Message from server to client."
                                        "\nThis really should just be an ACK")
-                             (message/parent-> @state-agent-atom bs))
+                             (message/parent->! @state-agent-atom bs))
           server-child-cb (fn [incoming]
                             (log/info test-run "Incoming to server's child")
 
@@ -459,7 +459,7 @@
                       ;; And, realistically, push the message onto another
                       ;; queue that handles all the details like encrypting
                       ;; and actually writing bytes to the wire.
-                      (message/parent-> srvr-state bs))
+                      (message/parent->! srvr-state bs))
           child-message-counter (atom 0)
           strm-address (atom 0)
           child-cb (fn [_]
@@ -479,7 +479,7 @@
         (let [;; Note that this is what the child sender should be supplying
               message-body (byte-array (range msg-len))]
           (log/debug test-run "Replicating child-send to " client-state)
-          (message/child-> client-state message-body)
+          (message/child->! client-state message-body)
           (let [outcome (deref response 10000 ::timeout)
                 end-time (System/nanoTime)]
             (log/info test-run
@@ -555,11 +555,28 @@
 
 (comment
   (deftest parallel-parent-test
-    (testing "parent-> should be thread-safe"
+    (testing "parent->! should be thread-safe"
+      ;; This seems dubious.
+      ;; Q: What's the real use case?
+      ;; A: Well, we certainly could have multiple
+      ;; socket listening threads that get a bunch
+      ;; of message packets from the client at the
+      ;; same time.
+      ;; Q: Can we?
+      ;; TODO: this needs more investigation.
       (is false "Write this")))
 
   (deftest parallel-child-test
-    (testing "child-> should be thread-safe"
+    (testing "child->! should be thread-safe"
+      ;; It seems scary, but it's actually an important
+      ;; part of allowing the child to buffer up bytes
+      ;; bigger than we can handle all at once.
+      ;; Maybe 1 thread sends a big EDN structure, while
+      ;; another sends a big chunk of transit, and a
+      ;; third starts uploading chunks of images.
+      ;; The other side will have to sort out the
+      ;; stream on its own, but we have to maintain
+      ;; the byte ordering
       (is false "Write this")))
 
   (deftest simulate-dropped-acks
