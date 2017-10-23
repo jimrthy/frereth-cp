@@ -537,12 +537,11 @@
           (dfrd/on-realized next-action
                             ;; TODO: Refactor this to top-level
                             (fn [success]
-                              (let [fmt (str "Event loop waiting for ~:d ms "
-                                             "after ~:d at ~:d "
-                                             "possibly "
-                                             "because input arrived "
-                                             "from elsewhere at ~:d:\n~a")
-                                    tag (first success)]
+                              (let [prelog (utils/pre-log message-loop-name)  ; might be on a different thread
+                                    fmt (str "Interrupting event loop waiting for ~:d ms "
+                                             "after ~:d at ~:d\n"
+                                             "possibly because input arrived "
+                                             "from elsewhere at ~:d:\n~a")]
                                 (log/debug prelog
                                            (cl-format nil
                                                       fmt
@@ -551,8 +550,15 @@
                                                       actual-next
                                                       (System/nanoTime)
                                                       success))
-                                (let [updater
+                                (let [tag (try (first success)
+                                               (catch IllegalArgumentException ex
+                                                 (log/error ex
+                                                            prelog
+                                                            "Should have been a variant")
+                                                 ::no-op))
+                                      updater
                                       (case tag
+                                        ::child-> (partial trigger-from-child (second success))
                                         ::drained (do (log/warn prelog
                                                                 ;; Actually, this seems like a strong argument for
                                                                 ;; having a pair of streams. Child could still have
@@ -564,13 +570,6 @@
                                                                 ;; work.
                                                                 "Stream closed. Surely there's more to do")
                                                       (constantly nil))
-                                        ::timed-out (do
-                                                      (log/debug prelog
-                                                                 (cl-format nil
-                                                                            "~Timer for ~:d ms after ~:d timed out. Re-triggering Output"
-                                                                            delta_f
-                                                                            now))
-                                                      trigger-from-timer)
                                         ::parent-> (fn [{{:keys [::specs/->child-buffer]} ::specs/incoming
                                                          :as state}]
 ;;;           From parent (over watch8)
@@ -649,10 +648,19 @@
                                                                           "/"
                                                                           max-child-buffer-size
                                                                           " messages buffered. Wait!"))))))
-                                        ::child-> (partial trigger-from-child (second success))
+                                        ::no-op identity
                                         ::query-state (fn [state]
-                                                        (let [dst (second success)]
-                                                          (dfrd/success! dst state))))]
+                                                        (if-let [dst (second success)]
+                                                          (deliver dst state)
+                                                          (log/warn prelog "state-query request missing required deferred"))
+                                                        state)
+                                        ::timed-out (do
+                                                      (log/debug prelog
+                                                                 (cl-format nil
+                                                                            "~Timer for ~:d ms after ~:d timed out. Re-triggering Output"
+                                                                            delta_f
+                                                                            now))
+                                                      trigger-from-timer))]
                                   (when (not= tag ::drained)
                                     (log/debug prelog "Processing event")
                                     ;; At the end of the main ioloop in the refernce
@@ -708,11 +716,14 @@
                                           ;; needing to do that manually is
                                           ;; a great reason to not introduce a second
                                           ;; one for bytes travelling the other direction)
-                                          state' (updater state)  ; for now, deref again to be safe
+                                          state' (try (updater state)
+                                                      (catch RuntimeException ex
+                                                        (log/error ex "Running updater failed")
+                                                        state))
                                           mid (System/nanoTime)
                                           ;; This is taking a ludicrous amount of time.
                                           ;; Q: How much should I blame on logging?
-                                          result (schedule-next-timeout! state')
+                                          _ (schedule-next-timeout! state')
                                           end (System/nanoTime)]
                                       (log/debug prelog
                                                  (cl-format nil
@@ -721,7 +732,7 @@
                                                              "Scheduling next timeout took ~:d  nanoseconds")
                                                             (- mid start)
                                                             (- end mid)))
-                                      result)))))
+                                      nil)))))
                             (fn [failure]
                               (log/error failure
                                          prelog
@@ -898,13 +909,41 @@
         :args (s/cat :state-wrapper ::state-wrapper)
         :ret any?)
 (defn halt!
-  [{:keys [::stream
+  [{:keys [::specs/stream
            ::specs/state]
     :as state-wrapper}]
   (let [{:keys [::specs/message-loop-name]} state]
     (log/info (utils/pre-log message-loop-name) "Halting"))
-  ;; Q: Do I want to do this?
   (strm/close! stream))
+
+(s/fdef get-state
+        :args (s/cat :state ::specs/state
+                     :time-out any?)
+        :ret (s/or :success ::specs/state
+                   ;; TODO: Add a fn spec that makes it
+                   ;; clear that this matches the time-out
+                   ;; parameter (or ::timed-out)
+                   :timed-out any?))
+(defn get-state
+  ([{:keys [::specs/stream
+            ::specs/state]}
+    time-out]
+   (let [state-holder (dfrd/deferred)
+         req (strm/try-put! stream [::query-state state-holder] 100)
+         {:keys [::specs/message-loop-name]} state]
+     (dfrd/on-realized req
+                       (fn [success]
+                         (log/debug
+                          (utils/pre-log message-loop-name)
+                          "Submitted get-state query:" success))
+                       (fn [failure]
+                         (log/error failure
+                                    (utils/pre-log message-loop-name)
+                                    "Submitting state query")
+                         (deliver state-holder failure)))
+     (deref state-holder 500 time-out)))
+  ([stream-holder]
+   (get-state stream-holder ::timed-out)))
 
 (s/fdef child->!
         :args (s/cat :state ::specs/state

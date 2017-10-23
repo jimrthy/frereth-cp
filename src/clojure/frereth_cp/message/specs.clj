@@ -304,7 +304,7 @@
 ;;    yet managed to write to the child
 (s/def ::incoming (s/keys :req [::->child  ; callback
                                 ::->child-buffer
-                                ::contiguous-stream-end
+                                ::contiguous-stream-count
                                 ::gap-buffer
                                 ::receive-eof
                                 ::receive-total-bytes

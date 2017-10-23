@@ -111,7 +111,7 @@
                          java.nio.ByteOrder/LITTLE_ENDIAN)
         flag-size (calculate-message-data-packet-length-flags block-to-send)]
     (log/debug (utils/pre-log message-loop-name)
-               (str ": Building a Message Block byte array for message "
+               (str "Building a Message Block byte array for message "
                     next-message-id
                     "\nTotal length: " u
                     "\nSize | Flags: " flag-size
