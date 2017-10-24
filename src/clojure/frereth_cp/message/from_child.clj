@@ -32,7 +32,7 @@
    ;; TODO: Add a signal for marking this true
    ;; (It probably needs to involve a close! function
    ;; in the message ns)
-   ::specs/send-eof false
+   ::specs/send-eof ::specs/false
    ::specs/transmissions 0
    ::specs/time (System/nanoTime)
    ;; There's the possibility of using a Nagle
@@ -194,82 +194,87 @@
    ;; to just hand the message to a serializer and have it handle
    ;; the streaming.
    ^bytes array-o-bytes]
-  (log/debug (utils/pre-log message-loop-name)
-                (str "Adding message block(s) to "
-                  ;; TODO: Might be worth logging the actual contents
-                  ;; when it's time to trace
-                  (count un-sent-blocks)
-                  " unsent others"))
-  ;; Note that back-pressure gets applied if we
-  ;; already have ~124K pending because caller started
-  ;; dropping packets.
-  ;; (It doesn't seem like it should matter, except
-  ;; as an upstream signal that there's some kind of
-  ;; problem)
-  (let [buf-size (count array-o-bytes)
-        ;; Q: Use Pooled direct buffers instead?
-        ;; A: Direct buffers wouldn't make any sense.
-        ;; After we get done with all the slicing and
-        ;; dicing that needs to happen to get the bytes
-        ;; to the parent, they still need to be translated
-        ;; back into byte arrays so they can be encrypted.
-        ;; Pooled buffers might make sense, except that
-        ;; we're starting from a byte array. So it would
-        ;; be silly to copy it.
-        buf (Unpooled/wrappedBuffer array-o-bytes)
-        ;; This lets people downstream know that there are
-        ;; bytes available
-        _ (.writerIndex buf buf-size)
-        ;; In the original, this is the offset into the circular
-        ;; buf where we're going to start writing incoming bytes.
-        pos (rem (inc strm-hwm) K/send-byte-buf-size)
-        available-buffer-space (- K/send-byte-buf-size pos)
-        ;; I'm pretty sure this concept throws a major
-        ;; wrench into my gears.
-        ;; I don't remember handling this sort of buffering
-        ;; at all.
-        ;; Q: If I drop the extra bytes, how do I inform the
-        ;; client?
-        bytes-to-read (min available-buffer-space buf-size)
-        ;; Major(?) issue with this approach:
-        ;; If the client child starts by writing (for example), 16K bytes
-        ;; all at once, we'll break that into 32 blocks to send.
-        ;; After the server responds with the first message packet (which
-        ;; is probably the ACK), the available message size increases
-        ;; significantly.
-        ;; This seems like a good reason to rethink the big picture
-        ;; strategy I'm using here.
-        blocks (build-block-descriptions message-loop-name strm-hwm buf max-block-length)]
-    ;; Q: What are the odds that calling pretty here accounts for
-    ;; the huge timing delays I'm seeing between this log message
-    ;; and the one at the top of build-block-descriptions?
-    (log/debug (utils/pre-log message-loop-name)
-               (str (count blocks)
-                    " Block(s) to add:\n"
-                    (utils/pretty blocks)))
-    (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
-      ;; Want to be sure standard error handlers don't catch
-      ;; this...it needs to force a fresh handshake.
-      ;; Note that this check has major problems:
-      ;; This is the number of bytes we have buffered
-      ;; that have not yet been ACK'd.
-      ;; We really should have quit reading from the child
-      ;; long before this due to buffer overflows.
-      ;; OTOH, the spec *does* define this as the end
-      ;; of the stream.
-      ;; So, when ackd-addr gets here (or possibly
-      ;; strm-hwm), we're done.
-      ;; TODO: Revisit this.
-      (throw (AssertionError. "End of stream")))
-    (-> state
-        (update-in [::specs/outgoing ::specs/un-sent-blocks]
-                   (fn [cur]
-                     ;; un-sent-blocks is a PersistentQueue.
-                     ;; Can't just concat.
-                     (reduce (fn [acc block]
-                               (conj acc block))
-                             cur
-                             blocks)))
-        (update-in [::specs/outgoing ::specs/strm-hwm] + bytes-to-read)
-        ;; Line 337
-        (assoc ::specs/recent (System/nanoTime)))))
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/debug prelog
+               (str "Adding message block(s) to "
+                    ;; TODO: Might be worth logging the actual contents
+                    ;; when it's time to trace
+                    (count un-sent-blocks)
+                    " unsent others"))
+    ;; Note that back-pressure gets applied if we
+    ;; already have ~124K pending because caller started
+    ;; dropping packets.
+    ;; (It doesn't seem like it should matter, except
+    ;; as an upstream signal that there's some kind of
+    ;; problem)
+    (let [buf-size (count array-o-bytes)
+          ;; Q: Use Pooled direct buffers instead?
+          ;; A: Direct buffers wouldn't make any sense.
+          ;; After we get done with all the slicing and
+          ;; dicing that needs to happen to get the bytes
+          ;; to the parent, they still need to be translated
+          ;; back into byte arrays so they can be encrypted.
+          ;; Pooled buffers might make sense, except that
+          ;; we're starting from a byte array. So it would
+          ;; be silly to copy it.
+          buf (Unpooled/wrappedBuffer array-o-bytes)
+          ;; Needing to do this feels wrong.
+          ;; Honestly, I'm relying on functionality
+          ;; that doesn't seem to be quite documented.
+          ;; It almost seems as though I really should be
+          ;; setting up a new [pooled] buffer and reading
+          ;; array-o-bytes into it instead.
+          _ (.writerIndex buf buf-size)
+          ;; In the original, this is the offset into the circular
+          ;; buf where we're going to start writing incoming bytes.
+          pos (rem (inc strm-hwm) K/send-byte-buf-size)
+          available-buffer-space (- K/send-byte-buf-size pos)
+          ;; I'm pretty sure this concept throws a major
+          ;; wrench into my gears.
+          ;; I don't remember handling this sort of buffering
+          ;; at all.
+          ;; Q: If I drop the extra bytes, how do I inform the
+          ;; client?
+          bytes-to-read (min available-buffer-space buf-size)
+          ;; Major(?) issue with this approach:
+          ;; If the client child starts by writing (for example), 16K bytes
+          ;; all at once, we'll break that into 32 blocks to send.
+          ;; After the server responds with the first message packet (which
+          ;; is probably the ACK), the available message size increases
+          ;; significantly.
+          ;; This seems like a good reason to rethink the big picture
+          ;; strategy I'm using here.
+          blocks (build-block-descriptions message-loop-name strm-hwm buf max-block-length)]
+      ;; Q: What are the odds that calling pretty here accounts for
+      ;; the huge timing delays I'm seeing between this log message
+      ;; and the one at the top of build-block-descriptions?
+      (log/debug prelog
+                 (str (count blocks)
+                      " Block(s) to add:\n"
+                      (utils/pretty blocks)))
+      (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
+        ;; Want to be sure standard error handlers don't catch
+        ;; this...it needs to force a fresh handshake.
+        ;; Note that this check has major problems:
+        ;; This is the number of bytes we have buffered
+        ;; that have not yet been ACK'd.
+        ;; We really should have quit reading from the child
+        ;; long before this due to buffer overflows.
+        ;; OTOH, the spec *does* define this as the end
+        ;; of the stream.
+        ;; So, when ackd-addr gets here (or possibly
+        ;; strm-hwm), we're done.
+        ;; TODO: Revisit this.
+        (throw (AssertionError. "End of stream")))
+      (-> state
+          (update-in [::specs/outgoing ::specs/un-sent-blocks]
+                     (fn [cur]
+                       ;; un-sent-blocks is a PersistentQueue.
+                       ;; Can't just concat.
+                       (reduce (fn [acc block]
+                                 (conj acc block))
+                               cur
+                               blocks)))
+          (update-in [::specs/outgoing ::specs/strm-hwm] + bytes-to-read)
+          ;; Line 337
+          (assoc ::specs/recent (System/nanoTime))))))

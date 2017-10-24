@@ -459,7 +459,9 @@
   "Write ACK buffer back to parent
 
 Line 608"
-  [{{:keys [::specs/->parent]} ::specs/outgoing
+  [{:keys [::specs/->parent]
+    :as io-handle}
+   {
     :keys [::specs/message-loop-name]
     :as state}
    ^ByteBuf send-buf]
@@ -561,7 +563,8 @@ Line 608"
                            (filter ::specs/ackd? blocks)))))))
 
 (s/fdef handle-comprehensible-message!
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :io-handle ::specs/io-handle
+                     :state ::specs/state)
         ;; TODO: This should not be nilable
         :ret (s/nilable ::specs/state))
 (defn handle-comprehensible-message!
@@ -569,7 +572,8 @@ Line 608"
 
   This seems like the interesting part.
   lines 444-609"
-  [{{^bytes parent->buffer ::specs/parent->buffer} ::specs/incoming
+  [io-handle
+   {{^bytes parent->buffer ::specs/parent->buffer} ::specs/incoming
     ;; It seems really strange to have anything that involves
     ;; the outgoing blocks in here.
     ;; But there's an excellent chance that the incoming message
@@ -654,7 +658,7 @@ Line 608"
                    (log/debug (str message-loop-name ": Have an ACK to send back"))
                    ;; since this is called for side-effects, ignore the
                    ;; return value.
-                   (send-ack! extracted ack-msg)
+                   (send-ack! io-handle extracted ack-msg)
                    (log/debug log-prefix "ACK'd")
                    (update extracted
                            ::specs/incoming
@@ -676,14 +680,16 @@ Line 608"
 ;;; Public
 
 (s/fdef try-processing-message!
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :io-handle ::specs/io-handle
+                     :state ::specs/state)
         ;; TODO: This should not be nilable
         ;; (it is, due to handle-comprehensible-message.
         ;; Which also shouldn't be)
         :ret (s/nilable ::specs/state))
 (defn try-processing-message!
   "436-613: try processing a message: --DJB"
-  [{{:keys [::specs/->child-buffer
+  [io-handle
+   {{:keys [::specs/->child-buffer
             ::specs/parent->buffer
             ::specs/receive-written
             ::specs/strm-hwm]} ::specs/incoming
@@ -729,7 +735,7 @@ Line 608"
         ;; It seems as though this should forward the incoming message
         ;; along to the child. But it's really just setting up the
         ;; state to do that.
-        (handle-comprehensible-message! state'))
+        (handle-comprehensible-message! io-handle state'))
       (do
         ;; Nothing to do.
         (log/debug pre-log

@@ -246,9 +246,7 @@
 (s/def ::callback (s/fspec :args (s/cat :buf bytes?)
                            :ret any?))
 (s/def ::->child ::callback)
-(comment (s/def ::child-> ::callback))
 (s/def ::->parent ::callback)
-(comment (s/def ::parent-> ::callback))
 
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
@@ -313,8 +311,7 @@
 
 ;; 2. Buffers of bytes from the parent that we have not
 ;;    yet managed to write to the child
-(s/def ::incoming (s/keys :req [::->child  ; callback
-                                ::->child-buffer
+(s/def ::incoming (s/keys :req [::->child-buffer
                                 ::contiguous-stream-count
                                 ::gap-buffer
                                 ::receive-eof
@@ -326,13 +323,12 @@
 
 ;; 3. Buffers of bytes that we received from the child
 ;;    but the parent has not yet ACK'd
-(s/def ::outgoing (s/keys :req [::earliest-time  ; Q: Any point to this?
+(s/def ::outgoing (s/keys :req [::ackd-addr
+                                ::earliest-time  ; Q: Any point to this?
                                 ::last-block-time
                                 ::last-panic
                                 ::max-block-length
                                 ::next-message-id
-                                ::->parent
-                                ::ackd-addr
                                 ;; Q: Does this field make any sense at all?
                                 ;; (It's a hard-coded constant that doesn't
                                 ;; seem likely to ever change)
@@ -351,7 +347,6 @@
                           :opt [::next-block-queue
                                 ::send-buf]))
 
-;; TODO: These really need a better namespace
 (s/def ::state (s/keys :req [::flow-control
                              ::incoming
                              ::outgoing
@@ -361,8 +356,21 @@
                              ;; Q: Does this make more sense anywhere else?
                              ;; Nested under ::flow-control seems like a better
                              ;; choice.
-                             ::recent
-                             ::stream]))
+                             ::recent]))
 
-#_(s/def ::state-atom (s/and #(instance? clojure.lang.Atom %)
-                           #(s/valid? ::state (deref %))))
+;;; Black box that holds the pieces I need for doing I/O.
+;;; If this were an OOP environment, I'd stick these parts
+;;; into private members.
+;;; The main restriction around these is that they're all
+;;; about side-effects. So don't try to spec this.
+(s/def ::io-handle (s/keys :req [::->child
+                                 ::->parent
+                                 ;; This seems redundant.
+                                 ;; Q: How often will I have an io-handle
+                                 ;; without state?
+                                 ;; The two go together so often/well
+                                 ;; that I'm very tempted to add
+                                 ;; a state-wrapper again that includes
+                                 ;; them both.
+                                 ::message-loop-name
+                                 ::stream]))

@@ -129,12 +129,14 @@
 ;;;         Well, maybe. If we're done with it
 
 (s/fdef trigger-output
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :io-handle ::specs/io-handle
+                     :state ::specs/state)
         :ret ::specs/state)
 (defn trigger-output
-  [{{:keys [::specs/->child]} ::specs/incoming
-    {:keys [::specs/next-action]} ::specs/flow-control
-    :keys [::specs/message-loop-name]
+  [{:keys [::specs/->child
+           ::specs/message-loop-name]
+    :as io-handle}
+   {{:keys [::specs/next-action]} ::specs/flow-control
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
     (log/debug prelog "Triggering Output")
@@ -164,15 +166,17 @@
             ;; when the child schedules another send,
             ;; or a message arrives from parent to
             ;; update the RTT.
-            (to-parent/maybe-send-block! state))]
+            (to-parent/maybe-send-block! io-handle state))]
       state)))
 
 (s/fdef trigger-from-child
-        :args (s/cat :array-o-bytes bytes?
+        :args (s/cat :io-handle ::specs/io-handle
+                     :array-o-bytes bytes?
                      :state ::specs/state)
         :ret ::specs/state)
 (defn trigger-from-child
-  [^bytes array-o-bytes
+  [io-handle
+   ^bytes array-o-bytes
    {{:keys [::specs/strm-hwm]
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
@@ -201,11 +205,13 @@
       ;; It's pointless to call this if we just have
       ;; to wait for the timer to expire.
       (let [state'' (trigger-output
+                     io-handle
                      state')]
         state''))))
 
 (s/fdef trigger-from-parent
-        :args (s/cat :array-o-bytes bytes?
+        :args (s/cat :io-handle ::specs/io-handle
+                     :array-o-bytes bytes?
                      :specs/state ::specs/state)
         :ret ::specs/state)
 (defn trigger-from-parent
@@ -214,16 +220,16 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [^bytes message
-   {{:keys [::specs/->child]
-     :as incoming} ::specs/incoming
-    :keys [::specs/message-loop-name]
+  [{:keys [::specs/->child]
+    :as io-handle}
+   ^bytes message
+   {:keys [::specs/message-loop-name]
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
     (when-not ->child
       (throw (ex-info (str prelog
                            "Missing ->child")
-                      {::detail-keys (keys incoming)
+                      {::detail-keys (keys io-handle)
                        ::top-level-keys (keys state)
                        ::details state})))
 
@@ -247,6 +253,7 @@
     ;; logic.
     (try
       (let [pre-processed (from-parent/try-processing-message!
+                           io-handle
                            (assoc-in state
                                      [::specs/incoming ::specs/parent->buffer]
                                      message))
@@ -259,14 +266,15 @@
         ;; this long?
         ;; i.e. Is it worth doing that at the top of the trigger
         ;; functions instead?
-        (trigger-output state'))
+        (trigger-output io-handle state'))
       (catch RuntimeException ex
         (log/error ex
                    (str prelog
                         "Trying to cope with a message arriving from parent"))))))
 
 (defn trigger-from-timer
-  [{:keys [::specs/message-loop-name]
+  [io-handle
+   {:keys [::specs/message-loop-name]
     :as state}]
   ;; It's really tempting to move this to to-parent.
   ;; But (at least in theory) it could also trigger
@@ -276,7 +284,7 @@
   ;; I keep thinking that I need to check data arriving from
   ;; the child, but the main point to this logic branch is
   ;; to resend an outbound block that hasn't been ACK'd yet.
-  (trigger-output state))
+  (trigger-output io-handle state))
 
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
@@ -481,19 +489,30 @@
 ;;; TODO: Find out.
 
 (s/fdef schedule-next-timeout!
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :io-handle ::specs/io-handle
+                     :state ::specs/state)
         :ret any?)
 ;;; This was originally just for setting up a
 ;;; timeout trigger to signal an agent to try
 ;;; (re-)sending any pending i/o.
 ;;; It's gotten repurposed since then, and
-;;; probably needs a rename.
-;;; Definitely needs some refactoring to trim
-;;; it down to a reasonable size
+;;; probably needs a rename (TODO:).
+;;; TODO: Definitely needs some refactoring to trim
+;;; it down to a reasonable size.
+
+;;; TODO: Possible alt approach: use atoms with
+;;; add-watch. That opens up a different can of
+;;; worms, in terms of synchronizing the flow-control
+;;; section and "trigger-output" semantics. And
+;;; it takes me back to Square One in terms of
+;;; handling the timer. But it's tempting.
 (defn schedule-next-timeout!
-  [{:keys [::specs/message-loop-name
-           ::specs/recent
+  [{:keys [::specs/->parent
+           ::specs/->child
+           ::specs/message-loop-name
            ::specs/stream]
+    :as io-handle}
+   {:keys [::specs/recent]
     :as state}]
   {:pre [recent]}
   (let [{{:keys [::specs/next-action]
@@ -559,7 +578,7 @@
                                                  ::no-op))
                                       updater
                                       (case tag
-                                        ::child-> (partial trigger-from-child (second success))
+                                        ::child-> (partial trigger-from-child io-handle (second success))
                                         ::drained (do (log/warn prelog
                                                                 ;; Actually, this seems like a strong argument for
                                                                 ;; having a pair of streams. Child could still have
@@ -631,7 +650,7 @@
                                                                ;; that decision.
                                                                (log/debug prelog
                                                                           "Message is small enough. Passing along to stream to handle")
-                                                               (trigger-from-parent buf state))
+                                                               (trigger-from-parent io-handle buf state))
                                                              (do
                                                                ;; This is actually pretty serious.
                                                                ;; All sorts of things had to go wrong for us to get here.
@@ -661,7 +680,7 @@
                                                                             "~Timer for ~:d ms after ~:d timed out. Re-triggering Output"
                                                                             delta_f
                                                                             now))
-                                                      trigger-from-timer))]
+                                                      (partial trigger-from-timer io-handle)))]
                                   (when (not= tag ::drained)
                                     (log/debug prelog "Processing event")
                                     ;; At the end of the main ioloop in the refernce
@@ -713,18 +732,27 @@
                                           ;; threaded.
                                           ;; Actually, it should be safe as written.
                                           ;; Just be sure to keep everything synchronized
-                                          ;; around takes from the i/o stream. (Not
+                                          ;; around takes from the i/o handle. (Not
                                           ;; needing to do that manually is
                                           ;; a great reason to not introduce a second
                                           ;; one for bytes travelling the other direction)
                                           state' (try (updater state)
                                                       (catch RuntimeException ex
                                                         (log/error ex "Running updater failed")
-                                                        state))
+                                                        ;; The eternal question in this scenario:
+                                                        ;; Fail fast, or hope we can keep limping
+                                                        ;; along?
+                                                        ;; TODO: Add prod vs. dev environment options
+                                                        ;; to give the caller control over what
+                                                        ;; should happen here.
+                                                        ;; (Note that, either way, it really should
+                                                        ;; include a callback to some
+                                                        ;; currently-undefined status updater
+                                                        (comment state)))
                                           mid (System/nanoTime)
                                           ;; This is taking a ludicrous amount of time.
                                           ;; Q: How much should I blame on logging?
-                                          _ (schedule-next-timeout! state')
+                                          _ (schedule-next-timeout! io-handle state')
                                           end (System/nanoTime)]
                                       (log/debug prelog
                                                  (cl-format nil
@@ -741,18 +769,19 @@
                                                     "~a: Waiting on some I/O to happen in timeout ~:d ms after ~:d"
                                                     delta_f
                                                     now))
-                              (strm/close! stream)))
+                              (strm/close! io-handle)))
           (log/debug prelog
                      (cl-format nil
                                 "Set timer to trigger in ~:d ms (vs ~:d scheduled)"
                                 delta_f
                                 (float (utils/nanos->millis scheduled-delay))))))
-      (log/warn prelog "I/O Stream closed"))
+      (log/warn prelog "I/O Handle closed"))
     ;; Don't rely on the return value of a function called for side-effects
     nil))
 
 (s/fdef start-event-loops!
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :io-handle ::specs/io-handle
+                     :state ::specs/state)
         :ret any?)
 ;;; TODO: This next lineno reference needs to move elsewhere.
 ;;; Although, really, it isn't even applicable any more.
@@ -761,7 +790,7 @@
 ;;; abstraction that just don't fit.
 ;;;          205-259 fork child
 (defn start-event-loops!
-  [state]
+  [io-handle state]
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
   ;; That checks for input on:
@@ -776,24 +805,20 @@
     ;; This covers line 260
     ;; Although it seems a bit silly to do it here
     (let [state (assoc state ::specs/recent recent)]
-      (schedule-next-timeout! state))))
+      (schedule-next-timeout! io-handle state))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
 (s/fdef initial-state
         :args (s/cat :human-name ::specs/message-loop-name
-                     :parent-callback ::specs/->parent
-                     :child-callback ::specs/->child
-                     ;; Q: What's the difference to spec that this
+                     ;; Q: What (if any) is the difference to spec that this
                      ;; argument is optional?
                      :want-ping ::specs/want-ping)
         :ret ::specs/state)
 (defn initial-state
   "Put together an initial state that's ready to start!"
   ([human-name
-    parent-callback
-    child-callback
     server?]
    {::specs/flow-control {::specs/last-doubling 0
                           ::specs/last-edge 0
@@ -811,8 +836,7 @@
                           ::specs/rtt-seen-recent-high false
                           ::specs/rtt-seen-recent-low false
                           ::specs/rtt-timeout K/sec->n-sec}
-    ::specs/incoming {::specs/->child child-callback
-                      ::specs/->child-buffer []
+    ::specs/incoming {::specs/->child-buffer []
                       ::specs/contiguous-stream-count 0
                       ::specs/gap-buffer (to-child/build-gap-buffer)
                       ::specs/receive-eof ::specs/false
@@ -835,7 +859,6 @@
                                                  K/standard-max-block-length
                                                  K/initial-max-block-length)
                       ::specs/next-message-id 1
-                      ::specs/->parent parent-callback
                       ::specs/ackd-addr 0
                       ;; Q: Does this make any sense at all?
                       ;; It isn't ever going to change, so I might
@@ -872,16 +895,20 @@
     ;; as "global", since it really is involved whether we're
     ;; talking about incoming/outgoing buffer management or
     ;; flow control.
-    ::specs/recent 0
-    ::specs/stream (strm/stream)})
-  ([human-name parent-callback child-callback]
-   (initial-state human-name parent-callback child-callback false)))
+    ::specs/recent 0})
+  ([human-name]
+   (initial-state human-name false)))
 
 (s/fdef start!
-        :args (s/cat :state ::specs/state)
-        :ret any?)
+        :args (s/cat :state ::specs/state
+                     :parent-callback ::specs/->parent
+                     :child-callback ::specs/->child)
+        :ret ::specs/io-handle)
 (defn start!
-  [state]
+  [{:keys [::specs/message-loop-name]
+    :as state}
+   parent-cb
+   child-cb]
   ;; This function is probably pointless now.
   ;; Except as a wrapper abstraction, in case it
   ;; turns out that I need to do more.
@@ -890,8 +917,13 @@
   ;; functionality into here to avoid the pointless
   ;; indirection.
   ;; TODO: That.
-  (start-event-loops! state)
-  nil)
+  (let [s (strm/stream)
+        io-handle {::specs/->parent parent-cb
+                   ::specs/->child child-cb
+                   ::specs/message-loop-name message-loop-name
+                   ::specs/stream s}]
+    (start-event-loops! io-handle state)
+    io-handle))
 
 (s/fdef close!
         :args (s/cat :state ::state-wrapper)
@@ -907,25 +939,30 @@
   (throw (RuntimeException. "Q: How should this work?")))
 
 (s/fdef halt!
-        :args (s/cat :state-wrapper ::state-wrapper)
+        :args (s/cat :io-handle ::specs/io-handle)
         :ret any?)
 (defn halt!
-  [{:keys [::specs/stream
-           ::specs/state]
-    :as state-wrapper}]
-  (let [{:keys [::specs/message-loop-name]} state]
-    (log/info (utils/pre-log message-loop-name) "Halting"))
+  [{:keys [::specs/message-loop-name
+           ::specs/stream]
+    :as io-handle}]
+  (log/info (utils/pre-log message-loop-name) "Halting")
   (strm/close! stream))
 
 (s/fdef get-state
-        :args (s/cat :state ::specs/state
+        :args (s/cat :io-handle ::specs/io-handle
                      :time-out any?)
         :ret (s/or :success ::specs/state
-                   ;; TODO: Add a fn spec that makes it
-                   ;; clear that this matches the time-out
-                   ;; parameter (or ::timed-out)
-                   :timed-out any?))
+                   :timed-out any?)
+        ;; If this timed out, should return the supplied
+        ;; time-out paremeter (or ::timed-out, if none).
+        ;; Otherwise, the requested state.
+        ;; TODO: Verify that this spec does what I expect.
+        :fn (fn [{:keys [:args :ret]}]
+              (if-let [failed (:timed-out ret)]
+                (= failed (:time-out args))
+                (:success ret))))
 (defn get-state
+  "Synchronous equivalent to deref"
   ([{:keys [::specs/message-loop-name
             ::specs/stream]}
     time-out]
@@ -946,7 +983,7 @@
    (get-state stream-holder ::timed-out)))
 
 (s/fdef child->!
-        :args (s/cat :state ::specs/state
+        :args (s/cat :io-handle ::specs/io-handle
                      :array-o-bytes bytes?)
         :ret any?)
 (defn child->!
@@ -974,12 +1011,14 @@
 ;;;  319-336: Maybe read bytes from child
   [{:keys [::specs/message-loop-name
            ::specs/stream]
-    :as state}
+    :as io-handle}
    array-o-bytes]
   (let [prelog (utils/pre-log message-loop-name)]
     (log/debug prelog
-               "Top of child->!\n"
-               state)
+               "Top of child->!\n")
+    (when-not stream
+      (throw (ex-info (str prelog "Missing stream inside io-handle")
+                      {::io-handle io-handle})))
     (when (strm/closed? stream)
       (throw (RuntimeException. "Can't write to a closed stream")))
     (let [success
@@ -996,7 +1035,7 @@
     nil))
 
 (s/fdef parent->!
-        :args (s/cat :state ::specs/state
+        :args (s/cat :io-handle ::specs/io-handle
                      :buf bytes?)
         :ret any?)
 (defn parent->!
@@ -1013,7 +1052,7 @@
   that fundamental strategic change"
   [{:keys [::specs/message-loop-name
            ::specs/stream]
-    :as state}
+    :as io-handle}
    ^bytes array-o-bytes]
 
   (let [prelog (utils/pre-log message-loop-name)]

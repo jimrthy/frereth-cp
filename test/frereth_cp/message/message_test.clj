@@ -48,11 +48,10 @@
                                      response-state
                                      "\nCalled from:\n"
                                      (utils/get-stack-trace (Exception.)))
-                          (if (< 0 (count buf))
-                            (do
-                              (deliver response buf)
-                              (swap! parent-state inc))
-                            (log/debug "Empty message. Assume it's a spec check"))))
+                          (let [new-state
+                                (swap! parent-state inc)]
+                            (when (= 2 new-state)
+                              (deliver response buf)))))
             ;; I have a circular dependency between
             ;; child-cb and initialized.
             ;; child-cb is getting called inside an
@@ -65,7 +64,7 @@
             ;; Wrapping it inside an atom is obnoxious, but
             ;; it works.
             ;; Don't do anything like this for anything real.
-            state-agent-atom (atom nil)
+            io-handle-atom (atom nil)
             child-message-counter (atom 0)
             strm-address (atom 0)
             child-cb (fn [array-o-bytes]
@@ -94,23 +93,12 @@
                                             ::actual msg-len
                                             ::details (vec array-o-bytes)}))
                                ;; Just echo it directly back.
-                               (let [state-wrapper @state-agent-atom]
-                                 (is state-wrapper)
+                               (let [io-handle @io-handle-atom]
+                                 (is io-handle)
                                  (swap! child-message-counter inc)
                                  (swap! strm-address + msg-len)
-                                 (message/child->! state-wrapper array-o-bytes)))
-                             ;; This seems like an area where I shouldn't be spec'ing
-                             ;; the function at all, although that seems like an
-                             ;; incredibly useful thing to have.
-                             ;; Instead, I should just double-check the input/output
-                             ;; values around where it's called.
-                             ;; It seems like it's probably OK if the spec check
-                             ;; provides predictable input (like an empty byte
-                             ;; array), and maybe I need some sort of specific
-                             ;; generator precisely for that. But...this seems to
-                             ;; be on very shaky ground.
-                             (log/debug prelog
-                                        "Called w/ 0 bytes. Assume this was a spec check")))))
+                                 (message/child->! io-handle array-o-bytes)))
+                             (log/warn prelog "Empty incoming message. Highly suspicious")))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.
@@ -119,73 +107,60 @@
             ;; message arrives.
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
-            initialized (message/initial-state loop-name parent-cb child-cb true)]
-        (message/start! initialized)
-        (let [state (message/get-state initialized)]
-          (try
-            ;; TODO: Refactor the state query into a synchronous
-            ;; function in message, to avoid exposing this sort
-            ;; of implementation detail.
-            (let [state (message/get-state initialized)]
-              (is (not= state ::timed-out))
-              (when (not= state ::timed-out)
-                (reset! state-agent-atom initialized)
-                ;; This isn't even passing.
-                ;; FIXME: Start here.
-                (is (not
-                     (s/explain-data ::specs/state state)))
+            initialized (message/initial-state loop-name true)
+            io-handle (message/start! initialized  parent-cb child-cb)]
+        (try
+          (let [state (message/get-state io-handle)]
+            (is (not= state ::timed-out))
+            (when (not= state ::timed-out)
+              (reset! io-handle-atom io-handle)
+              (is (not
+                   (s/explain-data ::specs/state state)))
 
-                ;; TODO: Add similar tests that send a variety of
-                ;; gibberish messages
-                (let [wrote (future (message/parent->! initialized incoming))
-                      outcome (deref response 1000 ::timeout)]
-                  (is (not= outcome ::timeout))
-                  (when-not (= outcome ::timeout)
-                    ;; In a previous version, I wasn't setting up a "server side"
-                    ;; to cope w/ ACKs from child. Which made this next check
-                    ;; more interesting.
-                    (is (= 1 @parent-state))
-                    ;; I'm getting the response message header here, which is
-                    ;; correct, even though it seems wrong.
-                    ;; In the real thing, these are the bytes I'm getting ready
-                    ;; to send over the wire
-                    (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
-                    (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
-                                                           (vec outcome)))]
-                      (is (= (count message-body) (count without-header)))
-                      (is (b-t/bytes= message-body without-header))))
-                  (is (realized? wrote))
-                  (when (realized? wrote)
-                    (let [state (message/get-state initialized)]
-                      (is (not
-                           (s/explain-data ::specs/state state)))
-                      (log/info "Checking test outcome")
+              ;; TODO: Add similar tests that send a variety of
+              ;; gibberish messages
+              (let [wrote (future (message/parent->! io-handle incoming))
+                    outcome (deref response 1000 ::timeout)]
+                (is (not= outcome ::timeout))
+                (when-not (= outcome ::timeout)
+                  (is (= 2 @parent-state))
+                  ;; I'm getting the response message header here, which is
+                  ;; correct, even though it seems wrong.
+                  ;; In the real thing, these are the bytes I'm getting ready
+                  ;; to send over the wire
+                  (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
+                  (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
+                                                         (vec outcome)))]
+                    (is (= (count message-body) (count without-header)))
+                    (is (b-t/bytes= message-body without-header))))
+                (is (realized? wrote))
+                (when (realized? wrote)
+                  (let [state (message/get-state io-handle)]
+                    (is (not
+                         (s/explain-data ::specs/state state)))
+                    (log/info "Checking test outcome")
 
-                      ;; Q: Is there anything useful to get out of this?
-                      (is (not= state
-                                @state-agent-atom))
-
-                      (let [{:keys [::specs/incoming
-                                    ::specs/outgoing]} state]
-                        (is incoming)
-                        (is (= msg-len (inc (::specs/strm-hwm incoming))))
-                        (is (= msg-len (::specs/contiguous-stream-count incoming)))
-                        (is (= (inc (::specs/strm-hwm incoming))
-                               (::specs/contiguous-stream-count incoming)))
-                        (is (= 2 (::specs/next-message-id outgoing)))
-                        ;; Still have the message buffered.
-                        (is (= msg-len (from-child/buffer-size outgoing)))
-                        (is (= 0 (count (::specs/un-sent-blocks outgoing))))
-                        (is (= 1 (count (::specs/un-ackd-blocks outgoing))))
-                        (is (not (::specs/send-eof outgoing)))
-                        (is (= msg-len (::specs/strm-hwm outgoing)))
-                        ;; Keeping around as a reminder for when the implementation changes
-                        ;; and I need to see what's really going on again
-                        (comment (is (not outcome) "What should we have here?"))))))))
-            (catch ExceptionInfo ex
-              (log/error loop-name ex "Starting the event loop"))
-            (finally
-              (message/halt! initialized))))))))
+                    (let [{:keys [::specs/incoming
+                                  ::specs/outgoing]} state]
+                      (is incoming)
+                      (is (= msg-len (inc (::specs/strm-hwm incoming))))
+                      (is (= msg-len (::specs/contiguous-stream-count incoming)))
+                      (is (= (inc (::specs/strm-hwm incoming))
+                             (::specs/contiguous-stream-count incoming)))
+                      (is (= 2 (::specs/next-message-id outgoing)))
+                      ;; Still have the message buffered.
+                      (is (= msg-len (from-child/buffer-size outgoing)))
+                      (is (= 0 (count (::specs/un-sent-blocks outgoing))))
+                      (is (= 1 (count (::specs/un-ackd-blocks outgoing))))
+                      (is (not (::specs/send-eof outgoing)))
+                      (is (= msg-len (::specs/strm-hwm outgoing)))
+                      ;; Keeping around as a reminder for when the implementation changes
+                      ;; and I need to see what's really going on again
+                      (comment (is (not outcome) "What should we have here?"))))))))
+          (catch ExceptionInfo ex
+            (log/error loop-name ex "Starting the event loop"))
+          (finally
+            (message/halt! io-handle)))))))
 (comment (basic-echo))
 
 (deftest check-eof

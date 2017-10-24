@@ -579,11 +579,14 @@
 ;;; Public
 
 (s/fdef maybe-send-block!
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :io-handle ::specs/io-handle
+                     :state ::specs/state)
         :ret ::specs/state)
 (defn maybe-send-block!
   "Possibly send a block from child to parent"
-  [{:keys [::specs/message-loop-name]
+  [{:keys [::specs/->parent]
+    :as io-handle}
+   {:keys [::specs/message-loop-name]
     :as state}]
   ;; I could have pick-next-block-to-send just adjust the state
   ;; to signal whether there *is* a next block to send, instead
@@ -592,18 +595,35 @@
   ;; TODO: Make that so.
   (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
          :as state'} (pick-next-block-to-send state)
-        pre-log (utils/pre-log message-loop-name)]
+        prelog (utils/pre-log message-loop-name)]
     (if next-block-queue
-      (let [{{:keys [::specs/->parent
-                     ::specs/send-buf
+      (let [{{:keys [::specs/send-buf
                      ::specs/un-ackd-blocks]} ::specs/outgoing
              :as state''} (pre-calculate-state-after-send state')]
-        (log/debug pre-log
+        (when-not (s/valid? ::specs/send-buf send-buf)
+          ;; Doing a spec test here seems worrisome from a
+          ;; performance perspective.
+          ;; But it really does need to happen (at least at dev
+          ;; time, and probably always).
+          ;; And this seems like the most obvious location.
+          (log/warn prelog
+                    "Illegal outgoing buffer\n"
+                    (s/explain-data ::specs/send-buf send-buf)))
+        (log/debug prelog
                    "Sending"
+                   ;; Actually, calling count here tells the entire
+                   ;; story: I have either a byte-array or vector
+                   ;; rather than the ByteBuf that spec demands.
+                   ;; Actually, the spec is wrong.
+                   ;; I *want*
+                   ;; TODO: Fix the spec.
+                   ;; That probably means switching the key name.
                    (count send-buf)
                    "bytes to parent")
+        ;; TODO: This is one of the side-effects that I really should
+        ;; be accumulating rather than calling willy-nilly.
         (block->parent! ->parent send-buf)
-        (log/debug pre-log
+        (log/debug prelog
                    (str "Calculating earliest time among "
                         (count un-ackd-blocks)
                         " un-ACK'd block(s)"
@@ -617,6 +637,6 @@
                       (help/earliest-block-time message-loop-name un-ackd-blocks))
             (update ::specs/outgoing dissoc ::specs/next-block-queue)))
       (do
-        (log/debug pre-log
+        (log/debug prelog
                    "Nothing to send")
         state))))
