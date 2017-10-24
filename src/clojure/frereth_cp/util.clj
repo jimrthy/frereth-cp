@@ -6,6 +6,7 @@
   ;; pprint
   (:require [clojure.pprint :as pprint]
             [clojure.spec.alpha :as s]
+            [clojure.stacktrace :as s-t]
             [clojure.string :as string]
             [clojure.tools.logging :as log])
   (:import clojure.lang.ExceptionInfo))
@@ -53,14 +54,7 @@ Falling back to standard")
         :ret (s/coll-of str))
 (defn get-stack-trace
   [^Throwable ex]
-  (reduce
-   (fn [acc ^StackTraceElement frame]
-     (conj acc
-           (str "\n" (.getClassName frame)
-                "::" (.getMethodName frame)
-                " at " (.getFileName frame)
-                " line " (.getLineNumber frame))))
-   [] (.getStackTrace ex)))
+  (with-out-str (s-t/print-stack-trace ex)))
 
 (s/fdef show-stack-trace
         :args (s/cat :ex #(instance? Throwable %))

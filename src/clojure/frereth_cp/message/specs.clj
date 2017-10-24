@@ -45,7 +45,7 @@
 ;; This maps to a bitflag to send over the wire:
 ;; 2048 for normal EOF after sendbytes
 ;; 4096 for error after sendbytes
-(s/def ::eof-flag #{false ::normal ::error})
+(s/def ::eof-flag #{::false ::normal ::error})
 (s/def ::receive-eof ::eof-flag)
 (s/def ::send-eof ::eof-flag)
 
@@ -232,12 +232,23 @@
 ;; (Gets updated in a lump when a block gets ACK'd)
 (s/def ::total-block-transmissions nat-int?)
 
+;; The return value is actually a vital piece of the puzzle.
+;; Need an indicator about what happened to the bytes we
+;; just tried to send.
+;; I *could* throw exceptions to achieve similar effects
+;; for cases where (for example) buffers are full,
+;; and it seems like it would probably make sense, since
+;; these calls really *are* all about crossing system
+;; boundaries and side-effects.
+;; But that approach still feels very dubious.
+;; TODO: Decide how I want to handle this (a set of
+;; keywords seems most likely)
 (s/def ::callback (s/fspec :args (s/cat :buf bytes?)
-                           :ret boolean?))
+                           :ret any?))
 (s/def ::->child ::callback)
-(s/def ::child-> ::callback)
+(comment (s/def ::child-> ::callback))
 (s/def ::->parent ::callback)
-(s/def ::parent-> ::callback)
+(comment (s/def ::parent-> ::callback))
 
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
@@ -271,7 +282,7 @@
 ;; -s : part of a server (0)
 ;; -c : client that starts after the server (2)
 ;; -C : client that starts before the server (1)
-(s/def ::want-ping #{false ::immediate ::second-1})
+(s/def ::want-ping #{::false ::immediate ::second-1})
 
 ;; Q: Does it make sense to split this up?
 ;; That seems to be begging for trouble, although

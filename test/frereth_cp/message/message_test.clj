@@ -41,20 +41,18 @@
       (is (= K/max-msg-len (count incoming)))
       (let [response (promise)
             parent-state (atom 0)
-            parent-cb (fn [dst]
+            parent-cb (fn [buf]
                         (let [response-state @parent-state]
                           (log/debug (utils/pre-log "parent-cb")
-                                     response-state)
-                          ;; Should get 2 callbacks here:
-                          ;; 1. The ACK (this has stopped showing up)
-                          ;; 2. The actual response
-                          ;; Although, depending on timing, 3 or
-                          ;; more are possible
-                          ;; It's unlikely, but this could drag
-                          ;; on long enough to trigger a repeated send
-                          (when (= response-state 1)
-                            (deliver response dst))
-                          (swap! parent-state inc)))
+                                     "Current response-state: "
+                                     response-state
+                                     "\nCalled from:\n"
+                                     (utils/get-stack-trace (Exception.)))
+                          (if (< 0 (count buf))
+                            (do
+                              (deliver response buf)
+                              (swap! parent-state inc))
+                            (log/debug "Empty message. Assume it's a spec check"))))
             ;; I have a circular dependency between
             ;; child-cb and initialized.
             ;; child-cb is getting called inside an
@@ -75,27 +73,44 @@
                        ;; exception here, for the sake of hardening the
                        ;; caller
                        (is (bytes? array-o-bytes)
-                           (str "Expected a byte-array. Got a "
+                           (str "child-cb Expected a byte-array. Got a "
                                 (class array-o-bytes)))
-                       (assert array-o-bytes)
-                       (let [msg-len (count array-o-bytes)]
-
-                         (log/debug (utils/pre-log "child-cb")
-                                      "Echoing back an incoming message:"
-                                      msg-len
-                                      "bytes")
-                         (when (not= K/k-1 msg-len)
-                           (log/warn (utils/pre-log "child-cb")
-                                       "Incoming message doesn't match length we sent"
-                                       {::expected K/k-1
-                                        ::actual msg-len
-                                        ::details (vec array-o-bytes)}))
-                         ;; Just echo it directly back.
-                         (let [state-wrapper @state-agent-atom]
-                           (is state-wrapper)
-                           (swap! child-message-counter inc)
-                           (swap! strm-address + msg-len)
-                           (message/child->! state-wrapper array-o-bytes))))
+                       (when array-o-bytes
+                         (let [msg-len (count array-o-bytes)
+                               prelog (utils/pre-log "child-cb")
+                               locator (Exception.)]
+                           (if (not= 0 msg-len)
+                             (do
+                               (log/debug prelog
+                                          "Echoing back an incoming message:"
+                                          msg-len
+                                          "bytes\n"
+                                          "Called from:\n"
+                                          (utils/get-stack-trace (Exception.)))
+                               (when (not= K/k-1 msg-len)
+                                 (log/warn prelog
+                                           "Incoming message doesn't match length we sent"
+                                           {::expected K/k-1
+                                            ::actual msg-len
+                                            ::details (vec array-o-bytes)}))
+                               ;; Just echo it directly back.
+                               (let [state-wrapper @state-agent-atom]
+                                 (is state-wrapper)
+                                 (swap! child-message-counter inc)
+                                 (swap! strm-address + msg-len)
+                                 (message/child->! state-wrapper array-o-bytes)))
+                             ;; This seems like an area where I shouldn't be spec'ing
+                             ;; the function at all, although that seems like an
+                             ;; incredibly useful thing to have.
+                             ;; Instead, I should just double-check the input/output
+                             ;; values around where it's called.
+                             ;; It seems like it's probably OK if the spec check
+                             ;; provides predictable input (like an empty byte
+                             ;; array), and maybe I need some sort of specific
+                             ;; generator precisely for that. But...this seems to
+                             ;; be on very shaky ground.
+                             (log/debug prelog
+                                        "Called w/ 0 bytes. Assume this was a spec check")))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.
@@ -126,7 +141,10 @@
                       outcome (deref response 1000 ::timeout)]
                   (is (not= outcome ::timeout))
                   (when-not (= outcome ::timeout)
-                    (is (= 2 @parent-state))
+                    ;; In a previous version, I wasn't setting up a "server side"
+                    ;; to cope w/ ACKs from child. Which made this next check
+                    ;; more interesting.
+                    (is (= 1 @parent-state))
                     ;; I'm getting the response message header here, which is
                     ;; correct, even though it seems wrong.
                     ;; In the real thing, these are the bytes I'm getting ready

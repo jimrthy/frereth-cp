@@ -473,9 +473,10 @@
                           alt))
     actual-next))
 
-;;; I really want to move schedule-next-timeout to flow-control.
+;;; I really want to move schedule-next-timeout! to flow-control.
 ;;; But it has a circular dependency with trigger-from-timer.
 ;;; Which...honestly also belongs in there.
+;;; trigger-from-parent and trigger-from-child do not.
 ;;; Q: How much more badly would this break things?
 ;;; TODO: Find out.
 
@@ -814,7 +815,7 @@
                       ::specs/->child-buffer []
                       ::specs/contiguous-stream-count 0
                       ::specs/gap-buffer (to-child/build-gap-buffer)
-                      ::specs/receive-eof false
+                      ::specs/receive-eof ::specs/false
                       ::specs/receive-total-bytes 0
                       ::specs/receive-written 0
                       ;; Note that the reference implementation
@@ -844,7 +845,7 @@
                       ;; That almost seems like premature optimization,
                       ;; but this approach seems like serious YAGNI.
                       ::specs/send-buf-size K/send-byte-buf-size
-                      ::specs/send-eof false
+                      ::specs/send-eof ::specs/false
                       ::specs/send-eof-acked false
                       ::specs/send-eof-processed false
                       ::specs/strm-hwm 0
@@ -853,7 +854,7 @@
                       ::specs/un-ackd-blocks (build-un-ackd-blocks)
                       ::specs/un-sent-blocks PersistentQueue/EMPTY
                       ::specs/want-ping (if server?
-                                          false
+                                          ::specs/false
                                           ;; TODO: Add option for a
                                           ;; client that started before the
                                           ;; server, meaning that it waits
@@ -925,12 +926,11 @@
                    ;; parameter (or ::timed-out)
                    :timed-out any?))
 (defn get-state
-  ([{:keys [::specs/stream
-            ::specs/state]}
+  ([{:keys [::specs/message-loop-name
+            ::specs/stream]}
     time-out]
    (let [state-holder (dfrd/deferred)
-         req (strm/try-put! stream [::query-state state-holder] 100)
-         {:keys [::specs/message-loop-name]} state]
+         req (strm/try-put! stream [::query-state state-holder] 100)]
      (dfrd/on-realized req
                        (fn [success]
                          (log/debug
