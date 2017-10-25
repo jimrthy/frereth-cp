@@ -594,8 +594,8 @@
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
 ;;;                    Copies bytes from incoming message buffer to message[][]
-                                                     (let [buf (second success)
-                                                           incoming-size (count buf)]
+                                                     (let [^ByteBuf buf (second success)
+                                                           incoming-size (.readableBytes buf)]
                                                        (when (= 0 incoming-size)
                                                          ;; This is supposed to kill the entire process
                                                          ;; TODO: Be more graceful

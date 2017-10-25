@@ -45,6 +45,8 @@
 ;; What, exactly, do we need to do here?
 (s/def ::child-id int?)
 (s/def ::write->child ::specs/manifold-stream)
+;; Note that the frereth-cp.server ns also has one of
+;; these. That seems like a mistake.
 (s/def ::child-interaction (s/keys :req [::child-id
                                          ::read<-child
                                          ::write->child]

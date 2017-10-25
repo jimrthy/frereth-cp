@@ -38,10 +38,11 @@
                      ::specs/length msg-len
                      ::specs/send-eof ::specs/false
                      ::specs/start-pos 0})]
-      (is (= K/max-msg-len (count incoming)))
+      (is (= K/max-msg-len (.readableBytes incoming)))
       (let [response (promise)
             parent-state (atom 0)
             parent-cb (fn [buf]
+                        (is (s/valid? bytes? buf))
                         (let [response-state @parent-state]
                           (log/debug (utils/pre-log "parent-cb")
                                      "Current response-state: "
@@ -143,7 +144,7 @@
                     ;; According to spec, it must be a ByteBuf.
                     ;; Honestly, I'm mixing 2 different abstraction layers,
                     ;; because they happen to represent the same thing.
-                    ;; FIXME: Start back here.
+                    (comment (throw (RuntimeException. "FIXME: Start back here.")))
                     (is (not
                          (s/explain-data ::specs/state state)))
                     (log/info "Checking test outcome")

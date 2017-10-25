@@ -213,8 +213,8 @@
 ;; This is really the maximum length that we're willing to allocate
 ;; to this buffer
 (s/def ::send-buf-size nat-int?)
-;; Number of initial bytes sent and fully acknowledged
-;; Corresponds to sendacked in reference.
+;; Number of bytes sent and fully acknowledged
+;; Corresponds to sendacked in reference
 ;; This name just makes more sense to me.
 (s/def ::ackd-addr int?)
 
@@ -359,7 +359,9 @@
 ;;; If this were an OOP environment, I'd stick these parts
 ;;; into private members.
 ;;; The main restriction around these is that they're all
-;;; about side-effects. So don't try to spec this.
+;;; about side-effects. So you probably don't want to try
+;;; to validate this.
+;;; TODO: add an optional status updating callback
 (s/def ::io-handle (s/keys :req [::->child
                                  ::->parent
                                  ::executor

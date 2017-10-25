@@ -384,9 +384,8 @@
                                     pos?))
         :ret (s/nilable bytes?))
 (defn prep-send-ack
-  "Build a ByteBuf to ACK the message we just received
-
-  Lines 595-606"
+  "Build a byte array to ACK the message we just received"
+  ;;   Lines 595-606
   [{{:keys [::specs/contiguous-stream-count
             ::specs/receive-eof
             ::specs/receive-total-bytes
@@ -459,19 +458,21 @@
   "Write ACK buffer back to parent
 
 Line 608"
-  [{:keys [::specs/->parent]
+  [{:keys [::specs/->parent
+           ::specs/message-loop-name]
     :as io-handle}
-   {
-    :keys [::specs/message-loop-name]
-    :as state}
-   ^ByteBuf send-buf]
+   ^bytes send-buf]
   (if send-buf
     (do
       (when-not ->parent
         (throw (ex-info "Missing ->parent callback"
-                        {::callbacks (::specs/callbacks state)
-                         ::available-keys (keys state)})))
-      (->parent send-buf))
+                        {::callbacks (::specs/callbacks io-handle)
+                         ::available-keys (keys io-handle)})))
+      (try
+        (->parent send-buf)
+        ;; TODO: Need a status reporter callback for something like this
+        (catch RuntimeException ex
+          (log/error ex "send-ack! failed during supplied callback"))))
     (log/debug (str message-loop-name
                     ": No bytes to send...presumably we just processed a pure ACK"))))
 
@@ -658,7 +659,9 @@ Line 608"
                    (log/debug (str message-loop-name ": Have an ACK to send back"))
                    ;; since this is called for side-effects, ignore the
                    ;; return value.
-                   (send-ack! io-handle extracted ack-msg)
+                   ;; TODO: Place this in a buffer of side-effects that should
+                   ;; happen once all the purely functional stuff is done
+                   (send-ack! io-handle ack-msg)
                    (log/debug log-prefix "ACK'd")
                    (update extracted
                            ::specs/incoming

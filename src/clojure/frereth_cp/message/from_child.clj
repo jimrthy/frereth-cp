@@ -88,14 +88,10 @@
         ;; Make sure that releasing an individual slice
         ;; doesn't release the entire thing
         ;; Q: How long does this take?
+        ;; (surely it isn't very long...right?)
         (.retain buf (dec block-count))
         result)
       [(build-individual-block buf cap strm-hwm)])))
-(comment
-  (let [base (byte-array (range 8192))
-        src (Unpooled/wrappedBuffer base)]
-    (.writerIndex src 8192)
-    (.slice src 0 1024)))
 
 (s/fdef count-buffered-bytes
         :args (s/cat :blocks ::specs/blocks)

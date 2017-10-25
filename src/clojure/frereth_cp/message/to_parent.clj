@@ -67,16 +67,16 @@
                      :block-to-send ::specs/block)
         :ret bytes?)
 (defn build-message-block-description
-  ^bytes [message-loop-name
-          ^Integer next-message-id
-          {^Long start-pos ::specs/start-pos
-           ;; TODO: Switch this to either a bytes or a clojure
-           ;; vector of bytes.
-           ;; Then again...the bit about tracking the current
-           ;; read position seems pretty worthwhile.
-           ^ByteBuf buf ::specs/buf
-           :keys [::specs/length]
-           :as block-to-send}]
+  ^ByteBuf [message-loop-name
+            ^Integer next-message-id
+            {^Long start-pos ::specs/start-pos
+             ;; TODO: Switch this to either a bytes or a clojure
+             ;; vector of bytes.
+             ;; Then again...the bit about tracking the current
+             ;; read position seems pretty worthwhile.
+             ^ByteBuf buf ::specs/buf
+             :keys [::specs/length]
+             :as block-to-send}]
   ;;; Lines 387-402
   ;;; Q: make this thread-safe?
 
@@ -144,21 +144,33 @@
         (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
                                                                                     (dec send-buf-size))))
       ;; Start by skipping to the appropriate start position
+      (log/warn "Q: Does this make any sense at all?")
       (.writerIndex send-buf data-start))
 
-    ;; Need to save buf's initial read-index because we aren't ready
-    ;; to discard the buffer until it's been ACK'd.
-    ;; This is a fairly hefty departure from the reference implementation,
-    ;; which is all based around the circular buffer concept.
-    ;; I keep telling myself that a ByteBuffer will surely be fast
-    ;; enough.
-    ;; And...at this point, it seems a little silly for buf to be
-    ;; a ByteBuf instead of ordinary byte array.
-    ;; That's a concern for some other day.
-    (.markReaderIndex buf)
-    (.writeBytes send-buf buf)
-    (.resetReaderIndex buf)
-    (.array send-buf)))
+    ;; I think the server implementation has been waiting for me to
+    ;; decide what to do here.
+    ;; The client, at least, is expecting a manifold stream that sends
+    ;; it ByteBuf instances.
+    ;; Which it immediately converts to byte arrays.
+    (throw (RuntimeException. "Just do this here"))
+    (comment
+      ;; Need to save buf's initial read-index because we aren't ready
+      ;; to discard the buffer until it's been ACK'd.
+      ;; This is a fairly hefty departure from the reference implementation,
+      ;; which is all based around the circular buffer concept.
+      ;; I keep telling myself that a ByteBuffer will surely be fast
+      ;; enough.
+      ;; And...at this point, it seems a little silly for buf to be
+      ;; a ByteBuf instead of ordinary byte array.
+      ;; That's a concern for some other day.
+      (.markReaderIndex buf)
+      (.writeBytes send-buf buf)
+      (.resetReaderIndex buf)
+      (.array send-buf))
+    ;; TODO: Verify that this makes sense from the encrypting
+    ;; code's point of view. It seems like a B] really is/was
+    ;; the way to go here.
+    send-buf))
 
 (s/fdef mark-block-sent
         :args (s/cat :state ::specs/state)
@@ -536,12 +548,9 @@
 
 (s/fdef pick-next-block-to-send
         :args (s/cat :state ::specs/state)
-        :ret (s/nilable ::specs/state))
+        :ret ::specs/state)
 (defn pick-next-block-to-send
   [state]
-  ;; TODO: Instead of returning nil on nothing to do, just
-  ;; do something like setting a nil cursor.
-  ;; That should simplify the caller.
   (let [found? (check-for-previous-block-to-resend state)]
     (if (get-in found? [::specs/outbound ::specs/next-block-queue])
       found?)
@@ -551,12 +560,13 @@
     (check-for-new-block-to-send state)))
 
 (s/fdef block->parent!
-        :args (s/cat :send-buf ::specs/buf)
+        :args (s/cat :->parent ::specs/->parent
+                     :send-buf ::specs/buf)
         :ret any?)
 (defn block->parent!
   "Actually send the message block to the parent"
   ;; Corresponds to line 404 under the sendblock: label
-  [->parent send-buf]
+  [->parent ^ByteBuf send-buf]
   {:pre [send-buf]}
   ;; Note that I've ditched the special offset+7
   ;; That kind of length calculation is just built
@@ -588,18 +598,14 @@
     :as io-handle}
    {:keys [::specs/message-loop-name]
     :as state}]
-  ;; I could have pick-next-block-to-send just adjust the state
-  ;; to signal whether there *is* a next block to send, instead
-  ;; of having it return nil like this.
-  ;; That seems like a better API.
-  ;; TODO: Make that so.
   (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
          :as state'} (pick-next-block-to-send state)
         prelog (utils/pre-log message-loop-name)]
     (if next-block-queue
       (let [{{:keys [::specs/send-buf
                      ::specs/un-ackd-blocks]} ::specs/outgoing
-             :as state''} (pre-calculate-state-after-send state')]
+             :as state''} (pre-calculate-state-after-send state')
+            n (count send-buf)]
         (when-not (s/valid? ::specs/send-buf send-buf)
           ;; Doing a spec test here seems worrisome from a
           ;; performance perspective.
@@ -618,10 +624,19 @@
                    ;; I *want*
                    ;; TODO: Fix the spec.
                    ;; That probably means switching the key name.
-                   (count send-buf)
+                   n
                    "bytes to parent")
         ;; TODO: This is one of the side-effects that I really should
         ;; be accumulating rather than calling willy-nilly.
+        ;; Honestly, I should convert the ByteBuf to a byte array
+        ;; right here, at the last possible moment
+        ;; Note that that means saving the read index, reading the
+        ;; ByteBuf into array-o-bytes, and then restoring it.
+        ;; So maybe inside block->parent!, although it really shouldn't
+        ;; be doing anything except side-effects.
+        ;; Although I have a comment in there pointing out that I
+        ;; should just be sending the ByteBuf.
+        ;; I'm skeptical, but it saves a conversion.
         (block->parent! ->parent send-buf)
         (log/debug prelog
                    (str "Calculating earliest time among "

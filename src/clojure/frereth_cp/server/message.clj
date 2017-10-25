@@ -17,7 +17,10 @@
   ;; server.
   ;; Really, curvecpserver.c lines 425-427 cover everything that
   ;; needs to happen in here
-  ;; Note that that looks about the same as lines 351-355
+  ;; Note the similarities to lines 351-355.
+  ;; The part I was reference was probably the magic "* 16"
+  ;; part of the protocol to get the byte count of the next
+  ;; block in the queue.
   (throw (RuntimeException. "Where does this ball go?")))
 
 (defn child-writer
@@ -40,5 +43,18 @@
            ::state/client-port
            ::state/read<-child]
     :as child}]
+  ;; I've turned this inside out by switching
+  ;; the other side to use a pure callback mechanism,
+  ;; instead of manifold. Maybe I should rethink
+  ;; that choice, since I've at least set the
+  ;; expectation here that I'd be handling incoming
+  ;; messages like this instead.
+  ;; Except that, really, this is an implementation
+  ;; detail, and I'd very much like to keep these
+  ;; implementations very distinct.
+  ;; Besides, a function callback is guaranteed
+  ;; to have less overhead than a queue insertion,
+  ;; unless I wrote this side to require that
+  ;; insertion in the callback.
   (strm/consume child-reader
                 read<-child))
