@@ -13,8 +13,6 @@
 
 (set! *warn-on-reflection* true)
 
-;;;; Logging wrappers
-
 (defn pre-log
   [human-name]
   (pprint/cl-format nil
@@ -53,8 +51,16 @@ Falling back to standard")
         :args (s/cat :ex #(instance? Throwable %))
         :ret (s/coll-of str))
 (defn get-stack-trace
+  "Returns stack trace frame descriptions in a vector"
   [^Throwable ex]
-  (with-out-str (s-t/print-stack-trace ex)))
+  (reduce
+   (fn [acc ^StackTraceElement frame]
+     (conj acc
+           (str "\n" (.getClassName frame)
+                "::" (.getMethodName frame)
+                " at " (.getFileName frame)
+                " line " (.getLineNumber frame))))
+   [] (.getStackTrace ex)))
 
 (s/fdef show-stack-trace
         :args (s/cat :ex #(instance? Throwable %))
@@ -65,9 +71,20 @@ Falling back to standard")
   performance if you're calling this"
   ;; This is more-or-less a built-in. TODO: Switch to using that
   [^Throwable ex]
+  ;; TODO: Compare timing against my implementation
+  ;; It seems like the core lib approach really should be the
+  ;; clear winner
+  #_(with-out-str (s-t/print-stack-trace ex))
   (let [base (if (instance? ExceptionInfo ex)
                (str ex "\n" (pretty (.getData ^ExceptionInfo ex)))
                (str ex))]
     (reduce #(str %1 %2)
             base
             (get-stack-trace ex))))
+
+(s/fdef get-cpu-count
+        :ret nat-int?)
+(defn get-cpu-count
+  []
+  (let [^Runtime rt (Runtime/getRuntime)]
+    (.availableProcessors rt)))

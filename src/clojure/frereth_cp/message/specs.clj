@@ -84,12 +84,7 @@
                              ::start-pos
                              ::time
                              ::transmissions]))
-;; I'd prefer to implement this as a set instead of a vector.
-;; Q: what then happens when ::buf changes?
-;; Honestly, it should probably be a priority queue that's
-;; sorted by ::time.
-(s/def ::blocks (s/and (s/coll-of ::block)
-                       #(= (rem (count %) 2) 0)))
+(s/def ::blocks (s/and (s/coll-of ::block)))
 
 ;; Blocks from child that have been sent to parent, but not acknowledged
 (s/def ::un-ackd-blocks ::blocks)
@@ -248,6 +243,8 @@
 (s/def ::->child ::callback)
 (s/def ::->parent ::callback)
 
+(s/def ::executor #(instance? java.util.concurrent.ExecutorService %))
+
 ;; This is the last time we checked the clock, in nanoseconds
 (s/def ::recent int?)
 ;; deferred for next event-loop trigger
@@ -365,6 +362,7 @@
 ;;; about side-effects. So don't try to spec this.
 (s/def ::io-handle (s/keys :req [::->child
                                  ::->parent
+                                 ::executor
                                  ;; This seems redundant.
                                  ;; Q: How often will I have an io-handle
                                  ;; without state?
@@ -372,5 +370,11 @@
                                  ;; that I'm very tempted to add
                                  ;; a state-wrapper again that includes
                                  ;; them both.
+                                 ;; Then again, most client code doesn't
+                                 ;; have any reason to include the state.
+                                 ;; It would be deceptive to include some
+                                 ;; old, outdated, immutable version of it.
+                                 ;; Maybe do this for something that's
+                                 ;; internal to the message ns (et al)
                                  ::message-loop-name
                                  ::stream]))

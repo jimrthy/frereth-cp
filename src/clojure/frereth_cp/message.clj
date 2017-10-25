@@ -350,14 +350,13 @@
                                 recent))
         ;; Lines 286-289
         _ (log/debug prelog (str "Scheduling based on want-ping value '" want-ping "'"))
-        next-based-on-ping (if want-ping
+        next-based-on-ping (case want-ping
+                             ::specs/false default-next
+                             ::specs/immediate (min default-next min-resend-time)
                              ;; Go with the assumption that this matches wantping 1 in the original
                              ;; I think the point there is for the
                              ;; client to give the server 1 second to start up
-                             (if (= want-ping ::specs/second-1)
-                               (+ recent (utils/seconds->nanos 1))
-                               (min default-next min-resend-time))
-                             default-next)
+                             ::specs/second-1 (+ recent (utils/seconds->nanos 1)))
         _ (log/debug prelog (cl-format nil
                                         "Based on ping settings, adjusted next time to: ~:d"
                                         next-based-on-ping))
@@ -918,8 +917,13 @@
   ;; indirection.
   ;; TODO: That.
   (let [s (strm/stream)
+        ;; TODO: Need to tune and monitor this execution pool
+        ;; c.f. ztellman's dirigiste
+        executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
+        s (strm/onto executor s)
         io-handle {::specs/->parent parent-cb
                    ::specs/->child child-cb
+                   ::specs/executor executor
                    ::specs/message-loop-name message-loop-name
                    ::specs/stream s}]
     (start-event-loops! io-handle state)
@@ -1060,6 +1064,7 @@
               "Top of parent->!")
     (let [success
           (strm/put! stream [::parent-> array-o-bytes])]
+      (log/debug prelog "Parent put!. Setting up on-realized handler")
       (dfrd/on-realized success
                         (fn [x]
                           (log/debug (utils/pre-log message-loop-name)
@@ -1069,4 +1074,5 @@
                           (log/warn (utils/pre-log message-loop-name)
                                     "Failed  to buffer bytes from parent, triggered from\n"
                                     prelog))))
+    (log/debug prelog "returning")
     nil))

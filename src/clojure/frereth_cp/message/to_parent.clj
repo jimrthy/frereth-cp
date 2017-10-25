@@ -57,7 +57,7 @@
   [{:keys [::specs/length] :as block}]
   (bit-or length
           (case (::specs/send-eof block)
-            false 0
+            ::specs/false 0
             ::specs/normal K/eof-normal
             ::specs/error K/eof-error)))
 
@@ -323,7 +323,7 @@
                                         ::specs/last-block-time recent
                                         ;; Q: How wise is it to inject send-buf here?
                                         ::specs/send-buf buf
-                                        ::specs/want-ping false)))]
+                                        ::specs/want-ping ::specs/false)))]
             (log/debug pre-log
                        "Next block built and control state updated to"
                        result)

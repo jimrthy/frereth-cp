@@ -36,7 +36,7 @@
                     message-id
                     {::specs/buf src
                      ::specs/length msg-len
-                     ::specs/send-eof false
+                     ::specs/send-eof ::specs/false
                      ::specs/start-pos 0})]
       (is (= K/max-msg-len (count incoming)))
       (let [response (promise)
@@ -119,7 +119,7 @@
 
               ;; TODO: Add similar tests that send a variety of
               ;; gibberish messages
-              (let [wrote (future (message/parent->! io-handle incoming))
+              (let [wrote (dfrd/future (message/parent->! io-handle incoming))
                     outcome (deref response 1000 ::timeout)]
                 (is (not= outcome ::timeout))
                 (when-not (= outcome ::timeout)
@@ -133,9 +133,17 @@
                                                          (vec outcome)))]
                     (is (= (count message-body) (count without-header)))
                     (is (b-t/bytes= message-body without-header))))
-                (is (realized? wrote))
-                (when (realized? wrote)
-                  (let [state (message/get-state io-handle)]
+                (is (realized? wrote) "Initial write from parent hasn't returned yet.")
+                (let [state (message/get-state io-handle ::time-out)]
+                  (is (not= state ::timeout))
+                  (when (not= state ::timeout)
+                    ;; This test fails because
+                    ;; (get-in state [::specs/outgoing ::specs/send-buf])
+                    ;; is either a byte-array (seems likely) or a vector.
+                    ;; According to spec, it must be a ByteBuf.
+                    ;; Honestly, I'm mixing 2 different abstraction layers,
+                    ;; because they happen to represent the same thing.
+                    ;; FIXME: Start back here.
                     (is (not
                          (s/explain-data ::specs/state state)))
                     (log/info "Checking test outcome")
@@ -152,7 +160,7 @@
                       (is (= msg-len (from-child/buffer-size outgoing)))
                       (is (= 0 (count (::specs/un-sent-blocks outgoing))))
                       (is (= 1 (count (::specs/un-ackd-blocks outgoing))))
-                      (is (not (::specs/send-eof outgoing)))
+                      (is (= ::specs/false (::specs/send-eof outgoing)))
                       (is (= msg-len (::specs/strm-hwm outgoing)))
                       ;; Keeping around as a reminder for when the implementation changes
                       ;; and I need to see what's really going on again
