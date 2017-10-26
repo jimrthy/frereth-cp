@@ -38,7 +38,7 @@
                      ::specs/length msg-len
                      ::specs/send-eof ::specs/false
                      ::specs/start-pos 0})]
-      (is (= K/max-msg-len (.readableBytes incoming)))
+      (is (= K/max-msg-len (count incoming)))
       (let [response (promise)
             parent-state (atom 0)
             parent-cb (fn [buf]

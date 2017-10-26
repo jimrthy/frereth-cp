@@ -209,7 +209,7 @@
 ;;; These next 5 really swirld around the sendbuf array/circular queue
 ;; Need something to act as the array that backs the circular buffer.
 ;; This seems dubious, but I have to start somewhere
-(s/def ::send-buf ::buf)
+(s/def ::send-buf bytes?)
 ;; This is really the maximum length that we're willing to allocate
 ;; to this buffer
 (s/def ::send-buf-size nat-int?)
@@ -217,7 +217,6 @@
 ;; Corresponds to sendacked in reference
 ;; This name just makes more sense to me.
 (s/def ::ackd-addr int?)
-
 (s/def ::send-eof-acked boolean?)
 (s/def ::send-eof-processed boolean?)
 

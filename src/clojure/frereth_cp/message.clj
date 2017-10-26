@@ -483,7 +483,9 @@
 ;;; I really want to move schedule-next-timeout! to flow-control.
 ;;; But it has a circular dependency with trigger-from-timer.
 ;;; Which...honestly also belongs in there.
-;;; trigger-from-parent and trigger-from-child do not.
+;;; trigger-from-parent and trigger-from-child do not
+;;; (from-parent and from-child seem like much better
+;;; locations).
 ;;; Q: How much more badly would this break things?
 ;;; TODO: Find out.
 
@@ -594,8 +596,8 @@
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
 ;;;                    Copies bytes from incoming message buffer to message[][]
-                                                     (let [^ByteBuf buf (second success)
-                                                           incoming-size (.readableBytes buf)]
+                                                     (let [^bytes buf (second success)
+                                                           incoming-size (count buf)]
                                                        (when (= 0 incoming-size)
                                                          ;; This is supposed to kill the entire process
                                                          ;; TODO: Be more graceful
@@ -622,6 +624,7 @@
                                                        (if (< (count ->child-buffer) max-child-buffer-size)
                                                          ;; Q: Will ->child-buffer ever have more than one array?
                                                          ;; It would be faster to skip the map/reduce
+                                                         ;; TODO: Try switching to the reducers version instead
                                                          (let [previously-buffered-message-bytes (reduce + 0
                                                                                                          (map (fn [^bytes buf]
                                                                                                                 (count buf))

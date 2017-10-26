@@ -75,85 +75,77 @@
              ;; Then again...the bit about tracking the current
              ;; read position seems pretty worthwhile.
              ^ByteBuf buf ::specs/buf
-             :keys [::specs/length]
              :as block-to-send}]
   ;;; Lines 387-402
+
   ;;; Q: make this thread-safe?
 
-  ;; The reference implementation does this after calculating u,
-  ;; which just seems silly.
-  (when (or (neg? length)
-            (< K/k-1 length))
-    (throw (AssertionError. (str "illegal block length: " length))))
+  (let [length (.readableBytes buf)]
+    ;; The reference implementation does this after calculating u,
+    ;; which just seems silly.
+    (when (or (neg? length)
+              (< K/k-1 length))
+      (throw (AssertionError. (str "illegal block length: " length))))
 
-  ;; It's tempting to use a direct buffer here, but that temptation
-  ;; would probably be wrong.
-  ;; Since this has to be converted to a ByteArray so it can be
-  ;; encrypted.
-  ;; OTOH, there's Norman Mauer's "Best Practices" that include
-  ;; the points about "Use pooled direct buffers" and "Write
-  ;; direct buffers...always."
+    ;; For now, that concern is premature optimization.
+    ;; Back to regularly scheduled actual implementation comments:
+    ;; Note that we also need padding.
+    (let [u (calculate-padded-size block-to-send)
+          ;; ByteBuf instances default to BIG_ENDIAN, which is not what CurveCP uses.
+          ;; It seems like it would be better to switch to a Pooled allocator
+          ;; Or, better yet, just start with a byte-array.
+          ;; It's not like there are a lot of aset calls to make here.
+          ;; And I have the functions in bit-twiddling that should
+          ;; correspond to the proper little-endian packing.
+          ;; Then again...this is something that really deserves some
+          ;; hefty benchmarking.
+          ;; TODO: That.
+          send-buf (.order (Unpooled/buffer u)
+                           java.nio.ByteOrder/LITTLE_ENDIAN)
+          flag-size (calculate-message-data-packet-length-flags block-to-send)]
+      (log/debug (utils/pre-log message-loop-name)
+                 (str "Building a Message Block byte array for message "
+                      next-message-id
+                      "\nTotal length: " u
+                      "\nSize | Flags: " flag-size
+                      "\nStart Position: " start-pos))
 
-  ;; For now, that concern is premature optimization.
-  ;; Back to regularly scheduled actual implementation comments:
-  ;; Note that we also need padding.
-  (let [u (calculate-padded-size block-to-send)
-        ;; ByteBuf instances default to BIG_ENDIAN, which is not what CurveCP uses.
-        ;; It seems like it would be better to switch to a Pooled allocator
-        ;; Or, better yet, just start with a byte-array.
-        ;; It's not like there are a lot of aset calls to make here.
-        ;; And I have the functions in bit-twiddling that should
-        ;; correspond to the proper little-endian packing.
-        ;; Then again...this is something that really deserves some
-        ;; hefty benchmarking.
-        ;; TODO: That.
-        send-buf (.order (Unpooled/buffer u)
-                         java.nio.ByteOrder/LITTLE_ENDIAN)
-        flag-size (calculate-message-data-packet-length-flags block-to-send)]
-    (log/debug (utils/pre-log message-loop-name)
-               (str "Building a Message Block byte array for message "
-                    next-message-id
-                    "\nTotal length: " u
-                    "\nSize | Flags: " flag-size
-                    "\nStart Position: " start-pos))
+      ;; Q: Is this worth switching to shared/compose?
+      (.writeInt send-buf next-message-id)
 
-    ;; Q: Is this worth switching to shared/compose?
-    (.writeInt send-buf next-message-id)
+      ;; XXX: include any acknowledgments that have piled up (--DJB)
+      ;; Reference implementation doesn't zero anything out. It just skips these
+      ;; bytes. Which seems like it can't possibly be correct.
+      (.writeBytes send-buf #^bytes shared/all-zeros 0 34)  ; all the ACK fields
 
-    ;; XXX: include any acknowledgments that have piled up (--DJB)
-    ;; Reference implementation doesn't zero anything out. It just skips these
-    ;; bytes. Which seems like it can't possibly be correct.
-    (.writeBytes send-buf #^bytes shared/all-zeros 0 34)  ; all the ACK fields
+      ;; SUCC/FAIL flag | data block size
+      (.writeShort send-buf flag-size)
 
-    ;; SUCC/FAIL flag | data block size
-    (.writeShort send-buf flag-size)
+      ;; stream position of the first byte in the data block being sent
+      ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
+      ;; i.e. the total number of bytes in the stream.
+      (.writeLong send-buf start-pos)
 
-    ;; stream position of the first byte in the data block being sent
-    ;; If D==0 but SUCC>0 or FAIL>0 then this is the success/failure position.
-    ;; i.e. the total number of bytes in the stream.
-    (.writeLong send-buf start-pos)
-
-    ;; Note that we're sending a fairly arbitrary amount of padding
-    (let [data-start (- u length)
-          writer-index (.writerIndex send-buf)]
-
+      ;; Note that we're sending a fairly arbitrary amount of padding
       ;; This is the copy approach taken by the reference implementation
       ;; Note that he's just skipping the padding bytes rather than
       ;; filling them with zeros
       (comment
         (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
                                                                                     (dec send-buf-size))))
-      ;; Start by skipping to the appropriate start position
-      (log/warn "Q: Does this make any sense at all?")
-      (.writerIndex send-buf data-start))
+      (let [data-start (- u length)
+            writer-index (.writerIndex send-buf)]
+        ;; Start by skipping to the appropriate start position
+        (log/warn "Q: Does this make any sense at all?")
+        (.writerIndex send-buf data-start))
 
-    ;; I think the server implementation has been waiting for me to
-    ;; decide what to do here.
-    ;; The client, at least, is expecting a manifold stream that sends
-    ;; it ByteBuf instances.
-    ;; Which it immediately converts to byte arrays.
-    (throw (RuntimeException. "Just do this here"))
-    (comment
+      ;; Q: What happens on the other side?
+      ;; A: The client, at least, is expecting a manifold stream that sends
+      ;; it ByteBuf instances.
+      ;; The server implementation has been waiting for me to
+      ;; decide what to do here.
+      ;; Which it immediately converts to byte arrays.
+
       ;; Need to save buf's initial read-index because we aren't ready
       ;; to discard the buffer until it's been ACK'd.
       ;; This is a fairly hefty departure from the reference implementation,
@@ -166,11 +158,9 @@
       (.markReaderIndex buf)
       (.writeBytes send-buf buf)
       (.resetReaderIndex buf)
-      (.array send-buf))
-    ;; TODO: Verify that this makes sense from the encrypting
-    ;; code's point of view. It seems like a B] really is/was
-    ;; the way to go here.
-    send-buf))
+      (let [result (byte-array (.readableBytes send-buf))]
+        (.readBytes send-buf result)
+        result))))
 
 (s/fdef mark-block-sent
         :args (s/cat :state ::specs/state)
@@ -333,7 +323,19 @@
                                         ;; It *is* readily available in un-ackd-blocks,
                                         ;; until the last block gets ACK'd.
                                         ::specs/last-block-time recent
-                                        ;; Q: How wise is it to inject send-buf here?
+                                        ;; Note that send-buf is just a byte-array that's
+                                        ;; ready to send to the parent.
+                                        ;; It's very tempting to make it a queue or set,
+                                        ;; and then buffer the sends. But that's half the
+                                        ;; point behind the message "package."
+                                        ;; This is the culmination of that buffer/send
+                                        ;; process.
+                                        ;; It cannot matter whether we send duplicates
+                                        ;; or a packet gets sent out of order:
+                                        ;; our "parent" does not care, and the other
+                                        ;; side has to cope with those problems anyway,
+                                        ;; since we're using UDP (that's the other half
+                                        ;; of the point)
                                         ::specs/send-buf buf
                                         ::specs/want-ping ::specs/false)))]
             (log/debug pre-log
