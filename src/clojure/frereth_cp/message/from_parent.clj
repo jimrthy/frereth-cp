@@ -336,47 +336,48 @@
   ;; But the caller may have different ideas.
   ;; Actually, if (= message-id 0), this probably shouldn't
   ;; have been called in the first place.
-  (log/info (str message-loop-name
-                  ": Top of flag-acked-others!\nExtracting gap ACK from\n"
-                  packet
-                  "\n"))
-  (let [gaps (map (fn [[startfn stopfn]]
-                    [(startfn packet) (stopfn packet)])
-                  [[(constantly 0) ::specs/ack-length-1] ;  0-8
-                   [::specs/ack-gap-1->2 ::specs/ack-length-2] ; 16-20
-                   [::specs/ack-gap-2->3 ::specs/ack-length-3] ; 22-24
-                   [::specs/ack-gap-3->4 ::specs/ack-length-4] ; 26-28
-                   [::specs/ack-gap-4->5 ::specs/ack-length-5] ; 30-32
-                   [::specs/ack-gap-5->6 ::specs/ack-length-6]])] ; 34-36
-    (log/debug (str message-loop-name
-                    ": ACK'ing with Gaps: " (into [] gaps)
-                    "\nState: " state))
-    (->
-     (reduce (fn [{:keys [::stop-byte]
-                   :as state}
-                  [start stop :as gap-key]]
-               (when-not (and start stop)
-                 (log/error (str message-loop-name
-                                 ": missing either "
-                                 start
-                                 " or "
-                                 stop
-                                 " somewhere in packet.")))
-               ;; Note that this is based on absolute stream addresses
-               (let [start-byte (+ stop-byte start)
-                     stop-byte (+ start-byte stop)]
-                 ;; This seems like an awkward way to get state modified to
-                 ;; adjust the return value.
-                 ;; It actually fits perfectly, but it isn't as obvious as
-                 ;; I'd like.
-                 (assoc (help/mark-ackd-by-addr state start-byte stop-byte)
-                              ::stop-byte
-                              stop-byte)))
-             (assoc state ::stop-byte 0)
-             gaps)
-     ;; Ditch the temp key we used to track the stop point
-     (dissoc ::stop-byte)
-     help/drop-ackd!)))
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/info prelog
+              (str "Top of flag-acked-others!\nExtracting gap ACK from\n"
+                   packet
+                   "\n"))
+    (let [gaps (map (fn [[startfn stopfn]]
+                      [(startfn packet) (stopfn packet)])
+                    [[(constantly 0) ::specs/ack-length-1] ;  0-8
+                     [::specs/ack-gap-1->2 ::specs/ack-length-2] ; 16-20
+                     [::specs/ack-gap-2->3 ::specs/ack-length-3] ; 22-24
+                     [::specs/ack-gap-3->4 ::specs/ack-length-4] ; 26-28
+                     [::specs/ack-gap-4->5 ::specs/ack-length-5] ; 30-32
+                     [::specs/ack-gap-5->6 ::specs/ack-length-6]])] ; 34-36
+      (log/debug prelog
+                 (str "ACK'ing with Gaps: " (into [] gaps)
+                      "\nState: " state))
+      (->
+       (reduce (fn [{:keys [::stop-byte]
+                     :as state}
+                    [start stop :as gap-key]]
+                 (when-not (and start stop)
+                   (log/error (str prelog
+                                   "missing either "
+                                   start
+                                   " or "
+                                   stop
+                                   " somewhere in packet.")))
+                 ;; Note that this is based on absolute stream addresses
+                 (let [start-byte (+ stop-byte start)
+                       stop-byte (+ start-byte stop)]
+                   ;; This seems like an awkward way to get state modified to
+                   ;; adjust the return value.
+                   ;; It actually fits perfectly, but it isn't as obvious as
+                   ;; I'd like.
+                   (assoc (help/mark-ackd-by-addr state start-byte stop-byte)
+                          ::stop-byte
+                          stop-byte)))
+               (assoc state ::stop-byte 0)
+               gaps)
+       ;; Ditch the temp key we used to track the stop point
+       (dissoc ::stop-byte)
+       help/drop-ackd!))))
 
 (s/fdef prep-send-ack
         :args (s/cat :state ::state

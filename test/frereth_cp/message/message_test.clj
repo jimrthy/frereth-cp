@@ -390,7 +390,7 @@
           ;; Wrapping it inside an atom is obnoxious, but
           ;; it works.
           ;; Don't do anything like this for anything real.
-          state-agent-atom (atom nil)
+          client-io-atom (atom nil)
           server-parent-cb (fn [bs]
                              ;; TODO: Add a test that buffers these
                              ;; up and then sends them
@@ -398,7 +398,7 @@
                              (log/info test-run
                                        "Message from server to client."
                                        "\nThis really should just be an ACK")
-                             (message/parent->! @state-agent-atom bs))
+                             (message/parent->! @client-io-atom bs))
           server-child-cb (fn [incoming]
                             (log/info test-run "Incoming to server's child")
 
@@ -463,7 +463,7 @@
           client-initialized (message/initial-state (str "(test " test-run ") Client w/ Big Outbound")
                                                     false)
           client-io-handle (message/start! client-initialized parent-cb child-cb)]
-      (reset! state-agent-atom client-io-handle)
+      (reset! client-io-atom client-io-handle)
       (try
         (let [;; Note that this is what the child sender should be supplying
               message-body (byte-array (range msg-len))]
@@ -499,7 +499,21 @@
                                          vec
                                          (take K/initial-max-block-length)
                                          byte-array)))))))))
-        (finally
+        (let [{:keys [::specs/incoming
+                      ::specs/outgoing]
+               :as outcome} (message/get-state client-io-handle ::time-out)]
+          (is (not= outcome ::timeout))
+          (when (not= outcome ::timeout)
+            (is (= msg-len (::specs/ackd-addr outgoing)))
+            (let [n-m-id (::specs/next-message-id outgoing)]
+              (is (= (inc packet-count) n-m-id)))
+            (is (= 0 (from-child/buffer-size outcome)))
+            ;; TODO: I do need a test that triggers EOF
+            (is (= ::specs/false (::specs/send-eof outgoing)))
+            ;; Keeping around as a reminder for when the implementation changes
+            ;; and I need to see what's really going on again
+            (comment (is (not outcome) "What should we have here?"))))
+      (finally
           (log/info "Ending test" test-run)
           (try
             (message/halt! client-io-handle)
@@ -508,36 +522,7 @@
           (try
             (message/halt! srvr-io-handle)
             (catch RuntimeException ex
-              (is not ex)))))
-      (throw (RuntimeException. "The rest of this is pretty broken"))
-      (let [state-agent @state-agent-atom]
-        (log/info test-run "Deref'ing the state-agent")
-        (let [{:keys [::specs/incoming
-                      ::specs/outgoing]
-               :as outcome} @state-agent]
-          (is (= msg-len (::specs/ackd-addr outgoing)))
-          (let [n-m-id (::specs/next-message-id outgoing)]
-            ;; There's a timing issue with the next check.
-            ;; There's a good chance we'll get here before
-            ;; the agent is through updating its state due
-            ;; to the last message we fed from the child.
-            ;; So it might be one or the other
-            (is (or (= (inc packet-count) n-m-id)
-                    (= packet-count n-m-id)))
-            ;; Either way, this relationship won't be impacted
-            ;; by timing issues.
-            ;; Except that it totally is.
-            ;; We need to do an await on the client/server
-            ;; agents for this kind of approach to make
-            ;; any sense at all.
-            (is (= (- n-m-id packet-count)
-                   (count (::specs/un-ackd-blocks outgoing)))))
-          (is (= 0 (from-child/buffer-size outcome)))
-          ;; TODO: I do need a test that triggers EOF
-          (is (not (::specs/send-eof outgoing)))
-          ;; Keeping around as a reminder for when the implementation changes
-          ;; and I need to see what's really going on again
-          (comment (is (not outcome) "What should we have here?")))))))
+              (is not ex))))))))
 (comment (bigger-echo))
 
 (comment

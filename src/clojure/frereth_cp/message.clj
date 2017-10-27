@@ -220,10 +220,11 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [{:keys [::specs/->child]
+  [{:keys [::specs/->child
+           ::specs/message-loop-name]
     :as io-handle}
    ^bytes message
-   {:keys [::specs/message-loop-name]
+   {{:keys [::specs/->child-buffer]} ::specs/incoming
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
     (when-not ->child
@@ -235,42 +236,119 @@
 
     (log/debug prelog "Incoming from parent")
 
-    ;; This is basically an iteration of the top-level
-    ;; event-loop handler from main().
-    ;; I can skip the pieces that only relate to reading
-    ;; from the child, because I'm using an active callback
-    ;; approach, and this was triggered by a block of
-    ;; data coming from the parent.
+;;;           From parent (over watch8)
+;;;           417-433: for loop from 0-bytes read
+;;;                    Copies bytes from incoming message buffer to message[][]
+    (let [incoming-size (count message)]
+      (when (= 0 incoming-size)
+        ;; This is supposed to kill the entire process
+        ;; TODO: Be more graceful
+        (throw (AssertionError. "Bad Message")))
 
-    ;; However, there *is* the need to handle packets that the
-    ;; child has buffered up to send to the parent.
+      ;; Reference implementation is really reading bytes from
+      ;; a stream.
+      ;; It reads the first byte to get the length of the block,
+      ;; pulls the next byte from the stream, calculates the stream
+      ;; length, double-checks for failure conditions, and then copies
+      ;; the bytes into the last spot in the global message array
+      ;; (assuming that array/buffer hasn't filled up waiting for the
+      ;; client to process it).
 
-    ;; Except that we can't do this here/now. That part's
-    ;; limited by the flow-control logic (handled by the
-    ;; timer) and the callbacks arriving from the child.
-    ;; It seems like we probably should cancel/reschedule,
-    ;; since whatever ACK just arrived might adjust the RTT
-    ;; logic.
-    (try
-      (let [pre-processed (from-parent/try-processing-message!
-                           io-handle
-                           (assoc-in state
-                                     [::specs/incoming ::specs/parent->buffer]
-                                     message))
-            state' (to-child/forward! ->child (or pre-processed
-                                                  state))]
-        ;; This will update recent.
-        ;; In the reference implementation, that happens immediately
-        ;; after trying to read from the child.
-        ;; Q: Am I setting up any problems for myself by waiting
-        ;; this long?
-        ;; i.e. Is it worth doing that at the top of the trigger
-        ;; functions instead?
-        (trigger-output io-handle state'))
-      (catch RuntimeException ex
-        (log/error ex
-                   (str prelog
-                        "Trying to cope with a message arriving from parent"))))))
+      ;; I'm going to take a simpler and easier approach, at least for
+      ;; the first pass.
+
+      ;; trigger-from-parent is expecting to have a ::->child-buffer key
+      ;; that's really a vector that we can just conj onto.
+      (when-not state
+        (log/warn prelog
+                  "nil state. Things went sideways recently"))
+
+      (if (< (count ->child-buffer) max-child-buffer-size)
+        ;; Q: Will ->child-buffer ever have more than one array?
+        ;; It would be faster to skip the map/reduce
+        ;; TODO: Try switching to the reducers version instead
+        (let [previously-buffered-message-bytes (reduce + 0
+                                                        (map (fn [^bytes buf]
+                                                               (count buf))
+                                                             ->child-buffer))]
+          (log/debug prelog
+                     "Have"
+                     previously-buffered-message-bytes
+                     "bytes in"
+                     (count ->child-buffer)
+                     " child buffers; possibly processing")
+          ;; Probably need to do something with previously-buffered-message-bytes.
+          ;; Definitely need to check the number of bytes that have not
+          ;; been forwarded along yet.
+          ;; However, the reference implementation does not.
+          ;; Then again...it's basically a self-enforcing
+          ;; 64K buffer, so maybe it's already covered, and I just wasted
+          ;; CPU cycles calculating it.
+          (if (<= incoming-size K/max-msg-len)
+            (do
+              ;; It's tempting to move as much as possible from here
+              ;; into the (now defunct) agent handler.
+              ;; That impulse seems wrong. Based on preliminary numbers,
+              ;; any filtering I can do outside an an agent send is a win.
+              ;; TODO: As soon as the manifold version is working, revisit
+              ;; that decision.
+              (log/debug prelog
+                         "Message is small enough. Passing along to stream to handle")
+              ;; This is basically an iteration of the top-level
+              ;; event-loop handler from main().
+              ;; I can skip the pieces that only relate to reading
+              ;; from the child, because I'm using an active callback
+              ;; approach, and this was triggered by a block of
+              ;; data coming from the parent.
+
+              ;; However, there *is* the need to handle packets that the
+              ;; child has buffered up to send to the parent.
+
+              ;; Except that we can't do this here/now. That part's
+              ;; limited by the flow-control logic (handled by the
+              ;; timer) and the callbacks arriving from the child.
+              ;; It seems like we probably should cancel/reschedule,
+              ;; since whatever ACK just arrived might adjust the RTT
+              ;; logic.
+              (try
+                (let [pre-processed (from-parent/try-processing-message!
+                                     io-handle
+                                     (assoc-in state
+                                               [::specs/incoming ::specs/parent->buffer]
+                                               message))
+                      state' (to-child/forward! ->child (or pre-processed
+                                                            state))]
+                  ;; This will update recent.
+                  ;; In the reference implementation, that happens immediately
+                  ;; after trying to read from the child.
+                  ;; Q: Am I setting up any problems for myself by waiting
+                  ;; this long?
+                  ;; i.e. Is it worth doing that at the top of the trigger
+                  ;; functions instead?
+                  (trigger-output io-handle state'))
+                (catch RuntimeException ex
+                  (log/error ex
+                             (str prelog
+                                  "Trying to cope with a message arriving from parent")))))
+            (do
+              ;; This is actually pretty serious.
+              ;; All sorts of things had to go wrong for us to get here.
+              ;; TODO: More extensive error handling.
+              ;; Actually, should probably add an optional client-supplied
+              ;; error handler for situations like this
+              (log/warn prelog
+                        (str "Message too large\n"
+                             "Incoming message is " incoming-size
+                             " / " K/max-msg-len)))))
+        (do
+          ;; TODO: Need a way to apply back-pressure
+          ;; to child
+          (log/warn prelog
+                    (str "Child buffer overflow\n"
+                         "Have " (count ->child-buffer)
+                         "/"
+                         max-child-buffer-size
+                         " messages buffered. Wait!")))))))
 
 (defn trigger-from-timer
   [io-handle
@@ -326,30 +404,28 @@
         ;; goes away if I just eliminate all the logging
         min-resend-time (+ last-block-time n-sec-per-block)
         prelog (utils/pre-log message-loop-name)
-        _ (log/debug prelog
-                     (cl-format nil
-                                (str "Minimum send time: ~:d\n"
-                                     "which is ~:d nanoseconds\n"
-                                     "after last block time ~:d.\n"
-                                     "Recent was ~:d ns in the past")
-                                min-resend-time
-                                n-sec-per-block
-                                ;; I'm calculating last-block-time
-                                ;; incorrectly, due to a misunderstanding
-                                ;; about the name.
-                                ;; It should really be the value of
-                                ;; recent, set immediately after
-                                ;; I send a block to parent.
-                                last-block-time
-                                (- now recent)))
+        log-message (cl-format nil
+                               (str "Minimum send time: ~:d\n"
+                                    "which is ~:d nanoseconds\n"
+                                    "after last block time ~:d.\n"
+                                    "Recent was ~:d ns in the past")
+                               min-resend-time
+                               n-sec-per-block
+                               ;; I'm calculating last-block-time
+                               ;; incorrectly, due to a misunderstanding
+                               ;; about the name.
+                               ;; It should really be the value of
+                               ;; recent, set immediately after
+                               ;; I send a block to parent.
+                               last-block-time
+                               (- now recent))
         default-next (+ recent (utils/seconds->nanos 60))  ; by default, wait 1 minute
-        _ (log/debug prelog
-                     (cl-format nil
-                                "Default +1 minute: ~:d from ~:d"
-                                default-next
-                                recent))
+        log-message (str log-message (cl-format nil
+                                                "\nDefault +1 minute: ~:d from ~:d\nScheduling based on want-ping value '~a'"
+                                                default-next
+                                                recent
+                                                want-ping))
         ;; Lines 286-289
-        _ (log/debug prelog (str "Scheduling based on want-ping value '" want-ping "'"))
         next-based-on-ping (case want-ping
                              ::specs/false default-next
                              ::specs/immediate (min default-next min-resend-time)
@@ -357,9 +433,9 @@
                              ;; I think the point there is for the
                              ;; client to give the server 1 second to start up
                              ::specs/second-1 (+ recent (utils/seconds->nanos 1)))
-        _ (log/debug prelog (cl-format nil
-                                        "Based on ping settings, adjusted next time to: ~:d"
-                                        next-based-on-ping))
+        log-message (str log-message (cl-format nil
+                                                "\nBased on ping settings, adjusted next time to: ~:d"
+                                                next-based-on-ping))
         ;; Lines 290-292
         ;; Q: What is the actual point to this?
         ;; (the logic seems really screwy, but that's almost definitely
@@ -369,43 +445,27 @@
         ;; 2. Do we have previously sent blocks that might need to re-send?
         ;; 3. Have we sent an un-ACK'd EOF?
         un-ackd-count (count un-ackd-blocks)
-        next-based-on-eof (let [un-sent-count(count un-sent-blocks)]
-                            (if (and (< (+ un-ackd-count
-                                           un-sent-count)
-                                        K/max-outgoing-blocks)
-                                     (if send-eof
-                                       (not send-eof-processed)
-                                       (< 0 un-sent-count)))
-                              (let [next-time
-                                    ;; This is overly aggressive when
-                                    ;; the unsent buffer is empty and we're
-                                    ;; just twiddling our thumbs waiting
-                                    ;; for an ACK.
-                                    ;; In that case, it needs to be the RTT
-                                    ;; timeout.
-                                    ;; (At least, that seems like it would
-                                    ;; make sense. And my 2nd translation
-                                    ;; attempt seems to agree).
-                                    ;; TODO: Double-check the reference
-                                    (min next-based-on-ping min-resend-time)]
-                                (log/debug prelog
-                                           "EOF/unsent criteria:\nun-ackd-count:"
-                                           un-ackd-count
-                                           "\nun-sent-count:"
-                                           un-sent-count
-                                           "\nsend-eof:"
-                                           send-eof
-                                           "\nsend-eof-processed:"
-                                           send-eof-processed)
-                                (when (= 0 un-sent-count)
-                                  (log/warn prelog
-                                            "Double-check reference against empty un-ACK'd"))
-                                next-time)
-                              next-based-on-ping))
-        _ (log/debug prelog
-                     (cl-format nil
-                                "Due to EOF status: ~:d"
-                                next-based-on-eof))
+        un-sent-count(count un-sent-blocks)
+        next-based-on-eof (if (and (< (+ un-ackd-count
+                                         un-sent-count)
+                                      K/max-outgoing-blocks)
+                                   (if (not= ::specs/false send-eof)
+                                     (not send-eof-processed)
+                                     (< 0 un-sent-count)))
+                            (min next-based-on-ping min-resend-time)
+                            next-based-on-ping)
+        log-message (str log-message
+                         "\nEOF/unsent criteria:\nun-ackd-count: "
+                         un-ackd-count
+                         "\nun-sent-count: "
+                         un-sent-count
+                         "\nsend-eof: "
+                         send-eof
+                         "\nsend-eof-processed: "
+                         send-eof-processed
+                         (cl-format nil
+                                    "\nDue to EOF status: ~:d"
+                                    next-based-on-eof))
         ;; Lines 293-296
         rtt-resend-time (+ earliest-time rtt-timeout)
         ;; In the reference implementation, 0 for a block's time
@@ -422,9 +482,9 @@
                                                       min-resend-time))
                                             (min next-based-on-eof rtt-resend-time)
                                             next-based-on-eof)
-        _ (log/debug prelog
+        log-message (str log-message
                      (cl-format nil
-                                "Adjusted for RTT: ~:d"
+                                "\nAdjusted for RTT: ~:d"
                                 next-based-on-earliest-block-time))
         ;; There's one last caveat, from 298-300:
         ;; It all swirls around watchtochild, which gets set up
@@ -438,10 +498,10 @@
                                        (nil? watch-to-child))
                                 0
                                 next-based-on-earliest-block-time)
-        _ (log/debug prelog
-                     (cl-format nil
-                                "After [pretending to] adjusting for closed/ignored child watcher: ~:d"
-                                based-on-closed-child))
+        log-message (str log-message
+                         (cl-format nil
+                                    "\nAfter [pretending to] adjusting for closed/ignored child watcher: ~:d"
+                                    based-on-closed-child))
         ;; Lines 302-305
         actual-next (max based-on-closed-child recent)
         mid-time (System/nanoTime)
@@ -458,12 +518,13 @@
                 (and (< (+ un-ackd-count
                            un-sent-count)
                         K/max-outgoing-blocks)
-                     (if send-eof
+                     (if (not= ::specs/false send-eof)
                        (not send-eof-processed)
                        (< 0 un-sent-count)))) (min min-resend-time)
               (and (not= un-ackd-count)
                    (>= rtt-resend-time min-resend-time)) (min rtt-resend-time))
         end-time (System/nanoTime)]
+    (log/debug prelog log-message)
     (when-not (= actual-next alt)
       (log/warn prelog
                 "Scheduling Mismatch!"))
@@ -561,8 +622,7 @@
                               (let [prelog (utils/pre-log message-loop-name)  ; might be on a different thread
                                     fmt (str "Interrupting event loop waiting for ~:d ms "
                                              "after ~:d at ~:d\n"
-                                             "possibly because input arrived "
-                                             "from elsewhere at ~:d:\n~a")]
+                                             "at ~:d because: ~a")]
                                 (log/debug prelog
                                            (cl-format nil
                                                       fmt
@@ -591,85 +651,9 @@
                                                                 ;; work.
                                                                 "Stream closed. Surely there's more to do")
                                                       (constantly nil))
-                                        ::parent-> (fn [{{:keys [::specs/->child-buffer]} ::specs/incoming
-                                                         :as state}]
-;;;           From parent (over watch8)
-;;;           417-433: for loop from 0-bytes read
-;;;                    Copies bytes from incoming message buffer to message[][]
-                                                     (let [^bytes buf (second success)
-                                                           incoming-size (count buf)]
-                                                       (when (= 0 incoming-size)
-                                                         ;; This is supposed to kill the entire process
-                                                         ;; TODO: Be more graceful
-                                                         (throw (AssertionError. "Bad Message")))
-
-                                                       ;; Reference implementation is really reading bytes from
-                                                       ;; a stream.
-                                                       ;; It reads the first byte to get the length of the block,
-                                                       ;; pulls the next byte from the stream, calculates the stream
-                                                       ;; length, double-checks for failure conditions, and then copies
-                                                       ;; the bytes into the last spot in the global message array
-                                                       ;; (assuming that array/buffer hasn't filled up waiting for the
-                                                       ;; client to process it).
-
-                                                       ;; I'm going to take a simpler and easier approach, at least for
-                                                       ;; the first pass.
-
-                                                       ;; trigger-from-parent is expecting to have a ::->child-buffer key
-                                                       ;; that's really a vector that we can just conj onto.
-                                                       (when-not state
-                                                         (log/warn prelog
-                                                                   "nil state. Things went sideways recently"))
-
-                                                       (if (< (count ->child-buffer) max-child-buffer-size)
-                                                         ;; Q: Will ->child-buffer ever have more than one array?
-                                                         ;; It would be faster to skip the map/reduce
-                                                         ;; TODO: Try switching to the reducers version instead
-                                                         (let [previously-buffered-message-bytes (reduce + 0
-                                                                                                         (map (fn [^bytes buf]
-                                                                                                                (count buf))
-                                                                                                              ->child-buffer))]
-                                                           (log/debug prelog
-                                                                      "Have"
-                                                                      previously-buffered-message-bytes
-                                                                      "bytes in"
-                                                                      (count ->child-buffer)
-                                                                      " child buffers; possibly processing")
-                                                           ;; Probably need to do something with previously-buffered-message-bytes.
-                                                           ;; Definitely need to check the number of bytes that have not
-                                                           ;; been forwarded along yet.
-                                                           ;; However, the reference implementation does not.
-                                                           ;; Then again...it's basically a self-enforcing
-                                                           ;; 64K buffer, so maybe it's already covered, and I just wasted
-                                                           ;; CPU cycles calculating it.
-                                                           (if (<= incoming-size K/max-msg-len)
-                                                             (do
-                                                               ;; It's tempting to move as much as possible from here
-                                                               ;; into the (now defunct) agent handler.
-                                                               ;; That impulse seems wrong. Based on preliminary numbers,
-                                                               ;; any filtering I can do outside an an agent send is a win.
-                                                               ;; TODO: As soon as the manifold version is working, revisit
-                                                               ;; that decision.
-                                                               (log/debug prelog
-                                                                          "Message is small enough. Passing along to stream to handle")
-                                                               (trigger-from-parent io-handle buf state))
-                                                             (do
-                                                               ;; This is actually pretty serious.
-                                                               ;; All sorts of things had to go wrong for us to get here.
-                                                               ;; TODO: More extensive error handling.
-                                                               ;; Actually, should probably add an optional client-supplied
-                                                               ;; error handler for situations like this
-                                                               (log/warn prelog
-                                                                         (str "Message too large\n"
-                                                                              "Incoming message is " incoming-size
-                                                                              " / " K/max-msg-len)))))
-                                                         (do
-                                                           (log/warn prelog
-                                                                     (str "Child buffer overflow\n"
-                                                                          "Have " (count ->child-buffer)
-                                                                          "/"
-                                                                          max-child-buffer-size
-                                                                          " messages buffered. Wait!"))))))
+                                        ::parent-> (partial trigger-from-parent
+                                                            io-handle
+                                                            (second success))
                                         ::no-op identity
                                         ::query-state (fn [state]
                                                         (if-let [dst (second success)]
@@ -679,7 +663,7 @@
                                         ::timed-out (do
                                                       (log/debug prelog
                                                                  (cl-format nil
-                                                                            "~Timer for ~:d ms after ~:d timed out. Re-triggering Output"
+                                                                            "Timer for ~:d ms after ~:d timed out. Re-triggering Output"
                                                                             delta_f
                                                                             now))
                                                       (partial trigger-from-timer io-handle)))]
