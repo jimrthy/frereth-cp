@@ -292,15 +292,15 @@
                         (log/info "Success!"))
                       (fn [bad] (is (not bad))))
 
-    (reset! client-atom (message/initial-state "Client" client-parent-cb client-child-cb false))
-    (message/start! @client-atom)
+    (reset! client-atom (message/initial-state "Client" false))
+    (message/start! @client-atom client-parent-cb client-child-cb)
 
     ;; It seems like this next part really shouldn't happen until the initial message arrives
     ;; from the client.
     ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
     ;; that isn't quite true
-    (reset! server-atom (message/initial-state "Server" server-parent-cb server-child-cb true))
-    (message/start! @server-atom)
+    (reset! server-atom (message/initial-state "Server" true))
+    (message/start! @server-atom server-parent-cb server-child-cb)
 
     (try
       (strm/consume (fn [bs]
@@ -436,10 +436,8 @@
                                 (log/info (str test-run "::srvr-child-cb Received all expected packets"))
                                 (deliver response @srvr-child-state))))
           srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
-                                                  server-parent-cb
-                                                  server-child-cb
                                                   true)
-          srvr-state (message/start! srvr-initialized)
+          srvr-io-handle (message/start! srvr-initialized server-parent-cb server-child-cb)
 
           parent-cb (fn [bs]
                       (log/info test-run "Forwarding buffer to server")
@@ -450,7 +448,7 @@
                       ;; And, realistically, push the message onto another
                       ;; queue that handles all the details like encrypting
                       ;; and actually writing bytes to the wire.
-                      (message/parent->! srvr-state bs))
+                      (message/parent->! srvr-io-handle bs))
           child-message-counter (atom 0)
           strm-address (atom 0)
           child-cb (fn [_]
@@ -463,58 +461,56 @@
                      ;; Q: (which failure? feature?)
                      (is false "This should never get called"))
           client-initialized (message/initial-state (str "(test " test-run ") Client w/ Big Outbound")
-                                                    parent-cb child-cb false)
-          client-state (message/start! client-initialized)]
-      (reset! state-agent-atom client-state)
+                                                    false)
+          client-io-handle (message/start! client-initialized parent-cb child-cb)]
+      (reset! state-agent-atom client-io-handle)
       (try
         (let [;; Note that this is what the child sender should be supplying
               message-body (byte-array (range msg-len))]
-          (log/debug test-run "Replicating child-send to " client-state)
-          (message/child->! client-state message-body)
+          (log/debug test-run "Replicating child-send to " client-io-handle)
+          (message/child->! client-io-handle message-body)
           (let [outcome (deref response 10000 ::timeout)
                 end-time (System/nanoTime)]
             (log/info test-run
                       "Verifying that state hasn't errored out after"
                       (float (utils/nanos->millis (- end-time start-time))) "milliseconds")
-            (if-let [err (agent-error client-state)]
-              (is (not err))
-              (do
-                (is (not= outcome ::timeout))
-                (when-not (= outcome ::timeout)
-                  ;; TODO: What do I need to set up a full-blown i/o
-                  ;; loop to make this accurate?
-                  (let [result-buffer (:buffer outcome)]
-                    (is (= packet-count (count result-buffer)))
-                    (is (= K/initial-max-block-length (count (first result-buffer))))
-                    (doseq [packet (butlast result-buffer)]
-                      (is (= (count packet) K/k-div2)))
-                    (let [final (last result-buffer)]
-                      (is (= (count final) K/k-div4)))
-                    (let [rcvd-strm
-                          (reduce (fn [acc block]
-                                    (conj acc block))
-                                  []
-                                  result-buffer)]
-                      (is (b-t/bytes= (->> rcvd-strm
-                                           first
-                                           byte-array)
-                                      (->> message-body
-                                           vec
-                                           (take K/initial-max-block-length)
-                                           byte-array))))))))))
+            ;; Q: Can I do anything better in terms of checking for errors?
+            (let [client-state (message/get-state client-io-handle ::timeout)]
+              (is outcome)
+              (is (not= ::timeout outcome))
+              (is (not (instance? Exception outcome)))
+              (when-not (= outcome ::timeout)
+                (let [result-buffer (:buffer outcome)]
+                  (is (= packet-count (count result-buffer)))
+                  (is (= K/initial-max-block-length (count (first result-buffer))))
+                  (doseq [packet (butlast result-buffer)]
+                    (is (= (count packet) K/k-div2)))
+                  (let [final (last result-buffer)]
+                    (is (= (count final) K/k-div4)))
+                  (let [rcvd-strm
+                        (reduce (fn [acc block]
+                                  (conj acc block))
+                                []
+                                result-buffer)]
+                    (is (b-t/bytes= (->> rcvd-strm
+                                         first
+                                         byte-array)
+                                    (->> message-body
+                                         vec
+                                         (take K/initial-max-block-length)
+                                         byte-array)))))))))
         (finally
           (log/info "Ending test" test-run)
           (try
-            (message/halt! client-state)
+            (message/halt! client-io-handle)
             (catch RuntimeException ex
               (is not ex)))
           (try
-            (message/halt! srvr-state)
+            (message/halt! srvr-io-handle)
             (catch RuntimeException ex
               (is not ex)))))
+      (throw (RuntimeException. "The rest of this is pretty broken"))
       (let [state-agent @state-agent-atom]
-        (await state-agent)
-        (await srvr-state)
         (log/info test-run "Deref'ing the state-agent")
         (let [{:keys [::specs/incoming
                       ::specs/outgoing]
