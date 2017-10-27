@@ -541,6 +541,146 @@
                           alt))
     actual-next))
 
+(declare schedule-next-timeout!)
+(defn action-trigger
+  [{:keys [::actual-next
+           ::delta_f
+           ::scheduling-time]
+    :as timing-details}
+   {:keys [::specs/message-loop-name]
+    :as io-handle}
+   state
+   success]
+  (let [prelog (utils/pre-log message-loop-name)  ; might be on a different thread
+        fmt (str "Interrupting event loop waiting for ~:d ms "
+                 "after ~:d at ~:d\n"
+                 "at ~:d because: ~a")]
+    (log/debug prelog
+               (cl-format nil
+                          fmt
+                          delta_f
+                          scheduling-time
+                          actual-next
+                          (System/nanoTime)
+                          success))
+    (let [tag (try (first success)
+                   (catch IllegalArgumentException ex
+                     (log/error ex
+                                prelog
+                                "Should have been a variant")
+                     ::no-op))
+          updater
+          (case tag
+            ::child-> (partial trigger-from-child io-handle (second success))
+            ::drained (do (log/warn prelog
+                                    ;; Actually, this seems like a strong argument for
+                                    ;; having a pair of streams. Child could still have
+                                    ;; bytes to send to the parent after the latter's
+                                    ;; stopped sending, or vice versa.
+                                    ;; I'm pretty sure the complexity I haven't finished
+                                    ;; translating stems from that case.
+                                    ;; TODO: Another piece to revisit once the basics
+                                    ;; work.
+                                    "Stream closed. Surely there's more to do")
+                          (constantly nil))
+            ::parent-> (partial trigger-from-parent
+                                io-handle
+                                (second success))
+            ::no-op identity
+            ::query-state (fn [state]
+                            (if-let [dst (second success)]
+                              (deliver dst state)
+                              (log/warn prelog "state-query request missing required deferred"))
+                            state)
+            ::timed-out (do
+                          (log/debug prelog
+                                     (cl-format nil
+                                                "Timer for ~:d ms after ~:d timed out. Re-triggering Output"
+                                                delta_f
+                                                scheduling-time))
+                          (partial trigger-from-timer io-handle)))]
+      (when (not= tag ::drained)
+        (log/debug prelog "Processing event")
+        ;; At the end of the main ioloop in the refernce
+        ;; implementation, there's a block that closes the pipe
+        ;; to the child if we're done.
+        ;; I think the point is that we'll quit polling on
+        ;; that and start short-circuiting out of the blocks
+        ;; that might do the send, once we've hit EOF
+        ;; Q: What can I do here to
+        ;; produce the same effect?
+        ;; TODO: Worry about that once the basic idea works.
+
+        ;; If the child sent a big batch of data to go out
+        ;; all at once, don't waste time setting up a timeout
+        ;; scheduler. The poll in the original would have
+        ;; returned immediately anyway.
+        ;; Except that n-sec-per-block puts a hard limit on how
+        ;; fast we can send.
+        (let [start (System/nanoTime)
+              ;; I'd prefer to do these next two
+              ;; pieces in a single step.
+              ;; But the fn passed to swap! must
+              ;; be functionally pure, which definitely
+              ;; is not the case with what's going on here.
+              ;; TODO: Break these pieces into something
+              ;; like the interceptor-chain idea. They should
+              ;; return a value that includes a key for a
+              ;; seq of functions to run to perform the
+              ;; side-effects.
+              ;; I'd still have to call updater, get
+              ;; that updating seq, update the state,
+              ;; and then modify the atom (well, modifying
+              ;; the atom first seems safer to avoid
+              ;; race conditions)
+              ;; Q: How long before I get bitten by that?
+              ;; Better Q: Is there a way to avoid it
+              ;; by scrapping the atom?
+              ;; A2: Yes. Add a ::get-state tag to
+              ;; the available tags above. The 'success'
+              ;; parameter is a deferred. (fulfill) that
+              ;; with the current state and go straight
+              ;; to scheduling the next timeout.
+              ;; Then the state atom turns into a normal
+              ;; value.
+              ;; TODO: That needs to happen fairly quickly.
+              ;; TODO: Read up on Executors. I could wind up
+              ;; with really nasty interactions now that I
+              ;; don't have an agent to keep this single-
+              ;; threaded.
+              ;; Actually, it should be safe as written.
+              ;; Just be sure to keep everything synchronized
+              ;; around takes from the i/o handle. (Not
+              ;; needing to do that manually is
+              ;; a great reason to not introduce a second
+              ;; one for bytes travelling the other direction)
+              state' (try (updater state)
+                          (catch RuntimeException ex
+                            (log/error ex "Running updater failed")
+                            ;; The eternal question in this scenario:
+                            ;; Fail fast, or hope we can keep limping
+                            ;; along?
+                            ;; TODO: Add prod vs. dev environment options
+                            ;; to give the caller control over what
+                            ;; should happen here.
+                            ;; (Note that, either way, it really should
+                            ;; include a callback to some
+                            ;; currently-undefined status updater
+                            (comment state)))
+              mid (System/nanoTime)
+              ;; This is taking a ludicrous amount of time.
+              ;; Q: How much should I blame on logging?
+              _ (schedule-next-timeout! io-handle state')
+              end (System/nanoTime)]
+          (log/debug prelog
+                     (cl-format nil
+                                (str
+                                 "Event handling took ~:d nanoseconds\n"
+                                 "Scheduling next timeout took ~:d  nanoseconds")
+                                (- mid start)
+                                (- end mid)))
+          nil)))))
+
 ;;; I really want to move schedule-next-timeout! to flow-control.
 ;;; But it has a circular dependency with trigger-from-timer.
 ;;; Which...honestly also belongs in there.
@@ -617,137 +757,12 @@
                                 recent
                                 now))
           (dfrd/on-realized next-action
-                            ;; TODO: Refactor this to top-level
-                            (fn [success]
-                              (let [prelog (utils/pre-log message-loop-name)  ; might be on a different thread
-                                    fmt (str "Interrupting event loop waiting for ~:d ms "
-                                             "after ~:d at ~:d\n"
-                                             "at ~:d because: ~a")]
-                                (log/debug prelog
-                                           (cl-format nil
-                                                      fmt
-                                                      delta_f
-                                                      now
-                                                      actual-next
-                                                      (System/nanoTime)
-                                                      success))
-                                (let [tag (try (first success)
-                                               (catch IllegalArgumentException ex
-                                                 (log/error ex
-                                                            prelog
-                                                            "Should have been a variant")
-                                                 ::no-op))
-                                      updater
-                                      (case tag
-                                        ::child-> (partial trigger-from-child io-handle (second success))
-                                        ::drained (do (log/warn prelog
-                                                                ;; Actually, this seems like a strong argument for
-                                                                ;; having a pair of streams. Child could still have
-                                                                ;; bytes to send to the parent after the latter's
-                                                                ;; stopped sending, or vice versa.
-                                                                ;; I'm pretty sure the complexity I haven't finished
-                                                                ;; translating stems from that case.
-                                                                ;; TODO: Another piece to revisit once the basics
-                                                                ;; work.
-                                                                "Stream closed. Surely there's more to do")
-                                                      (constantly nil))
-                                        ::parent-> (partial trigger-from-parent
-                                                            io-handle
-                                                            (second success))
-                                        ::no-op identity
-                                        ::query-state (fn [state]
-                                                        (if-let [dst (second success)]
-                                                          (deliver dst state)
-                                                          (log/warn prelog "state-query request missing required deferred"))
-                                                        state)
-                                        ::timed-out (do
-                                                      (log/debug prelog
-                                                                 (cl-format nil
-                                                                            "Timer for ~:d ms after ~:d timed out. Re-triggering Output"
-                                                                            delta_f
-                                                                            now))
-                                                      (partial trigger-from-timer io-handle)))]
-                                  (when (not= tag ::drained)
-                                    (log/debug prelog "Processing event")
-                                    ;; At the end of the main ioloop in the refernce
-                                    ;; implementation, there's a block that closes the pipe
-                                    ;; to the child if we're done.
-                                    ;; I think the point is that we'll quit polling on
-                                    ;; that and start short-circuiting out of the blocks
-                                    ;; that might do the send, once we've hit EOF
-                                    ;; Q: What can I do here to
-                                    ;; produce the same effect?
-                                    ;; TODO: Worry about that once the basic idea works.
-
-                                    ;; If the child sent a big batch of data to go out
-                                    ;; all at once, don't waste time setting up a timeout
-                                    ;; scheduler. The poll in the original would have
-                                    ;; returned immediately anyway.
-                                    ;; Except that n-sec-per-block puts a hard limit on how
-                                    ;; fast we can send.
-                                    (let [start (System/nanoTime)
-                                          ;; I'd prefer to do these next two
-                                          ;; pieces in a single step.
-                                          ;; But the fn passed to swap! must
-                                          ;; be functionally pure, which definitely
-                                          ;; is not the case with what's going on here.
-                                          ;; TODO: Break these pieces into something
-                                          ;; like the interceptor-chain idea. They should
-                                          ;; return a value that includes a key for a
-                                          ;; seq of functions to run to perform the
-                                          ;; side-effects.
-                                          ;; I'd still have to call updater, get
-                                          ;; that updating seq, update the state,
-                                          ;; and then modify the atom (well, modifying
-                                          ;; the atom first seems safer to avoid
-                                          ;; race conditions)
-                                          ;; Q: How long before I get bitten by that?
-                                          ;; Better Q: Is there a way to avoid it
-                                          ;; by scrapping the atom?
-                                          ;; A2: Yes. Add a ::get-state tag to
-                                          ;; the available tags above. The 'success'
-                                          ;; parameter is a deferred. (fulfill) that
-                                          ;; with the current state and go straight
-                                          ;; to scheduling the next timeout.
-                                          ;; Then the state atom turns into a normal
-                                          ;; value.
-                                          ;; TODO: That needs to happen fairly quickly.
-                                          ;; TODO: Read up on Executors. I could wind up
-                                          ;; with really nasty interactions now that I
-                                          ;; don't have an agent to keep this single-
-                                          ;; threaded.
-                                          ;; Actually, it should be safe as written.
-                                          ;; Just be sure to keep everything synchronized
-                                          ;; around takes from the i/o handle. (Not
-                                          ;; needing to do that manually is
-                                          ;; a great reason to not introduce a second
-                                          ;; one for bytes travelling the other direction)
-                                          state' (try (updater state)
-                                                      (catch RuntimeException ex
-                                                        (log/error ex "Running updater failed")
-                                                        ;; The eternal question in this scenario:
-                                                        ;; Fail fast, or hope we can keep limping
-                                                        ;; along?
-                                                        ;; TODO: Add prod vs. dev environment options
-                                                        ;; to give the caller control over what
-                                                        ;; should happen here.
-                                                        ;; (Note that, either way, it really should
-                                                        ;; include a callback to some
-                                                        ;; currently-undefined status updater
-                                                        (comment state)))
-                                          mid (System/nanoTime)
-                                          ;; This is taking a ludicrous amount of time.
-                                          ;; Q: How much should I blame on logging?
-                                          _ (schedule-next-timeout! io-handle state')
-                                          end (System/nanoTime)]
-                                      (log/debug prelog
-                                                 (cl-format nil
-                                                            (str
-                                                             "Event handling took ~:d nanoseconds\n"
-                                                             "Scheduling next timeout took ~:d  nanoseconds")
-                                                            (- mid start)
-                                                            (- end mid)))
-                                      nil)))))
+                            (partial action-trigger
+                                     {::actual-next actual-next
+                                      ::delta_f delta_f
+                                      ::scheduling-time now}
+                                     io-handle
+                                     state)
                             (fn [failure]
                               (log/error failure
                                          prelog
