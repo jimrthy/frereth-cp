@@ -202,7 +202,8 @@
         ;; Something that spans multiple packets would be better, but
         ;; that seems like a variation on this test.
         ;; Although this *does* take me back to the beginning, where
-        ;; I was trying to figure out ways to gen the tests via spec.
+        ;; I was trying to figure out ways to gen the tests based upon
+        ;; a protocol defined by something like spec.
         cheezburgr-length 182
         client-child-cb (fn [bs]
                           (is bs)
@@ -212,7 +213,7 @@
                             (is incoming)
                             ;; We're receiving the initial ::orly? response in State 0.
                             ;; The ::yarly disappears
-                            ;; FIXME: Where
+                            ;; FIXME: Where?
                             (log/info (str "Client (state "
                                            @client-state
                                            ") received: "
@@ -292,62 +293,78 @@
                         (log/info "Success!"))
                       (fn [bad] (is (not bad))))
 
-    (reset! client-atom (message/initial-state "Client" false))
-    (message/start! @client-atom client-parent-cb client-child-cb)
+    (let [client-init (message/initial-state "Client" false)
+          client-io (message/start! client-init client-parent-cb client-child-cb)
+          server-init (message/initial-state "Server" true)
+          ;; It seems like this next part really shouldn't happen until the initial message arrives
+          ;; from the client.
+          ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
+          ;; that isn't quite true
+          server-io (message/start! server-init server-parent-cb server-child-cb)]
+      (reset! client-atom client-io)
+      (reset! server-atom server-io)
 
-    ;; It seems like this next part really shouldn't happen until the initial message arrives
-    ;; from the client.
-    ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
-    ;; that isn't quite true
-    (reset! server-atom (message/initial-state "Server" true))
-    (message/start! @server-atom server-parent-cb server-child-cb)
+      (try
+        (strm/consume (fn [bs]
+                        (log/info "Message from client to server")
+                        (let [srvr-state (message/get-state server-io ::timed-out)]
+                          (if (or (= ::timed-out srvr-state)
+                                  (instance? Throwable srvr-state)
+                                  (nil? srvr-state))
+                            (do
+                              (log/error srvr-state "Server failed!")
+                              (dfrd/error! succeeded? srvr-state))
+                            (message/parent->! server-io bs))))
+                      client->server)
+        (strm/consume (fn [bs]
+                        (log/info "Message from server to client")
+                        (let [client-state (message/get-state client-io ::timed-out)]
+                          (if (or (= ::timed-out client-state)
+                                  (instance? Throwable client-state)
+                                  (nil? client-state))
+                            (do
+                              (log/error client-state "Client failed!")
+                              (dfrd/error! succeeded? client-state))
+                            (message/parent->! client-io bs))))
+                      server->client)
 
-    (try
-      (strm/consume (fn [bs]
-                      (log/info "Message from client to server")
-                      (let [srvr-agent @server-atom]
-                        (if-let [err (agent-error srvr-agent)]
-                          (do
-                            (log/error "Server failed!")
-                            (dfrd/error! succeeded? err))
-                          (message/parent->! srvr-agent bs))))
-                    client->server)
-      (strm/consume (fn [bs]
-                      (log/info "Message from server to client")
-                      (let [client-agent @client-atom]
-                        (if-let [err (agent-error client-agent)]
-                          (do
-                            (log/error "Client failed!")
-                            (dfrd/error! succeeded? err))
-                          (message/parent->! client-agent bs))))
-                    server->client)
-
-      (let [initial-message (Unpooled/buffer K/k-1)
-            helo (.getBytes (pr-str ::ohai!))]
-        ;; Kick off the exchange
-        (message/child->! @client-atom helo)
-        ;; TODO: Find a reasonable value for this timeout
-        (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
-          (log/info "Bottom of message-test")
-          (is (not (agent-error @client-atom)))
-          (is (not (agent-error @server-atom)))
-          (when (= really-succeeded? ::timed-out)
-            ;; Double deref to get to the agent state.
-            (let [{:keys [::specs/flow-control]
-                   :as client-state} @(deref client-atom)]
-              ;; I'm mostly interested in the next-action inside flow-control
-              ;; Down-side to switching to manifold for scheduling:
-              ;; I don't really have any insight into what's going on
-              ;; here.
-              ;; Q: Is that true? Or have I just not studied its
-              ;; docs thoroughly enough?
-              (is (not flow-control))))
-          (is (= ::kthxbai really-succeeded?))
-          (is (= 5 @client-state))))
-      (finally
-        (log/info "Cleaning up")
-        (message/halt! @client-atom)
-        (message/halt! @server-atom)))))
+        (let [initial-message (Unpooled/buffer K/k-1)
+              helo (.getBytes (pr-str ::ohai!))]
+          ;; Kick off the exchange
+          (message/child->! client-io helo)
+          ;; TODO: Find a reasonable value for this timeout
+          (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
+            (log/info "Bottom of message-test")
+            (let [client-state (message/get-state client-io ::timed-out)]
+              (is (not (or (= client-state ::timed-out)
+                           (instance? Throwable client-state)
+                           (nil? client-state))))
+              (when (= really-succeeded? ::timed-out)
+                (let [{:keys [::specs/flow-control]} client-state]
+                  ;; I'm mostly interested in the next-action inside flow-control
+                  ;; Down-side to switching to manifold for scheduling:
+                  ;; I don't really have any insight into what's going on
+                  ;; here.
+                  ;; Q: Is that true? Or have I just not studied its
+                  ;; docs thoroughly enough?
+                  (is (not flow-control))
+                  (is (not client-io)))))
+            (let [srvr-state (message/get-state server-io ::timed-out)]
+              (is (not (or (= srvr-state ::timed-out)
+                           (instance? Throwable srvr-state)
+                           (nil? srvr-state)))))
+            (is (= ::kthxbai really-succeeded?))
+            (is (= 5 @client-state))))
+        (finally
+          (log/info "Cleaning up")
+          (try
+            (message/halt! client-io)
+            (catch Exception ex
+              (log/error ex "Trying to halt client")))
+          (try
+            (message/halt! server-io)
+            (catch Exception ex
+              (log/error ex "Trying to halt server"))))))))
 (comment (handshake))
 
 (deftest overflow-from-child
