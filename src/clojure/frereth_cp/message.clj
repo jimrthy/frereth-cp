@@ -139,15 +139,31 @@
    {{:keys [::specs/next-action]} ::specs/flow-control
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
+    ;; I have at least 1 unit test that receives input
+    ;; from parent, forwards that to child, then
+    ;; echoes it back.
+    ;; Then it calls trigger-output, doesn't find
+    ;; anything ready to go, loops back to polling
+    ;; for events, finds the message the child
+    ;; just queued, and starts over.
+    ;; It's very tempting to try to account for
+    ;; that scenario here, but it would involve
+    ;; enough extra stateful contortions (we'd
+    ;; have to peek
     (log/debug prelog "Triggering Output")
-    ;; Originally, it seemed like it would make sense to cancel
-    ;; the timer here, to avoid duplicating the call when I
-    ;; get input from either the parent or the child.
-    ;; Doing it that way entails too much delay. If the
-    ;; timer is running in a tight loop, it might trigger
-    ;; several more times before they get around to
-    ;; actually calling this.
     (let [state
+          ;; This is a scenario when it seems like it would
+          ;; be nice to be able to peek into io-handle's stream.
+          ;; If a message from the parent has been buffered, it
+          ;; would be nice to move it from there into the outbound
+          ;; queue.
+          ;; Actually, there's probably a useful clue right there:
+          ;; It would be nice to have 1 queue for the outer API,
+          ;; which is what schedule-next-event! is looping around.
+          ;; And then multiple queues for the specifics, like
+          ;; incoming from child vs. parent vs. a timeout triggering
+          ;; a resend.
+          ;; Maybe in a future version.
           (as-> state state
             (assoc state ::specs/recent (System/nanoTime))
             ;; It doesn't make any sense to call this if
@@ -162,6 +178,7 @@
             ;; This really only makes sense when the
             ;; timer triggers to let us know that it's
             ;; OK to send a new message.
+            ;; *However*:
             ;; The timeout on that may completely change
             ;; when the child schedules another send,
             ;; or a message arrives from parent to
@@ -184,7 +201,9 @@
   {:pre [array-o-bytes]}
   (let [prelog (utils/pre-log message-loop-name)]
     (log/info prelog
-              "trigger-from-child\nSent stream address: "
+              "trigger-from-child\nSending"
+              (count array-o-bytes)
+              "bytes\nSent stream address:"
               strm-hwm)
     (let [state' (if (from-child/room-for-child-bytes? state)
                    (do
@@ -524,7 +543,7 @@
               (and (not= un-ackd-count)
                    (>= rtt-resend-time min-resend-time)) (min rtt-resend-time))
         end-time (System/nanoTime)]
-    (log/debug prelog log-message)
+    (log/debug prelog "Scheduling considerations\n" log-message)
     (when-not (= actual-next alt)
       (log/warn prelog
                 "Scheduling Mismatch!"))
@@ -534,7 +553,7 @@
                ;; Q: Is that due to reduced logging?
                (cl-format nil (str "Calculating next scheduled time took"
                                    " ~:d nanoseconds and calculated ~:d."
-                                   " Alt approach took ~:d and calculated ~:d")
+                                   "\nAlt approach took ~:d and calculated ~:d")
                           (- mid-time now)
                           actual-next
                           (- end-time mid-time)
@@ -587,6 +606,14 @@
                                 io-handle
                                 (second success))
             ::no-op identity
+            ;; This can throw off the timer, since we're basic the delay on
+            ;; the delta from recent (which doesn't change) rather than now.
+            ;; But we're basing the actual delay from now, which does change.
+            ;; e.g. If the scheduled delay is 980 ms, and someone triggers a
+            ;; query-state that takes 20 ms after 20 ms, the new delay will
+            ;; still be 980 ms rather than the 940 that would have been
+            ;; appropriate.
+            ;; Q: What's the best way to avoid this?
             ::query-state (fn [state]
                             (if-let [dst (second success)]
                               (deliver dst state)
@@ -600,7 +627,7 @@
                                                 scheduling-time))
                           (partial trigger-from-timer io-handle)))]
       (when (not= tag ::drained)
-        (log/debug prelog "Processing event")
+        (log/debug prelog "Processing event:" tag)
         ;; At the end of the main ioloop in the refernce
         ;; implementation, there's a block that closes the pipe
         ;; to the child if we're done.
@@ -675,8 +702,9 @@
           (log/debug prelog
                      (cl-format nil
                                 (str
-                                 "Event handling took ~:d nanoseconds\n"
+                                 "Handling ~a event took ~:d nanoseconds\n"
                                  "Scheduling next timeout took ~:d  nanoseconds")
+                                tag
                                 (- mid start)
                                 (- end mid)))
           nil)))))
@@ -1026,18 +1054,21 @@
       (throw (ex-info (str prelog "Missing stream inside io-handle")
                       {::io-handle io-handle})))
     (when (strm/closed? stream)
-      (throw (RuntimeException. "Can't write to a closed stream")))
+      (throw (RuntimeException. (str prelog "Can't write to a closed stream"))))
     (let [success
           (strm/put! stream [::child-> array-o-bytes])]
       (dfrd/on-realized success
                         (fn [x]
+                          ;; Note that this could happen on a different thread.
+                          ;; Hence the extra calls to utils/pre-log
                           (log/debug (utils/pre-log message-loop-name)
-                                     "Sent bytes from child to buffer, triggered from\n"
+                                     "Buffered bytes from child, triggered from\n"
                                      prelog))
                         (fn [x]
                           (log/warn (utils/pre-log message-loop-name)
                                     "Failed sending bytes from child to buffer, triggered from\n"
                                     prelog))))
+    (log/debug prelog "returning from child->")
     nil))
 
 (s/fdef parent->!
@@ -1076,5 +1107,5 @@
                           (log/warn (utils/pre-log message-loop-name)
                                     "Failed  to buffer bytes from parent, triggered from\n"
                                     prelog))))
-    (log/debug prelog "returning")
+    (log/debug prelog "returning from parent->")
     nil))

@@ -136,7 +136,6 @@
       (let [data-start (- u length)
             writer-index (.writerIndex send-buf)]
         ;; Start by skipping to the appropriate start position
-        (log/warn "Q: Does this make any sense at all?")
         (.writerIndex send-buf data-start))
 
       ;; Q: What happens on the other side?
@@ -302,6 +301,11 @@
                                   (update ::specs/transmissions inc)
                                   (assoc ::specs/time recent)
                                   (assoc ::specs/message-id current-message-id))]
+          ;; There's a 6 ms gap in logs between previous message and this one.
+          ;; FIXME: Profile to see where that time went
+          ;; alt: try converting current-message to a transient before using it to
+          ;; build updated message
+          ;; better alt: eliminate the call to pretty below
           (log/debug pre-log
                      (str "Getting ready to build message block for message "
                           current-message-id
@@ -375,61 +379,64 @@
   {:pre [n-sec-per-block
          recent
          rtt-timeout]}
-  (assert earliest-time (str "Missing earliest-time among " (keys outgoing)))
-  (log/debug (str message-loop-name ": Checking for a block to resend"))
   ;; It's tempting to make adjustments in here using now vs. recent.
   ;; Q: How much impact would that really have?
   ;; (There would definitely be *some*)
-  (if (and #_(not= 0 earliest-time)
-           ;; I have at least one bug where earliest-time isn't getting
-           ;; correctly adjusted to 0 when all my un-ackd-blocks have been
-           ;; ACK'd. That doesn't seem like the most intuitive way to
-           ;; track this anyway.
-           (< 0 (count un-ackd-blocks))
-           (>= recent (+ earliest-time n-sec-per-block))
-           (>= recent (+ earliest-time rtt-timeout)))
-    (do
-      (log/debug (utils/pre-log message-loop-name)
-                 "It has been long enough to justify resending one of our"
-                 (count un-ackd-blocks)
-                 "un-ACK'd blocks")
-      ;; This gets us to line 344
-      ;; It finds the first block that matches earliest-time
-      ;; It's going to re-send that block (it *does* exist...right?)
-      (let [block (first un-ackd-blocks)
-            state' (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
-        ;; But first, it might adjust some of the globals.
-        (if (> recent (+ last-panic (* 4 rtt-timeout)))
-          ;; Need to update some of the related flow-control fields
-          (-> state'
-              (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
-              (assoc-in [::specs/outgoing ::specs/last-panic] recent)
-              (assoc-in [::specs/flow-control ::specs/last-edge] recent))
-          ;; We haven't had another timeout since the last-panic.
-          ;; Don't adjust those dials.
-          state')))
-    (do
-      ;; Honestly, it makes more sense to consolidate the
-      ;; gap-buffer with any ACKs in this message before
-      ;; looking for messages to resend.
-      ;; TODO: That instead.
-      (log/debug (cl-format nil
-                            (str
-                             "~a (~a): Conditions wrong"
-                             " for resending any of our ~d previously "
-                             "sent un-ack'd blocks, based on"
-                             "\nEarliest time: ~:d"
-                             "\nnanoseconds per block: ~:d"
-                             "\nrtt-timeout: ~:d"
-                             "\nrecent: ~:d")
-                            message-loop-name
-                            (Thread/currentThread)
-                            (count un-ackd-blocks)
-                            earliest-time
-                            n-sec-per-block
-                            rtt-timeout
-                            recent))
-      state)))
+  (let [prelog (utils/pre-log message-loop-name)]
+    (assert earliest-time
+            (str prelog
+                 "Missing earliest-time among"
+                 (keys outgoing)))
+    (log/debug prelog "Checking for a block to resend")
+    (if (and #_(not= 0 earliest-time)
+             ;; I have at least one bug where earliest-time isn't getting
+             ;; correctly adjusted to 0 when all my un-ackd-blocks have been
+             ;; ACK'd. That doesn't seem like the most intuitive way to
+             ;; track this anyway.
+             (< 0 (count un-ackd-blocks))
+             (>= recent (+ earliest-time n-sec-per-block))
+             (>= recent (+ earliest-time rtt-timeout)))
+      (do
+        (log/debug prelog
+                   "It has been long enough to justify resending one of our"
+                   (count un-ackd-blocks)
+                   "un-ACK'd blocks")
+        ;; This gets us to line 344
+        ;; It finds the first block that matches earliest-time
+        ;; It's going to re-send that block (it *does* exist...right?)
+        (let [block (first un-ackd-blocks)
+              state' (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
+          ;; But first, it might adjust some of the globals.
+          (if (> recent (+ last-panic (* 4 rtt-timeout)))
+            ;; Need to update some of the related flow-control fields
+            (-> state'
+                (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
+                (assoc-in [::specs/outgoing ::specs/last-panic] recent)
+                (assoc-in [::specs/flow-control ::specs/last-edge] recent))
+            ;; We haven't had another timeout since the last-panic.
+            ;; Don't adjust those dials.
+            state')))
+      (do
+        ;; Honestly, it makes more sense to consolidate the
+        ;; gap-buffer with any ACKs in this message before
+        ;; looking for messages to resend.
+        ;; TODO: That instead.
+        (log/debug prelog
+                   (cl-format nil
+                              (str
+                               "Conditions wrong"
+                               " for resending any of our ~d previously "
+                               "sent un-ack'd blocks, based on"
+                               "\nEarliest time: ~:d"
+                               "\nnanoseconds per block: ~:d"
+                               "\nrtt-timeout: ~:d"
+                               "\nrecent: ~:d")
+                              (count un-ackd-blocks)
+                              earliest-time
+                              n-sec-per-block
+                              rtt-timeout
+                              recent))
+        state))))
 
 (s/fdef ok-to-send-new?
         :args (s/cat :state ::specs/state)
@@ -466,14 +473,14 @@
              ;; So only consider the ones that have already
              ;; been put on the wire.
              (< (count un-ackd-blocks) K/max-outgoing-blocks)
-             (or want-ping
+             (or (not= ::specs/false want-ping)
                  ;; This next style clause is used several times in
                  ;; the reference implementation.
                  ;; The actual check is negative in context, so
                  ;; it's really a not
                  ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
                  ;; C programmers have assured me that it translates into
-                 (if send-eof
+                 (if (not= ::specs/false send-eof)
                    (not send-eof-processed)
                    (or (< 0 (count un-ackd-blocks))
                        (< 0 (count un-sent-blocks))))))]
@@ -515,14 +522,15 @@
             ::specs/un-sent-blocks]
      :as outgoing} ::specs/outgoing
     :as state}]
-  (let [block-count (count un-sent-blocks)]
+  (let [block-count (count un-sent-blocks)
+        prelog (utils/pre-log message-loop-name)]
     ;; This is one of those places where I'm getting confused
     ;; by mixing the new blocks with the ones that have already
     ;; been sent at least once.
-    (log/debug (str message-loop-name
-                    ": Does it make sense to try to send any of our "
-                    block-count
-                    " unsent blocks?"))
+    (log/debug prelog
+               "Does it make sense to try to send any of our"
+               block-count
+               "unsent blocks?")
     (if (< 0 block-count)
       (if (ok-to-send-new? state)
         ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
@@ -541,7 +549,8 @@
                          strm-hwm)
                     send-eof
                     false)]
-          (log/debug (str message-loop-name ": Conditions ripe for sending a new outgoing message"))
+          (log/debug prelog
+                     "Conditions ripe for sending a new outgoing message")
           (assoc-in state
                     [::specs/outgoing ::specs/next-block-queue]
                     ::specs/un-sent-blocks))

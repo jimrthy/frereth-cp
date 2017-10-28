@@ -4,7 +4,8 @@
             [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.crypto :as crypto]))
+            [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.util :as utils]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
@@ -186,8 +187,8 @@
     :as state}
    {acked-time ::specs/time
     :as acked-block}]
-  (log/debug (str message-loop-name
-                  ": Updating flow-control stats due to "
-                  acked-block))
+  (log/debug (utils/pre-log message-loop-name)
+             "Updating flow-control stats due to "
+             acked-block)
   (let [state (recalc-rtt-average state acked-time)]
     (jacobson's-retransmission-timeout state)))

@@ -109,7 +109,7 @@
 (s/fdef calculate-start-stop-bytes
         :args (s/cat :state ::specs/state
                      :packet ::specs/packet)
-        :ret ::start-stop-details)
+        :ret (s/nilable ::start-stop-details))
 (defn calculate-start-stop-bytes
   "Extract start/stop ACK addresses (lines 562-574)"
   [{{:keys [::specs/receive-written]
@@ -120,124 +120,124 @@
     D ::specs/size-and-flags
     start-byte ::specs/start-byte
     :as packet}]
-  (assert D (str message-loop-name ": Missing ::specs/size-and-flags among\n" (keys packet)))
-  (log/debug (utils/pre-log message-loop-name)
+  (let [prelog (utils/pre-log message-loop-name)]
+    (assert D (str prelog "Missing ::specs/size-and-flags among\n" (keys packet)))
+    (log/debug prelog
                "calculate-start-stop-bytes: D =="
                D
                "\nIncoming State:\n"
                incoming)
-  ;; If we're re-receiving bytes...well, the reference
-  ;; implementation just discards them.
-  ;; It would be safer to verify that the overlapping bits
-  ;; match, since that sort of thing is an important attack
-  ;; vector.
-  ;; Then again, we've already authenticated the message and
-  ;; verified its signature. If an attacker can break that,
-  ;; doing extra work here isn't going to protect anything.
-  ;; We're back to the "DJB thought it was safe" appeal to
-  ;; authority.
-  ;; So stick with the current approach for now.
-  (let [starting-point (.readerIndex incoming-buf)
-        D' D
-        SF (bit-and D (bit-or K/eof-normal K/eof-error))
-        D (- D SF)
-        message-length (.readableBytes incoming-buf)]
-    (log/debug (str message-loop-name
-                    ": Setting up initial read from position "
-                    starting-point
-                    ": " D' " bytes"))
-    (if (and (<= D K/k-1)
-             ;; In the reference implementation,
-             ;; len = 16 * (unsigned long long) messagelen[pos]
-             ;; (assigned at line 443)
-             ;; This next check looks like it really
-             ;; amounts to "have we read all the bytes
-             ;; in this block from the parent pipe?"
-             ;; It doesn't make a lot of sense in this
-             ;; approach
-             ;; Except that it's a sanity check on the
-             ;; extraction code.
-             (= D message-length))
-      ;; start-byte and stop-byte are really addresses in the
-      ;; message stream
-      (let [stop-byte (+ D start-byte)]
-        (log/debug (str message-loop-name
-                        ": Starting with ACK from "
-                        start-byte
-                        " to "
-                        ;; It looks like there's a 1-off error here.
-                        ;; If Message 1 (start-byte 0) is 1024
-                        ;; bytes long, stop-byte should be at
-                        ;; address 1023.
-                        ;; At least for purposes of the ACK.
-                        ;; Q: Right?
-                        ;; A: Wrong.
-                        ;; Lines 589-593:
-                        ;; If we receive 1 byte at address 0,
-                        ;; that increments receivebytes to 1.
-                        ;; Line 605:
-                        ;; That's what goes into the ACK block.
-                        stop-byte))
-        (log/debug (utils/pre-log message-loop-name)
-                   "\ncalculate-start-stop-bytes\nreceive-written:"
-                   receive-written
-                   "\nstop-byte:"
-                   stop-byte
-                   ;; We aren't using anything like this.
-                   ;; Big Q: Should we?
-                   ;; A: Maybe. It would save some GC.
-                   ;; "\nreceive-buf writable length:" (.writableBytes receive-buf)
-                   )
+    ;; If we're re-receiving bytes...well, the reference
+    ;; implementation just discards them.
+    ;; It would be safer to verify that the overlapping bits
+    ;; match, since that sort of thing is an important attack
+    ;; vector.
+    ;; Then again, we've already authenticated the message and
+    ;; verified its signature. If an attacker can break that,
+    ;; doing extra work here isn't going to protect anything.
+    ;; We're back to the "DJB thought it was safe" appeal to
+    ;; authority.
+    ;; So stick with the current approach for now.
+    (let [starting-point (.readerIndex incoming-buf)
+          D' D
+          SF (bit-and D (bit-or K/eof-normal K/eof-error))
+          D (- D SF)
+          message-length (.readableBytes incoming-buf)]
+      (log/debug prelog
+                 (str "Setting up initial read from position "
+                      starting-point
+                      ": " D' " bytes"))
+      (if (and (<= D K/k-1)
+               ;; In the reference implementation,
+               ;; len = 16 * (unsigned long long) messagelen[pos]
+               ;; (assigned at line 443)
+               ;; This next check looks like it really
+               ;; amounts to "have we read all the bytes
+               ;; in this block from the parent pipe?"
+               ;; It doesn't make a lot of sense in this
+               ;; approach
+               ;; Except that it's a sanity check on the
+               ;; extraction code.
+               (= D message-length))
+        ;; start-byte and stop-byte are really addresses in the
+        ;; message stream
+        (let [stop-byte (+ D start-byte)]
+          (log/debug prelog
+                     "Start by processing ACK from"
+                     start-byte
+                     "to"
+                     ;; It looks like there's a 1-off error here.
+                     ;; If Message 1 (start-byte 0) is 1024
+                     ;; bytes long, stop-byte should be at
+                     ;; address 1023.
+                     ;; At least for purposes of the ACK.
+                     ;; Q: Right?
+                     ;; A: Wrong.
+                     ;; Lines 589-593:
+                     ;; If we receive 1 byte at address 0,
+                     ;; that increments receivebytes to 1.
+                     ;; Line 605:
+                     ;; That's what goes into the ACK block.
+                     stop-byte
+                     "\ncalculate-start-stop-bytes\nreceive-written:"
+                     receive-written
+                     "\nstop-byte:"
+                     stop-byte
+                     ;; We aren't using anything like this.
+                     ;; Big Q: Should we?
+                     ;; A: Maybe. It would save some GC.
+                     ;; "\nreceive-buf writable length:" (.writableBytes receive-buf)
+                     )
 
-        ;; of course, flow control would avoid this case -- DJB
-        ;; Q: What does that mean? --JRG
-        ;; Whatever it means:
-        ;; Note that both stop-byte and receive-written are absolute
-        ;; stream addresses. So we're just tossing messages for addresses
-        ;; that are too far past the last portion of that stream that
-        ;; we've passed along to the child.
-        (when (<= stop-byte (+ receive-written K/recv-byte-buf-size))
-          ;; 576-579: SF (StopFlag? deals w/ EOF)
-          (let [receive-eof (case SF
-                              0 false
-                              K/eof-normal ::specs/normal
-                              K/eof-error ::specs/error)
-                ;; Note that this needs to update the "global state" because
-                ;; we've reached the end of the stream.
-                receive-total-bytes (when receive-eof stop-byte)]
-            ;; 581-588: copy incoming into receivebuf
+          ;; of course, flow control would avoid this case -- DJB
+          ;; Q: What does that mean? --JRG
+          ;; Whatever it means:
+          ;; Note that both stop-byte and receive-written are absolute
+          ;; stream addresses. So we're just tossing messages for addresses
+          ;; that are too far past the last portion of that stream that
+          ;; we've passed along to the child.
+          (when (<= stop-byte (+ receive-written K/recv-byte-buf-size))
+            ;; 576-579: SF (StopFlag? deals w/ EOF)
+            (let [receive-eof (case SF
+                                0 ::specs/false
+                                K/eof-normal ::specs/normal
+                                K/eof-error ::specs/error)
+                  ;; Note that this needs to update the "global state" because
+                  ;; we've reached the end of the stream.
+                  receive-total-bytes (when receive-eof stop-byte)]
+              ;; 581-588: copy incoming into receivebuf
+              (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
+                    ;; Address at the limit of our buffer size
+                    max-rcvd (+ receive-written K/recv-byte-buf-size)
+                    ^Long max-k (min D (- max-rcvd start-byte))
+                    delta-k (- max-k min-k)]
+                (assert (<= 0 max-k))
+                (when (neg? delta-k)
+                  (throw (ex-info (str prelog "stop-byte before start-byte")
+                                  {::max-k max-k
+                                   ::min-k min-k
+                                   ::D D
+                                   ::max-rcvd max-rcvd
+                                   ::start-byte start-byte
+                                   ::receive-written receive-written})))
 
-            (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
-                  ;; Address at the limit of our buffer size
-                  max-rcvd (+ receive-written K/recv-byte-buf-size)
-                  ^Long max-k (min D (- max-rcvd start-byte))
-                  delta-k (- max-k min-k)]
-              (assert (<= 0 max-k))
-              (when (neg? delta-k)
-                (throw (ex-info "stop-byte before start-byte"
-                                {::max-k max-k
-                                 ::min-k min-k
-                                 ::D D
-                                 ::max-rcvd max-rcvd
-                                 ::start-byte start-byte
-                                 ::receive-written receive-written})))
-
-              {::min-k min-k
-               ::max-k max-k
-               ::delta-k delta-k
-               ::max-rcvd max-rcvd
-               ;; Yes, this might well be nil if there's no reason to "change"
-               ;; the "global state".
-               ;; This feels pretty hackish.
-               ::receive-total-bytes receive-total-bytes}))))
-      (do
-        (log/warn (str message-loop-name
-                       ": Too long message packet from parent. D == "
-                       D
-                       "\nRemaining readable bytes: " message-length))
-        ;; This needs to short-circuit.
-        ;; Q: is there a better way to accomplish that?
-        nil))))
+                {::min-k min-k
+                 ::max-k max-k
+                 ::delta-k delta-k
+                 ::max-rcvd max-rcvd
+                 ;; Yes, this might well be nil if there's no reason to "change"
+                 ;; the "global state".
+                 ;; This feels pretty hackish.
+                 ::receive-total-bytes receive-total-bytes}))))
+        (do
+          (log/warn prelog
+                    "Message packet from parent is too long. D =="
+                    D
+                    "\nRemaining readable bytes:"
+                    message-length)
+          ;; This needs to short-circuit.
+          ;; Q: is there a better way to accomplish that?
+          nil)))))
 
 (s/fdef extract-message!
         :args (s/cat :state ::specs/state
@@ -338,9 +338,10 @@
   ;; have been called in the first place.
   (let [prelog (utils/pre-log message-loop-name)]
     (log/info prelog
-              (str "Top of flag-acked-others!\nExtracting gap ACK from\n"
+              (str "Top of flag-acked-others!\nHandling gaps ACK'd from\n"
                    packet
                    "\n"))
+    ;; TODO: Check for performance difference if we switch to a reducible.
     (let [gaps (map (fn [[startfn stopfn]]
                       [(startfn packet) (stopfn packet)])
                     [[(constantly 0) ::specs/ack-length-1] ;  0-8
@@ -350,7 +351,7 @@
                      [::specs/ack-gap-4->5 ::specs/ack-length-5] ; 30-32
                      [::specs/ack-gap-5->6 ::specs/ack-length-6]])] ; 34-36
       (log/debug prelog
-                 (str "ACK'ing with Gaps: " (into [] gaps)
+                 (str "ACK'd with Gaps: " (into [] gaps)
                       "\nState: " state))
       (->
        (reduce (fn [{:keys [::stop-byte]
@@ -377,6 +378,8 @@
                gaps)
        ;; Ditch the temp key we used to track the stop point
        (dissoc ::stop-byte)
+       ;; FIXME: This is premature. We need to call
+       ;; flow-control/update-statistics first
        help/drop-ackd!))))
 
 (s/fdef prep-send-ack
@@ -424,6 +427,8 @@
                  (str "Building an ACK for message "
                       message-id
                       "\nup to address "
+                      contiguous-stream-count
+                      "/"
                       strm-hwm))
       ;; DJB reuses the incoming message that we're preparing
       ;; to ACK, locked to 192 bytes.
@@ -553,6 +558,10 @@ Line 608"
                       (get-in state
                               [::specs/outgoing
                                ::specs/un-ackd-blocks])))
+      ;; TODO: This really needs to happen after we've called
+      ;; update-statistics.
+      ;; Otherwise, there's nothing for that to update
+      #_(help/drop-ackd! state)
       (update-in state
                  [::specs/outgoing ::specs/un-ackd-blocks]
                  (fn [blocks]

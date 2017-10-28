@@ -100,7 +100,7 @@
                         buf)
               (.skipBytes buf bytes-to-skip)))
           (log/debug (utils/pre-log message-loop-name)
-                     (str "Consolidating entry 0/"
+                     (str "Consolidating entry 1/"
                           (count (::specs/gap-buffer
                                   incoming))))
           (-> incoming
@@ -251,14 +251,15 @@
                       ;; library. The sooner those can be nailed down,
                       ;; the happier it will be for everyone.
                       (try
-                        ;; Use milliseconds here because it's supposedly
+                        ;; TODO: Switch back to
+                        ;; using milliseconds here because it's supposedly
                         ;; ~2x faster than nanoTime, and this resolution
-                        ;; as plenty granular
-                        (let [start-time (System/currentTimeMillis)]
+                        ;; seems plenty granular
+                        (let [start-time (System/nanoTime)]
                           (->child bs)
-                          (let [end-time (System/currentTimeMillis)
+                          (let [end-time (System/nanoTime)
                                 delta (- end-time start-time)
-                                msg (str "Child callback took " delta " ms")]
+                                msg (str "Child callback took " delta " ns")]
                             (if (< callback-threshold-warning delta)
                               (if (< callback-threshold-error delta)
                                 (log/error pre-log msg)

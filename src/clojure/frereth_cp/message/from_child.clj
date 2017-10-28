@@ -39,6 +39,19 @@
    ;; algorithm later to consolidate smaller blocks,
    ;; so maybe it doesn't make sense to mess with it here.
    ::specs/start-pos start-pos})
+(comment
+  ;; This seems to be ridiculously slow.
+  ;; TODO: Check the timing. Maybe it speeds up as the JIT
+  ;; warms up
+  (time (doseq i (range 1000)
+               (build-individual-block ::garbage 256 (* 256 i))))
+  (do
+    ;; These numbers seem far too small
+    (doseq i (range 1000)
+           (build-individual-block ::garbage 256 (* 256 i)))
+    (time (doseq i (range 1000)
+                 (build-individual-block ::garbage 256 (* 256 i)))))
+  )
 
 (s/fdef build-block-descriptions
         :args (s/cat :message-loop-name ::specs/message-loop-name
@@ -72,6 +85,7 @@
             ;; TODO: Compare with using (reduce), possibly on a transient
             ;; (or ztellman's proteus?)
             ;; Maybe it evens out when we're looking at larger data
+            ;; FIXME: Switch to using reducibles
             (map (fn [n]
                    (let [length (if (< n (dec block-count))
                                   max-block-length
@@ -192,7 +206,7 @@
    ^bytes array-o-bytes]
   (let [prelog (utils/pre-log message-loop-name)]
     (log/debug prelog
-               (str "Adding message block(s) to "
+               (str "Adding new message block(s) to "
                     ;; TODO: Might be worth logging the actual contents
                     ;; when it's time to trace
                     (count un-sent-blocks)
@@ -214,12 +228,15 @@
           ;; we're starting from a byte array. So it would
           ;; be silly to copy it.
           buf (Unpooled/wrappedBuffer array-o-bytes)
+          ;; The writer index indicates the space that's
+          ;; available for reading.
           ;; Needing to do this feels wrong.
           ;; Honestly, I'm relying on functionality
           ;; that doesn't seem to be quite documented.
           ;; It almost seems as though I really should be
           ;; setting up a new [pooled] buffer and reading
           ;; array-o-bytes into it instead.
+          ;; That also seems a lot more wasteful.
           _ (.writerIndex buf buf-size)
           ;; In the original, this is the offset into the circular
           ;; buf where we're going to start writing incoming bytes.

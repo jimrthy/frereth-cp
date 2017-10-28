@@ -189,14 +189,20 @@
   (throw (RuntimeException. "Write this")))
 
 (deftest handshake
+  ;; The stop values going back to to-child/consolidate-message-block
+  ;; are gibberish. This probably ties in with my failures to cope with
+  ;; ::ackd-addr.
+  ;; This definitely seems to tie in with message.helpers, when it receives
+  ;; ACKs in gap buffers
+  ;; TODO: Need to address that.
   (let [client->server (strm/stream)
         server->client (strm/stream)
         succeeded? (dfrd/deferred)
         ;; Simulate a very stupid FSM
         client-state (atom 0)
         client-atom (atom nil)
-        client-parent-cb (fn [bs]
-                           (log/info "Sending a" (class bs) "to client's parent")
+        client-parent-cb (fn [^bytes bs]
+                           (log/info "Sending a" (count bs) "byte array to client's parent")
                            (let [sent (strm/try-put! client->server bs 500 ::timed-out)]
                              (is (not= @sent ::timed-out))))
         ;; Something that spans multiple packets would be better, but
@@ -225,7 +231,7 @@
                                         ::yarly)
                                     1 (do
                                         (is (= incoming ::kk))
-                                        ::icanhazchbrgr?)
+                                        ::icanhazchzbrgr?)
                                     2 (do
                                         (is (= incoming ::kk))
                                         ;; This is the ACK associated
@@ -251,7 +257,8 @@
                                         (dfrd/success! succeeded? ::kthxbai)
                                         nil))]
                               (swap! client-state inc)
-                              ;; Hmm...I've wound up with a circular dependency again.
+                              ;; Hmm...I've wound up with a circular dependency
+                              ;; on the io-handle again.
                               ;; Q: Is this a problem with my architecture, or just
                               ;; a testing artifact?
                               (when next-message
@@ -263,23 +270,18 @@
                            (let [sent (strm/try-put! server->client bs 500 ::timed-out)]
                              (is (not= @sent ::timed-out))))
         server-child-cb (fn [bs]
-                          (let [incoming (edn/read-string (String. bs))
-                                ;; Latest test is failing here, on ::yarly.
-                                ;; Wut?
-                                ;; I'm receiving
-                                ;; "frereth-cp.message.message-test/yarly"
-                                ;; rather than
-                                ;; ":frereth-cp.message.message-test/yarly"
-                                ;; due to an off-by-1 error.
-                                #_(comment (throw (RuntimeException. "Start back here")))
-                                _ (log/debug (str "Matching '" incoming
+                          (let [prelog (utils/pre-log "Server's child callback")
+                                incoming (edn/read-string (String. bs))
+                                _ (log/debug prelog
+                                             (str "Matching '" incoming
                                                   "', a " (class incoming)) )
                                 rsp (condp = incoming
                                         ::ohai! ::orly?
                                         ::yarly ::kk
-                                        ::icanhazchbrgr? ::kk
+                                        ::icanhazchzbrgr? ::kk
                                         ::kthxbai ::kk)]
-                            (log/info "Server received"
+                            (log/info prelog
+                                      "Server received"
                                       incoming
                                       "\nwhich triggers"
                                       rsp)
@@ -287,6 +289,12 @@
                             (when (= incoming ::icanhazchzbrgr?)
                               ;; One of the main points is that this doesn't need to be a lock-step
                               ;; request/response.
+                              (log/info prelog "Client requested chzbrgr. Send out of lock-step")
+                              ;; The message this triggers to the client is terribly corrupt.
+                              ;; There's a bunch of garbage in the list of gaps being ACK'd, and
+                              ;; the size field is garbage.
+                              ;; Even the readable-bytes field in the ByteBuf is wrong. This should
+                              ;; be 182 bytes long, but only 144 are getting sent.
                               (message/child->! @server-atom (byte-array (range cheezburgr-length))))))]
     (dfrd/on-realized succeeded?
                       (fn [good]
@@ -306,26 +314,49 @@
 
       (try
         (strm/consume (fn [bs]
-                        (log/info "Message from client to server")
-                        (let [srvr-state (message/get-state server-io ::timed-out)]
-                          (if (or (= ::timed-out srvr-state)
-                                  (instance? Throwable srvr-state)
-                                  (nil? srvr-state))
-                            (do
-                              (log/error srvr-state "Server failed!")
-                              (dfrd/error! succeeded? srvr-state))
-                            (message/parent->! server-io bs))))
+                        ;; Note that, at this point, we're blocking the
+                        ;; server's I/O loop.
+                        ;; Whatever happens here must return control
+                        ;; quickly.
+                        (let [prelog (utils/pre-log "client->server")]
+                          (log/info prelog "Incoming")
+                          ;; Checking for the server state is wasteful here.
+                          ;; And very dubious...depending on implementation details,
+                          ;; it wouldn't take much to shift this over to triggering
+                          ;; a deadlock (since we're really running on the event loop
+                          ;; thread).
+                          ;; Actually, I'm a little surprised that this works at all.
+                          ;; Q: But is it worth it for the test's sake?
+                          (let [srvr-state (message/get-state server-io ::timed-out)]
+                            (if (or (= ::timed-out srvr-state)
+                                    (instance? Throwable srvr-state)
+                                    (nil? srvr-state))
+                              (let [problem (if (instance? Throwable srvr-state)
+                                              srvr-state
+                                              (ex-info "Unusual failure"
+                                                       {::problem srvr-state}))]
+                                (log/error problem prelog "Server failed!")
+                                (dfrd/error! succeeded? problem))
+                              (do
+                                (message/parent->! server-io bs)
+                                (log/debug prelog "Server's parent-> triggered"))))))
                       client->server)
         (strm/consume (fn [bs]
-                        (log/info "Message from server to client")
-                        (let [client-state (message/get-state client-io ::timed-out)]
-                          (if (or (= ::timed-out client-state)
-                                  (instance? Throwable client-state)
-                                  (nil? client-state))
-                            (do
-                              (log/error client-state "Client failed!")
-                              (dfrd/error! succeeded? client-state))
-                            (message/parent->! client-io bs))))
+                        (let [prelog (utils/pre-log "server->client consumer")]
+                          (log/info prelog "Message from server to client")
+                          (let [client-state (message/get-state client-io ::timed-out)]
+                            (if (or (= ::timed-out client-state)
+                                    (instance? Throwable client-state)
+                                    (nil? client-state))
+                              (let [problem (if (instance? Throwable client-state)
+                                              client-state
+                                              (ex-info "Non-exception"
+                                                       {::problem client-state}))]
+                                (log/error problem prelog "Client failed!")
+                                (dfrd/error! succeeded? problem))
+                              (do
+                                (message/parent->! client-io bs)
+                                (log/debug prelog "Client's parent-> triggered"))))))
                       server->client)
 
         (let [initial-message (Unpooled/buffer K/k-1)
@@ -347,12 +378,13 @@
                   ;; here.
                   ;; Q: Is that true? Or have I just not studied its
                   ;; docs thoroughly enough?
-                  (is (not flow-control))
-                  (is (not client-io)))))
-            (let [srvr-state (message/get-state server-io ::timed-out)]
+                  (is (not flow-control) "Client flow-control"))))
+            (let [{:keys [::specs/flow-control]
+                   :as srvr-state} (message/get-state server-io ::timed-out)]
               (is (not (or (= srvr-state ::timed-out)
                            (instance? Throwable srvr-state)
-                           (nil? srvr-state)))))
+                           (nil? srvr-state))))
+              (is (not flow-control) "Server flow-control"))
             (is (= ::kthxbai really-succeeded?))
             (is (= 5 @client-state))))
         (finally

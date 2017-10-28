@@ -68,10 +68,10 @@ Based on earliestblocktime_compute, in lines 138-153
   ;; This gets called right after we flag the blocks
   ;; that have been ACK'd
   (let [un-flagged (remove ::ackd? un-acked-blocks)]
-    (log/debug (str message-loop-name
-                    ": Calculating min-time across "
-                    (count un-flagged)
-                    " un-ACK'd blocks"))
+    (log/debug (utils/pre-log message-loop-name)
+               "Calculating min-time across"
+               (count un-flagged)
+               "un-ACK'd blocks")
     (if (< 0 (count un-flagged))
       (apply min (map ::specs/time
                       ;; In the original,
@@ -107,7 +107,7 @@ Based on earliestblocktime_compute, in lines 138-153
         _ (log/debug log-prefix
                      (str "mark-ack'd Keeping "
                           (count to-keep)
-                          " block(s):\n"
+                          " un-ACK'd block(s):\n"
                           (reduce (fn [acc b]
                                     (str acc "\n" b))
                                   ""
@@ -162,6 +162,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     :as state}
    start
    stop]
+  ;; TODO: If un-ackd blocks is empty, we can just short-circuit this
   (let [log-prefix (utils/pre-log message-loop-name)]
     ;; This next log message is annoying right now, because
     ;; it seems very repetitive and pointless.
@@ -196,15 +197,30 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                    "Done w/ initial flag reduce:\n"
                    state)
         ;; Again, gaps kill it
-        (log/warn "This treatment of ::ackd-addr also fails")
+        (log/warn log-prefix "This treatment of ::ackd-addr also fails")
         (assoc-in state
                   [::specs/outgoing ::specs/ackd-addr]
                   stop))
       (do
-        ;; Q: Is this correct?
-        ;; At the very least, there might have been the
-        ;; previous message received.
-        (log/info log-prefix "Nothing ACK'd")
+        ;; Note that it might have ACK'd the previous address.
+        ;; There's another wrinkle in here:
+        ;; It ACK's the message ID as soon as it's received.
+        ;; It doesn't ACK the actual stream address until the
+        ;; bytes have been written to the child.
+        ;; We have to choose between the possibility that the
+        ;; buffer dies prematurely (meaning we've ACK'd blocks
+        ;; that never actually made it to the child) vs. risking
+        ;; its death after the bytes have been written.
+        ;; Classic networking trade-off.
+        ;; Even if we wait to send the ACK, there's no guarantee
+        ;; that the child "process" didn't die immediately after
+        ;; reading, which means the bytes would have disappeared
+        ;; anyway.
+        ;; That sort of consistency really needs to be handled
+        ;; at the application level.
+        ;; The bytes made it over the wire. That's the important
+        ;; thing at this layer.
+        (log/info log-prefix "Nothing ACK'd by address")
         ;; No change
         state))))
 
