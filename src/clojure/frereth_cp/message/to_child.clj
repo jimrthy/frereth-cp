@@ -260,8 +260,8 @@
                           (let [end-time (System/nanoTime)
                                 delta (- end-time start-time)
                                 msg (str "Child callback took " delta " ns")]
-                            (if (< callback-threshold-warning delta)
-                              (if (< callback-threshold-error delta)
+                            (if (< (* 1000000 callback-threshold-warning) delta)
+                              (if (< (* 1000000 callback-threshold-error) delta)
                                 (log/error pre-log msg)
                                 (log/warn pre-log msg))
                               (log/debug pre-log msg))))

@@ -177,9 +177,8 @@
   (let [block-to-move (peek un-sent-blocks)]
     (assert block-to-move (str "Trying to move non-existent block from among\n"
                                (keys outgoing)))
-    ;; Based on this, it looks as though block-to-move is an empty list
-    (log/debug (str message-loop-name
-                    ": Moving first unsent block\n("
+    (log/debug (utils/pre-log message-loop-name)
+               (str "Moving first unsent block\n("
                     ;; TODO: Verify that this has a ::specs/time key and value
                     block-to-move
                     ")\nfrom\na queue of "
@@ -229,7 +228,7 @@
   (let [pre-log (utils/pre-log message-loop-name)]
     ;; Really just for timing info
     (log/debug pre-log
-               "top of pre-calculate after-send")
+               "Top of pre-calculate after-send")
     (assert next-block-queue
             (str pre-log
                  "No next-block-queue to tell us what to send\nAvailable:\n"
@@ -301,16 +300,17 @@
                                   (update ::specs/transmissions inc)
                                   (assoc ::specs/time recent)
                                   (assoc ::specs/message-id current-message-id))]
-          ;; There's a 6 ms gap in logs between previous message and this one.
+          ;; There's a 4-6 ms gap in logs between log entry message and this one.
           ;; FIXME: Profile to see where that time went
           ;; alt: try converting current-message to a transient before using it to
           ;; build updated message
-          ;; better alt: eliminate the call to pretty below
+          ;; cheaper alt: eliminate the call to pretty below
           (log/debug pre-log
                      (str "Getting ready to build message block for message "
                           current-message-id
                           "\nbased on:\n")
-                     (utils/pretty current-message))
+                     #_(utils/pretty current-message)
+                     current-message)
           (let [buf (build-message-block-description message-loop-name
                                                      current-message-id
                                                      updated-message)
@@ -388,12 +388,7 @@
                  "Missing earliest-time among"
                  (keys outgoing)))
     (log/debug prelog "Checking for a block to resend")
-    (if (and #_(not= 0 earliest-time)
-             ;; I have at least one bug where earliest-time isn't getting
-             ;; correctly adjusted to 0 when all my un-ackd-blocks have been
-             ;; ACK'd. That doesn't seem like the most intuitive way to
-             ;; track this anyway.
-             (< 0 (count un-ackd-blocks))
+    (if (and (< 0 (count un-ackd-blocks))
              (>= recent (+ earliest-time n-sec-per-block))
              (>= recent (+ earliest-time rtt-timeout)))
       (do
@@ -564,11 +559,11 @@
   [state]
   (let [found? (check-for-previous-block-to-resend state)]
     (if (get-in found? [::specs/outbound ::specs/next-block-queue])
-      found?)
+      found?
 ;;;       357-410: Try sending a new block: (-- DJB)
-     ;; There's goto-fun overlap with resending
-     ;; a previous block -- JRG
-    (check-for-new-block-to-send state)))
+      ;; There's goto-fun overlap with resending
+      ;; a previous block -- JRG
+      (check-for-new-block-to-send found?))))
 
 (s/fdef block->parent!
         :args (s/cat :->parent ::specs/->parent

@@ -91,10 +91,6 @@ Based on earliestblocktime_compute, in lines 138-153
             ::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing
     :as state}]
-  (log/warn "Something's broken here.\nmessage-loop-name:"
-            message-loop-name
-            "\nState keys:"
-            (keys state))
   ;; To match the next block, the main point is to discard
   ;; the first sequence of blocks that have been ACK'd
   ;; drop-while seems obvious

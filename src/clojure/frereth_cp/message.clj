@@ -36,6 +36,16 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
+(def event-loop-buffer-size
+  "Q: How many event requests can we queue?"
+  ;; TODO: Play with this number
+  ;; It probably shouldn't be hard-coded. This
+  ;; makes more sense as a knob that clients can
+  ;; adjust.
+  ;; They obviously *can*, by altering the root
+  ;; binding. But that's a messy thing to do.
+  16)
+
 (def max-child-buffer-size
   "Maximum message blocks from parent to child that we'll buffer before dropping
 
@@ -933,10 +943,19 @@
   ;; functionality into here to avoid the pointless
   ;; indirection.
   ;; TODO: That.
-  (let [s (strm/stream)
+  (let [
         ;; TODO: Need to tune and monitor this execution pool
         ;; c.f. ztellman's dirigiste
         executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
+        ;; This approach was a mistake.
+        ;; By default, executors run in a thread pool that's based
+        ;; around either
+        ;; 1. unbounded thread count
+        ;; 2. unbounded queues
+        ;; Specifically, the docs warn that, if you implement your
+        ;; own thread pool, you really need to do the same.
+        ;;s (strm/stream event-loop-buffer-size identity executor)
+        s (strm/stream)
         s (strm/onto executor s)
         io-handle {::specs/->parent parent-cb
                    ::specs/->child child-cb
@@ -944,6 +963,11 @@
                    ::specs/message-loop-name message-loop-name
                    ::specs/stream s}]
     (start-event-loops! io-handle state)
+    (log/info (utils/pre-log message-loop-name)
+              (cl-format nil
+                         "Started an event loop with buffer size ~d:\n~a"
+                   event-loop-buffer-size
+                   s))
     io-handle))
 
 (s/fdef close!
@@ -986,13 +1010,14 @@
   "Synchronous equivalent to deref"
   ([{:keys [::specs/message-loop-name
             ::specs/stream]}
-    time-out]
+    timeout
+    failure-signal]
    (log/debug
     (utils/pre-log message-loop-name)
     "Submitting get-state query to"
     stream)
    (let [state-holder (dfrd/deferred)
-         req (strm/try-put! stream [::query-state state-holder] 100)]
+         req (strm/try-put! stream [::query-state state-holder] timeout)]
      (dfrd/on-realized req
                        (fn [success]
                          (log/debug
@@ -1003,9 +1028,9 @@
                                     (utils/pre-log message-loop-name)
                                     "Submitting state query")
                          (deliver state-holder failure)))
-     (deref state-holder 500 time-out)))
+     (deref state-holder timeout failure-signal)))
   ([stream-holder]
-   (get-state stream-holder ::timed-out)))
+   (get-state stream-holder 500 ::timed-out)))
 
 (s/fdef child->!
         :args (s/cat :io-handle ::specs/io-handle

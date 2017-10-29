@@ -111,7 +111,7 @@
             initialized (message/initial-state loop-name true)
             io-handle (message/start! initialized  parent-cb child-cb)]
         (try
-          (let [state (message/get-state io-handle ::timed-out)]
+          (let [state (message/get-state io-handle 500 ::timed-out)]
             (is (not= state ::timed-out))
             (when (not= state ::timed-out)
               (reset! io-handle-atom io-handle)
@@ -135,7 +135,7 @@
                     (is (= (count message-body) (count without-header)))
                     (is (b-t/bytes= message-body without-header))))
                 (is (realized? wrote) "Initial write from parent hasn't returned yet.")
-                (let [state (message/get-state io-handle ::time-out)]
+                (let [state (message/get-state io-handle 500 ::time-out)]
                   (is (not= state ::timeout))
                   (when (not= state ::timeout)
                     ;; This test fails because
@@ -195,6 +195,8 @@
   ;; This definitely seems to tie in with message.helpers, when it receives
   ;; ACKs in gap buffers
   ;; TODO: Need to address that.
+  (log/info (utils/pre-log "Handshake test")
+            "Top")
   (let [client->server (strm/stream)
         server->client (strm/stream)
         succeeded? (dfrd/deferred)
@@ -202,7 +204,9 @@
         client-state (atom 0)
         client-atom (atom nil)
         client-parent-cb (fn [^bytes bs]
-                           (log/info "Sending a" (count bs) "byte array to client's parent")
+                           (log/info (utils/pre-log "Client parent callback")
+                                     "Sending a" (count bs)
+                                     "byte array to client's parent")
                            (let [sent (strm/try-put! client->server bs 500 ::timed-out)]
                              (is (not= @sent ::timed-out))))
         ;; Something that spans multiple packets would be better, but
@@ -266,7 +270,8 @@
 
         server-atom (atom nil)
         server-parent-cb (fn [bs]
-                           (log/info "Sending a" (class bs) "to server's parent")
+                           (log/info (utils/pre-log "Server's parent callback")
+                                     "Sending a" (class bs) "to server's parent")
                            (let [sent (strm/try-put! server->client bs 500 ::timed-out)]
                              (is (not= @sent ::timed-out))))
         server-child-cb (fn [bs]
@@ -329,36 +334,50 @@
                           ;; thread).
                           ;; Actually, I'm a little surprised that this works at all.
                           ;; Q: But is it worth it for the test's sake?
-                          (let [srvr-state (message/get-state server-io ::timed-out)]
-                            (if (or (= ::timed-out srvr-state)
-                                    (instance? Throwable srvr-state)
-                                    (nil? srvr-state))
-                              (let [problem (if (instance? Throwable srvr-state)
-                                              srvr-state
-                                              (ex-info "Unusual failure"
-                                                       {::problem srvr-state}))]
-                                (log/error problem prelog "Server failed!")
-                                (dfrd/error! succeeded? problem))
-                              (do
-                                (message/parent->! server-io bs)
-                                (log/debug prelog "Server's parent-> triggered"))))))
+                          (loop [n 5
+                                 time-out 100]
+                            (let [srvr-state (message/get-state server-io time-out ::timed-out)]
+                              (if (or (= ::timed-out srvr-state)
+                                      (instance? Throwable srvr-state)
+                                      (nil? srvr-state))
+                                (let [problem (if (instance? Throwable srvr-state)
+                                                srvr-state
+                                                (ex-info "Non-exception in client->server consumer"
+                                                         {::problem srvr-state}))]
+                                  (if (> 0 n)
+                                    (do
+                                      (log/error problem prelog "Server failed!")
+                                      (dfrd/error! succeeded? problem))
+                                    (recur (dec n) (* time-out 3))))
+                                (do
+                                  (message/parent->! server-io bs)
+                                  (log/debug prelog
+                                             "Server's parent-> triggered after"
+                                             n "attempts")))))))
                       client->server)
         (strm/consume (fn [bs]
                         (let [prelog (utils/pre-log "server->client consumer")]
                           (log/info prelog "Message from server to client")
-                          (let [client-state (message/get-state client-io ::timed-out)]
-                            (if (or (= ::timed-out client-state)
-                                    (instance? Throwable client-state)
-                                    (nil? client-state))
-                              (let [problem (if (instance? Throwable client-state)
-                                              client-state
-                                              (ex-info "Non-exception"
-                                                       {::problem client-state}))]
-                                (log/error problem prelog "Client failed!")
-                                (dfrd/error! succeeded? problem))
-                              (do
-                                (message/parent->! client-io bs)
-                                (log/debug prelog "Client's parent-> triggered"))))))
+                          (loop [n 5
+                                 time-out 100]
+                            (let [client-state (message/get-state client-io time-out ::timed-out)]
+                              (if (or (= ::timed-out client-state)
+                                      (instance? Throwable client-state)
+                                      (nil? client-state))
+                                (if (> 0 n)
+                                  (let [problem (if (instance? Throwable client-state)
+                                                  client-state
+                                                  (ex-info "Non-exception in server->client consumer"
+                                                           {::problem client-state}))]
+                                    (log/error problem prelog "Client failed!")
+                                    (dfrd/error! succeeded? problem))
+                                  (recur (dec n) (* time-out 3)))
+                                (do
+                                  (message/parent->! client-io bs)
+                                  (log/debug prelog
+                                             "Client's parent-> triggered after"
+                                             n
+                                             "attempts")))))))
                       server->client)
 
         (let [initial-message (Unpooled/buffer K/k-1)
@@ -368,7 +387,7 @@
           ;; TODO: Find a reasonable value for this timeout
           (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
             (log/info "Bottom of message-test")
-            (let [client-state (message/get-state client-io ::timed-out)]
+            (let [client-state (message/get-state client-io 500 ::timed-out)]
               (is (not (or (= client-state ::timed-out)
                            (instance? Throwable client-state)
                            (nil? client-state))))
@@ -382,7 +401,7 @@
                   ;; docs thoroughly enough?
                   (is (not flow-control) "Client flow-control"))))
             (let [{:keys [::specs/flow-control]
-                   :as srvr-state} (message/get-state server-io ::timed-out)]
+                   :as srvr-state} (message/get-state server-io 500 ::timed-out)]
               (is (not (or (= srvr-state ::timed-out)
                            (instance? Throwable srvr-state)
                            (nil? srvr-state))))
@@ -526,7 +545,7 @@
                       "Verifying that state hasn't errored out after"
                       (float (utils/nanos->millis (- end-time start-time))) "milliseconds")
             ;; Q: Can I do anything better in terms of checking for errors?
-            (let [client-state (message/get-state client-io-handle ::timeout)]
+            (let [client-state (message/get-state client-io-handle 500 ::timeout)]
               (is outcome)
               (is (not= ::timeout outcome))
               (when (not= ::timeout outcome)
@@ -553,7 +572,7 @@
                                            byte-array))))))))))
         (let [{:keys [::specs/incoming
                       ::specs/outgoing]
-               :as outcome} (message/get-state client-io-handle ::time-out)]
+               :as outcome} (message/get-state client-io-handle 500 ::time-out)]
           (is (not= outcome ::time-out))
           (when (not= outcome ::time-out)
             (is outgoing)
