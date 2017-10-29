@@ -42,19 +42,20 @@
   [n-sec-per-block]
   ;; This next magic number matches K/send-byte-buf-size, but that's
   ;; almost definitely just a coincidence
-  (if (< n-sec-per-block K/k-128)
-    n-sec-per-block
+  (if (> n-sec-per-block K/k-128)
     ;; DJB had this to say.
     ;; As 4 separate comments.
     ;; additive increase: adjust 1/N by a constant c
     ;; rtt-fair additive increase: adjust 1/N by a constant c every nanosecond
     ;; approximation: adjust 1/N by cN every N nanoseconds
     ;; i.e., N <- 1/(1/N + cN) = N/(1 + cN^2) every N nanoseconds
-    (if (< n-sec-per-block 16777216)
+    (if (< n-sec-per-block K/m-16)
       (let [u (quot n-sec-per-block K/k-128)]
         (- n-sec-per-block (* u u u)))
       (let [d (double n-sec-per-block)]
-        (long (/ d (inc (/ (* d d) 2251799813685248.0))))))))
+        ;; TODO: figure out the meaning behind this magic number
+        (long (/ d (inc (/ (* d d) 2251799813685248.0))))))
+    n-sec-per-block))
 
 (s/fdef adjust-rtt-phase
         :args (s/cat :state ::specs/state)
@@ -67,7 +68,7 @@
             ::specs/rtt-seen-older-high
             ::specs/rtt-seen-older-low]} ::specs/flow-control
     :as state}]
-  (if (not rtt-phase)
+  (if rtt-phase
     (if rtt-seen-older-high
       (update state (fn [s]
                       (assoc s
@@ -80,8 +81,43 @@
       (assoc-in state [::specs/flow-control ::specs/rtt-phase] false)
       state)))
 
+(defn possibly-adjust-speed
+  [{:keys [::specs/recent]
+    {:keys [::specs/last-edge
+            ::specs/last-speed-adjustment
+            ::specs/n-sec-per-block
+            ::specs/rtt-seen-recent-high
+            ::specs/rtt-seen-recent-low]} ::specs/flow-control
+    :as state}]
+  ;; Lines 488-527
+  (if (>= recent (+ last-speed-adjustment (* 16 n-sec-per-block)))
+    (let [n-sec-per-block (if (> (- recent last-speed-adjustment) K/secs-10)
+                            (+ K/secs-1 (crypto/random-mod (quot K/secs-1 8)))
+                            n-sec-per-block)
+          n-sec-per-block (jacobson-adjust-block-time n-sec-per-block)
+          ;; adjust-rtt-phase depends on this
+          state (assoc-in state [::specs/flow-control ::specs/n-sec-per-block] n-sec-per-block)
+          ;; adjust-rtt-phase does not modify rtt-seen-recent-high/low.
+          ;; Q: Should it?
+          {{:keys [::specs/rtt-seen-recent-high ::specs/rtt-seen-recent-low]} ::specs/flow-control
+           :as state} (adjust-rtt-phase state)]
+      (update state
+              ::specs/flow-control
+              (fn [cur]
+                (assoc cur
+                       ::specs/last-speed-adjustment recent
+                       ::specs/seen-older-high rtt-seen-recent-high
+                       ::specs/seen-older-low rtt-seen-recent-low
+                       ;; We're throwing away the values we just calculated.
+                       ;; Well, except that they got moved into seen-older-*
+                       ;; Saving these booleans seems pointless.
+                       ::specs/seen-recent-high false
+                       ::specs/seen-recent-low false))))
+    state))
+
 (s/fdef jacobson's-retransmission-timeout
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :state ::specs/state
+                     :block ::specs/block)
         :ret ::specs/state)
 (defn jacobson's-retransmission-timeout
   "Jacobson's retransmission timeout calculation: --DJB
@@ -102,80 +138,86 @@
             ::specs/rtt-seen-recent-high
             ::specs/rtt-seen-recent-low
             ::specs/rtt-timeout]} ::specs/flow-control
-    :as state}]
-  (let [rtt-delta (- rtt-average rtt)
-        rtt-average (+ rtt-average (/ rtt-delta 8))
-        rtt-delta (if (> 0 rtt-delta)
-                    (- rtt-delta)
-                    rtt-delta)
-        rtt-delta (- rtt-delta rtt-deviation)
-        rtt-deviation (+ rtt-deviation (/ rtt-delta 4))
-        rtt-timeout (+ rtt-average (* 4 rtt-deviation))
-        ;; adjust for delayed acks with anti-spiking: --DJB
-        rtt-timeout (+ rtt-timeout (* 8 n-sec-per-block))
+    :as state}
+   {block-send-time ::specs/time
+    :as block}]
+  (let [rtt (- recent block-send-time)
+        ;; This is screwy. Lines 460-466.
+        ;; TODO: There must be a better/cleaner way
+        {:keys [::n-sec-per-block
+                ::rtt-average
+                ::rtt-deviation
+                ::rtt-highwhater
+                ::rtt-lowwater]} (if (= 0 rtt-average)
+                                   {::n-sec-per-block rtt
+                                    ::rtt-average rtt
+                                    ::rtt-deviation (/ rtt 2)
+                                    ::rtt-highwater rtt
+                                    ::rtt-lowwater rtt}
+                                   {::n-sec-per-block n-sec-per-block
+                                    ::rtt-average rtt-average
+                                    ::rtt-deviation rtt-deviation
+                                    ::rtt-highwater rtt-highwater
+                                    ::rtt-lowwater rtt-lowwater})]
 
-        ;; recognizing top and bottom of congestion cycle:  --DJB
-        rtt-delta (- rtt rtt-highwater)
-        rtt-highwater (+ rtt-highwater (/ rtt-delta K/k-1))
-        rtt-delta (- rtt rtt-lowwater)
-        rtt-lowwater (+ rtt-lowwater
-                        (if (> rtt-delta 0)
-                          (/ rtt-delta K/k-8)
-                          (/ rtt-delta K/k-div4)))
-        ;; Q: Are these actually used anywhere else?
-        rtt-seen-recent-high (> rtt-average (+ rtt-highwater K/ms-5))
-        rtt-seen-recent-low (and (not rtt-seen-recent-high)
-                                 (< rtt-average rtt-lowwater))]
-    (when (>= recent (+ last-speed-adjustment (* 16 n-sec-per-block)))
-      (let [n-sec-per-block (if (> (- recent last-speed-adjustment) K/secs-10)
-                              (+ K/secs-1 (crypto/random-mod (quot n-sec-per-block 8)))
-                              n-sec-per-block)
-            n-sec-per-block (jacobson-adjust-block-time n-sec-per-block)
-            state (assoc-in state [::specs/flow-control ::specs/n-sec-per-block] n-sec-per-block)
-            ;; adjust-rtt-phase does not modify rtt-seen-recent-high/low.
-            ;; Q: Is it supposed to?
-            {{:keys [::specs/rtt-seen-recent-high ::specs/rtt-seen-recent-low]} ::specs/flow-control
-             :as state} (adjust-rtt-phase state)
-            state (update state
-                          ::specs/flow-control
-                          (fn [cur]
-                            (assoc cur
-                                   ::specs/last-speed-adjustment recent
-                                   ::specs/n-sec-per-block n-sec-per-block
-                                   ::specs/rtt-average rtt-average
+    (let [rtt-delta (- rtt-average rtt)
+          rtt-average (+ rtt-average (/ rtt-delta 8))
+          rtt-delta (if (> 0 rtt-delta)
+                      (- rtt-delta)
+                      rtt-delta)
+          rtt-delta (- rtt-delta rtt-deviation)
+          rtt-deviation (+ rtt-deviation (/ rtt-delta 4))
+          rtt-timeout (+ rtt-average (* 4 rtt-deviation))
+          ;; adjust for delayed acks with anti-spiking: --DJB
+          rtt-timeout (+ rtt-timeout (* 8 n-sec-per-block))
 
-                                   ::specs/rtt-deviation rtt-deviation
-                                   ::specs/rtt-highwater rtt-highwater
-                                   ::specs/rtt-lowwater rtt-lowwater
-                                   ::specs/rtt-timeout rtt-timeout
-                                   ::specs/seen-older-high rtt-seen-recent-high
-                                   ::specs/seen-older-low rtt-seen-recent-low
-                                   ;; We're throwing away the values we just calculated.
-                                   ;; Well, except that they got moved into seen-older-*
-                                   ;; Saving these booleans seems pointless.
-                                   ::specs/seen-recent-high false
-                                   ::specs/seen-recent-low false)))
-            been-a-minute? (- recent last-edge K/minute-1)]
-        (cond
-          ;; Note that we generally don't need to make any changes
-          (and (> 0 been-a-minute?)
-               (< recent (+ last-doubling
-                            (* 4 n-sec-per-block)
-                            (* 64 rtt-timeout)
-                            K/ms-5))) state
-          (and (<= 0 been-a-minute?)
-               (< recent (+ last-doubling
-                            (* 4 n-sec-per-block)
-                            (* 2 rtt-timeout)))) state
-          ;; Q: Really? A: Yep. This is line 535
-          (<= (dec K/k-64) n-sec-per-block) state
-          :else (-> state
-                    (assoc ::specs/last-edge
-                           (if (not= 0 last-edge) recent last-edge))
-                    (assoc-in [::specs/flow-control ::specs/last-doubling]
-                              recent)
-                    (assoc-in [::specs/flow-control ::specs/n-sec-per-block]
-                              (quot n-sec-per-block 2))))))))
+          ;; recognizing top and bottom of congestion cycle:  --DJB
+          rtt-delta (- rtt rtt-highwater)
+          rtt-highwater (+ rtt-highwater (/ rtt-delta K/k-1))
+          rtt-delta (- rtt rtt-lowwater)
+          rtt-lowwater (+ rtt-lowwater
+                          (if (> rtt-delta 0)
+                            (/ rtt-delta K/k-8)
+                            (/ rtt-delta K/k-div4)))
+          ;; Q: Are these actually used anywhere else?
+          recently-seen-rtt-high? (> rtt-average (+ rtt-highwater K/ms-5))
+          rtt-seen-recent-high recently-seen-rtt-high?
+          rtt-seen-recent-low (and (not recently-seen-rtt-high?)
+                                   (< rtt-average rtt-lowwater))
+          state (update state
+                        ::specs/flow-control
+                        (fn [cur]
+                          (assoc cur
+                                 ::specs/n-sec-per-block n-sec-per-block
+                                 ::specs/rtt-average rtt-average
+                                 ::specs/rtt-deviation rtt-deviation
+                                 ::specs/rtt-highwater rtt-highwater
+                                 ::specs/rtt-lowwater rtt-lowwater
+                                 ::specs/rtt-seen-recent-high rtt-seen-recent-high
+                                 ::specs/rtt-seen-recent-low rtt-seen-recent-low
+                                 ::specs/rtt-timeout rtt-timeout)))
+          state (possibly-adjust-speed state)
+          been-a-minute? (- recent last-edge K/minute-1)]
+      (cond
+        ;; Note that we generally don't need to make any changes
+        (and (> 0 been-a-minute?)
+             (< recent (+ last-doubling
+                          (* 4 n-sec-per-block)
+                          (* 64 rtt-timeout)
+                          K/ms-5))) state
+        (and (<= 0 been-a-minute?)
+             (< recent (+ last-doubling
+                          (* 4 n-sec-per-block)
+                          (* 2 rtt-timeout)))) state
+        ;; Q: Really? A: Yep. This is line 535
+        (<= (dec K/k-64) n-sec-per-block) state
+        :else (-> state
+                  (assoc ::specs/last-edge
+                         (if (not= 0 last-edge) recent last-edge))
+                  (assoc-in [::specs/flow-control ::specs/last-doubling]
+                            recent)
+                  (assoc-in [::specs/flow-control ::specs/n-sec-per-block]
+                            (quot n-sec-per-block 2)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -199,4 +241,4 @@
              acked-block)
   (let [state (recalc-rtt-average state acked-time)]
     (assert state)
-    (jacobson's-retransmission-timeout state)))
+    (jacobson's-retransmission-timeout state acked-block)))

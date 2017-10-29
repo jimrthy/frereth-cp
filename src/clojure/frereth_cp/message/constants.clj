@@ -50,6 +50,10 @@
   "aka 128k"
   131072)
 
+(def m-16
+  "aka 16m, or 16M, or 16Mi"
+  16777216)
+
 ;; (dec (pow 2 32))
 ;; TODO: Eliminate this duplication
 (def max-32-uint-obsolete K/max-32-uint)
