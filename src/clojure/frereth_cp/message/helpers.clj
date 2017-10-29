@@ -90,7 +90,11 @@ Based on earliestblocktime_compute, in lines 138-153
             ::specs/send-eof
             ::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing
-    :as acked}]
+    :as state}]
+  (log/warn "Something's broken here.\nmessage-loop-name:"
+            message-loop-name
+            "\nState keys:"
+            (keys state))
   ;; To match the next block, the main point is to discard
   ;; the first sequence of blocks that have been ACK'd
   ;; drop-while seems obvious
@@ -107,7 +111,7 @@ Based on earliestblocktime_compute, in lines 138-153
         to-drop (filter ::specs/ackd? un-ackd-blocks)
         to-keep (remove ::specs/ackd? un-ackd-blocks)
         _ (log/debug log-prefix
-                     (str "mark-ack'd Keeping "
+                     (str "drop-ack'd! Keeping "
                           (count to-keep)
                           " un-ACK'd block(s):\n"
                           (reduce (fn [acc b]
@@ -127,7 +131,7 @@ Based on earliestblocktime_compute, in lines 138-153
                     (str "Really should be smarter re: ::ackd-addr (aka "
                          ackd-addr
                          ") here"))
-        state (-> acked
+        state (-> state
                   ;; Note that this really needs to be the stream address of the
                   ;; highest contiguous block that's been ACK'd.
                   ;; This makes any scheme for ACK'ing pieces out of

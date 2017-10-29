@@ -21,7 +21,7 @@
     :as state}
    acked-time]
   (let [rtt (- recent acked-time)]
-    (if (not= 0 rtt-average)
+    (if (= 0 rtt-average)
       (update state
               ::specs/flow-control
               (fn [s]
@@ -80,6 +80,9 @@
       (assoc-in state [::specs/flow-control ::specs/rtt-phase] false)
       state)))
 
+(s/fdef jacobson's-retransmission-timeout
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
 (defn jacobson's-retransmission-timeout
   "Jacobson's retransmission timeout calculation: --DJB
 
@@ -166,9 +169,13 @@
                             (* 2 rtt-timeout)))) state
           ;; Q: Really? A: Yep. This is line 535
           (<= (dec K/k-64) n-sec-per-block) state
-          :else (assoc-in (assoc state ::specs/last-edge (if (not= 0 last-edge) recent last-edge))
-                          [::specs/flow-control ::specs/last-doubling
-                           ::specs/n-sec-per-block (quot n-sec-per-block 2)] recent))))))
+          :else (-> state
+                    (assoc ::specs/last-edge
+                           (if (not= 0 last-edge) recent last-edge))
+                    (assoc-in [::specs/flow-control ::specs/last-doubling]
+                              recent)
+                    (assoc-in [::specs/flow-control ::specs/n-sec-per-block]
+                              (quot n-sec-per-block 2))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -191,4 +198,5 @@
              "Updating flow-control stats due to "
              acked-block)
   (let [state (recalc-rtt-average state acked-time)]
+    (assert state)
     (jacobson's-retransmission-timeout state)))

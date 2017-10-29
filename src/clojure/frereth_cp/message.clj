@@ -347,8 +347,8 @@
                   (trigger-output io-handle state'))
                 (catch RuntimeException ex
                   (log/error ex
-                             (str prelog
-                                  "Trying to cope with a message arriving from parent")))))
+                             prelog
+                             "Trying to cope with a message arriving from parent"))))
             (do
               ;; This is actually pretty serious.
               ;; All sorts of things had to go wrong for us to get here.
