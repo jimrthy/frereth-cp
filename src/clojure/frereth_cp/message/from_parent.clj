@@ -377,10 +377,7 @@
                (assoc state ::stop-byte 0)
                gaps)
        ;; Ditch the temp key we used to track the stop point
-       (dissoc ::stop-byte)
-       ;; FIXME: This is premature. We need to call
-       ;; flow-control/update-statistics first
-       help/drop-ackd!))))
+       (dissoc ::stop-byte)))))
 
 (s/fdef prep-send-ack
         :args (s/cat :state ::state
@@ -552,16 +549,19 @@ Line 608"
       ;; That seeming silliness is completely correct: this
       ;; is the entire point behind a pure ACK.
       (flag-acked-others! state packet)
+      ;; If I do this here, message-test/bigger-echo passes.
+      ;; The problem is that it's a false positive.
+      #_(help/drop-ackd! state)
       (reduce flow-control/update-statistics
               state
               (filter ::specs/ackd?
                       (get-in state
                               [::specs/outgoing
                                ::specs/un-ackd-blocks])))
-      ;; TODO: This really needs to happen after we've called
-      ;; update-statistics.
-      ;; Otherwise, there's nothing for that to update
-      #_(help/drop-ackd! state)
+      ;; Calling update-statistics breaks things. This version
+      ;; causes my event loop to time out when nothing else is happening
+      ;; when I try to query for the state
+      (help/drop-ackd! state)
       (update-in state
                  [::specs/outgoing ::specs/un-ackd-blocks]
                  (fn [blocks]

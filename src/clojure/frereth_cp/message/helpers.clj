@@ -86,8 +86,10 @@ Based on earliestblocktime_compute, in lines 138-153
         :ret ::specs/state)
 (defn drop-ackd!
   [{:keys [::specs/message-loop-name]
-    {:keys [::specs/send-eof
-            ::specs/un-ackd-blocks]} ::specs/outgoing
+    {:keys [::specs/ackd-addr
+            ::specs/send-eof
+            ::specs/un-ackd-blocks]
+     :as outgoing} ::specs/outgoing
     :as acked}]
   ;; To match the next block, the main point is to discard
   ;; the first sequence of blocks that have been ACK'd
@@ -121,7 +123,10 @@ Based on earliestblocktime_compute, in lines 138-153
                        (disj acc dropped))
                      un-ackd-blocks
                      to-drop)
-        _ (log/warn "Really should be smarter re: ::ackd-addr here")
+        _ (log/warn log-prefix
+                    (str "Really should be smarter re: ::ackd-addr (aka "
+                         ackd-addr
+                         ") here"))
         state (-> acked
                   ;; Note that this really needs to be the stream address of the
                   ;; highest contiguous block that's been ACK'd.

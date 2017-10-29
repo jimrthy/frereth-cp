@@ -111,7 +111,7 @@
             initialized (message/initial-state loop-name true)
             io-handle (message/start! initialized  parent-cb child-cb)]
         (try
-          (let [state (message/get-state io-handle)]
+          (let [state (message/get-state io-handle ::timed-out)]
             (is (not= state ::timed-out))
             (when (not= state ::timed-out)
               (reset! io-handle-atom io-handle)
@@ -299,7 +299,9 @@
     (dfrd/on-realized succeeded?
                       (fn [good]
                         (log/info "Success!"))
-                      (fn [bad] (is (not bad))))
+                      (fn [bad]
+                        (log/error bad "High-level test failure")
+                        (is (not bad))))
 
     (let [client-init (message/initial-state "Client" false)
           client-io (message/start! client-init client-parent-cb client-child-cb)
@@ -527,32 +529,34 @@
             (let [client-state (message/get-state client-io-handle ::timeout)]
               (is outcome)
               (is (not= ::timeout outcome))
-              (is (not (instance? Exception outcome)))
-              (when-not (= outcome ::timeout)
-                (let [result-buffer (:buffer outcome)]
-                  (is (= packet-count (count result-buffer)))
-                  (is (= K/initial-max-block-length (count (first result-buffer))))
-                  (doseq [packet (butlast result-buffer)]
-                    (is (= (count packet) K/k-div2)))
-                  (let [final (last result-buffer)]
-                    (is (= (count final) K/k-div4)))
-                  (let [rcvd-strm
-                        (reduce (fn [acc block]
-                                  (conj acc block))
-                                []
-                                result-buffer)]
-                    (is (b-t/bytes= (->> rcvd-strm
-                                         first
-                                         byte-array)
-                                    (->> message-body
-                                         vec
-                                         (take K/initial-max-block-length)
-                                         byte-array)))))))))
+              (when (not= ::timeout outcome)
+                (is (not (instance? Exception outcome)))
+                (when-not (= outcome ::timeout)
+                  (let [result-buffer (:buffer outcome)]
+                    (is (= packet-count (count result-buffer)))
+                    (is (= K/initial-max-block-length (count (first result-buffer))))
+                    (doseq [packet (butlast result-buffer)]
+                      (is (= (count packet) K/k-div2)))
+                    (let [final (last result-buffer)]
+                      (is (= (count final) K/k-div4)))
+                    (let [rcvd-strm
+                          (reduce (fn [acc block]
+                                    (conj acc block))
+                                  []
+                                  result-buffer)]
+                      (is (b-t/bytes= (->> rcvd-strm
+                                           first
+                                           byte-array)
+                                      (->> message-body
+                                           vec
+                                           (take K/initial-max-block-length)
+                                           byte-array))))))))))
         (let [{:keys [::specs/incoming
                       ::specs/outgoing]
                :as outcome} (message/get-state client-io-handle ::time-out)]
-          (is (not= outcome ::timeout))
-          (when (not= outcome ::timeout)
+          (is (not= outcome ::time-out))
+          (when (not= outcome ::time-out)
+            (is outgoing)
             (is (= msg-len (::specs/ackd-addr outgoing)))
             (let [n-m-id (::specs/next-message-id outgoing)]
               (is (= (inc packet-count) n-m-id)))

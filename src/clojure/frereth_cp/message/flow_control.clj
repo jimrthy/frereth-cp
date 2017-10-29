@@ -135,8 +135,8 @@
              :as state} (adjust-rtt-phase state)
             state (update state
                           ::specs/flow-control
-                          (fn [s]
-                            (assoc s
+                          (fn [cur]
+                            (assoc cur
                                    ::specs/last-speed-adjustment recent
                                    ::specs/n-sec-per-block n-sec-per-block
                                    ::specs/rtt-average rtt-average
@@ -155,18 +155,18 @@
             been-a-minute? (- recent last-edge K/minute-1)]
         (cond
           ;; Note that we generally don't need to make any changes
-          (and been-a-minute?
+          (and (> 0 been-a-minute?)
                (< recent (+ last-doubling
                             (* 4 n-sec-per-block)
                             (* 64 rtt-timeout)
                             K/ms-5))) state
-          (and (not been-a-minute?)
+          (and (<= 0 been-a-minute?)
                (< recent (+ last-doubling
                             (* 4 n-sec-per-block)
                             (* 2 rtt-timeout)))) state
           ;; Q: Really? A: Yep. This is line 535
           (<= (dec K/k-64) n-sec-per-block) state
-          :else (assoc-in (assoc state {::specs/last-edge (if (not= 0 last-edge) recent last-edge)})
+          :else (assoc-in (assoc state ::specs/last-edge (if (not= 0 last-edge) recent last-edge))
                           [::specs/flow-control ::specs/last-doubling
                            ::specs/n-sec-per-block (quot n-sec-per-block 2)] recent))))))
 

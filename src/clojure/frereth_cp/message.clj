@@ -645,32 +645,18 @@
         ;; Except that n-sec-per-block puts a hard limit on how
         ;; fast we can send.
         (let [start (System/nanoTime)
-              ;; I'd prefer to do these next two
-              ;; pieces in a single step.
-              ;; But the fn passed to swap! must
-              ;; be functionally pure, which definitely
-              ;; is not the case with what's going on here.
               ;; TODO: Break these pieces into something
               ;; like the interceptor-chain idea. They should
               ;; return a value that includes a key for a
               ;; seq of functions to run to perform the
               ;; side-effects.
               ;; I'd still have to call updater, get
-              ;; that updating seq, update the state,
-              ;; and then modify the atom (well, modifying
-              ;; the atom first seems safer to avoid
-              ;; race conditions)
-              ;; Q: How long before I get bitten by that?
-              ;; Better Q: Is there a way to avoid it
-              ;; by scrapping the atom?
-              ;; A2: Yes. Add a ::get-state tag to
-              ;; the available tags above. The 'success'
-              ;; parameter is a deferred. (fulfill) that
-              ;; with the current state and go straight
-              ;; to scheduling the next timeout.
-              ;; Then the state atom turns into a normal
-              ;; value.
-              ;; TODO: That needs to happen fairly quickly.
+              ;; that updating seq, and update the state
+              ;; to recurse.
+
+              ;; I'd prefer to do these next two
+              ;; pieces in a single step.
+
               ;; TODO: Read up on Executors. I could wind up
               ;; with really nasty interactions now that I
               ;; don't have an agent to keep this single-
@@ -801,9 +787,10 @@
                               (strm/close! io-handle)))
           (log/debug prelog
                      (cl-format nil
-                                "Set timer to trigger in ~:d ms (vs ~:d scheduled)"
+                                "Set timer to trigger in ~:d ms (vs ~:d scheduled) on ~a"
                                 delta_f
-                                (float (utils/nanos->millis scheduled-delay))))))
+                                (float (utils/nanos->millis scheduled-delay))
+                                stream))))
       (log/warn prelog "I/O Handle closed"))
     ;; Don't rely on the return value of a function called for side-effects
     nil))
@@ -1000,6 +987,10 @@
   ([{:keys [::specs/message-loop-name
             ::specs/stream]}
     time-out]
+   (log/debug
+    (utils/pre-log message-loop-name)
+    "Submitting get-state query to"
+    stream)
    (let [state-holder (dfrd/deferred)
          req (strm/try-put! stream [::query-state state-holder] 100)]
      (dfrd/on-realized req
