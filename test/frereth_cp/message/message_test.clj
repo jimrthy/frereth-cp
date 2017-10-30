@@ -334,50 +334,71 @@
                           ;; thread).
                           ;; Actually, I'm a little surprised that this works at all.
                           ;; Q: But is it worth it for the test's sake?
-                          (loop [n 5
-                                 time-out 100]
-                            (let [srvr-state (message/get-state server-io time-out ::timed-out)]
-                              (if (or (= ::timed-out srvr-state)
-                                      (instance? Throwable srvr-state)
-                                      (nil? srvr-state))
-                                (let [problem (if (instance? Throwable srvr-state)
-                                                srvr-state
-                                                (ex-info "Non-exception in client->server consumer"
-                                                         {::problem srvr-state}))]
-                                  (if (> 0 n)
-                                    (do
-                                      (log/error problem prelog "Server failed!")
-                                      (dfrd/error! succeeded? problem))
-                                    (recur (dec n) (* time-out 3))))
+                          ;; A: Well, now that the RTT adjustments are taking effect,
+                          ;; I'm hitting the deadlocks I expected.
+                          ;; I *think* the problem is this sequence:
+                          ;; 1. the event loop triggers this
+                          ;; 2. this sends a get-state request
+                          ;; 3. that request can never succeed, because it's waiting
+                          ;; for this thread to return to start handling those sorts
+                          ;; of requests again.
+                          ;; It seems a little strange that adding RTT adjustments would
+                          ;; bring this problem to light.
+                          ;; But, honestly, it seems more strange that it ever worked.
+
+                          ;; The obvious solution starts with what the library client
+                          ;; should do here: get the callback and push the incoming
+                          ;; message onto another queue to deal with later.
+
+                          ;; But, honestly, it would be easier for the library to
+                          ;; do that.
+                          ;; Not necessarily better, since callers *could* handle
+                          ;; things more directly here. But it's very tempting.
+
+                          ;; And yet...how did this approach ever work?
+
+                          ;; Actually, it's probably worth keeping in mind that
+                          ;; *this* approach never did.
+
+                          ;; An approach with the same basic code, built around agents,
+                          ;; never did either. It just failed in different ways that
+                          ;; drove me to switch to this Actor-based approach.
+                          (let [srvr-state (message/get-state server-io time-out ::timed-out)]
+                            (if (or (= ::timed-out srvr-state)
+                                    (instance? Throwable srvr-state)
+                                    (nil? srvr-state))
+                              (let [problem (if (instance? Throwable srvr-state)
+                                              srvr-state
+                                              (ex-info "Non-exception in client->server consumer"
+                                                       {::problem srvr-state}))]
                                 (do
-                                  (message/parent->! server-io bs)
-                                  (log/debug prelog
-                                             "Server's parent-> triggered after"
-                                             n "attempts")))))))
+                                  (log/error problem prelog "Server failed!")
+                                  (dfrd/error! succeeded? problem)))
+                              (do
+                                (message/parent->! server-io bs)
+                                (log/debug prelog
+                                           "Server's parent-> triggered after"
+                                           n "attempts"))))))
                       client->server)
         (strm/consume (fn [bs]
                         (let [prelog (utils/pre-log "server->client consumer")]
                           (log/info prelog "Message from server to client")
-                          (loop [n 5
-                                 time-out 100]
-                            (let [client-state (message/get-state client-io time-out ::timed-out)]
-                              (if (or (= ::timed-out client-state)
-                                      (instance? Throwable client-state)
-                                      (nil? client-state))
-                                (if (> 0 n)
-                                  (let [problem (if (instance? Throwable client-state)
-                                                  client-state
-                                                  (ex-info "Non-exception in server->client consumer"
-                                                           {::problem client-state}))]
-                                    (log/error problem prelog "Client failed!")
-                                    (dfrd/error! succeeded? problem))
-                                  (recur (dec n) (* time-out 3)))
-                                (do
-                                  (message/parent->! client-io bs)
-                                  (log/debug prelog
-                                             "Client's parent-> triggered after"
-                                             n
-                                             "attempts")))))))
+                          (let [client-state (message/get-state client-io time-out ::timed-out)]
+                            (if (or (= ::timed-out client-state)
+                                    (instance? Throwable client-state)
+                                    (nil? client-state))
+                              (let [problem (if (instance? Throwable client-state)
+                                              client-state
+                                              (ex-info "Non-exception in server->client consumer"
+                                                       {::problem client-state}))]
+                                (log/error problem prelog "Client failed!")
+                                (dfrd/error! succeeded? problem))
+                              (do
+                                (message/parent->! client-io bs)
+                                (log/debug prelog
+                                           "Client's parent-> triggered after"
+                                           n
+                                           "attempts"))))))
                       server->client)
 
         (let [initial-message (Unpooled/buffer K/k-1)
@@ -388,10 +409,11 @@
           (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
             (log/info "Bottom of message-test")
             (let [client-state (message/get-state client-io 500 ::timed-out)]
-              (is (not (or (= client-state ::timed-out)
-                           (instance? Throwable client-state)
-                           (nil? client-state))))
-              (when (= really-succeeded? ::timed-out)
+              (when (or (= client-state ::timed-out)
+                        (instance? Throwable client-state)
+                        (nil? client-state))
+                (is not client-state))
+              (when (= really-succeeded ::timed-out)
                 (let [{:keys [::specs/flow-control]} client-state]
                   ;; I'm mostly interested in the next-action inside flow-control
                   ;; Down-side to switching to manifold for scheduling:
@@ -402,9 +424,10 @@
                   (is (not flow-control) "Client flow-control"))))
             (let [{:keys [::specs/flow-control]
                    :as srvr-state} (message/get-state server-io 500 ::timed-out)]
-              (is (not (or (= srvr-state ::timed-out)
-                           (instance? Throwable srvr-state)
-                           (nil? srvr-state))))
+              (when (or (= srvr-state ::timed-out)
+                        (instance? Throwable srvr-state)
+                        (nil? srvr-state))
+                (is (not srvr-state)))
               (is (not flow-control) "Server flow-control"))
             (is (= ::kthxbai really-succeeded?))
             (is (= 5 @client-state))))
