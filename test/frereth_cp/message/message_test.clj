@@ -203,11 +203,12 @@
         ;; Simulate a very stupid FSM
         client-state (atom 0)
         client-atom (atom nil)
+        time-out 500
         client-parent-cb (fn [^bytes bs]
                            (log/info (utils/pre-log "Client parent callback")
                                      "Sending a" (count bs)
                                      "byte array to client's parent")
-                           (let [sent (strm/try-put! client->server bs 500 ::timed-out)]
+                           (let [sent (strm/try-put! client->server bs time-out ::timed-out)]
                              (is (not= @sent ::timed-out))))
         ;; Something that spans multiple packets would be better, but
         ;; that seems like a variation on this test.
@@ -272,7 +273,7 @@
         server-parent-cb (fn [bs]
                            (log/info (utils/pre-log "Server's parent callback")
                                      "Sending a" (class bs) "to server's parent")
-                           (let [sent (strm/try-put! server->client bs 500 ::timed-out)]
+                           (let [sent (strm/try-put! server->client bs time-out ::timed-out)]
                              (is (not= @sent ::timed-out))))
         server-child-cb (fn [bs]
                           (let [prelog (utils/pre-log "Server's child callback")
@@ -374,11 +375,7 @@
                                 (do
                                   (log/error problem prelog "Server failed!")
                                   (dfrd/error! succeeded? problem)))
-                              (do
-                                (message/parent->! server-io bs)
-                                (log/debug prelog
-                                           "Server's parent-> triggered after"
-                                           n "attempts"))))))
+                              (message/parent->! server-io bs)))))
                       client->server)
         (strm/consume (fn [bs]
                         (let [prelog (utils/pre-log "server->client consumer")]
@@ -393,12 +390,7 @@
                                                        {::problem client-state}))]
                                 (log/error problem prelog "Client failed!")
                                 (dfrd/error! succeeded? problem))
-                              (do
-                                (message/parent->! client-io bs)
-                                (log/debug prelog
-                                           "Client's parent-> triggered after"
-                                           n
-                                           "attempts"))))))
+                              (message/parent->! client-io bs)))))
                       server->client)
 
         (let [initial-message (Unpooled/buffer K/k-1)
@@ -408,12 +400,12 @@
           ;; TODO: Find a reasonable value for this timeout
           (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
             (log/info "Bottom of message-test")
-            (let [client-state (message/get-state client-io 500 ::timed-out)]
+            (let [client-state (message/get-state client-io time-out ::timed-out)]
               (when (or (= client-state ::timed-out)
                         (instance? Throwable client-state)
                         (nil? client-state))
                 (is not client-state))
-              (when (= really-succeeded ::timed-out)
+              (when (= really-succeeded? ::timed-out)
                 (let [{:keys [::specs/flow-control]} client-state]
                   ;; I'm mostly interested in the next-action inside flow-control
                   ;; Down-side to switching to manifold for scheduling:
@@ -423,7 +415,7 @@
                   ;; docs thoroughly enough?
                   (is (not flow-control) "Client flow-control"))))
             (let [{:keys [::specs/flow-control]
-                   :as srvr-state} (message/get-state server-io 500 ::timed-out)]
+                   :as srvr-state} (message/get-state server-io time-out ::timed-out)]
               (when (or (= srvr-state ::timed-out)
                         (instance? Throwable srvr-state)
                         (nil? srvr-state))

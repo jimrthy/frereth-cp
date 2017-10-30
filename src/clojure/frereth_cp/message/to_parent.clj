@@ -7,7 +7,8 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as shared-K]
-            [frereth-cp.util :as utils])
+            [frereth-cp.util :as utils]
+            [manifold.deferred :as dfrd])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -566,13 +567,15 @@
       (check-for-new-block-to-send found?))))
 
 (s/fdef block->parent!
-        :args (s/cat :->parent ::specs/->parent
+        :args (s/cat :message-loop-name ::specs/message-loop-name
+                     :->parent ::specs/->parent
                      :send-buf ::specs/buf)
         :ret any?)
 (defn block->parent!
   "Actually send the message block to the parent"
   ;; Corresponds to line 404 under the sendblock: label
-  [->parent ^ByteBuf send-buf]
+  [message-loop-name
+   ->parent ^ByteBuf send-buf]
   {:pre [send-buf]}
   ;; Note that I've ditched the special offset+7
   ;; That kind of length calculation is just built
@@ -589,7 +592,47 @@
   ;; Packet as a crypto box.
 
   ;; There used to be more involved in this
-  (->parent send-buf))
+
+  ;; I have what seems to be a deadlock, in my handshake
+  ;; test, which probably stems from callin this synchronously.
+  ;; This one's different than ->child.
+  ;; I don't really care very much whether it succeeds. Half
+  ;; the point behind the entire message "package" is
+  ;; buffering up sends for when they fail.
+  ;; I've run across a couple of successful approaches
+  ;; for coping with this.
+  ;; 1) Just put the send into its own thread
+  ;; 2) Convert this part to an enqueue. Have a dedicated
+  ;; thread that runs dequeue and does the send.
+
+  ;; Approach 2) has the same problem as this, almost:
+  ;; time spent on the library client side blocks that thread.
+  ;; In particular, for the specific test failure that I
+  ;; currently see, it gets blocked by sending "too many"
+  ;; requests in a row.
+
+  ;; Honestly, I need to figure out why that's causing problems
+  ;; and solve it.
+  ;; TODO: Take the time to do that.
+
+  ;; For now:
+  ;; Try putting this inside a dfrd/future
+  ;; TODO: Compare/contrast with using a regular future
+  (let [succeeded? (dfrd/future (->parent send-buf))
+        triggerer (utils/pre-log message-loop-name)]
+    (dfrd/on-realized succeeded?
+                      (fn [succeeded]
+                        (log/info (utils/pre-log message-loop-name)
+                                  (str "Bytes forwarded to parent, triggered by\n"
+                                       triggerer
+                                       succeeded)))
+                      (fn [failed]
+                        (log/error failed
+                                   (utils/pre-log message-loop-name)
+                                   (str "Failed to forward bytes to parent.\n"
+                                        "Probably don't care.\n"
+                                        "Triggered by\n"
+                                        triggerer))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -634,16 +677,7 @@
                    "bytes to parent")
         ;; TODO: This is one of the side-effects that I really should
         ;; be accumulating rather than calling willy-nilly.
-        ;; Honestly, I should convert the ByteBuf to a byte array
-        ;; right here, at the last possible moment
-        ;; Note that that means saving the read index, reading the
-        ;; ByteBuf into array-o-bytes, and then restoring it.
-        ;; So maybe inside block->parent!, although it really shouldn't
-        ;; be doing anything except side-effects.
-        ;; Although I have a comment in there pointing out that I
-        ;; should just be sending the ByteBuf.
-        ;; I'm skeptical, but it saves a conversion.
-        (block->parent! ->parent send-buf)
+        (block->parent! message-loop-name ->parent send-buf)
         (log/debug prelog
                    (str "Calculating earliest time among "
                         (count un-ackd-blocks)

@@ -256,6 +256,19 @@
                         ;; ~2x faster than nanoTime, and this resolution
                         ;; seems plenty granular
                         (let [start-time (System/nanoTime)]
+                          ;; There's a major difference between this and
+                          ;; the equivalent in ->parent:
+                          ;; We don't care if that succeeds.
+                          ;; Half the point to buffering everything
+                          ;; in this "package" is so we can resend failures.
+                          ;; At this point, we've already adjusted the
+                          ;; buffer states and sent the ACK back to the
+                          ;; other side. If this fails, things have broken
+                          ;; badly.
+                          ;; Actually, that points to a fairly ugly flaw
+                          ;; in this implementation.
+                          ;; TODO: Rearrange the logic. This part needs to
+                          ;; succeed before the rest of those things happen.
                           (->child bs)
                           (let [end-time (System/nanoTime)
                                 delta (- end-time start-time)
