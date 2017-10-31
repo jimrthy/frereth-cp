@@ -43,14 +43,14 @@
               magical-start-byte #_(long (Math/pow 2 33)) 45
               block (to-parent/build-message-block-description
                      human-name
-                     arbitrary-id
                      {::specs/buf buf
                       ;; Q: What happens if this
                       ;; doesn't match the actual?
                       ;; (That's a good reason to avoid
                       ;; the duplication)
                       ::specs/length length
-                      ::specs/send-eof false
+                      ::specs/message-id arbitrary-id
+                      ::specs/send-eof ::specs/false
                       ::specs/start-pos magical-start-byte})]
           (is (= 192 (count block)))
           (let [v (vec block)

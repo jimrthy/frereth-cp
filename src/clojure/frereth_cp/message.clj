@@ -226,9 +226,24 @@
                    ;; buffer is full.
                    ;; TODO: Need a way to signal the child to
                    ;; try again shortly
+                   ;; (this seems like a fairly ugly implementation flaw)
+                   ;; Reference implementation does not have this weakness.
+                   ;; If the buffer's too full, it just refuses to pull
+                   ;; more bytes.
+                   ;; Which means the child will eventually start getting
+                   ;; EAGAIN failures.
+                   ;; In order to make that work, this really needs to
+                   ;; happen in child->! (which really means that its
+                   ;; return value needs to be meaningful).
+                   ;; That really means that it has to start by asking the
+                   ;; Actor for its state. Which currently isn't exactly
+                   ;; efficient.
                    (do
                      (log/error prelog
                                 "Discarding incoming bytes, silently")
+                     (throw (ex-info "Need to cope with this"
+                                     {::state state
+                                      ::dropped-array array-o-bytes}))
                      state))]
       ;; TODO: check whether we can do output now.
       ;; It's pointless to call this if we just have
@@ -290,6 +305,7 @@
       ;; that's really a vector that we can just conj onto.
       (when-not state
         (log/warn prelog
+                  ;; They're about to get worse
                   "nil state. Things went sideways recently"))
 
       (if (< (count ->child-buffer) max-child-buffer-size)
@@ -583,14 +599,23 @@
   (let [prelog (utils/pre-log message-loop-name)  ; might be on a different thread
         fmt (str "Interrupting event loop waiting for ~:d ms "
                  "after ~:d at ~:d\n"
-                 "at ~:d because: ~a")]
+                 "at ~:d because: ~a")
+        now (System/nanoTime)
+        ;; Line 337
+        ;; Doing this now instead of after trying to receive data from the
+        ;; child seems like a fairly significant change from the reference
+        ;; implementation.
+        ;; TODO: Compare with other higher-level implementations
+        ;; TODO: Ask cryptographers and protocol experts whether this is
+        ;; a choice I'll really regret
+        state (assoc state ::specs/recent now)]
     (log/debug prelog
                (cl-format nil
                           fmt
                           delta_f
                           scheduling-time
                           actual-next
-                          (System/nanoTime)
+                          now
                           success))
     (let [tag (try (first success)
                    (catch IllegalArgumentException ex
@@ -883,6 +908,8 @@
                       ;; TODO: Account for that
                       ::specs/max-block-length (if server?
                                                  K/standard-max-block-length
+                                                 ;; TODO: Refactor/rename this to
+                                                 ;; initial-client-max-block-length
                                                  K/initial-max-block-length)
                       ::specs/next-message-id 1
                       ::specs/ackd-addr 0

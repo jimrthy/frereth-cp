@@ -1,7 +1,9 @@
 (ns frereth-cp.message.from-child-test
   (:require [clojure.test :refer (deftest is testing)]
+            [frereth-cp.message.constants :as K]
             [frereth-cp.message.from-child :as from-child]
-            [frereth-cp.message.specs :as specs])
+            [frereth-cp.message.specs :as specs]
+            [frereth-cp.shared.bit-twiddling :as b-t])
   (:import clojure.lang.PersistentQueue))
 
 (deftest child-consumption

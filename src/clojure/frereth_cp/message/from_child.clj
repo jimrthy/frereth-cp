@@ -134,7 +134,13 @@
           (map count-buffered-bytes [un-ackd-blocks
                                      un-sent-blocks])))
 
+(s/fdef room-for-child-bytes?
+        :args (s/cat :state ::specs/state)
+        :ret boolean?)
 (defn room-for-child-bytes?
+  ;; The reference implementation doesn't take the size of
+  ;; the incoming message into account
+  ;; Q: Do I want to?
   "Does send-buf have enough space left for a message from child?"
   [{{:keys [::specs/ackd-addr
             ::specs/strm-hwm]} ::specs/outgoing
@@ -182,8 +188,8 @@
   ;; That obvious approach completely misses the point that
   ;; this namespace is about buffering. We need to hang onto
   ;; those buffers here until they've been ACK'd.
-  [{{:keys [::specs/max-block-length
-            ::specs/ackd-addr
+  [{{:keys [::specs/ackd-addr
+            ::specs/max-block-length
             ::specs/strm-hwm
             ::specs/un-sent-blocks]} ::specs/outgoing
     :keys [::specs/message-loop-name]
@@ -288,6 +294,4 @@
                                  (conj acc block))
                                cur
                                blocks)))
-          (update-in [::specs/outgoing ::specs/strm-hwm] + bytes-to-read)
-          ;; Line 337
-          (assoc ::specs/recent (System/nanoTime))))))
+          (update-in [::specs/outgoing ::specs/strm-hwm] + bytes-to-read)))))

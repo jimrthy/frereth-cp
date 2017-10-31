@@ -115,6 +115,9 @@ OTOH, I'm only using it for coping with the nonce.
     n
     (+ n maximum)))
 
+;; Q: Would it be worth writing a macro or three to
+;; avoid the duplication that follows?
+
 (defn possibly-2s-uncomplement-8
   "Note that this is specifically for a single byte"
   [n]
@@ -122,19 +125,19 @@ OTOH, I'm only using it for coping with the nonce.
     (possibly-2s-uncomplement-n n k)))
 
 (defn possibly-2s-uncomplement-16
-  "Note that this is specifically for a single byte"
+  "Note that this is specifically for a pair of bytes"
   [n]
   (let [^:const k (inc K/max-16-uint)]
     (possibly-2s-uncomplement-n n k)))
 
 (defn possibly-2s-uncomplement-32
-  "Note that this is specifically for a single byte"
+  "Note that this is specifically for a quad-byte"
   [n]
   (let [^:const k (inc K/max-32-uint)]
     (possibly-2s-uncomplement-n n k)))
 
 (defn possibly-2s-uncomplement-64
-  "Note that this is specifically for a single byte"
+  "Note that this is specifically for an 8 byte sequence"
   [n]
   (let [^:const k (inc K/max-64-uint)]
     (possibly-2s-uncomplement-n n k)))
@@ -185,6 +188,9 @@ So stick with this translation.
      (uint64-pack! dst 0 x)
      dst)))
 
+;; TODO: If I ever need to add 32- 16- and/or 8-bit
+;; versions, redo this as a macro to avoid the code
+;; duplication.
 (s/fdef uint64-unpack
         :args (s/cat :src (and bytes?
                                #(= (count %) 8)))

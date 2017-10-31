@@ -549,9 +549,6 @@ Line 608"
       ;; That seeming silliness is completely correct: this
       ;; is the entire point behind a pure ACK.
       (flag-acked-others! state packet)
-      ;; If I do this here, message-test/bigger-echo passes.
-      ;; The problem is that it's a false positive.
-      #_(help/drop-ackd! state)
       (reduce flow-control/update-statistics
               state
               (filter ::specs/ackd?

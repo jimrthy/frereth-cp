@@ -26,12 +26,14 @@
                     #(<= 16 %)
                     #(<= 1088 %)))
 (defn calculate-padded-size
+  "Set the number of bytes we're going to send for this block"
   [{:keys [::specs/length] :as block}]
-  ;; Set the number of bytes we're going to send for this block
   ;; Q: Why the extra 16?
   ;; Current guess: Allows at least 16 bytes of padding.
   ;; Then we'll round up to an arbitrary length.
-  (condp >= #_(+ K/header-length K/min-padding-length length) length
+  ;; Q: When/where did I quit adjusting for padding?
+  ;; Whenever it happened, this is part of my problem
+  (condp >= (+ K/header-length K/min-padding-length length) #_length
     ;; Stair-step the number of bytes that will get sent for this block
     ;; This probably has something to do with traffic-shaping
     ;; analysis
@@ -69,8 +71,8 @@
         :ret bytes?)
 (defn build-message-block-description
   ^ByteBuf [message-loop-name
-            ^Integer next-message-id
             {^Long start-pos ::specs/start-pos
+             ^Integer next-message-id ::specs/message-id
              ;; TODO: Switch this to either a bytes or a clojure
              ;; vector of bytes.
              ;; Then again...the bit about tracking the current
@@ -79,8 +81,8 @@
              :as block-to-send}]
   ;;; Lines 387-402
 
-  ;;; Q: make this thread-safe?
-
+  ;; Note that we're messing around with mutable data.
+  ;; Tread carefully.
   (let [length (.readableBytes buf)]
     ;; The reference implementation does this after calculating u,
     ;; which just seems silly.
@@ -313,7 +315,6 @@
                      #_(utils/pretty current-message)
                      current-message)
           (let [buf (build-message-block-description message-loop-name
-                                                     current-message-id
                                                      updated-message)
                 ;; Reference implementation waits until after the actual write before setting any of
                 ;; the next pieces. But it's a single-threaded process that's going to block at the write,
