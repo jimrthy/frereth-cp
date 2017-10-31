@@ -36,6 +36,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 
+(def child-buffer-timeout
+  "How long might we block child->"
+  ;; This is far too long. Unfortunately, my event loop
+  ;; is currently very slow.
+  1000)
+
 (def event-loop-buffer-size
   "Q: How many event requests can we queue?"
   ;; TODO: Play with this number
@@ -199,11 +205,13 @@
 (s/fdef trigger-from-child
         :args (s/cat :io-handle ::specs/io-handle
                      :array-o-bytes bytes?
+                     :accepted? dfrd/deferrable?
                      :state ::specs/state)
         :ret ::specs/state)
 (defn trigger-from-child
   [io-handle
    ^bytes array-o-bytes
+   accepted?        ; for side-effects/modifications. Eww.
    {{:keys [::specs/strm-hwm]
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
@@ -217,6 +225,7 @@
               strm-hwm)
     (let [state' (if (from-child/room-for-child-bytes? state)
                    (do
+                     (deliver accepted? true)
                      (log/debug prelog
                                 "There is room for another message")
                      (let [result (from-child/consume-from-child state array-o-bytes)]
@@ -239,11 +248,11 @@
                    ;; Actor for its state. Which currently isn't exactly
                    ;; efficient.
                    (do
+                     ;; TODO: Should probably hints to the client to help
+                     ;; it solve the problem.
+                     (deliver accepted? false)
                      (log/error prelog
-                                "Discarding incoming bytes, silently")
-                     (throw (ex-info "Need to cope with this"
-                                     {::state state
-                                      ::dropped-array array-o-bytes}))
+                                "Discarding incoming bytes")
                      state))]
       ;; TODO: check whether we can do output now.
       ;; It's pointless to call this if we just have
@@ -624,8 +633,9 @@
                                 "Should have been a variant")
                      ::no-op))
           updater
+          ;; Q: Is this worth switching to something like core.match or a multimethod?
           (case tag
-            ::child-> (partial trigger-from-child io-handle (second success))
+            ::child-> (partial trigger-from-child io-handle (second success) (nth success 2))
             ::drained (do (log/warn prelog
                                     ;; Actually, this seems like a strong argument for
                                     ;; having a pair of streams. Child could still have
@@ -1061,8 +1071,10 @@
 
 (s/fdef child->!
         :args (s/cat :io-handle ::specs/io-handle
-                     :array-o-bytes bytes?)
-        :ret any?)
+                     :array-o-bytes (s/or :message bytes?
+                                          :eof #(instance? Throwable %)))
+        ;; Truthy on success
+        :ret boolean?)
 (defn child->!
   ;; TODO: Add a capturing version of this and parent->!
   ;; that can store inputs for later playback.
@@ -1098,25 +1110,24 @@
                       {::io-handle io-handle})))
     (when (strm/closed? stream)
       (throw (RuntimeException. (str prelog "Can't write to a closed stream"))))
-    (let [success
+    (let [success (dfrd/deferred)
           ;; TODO: Add a deferred parameter here to indicate success/failure.
           ;; Then block this thread by calling deref and returns that value.
           ;; Handler should fulfill that deferred based on whether it has
           ;; room to buffer the message or not.
-          (strm/put! stream [::child-> array-o-bytes])]
-      (dfrd/on-realized success
-                        (fn [x]
-                          ;; Note that this could happen on a different thread.
-                          ;; Hence the extra calls to utils/pre-log
-                          (log/debug (utils/pre-log message-loop-name)
-                                     "Buffered bytes from child, triggered from\n"
-                                     prelog))
-                        (fn [x]
-                          (log/warn (utils/pre-log message-loop-name)
-                                    "Failed sending bytes from child to buffer, triggered from\n"
-                                    prelog))))
-    (log/debug prelog "returning from child->")
-    nil))
+          ]
+      (strm/put! stream [::child-> array-o-bytes success])
+      (let [buffered? (deref success child-buffer-timeout ::timed-out)
+            success (and buffered?
+                         (not= buffered? ::timed-out))]
+        (when (= ::timed-out buffered?)
+          ;; This is mainly a problem because it means we blocked
+          ;; the sending thread for a ridiculously long time.
+          ;; TODO: Add an arity that allows sender to supply something
+          ;; that's deliverable so it can decide how much blockage is acceptable.
+          (log/warn "Timed out trying to buffer bytes from child"))
+        (log/debug prelog "returning from child->")
+        success))))
 
 (s/fdef parent->!
         :args (s/cat :io-handle ::specs/io-handle

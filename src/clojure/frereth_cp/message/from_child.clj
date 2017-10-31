@@ -150,9 +150,32 @@
         :ret boolean?)
 (defn room-for-child-bytes?
   ;; The reference implementation doesn't take the size of
-  ;; the incoming message into account
+  ;; the incoming message into account here.
+  ;; It doesn't need to.
+  ;; It pulls bytes out of a pipe, up to max-block-length
+  ;; at a time.
   ;; Q: Do I want to?
-  "Does send-buf have enough space left for a message from child?"
+  ;; A: I have to. If it tries to send too much in one
+  ;; shot, that's going to overflow the [hypothetical] buffer.
+  ;; The easy approach is to just let the client buffer as many
+  ;; bytes as it likes, but then it doesn't have any way to learn
+  ;; that the network's down until memory's full.
+  ;; TODO: Look at using a pair of PipedInputStream and
+  ;; PipedOutputStream again.
+  ;; I've dabbled with those in the past and rejected them.
+  ;; But I don't remember why.
+  ;; And, frankly, they seem like exactly what I want/need.
+  ;; First problem that I see:
+  ;; Writing to PipedOutputStream simply blocks until all
+  ;; bytes are written. There doesn't seem to be a good way
+  ;; to find out whether it will block until I try.
+  ;; Although I could check the input stream and compare the
+  ;; available bytes against the buffer size.
+  ;; I think I vaguely remember having issues when the
+  ;; buffer wraps.
+  ;; TODO: Give that a try. It seems like it was designed
+  ;; specifically for the issues I have now.
+  "Does send-buf have enough space left for any message from child?"
   [{{:keys [::specs/ackd-addr
             ::specs/strm-hwm]} ::specs/outgoing
     :as state}]

@@ -22,6 +22,34 @@
             PersistentQueue]
            [io.netty.buffer ByteBuf Unpooled]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Helper functions
+
+(defn try-multiple-sends
+  [f
+   n
+   io-handle
+   payload
+   success-message
+   failure-message
+   failure-body]
+  (loop [m n]
+    (if (f io-handle payload)
+      (do
+        (log/info success-message)
+        (log/debug "Took" (- (inc n) m) "attempt(s)"))
+      (if (> 0 m)
+        (let [failure (ex-info failure-message
+                               failure-body)]
+          (log/error failure)
+          (throw failure))
+        (recur (dec m))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Actual tests
+;;; handshake, at least, is bordering on an integration test.
+;;; It should probably move somewhere along those lines
+
 (deftest basic-echo
   (let [loop-name "Echo Test"
         src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
@@ -101,7 +129,13 @@
                                  (is io-handle)
                                  (swap! child-message-counter inc)
                                  (swap! strm-address + msg-len)
-                                 (message/child->! io-handle array-o-bytes)))
+                                 (try-multiple-sends message/child->!
+                                                     5
+                                                     io-handle
+                                                     array-o-bytes
+                                                     (str "Buffered bytes from child")
+                                                     "Giving up on buffering bytes from child"
+                                                     {})))
                              (log/warn prelog "Empty incoming message. Highly suspicious")))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
@@ -366,7 +400,14 @@
                               ;; Q: Is this a problem with my architecture, or just
                               ;; a testing artifact?
                               (when next-message
-                                (message/child->! @client-atom (.getBytes (pr-str next-message)))))))
+                                (let [actual (.getBytes (pr-str next-message))]
+                                  (try-multiple-sends message/child->!
+                                                      5
+                                                      @client-atom
+                                                      actual
+                                                      (str "Buffered bytes from child")
+                                                      "Giving up on sending message from child"
+                                                      {}))))))
 
         server-atom (atom nil)
         server-parent-cb (fn [bs]
@@ -390,17 +431,27 @@
                                       incoming
                                       "\nwhich triggers"
                                       rsp)
-                            (message/child->! @server-atom (.getBytes (pr-str rsp)))
+                            (let [actual (.getBytes (pr-str rsp))]
+                              (try-multiple-sends message/child->!
+                                                  5
+                                                  @server-atom
+                                                  actual
+                                                  "Message buffered to child"
+                                                  "Giving up on forwarding to child"
+                                                  {::response rsp
+                                                   ::request incoming}))
                             (when (= incoming ::icanhazchzbrgr?)
                               ;; One of the main points is that this doesn't need to be a lock-step
                               ;; request/response.
                               (log/info prelog "Client requested chzbrgr. Send out of lock-step")
-                              ;; The message this triggers to the client is terribly corrupt.
-                              ;; There's a bunch of garbage in the list of gaps being ACK'd, and
-                              ;; the size field is garbage.
-                              ;; Even the readable-bytes field in the ByteBuf is wrong. This should
-                              ;; be 182 bytes long, but only 144 are getting sent.
-                              (message/child->! @server-atom (byte-array (range cheezburgr-length))))))]
+                              (let [chzbrgr (byte-array (range cheezburgr-length))]
+                                (try-multiple-sends message/child->!
+                                                    5
+                                                    @server-atom
+                                                    chzbrgr
+                                                    "Buffered chzbrgr to child"
+                                                    "Giving up on sending chzbrgr"
+                                                    {})))))]
     (dfrd/on-realized succeeded?
                       (fn [good]
                         (log/info "----------> Test should have passed <-----------"))
@@ -495,7 +546,13 @@
         (let [initial-message (Unpooled/buffer K/k-1)
               helo (.getBytes (pr-str ::ohai!))]
           ;; Kick off the exchange
-          (message/child->! client-io helo)
+          (try-multiple-sends message/child->!
+                              5
+                              client-io
+                              helo
+                              "HELO sent"
+                              "Sending HELO failed"
+                              {})
           ;; TODO: Find a reasonable value for this timeout
           (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
             (log/info "handshake-test run through. Need to see what happened")
@@ -537,7 +594,23 @@
 (deftest overflow-from-child
   ;; If the child sends bytes faster than we can
   ;; buffer/send, we need a way to signal back-pressure.
-  (throw (RuntimeException. "Not Implemented")))
+  (let [start-state (message/initial-state "Overflowing Test" true)
+        parent-cb (fn [out]
+                    (log/warn "parent-cb called with"
+                              (count out) bytes)
+                    (is (not out) "Should never get called"))
+        rcvd (atom [])
+        child-cb (fn [in]
+                   (swap! rcvd conj in))
+        event-loop (message/start! start-state parent-cb child-cb)]
+    (try
+      ;; Start by trying to send a buffer that's just flat-out too big
+      (is (not (message/child->! event-loop (byte-array (* 4 K/recv-byte-buf-size)))))
+
+
+      (comment) (throw (RuntimeException. "Not Implemented"))
+      (finally
+        (message/halt! event-loop)))))
 
 (deftest bigger-outbound
   ;; Flip-side of echo: I want to see what happens
@@ -652,7 +725,15 @@
         (let [;; Note that this is what the child sender should be supplying
               message-body (byte-array (range msg-len))]
           (log/debug test-run "Replicating child-send to " client-io-handle)
-          (message/child->! client-io-handle message-body)
+          (try-multiple-sends message/child->!
+                              5
+                              client-io-handle
+                              message-body
+                              (str "Buffered "
+                                   msg-len
+                                   " bytes to child")
+                              "Buffering big message from child failed"
+                              {::buffer-size msg-len})
           (let [outcome (deref response 10000 ::timeout)
                 end-time (System/nanoTime)]
             (log/info test-run
