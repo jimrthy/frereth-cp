@@ -66,6 +66,17 @@
    ^ByteBuf buf
    max-block-length]
   {:pre [#(< 0 max-block-length)]}
+  ;; If max-block-length is < 1024, then we're a client that has not
+  ;; yet received a response to its Initiate packet. Which could arrive
+  ;; at any time.
+  ;; Really want to pull as many bytes as we can from the array, then
+  ;; put it back (at the head of the queue, which is problematic)
+  ;; to be read again during the
+  ;; next iteration (when we might have received an ACK that will let
+  ;; us double up on the bandwidth usage).
+  ;; This takes me back to an older implementation where I add bytes
+  ;; to a ByteBuf and notify handlers that more bytes are available.
+  ;; Or to the reference implementation's ring buffers.
   (let [cap (.capacity buf)
         remainder (mod cap max-block-length)
         block-count (int (Math/ceil (/ cap max-block-length)))]

@@ -1099,6 +1099,10 @@
     (when (strm/closed? stream)
       (throw (RuntimeException. (str prelog "Can't write to a closed stream"))))
     (let [success
+          ;; TODO: Add a deferred parameter here to indicate success/failure.
+          ;; Then block this thread by calling deref and returns that value.
+          ;; Handler should fulfill that deferred based on whether it has
+          ;; room to buffer the message or not.
           (strm/put! stream [::child-> array-o-bytes])]
       (dfrd/on-realized success
                         (fn [x]

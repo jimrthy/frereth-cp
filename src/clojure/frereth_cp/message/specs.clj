@@ -47,6 +47,10 @@
 ;; 4096 for error after sendbytes
 (s/def ::eof-flag #{::false ::normal ::error})
 (s/def ::receive-eof ::eof-flag)
+;; In the reference implementation, this gets changed from 0 (aka ::false) when
+;; reading from the fromchild[0] pipe returns either 0 (normal EOF) or <0 (error).
+;; A lot of logic depends on this flag, and its close relatives ::send-eof-processed
+;; and ::send-eof-ackd
 (s/def ::send-eof ::eof-flag)
 
 ;;; Position of a block's first byte within the stream
@@ -80,6 +84,10 @@
                              ;; switch.
                              ::length
                              ::message-id
+                             ;; It's pointless to include this in every message.
+                             ;; We only need 1.
+                             ;; TODO: Make this optional and eliminate it from all but the
+                             ;; last
                              ::send-eof
                              ::start-pos
                              ::time
@@ -217,8 +225,21 @@
 ;; Corresponds to sendacked in reference
 ;; This name just makes more sense to me.
 (s/def ::ackd-addr int?)
-(s/def ::send-eof-acked boolean?)
+
+;; When we queue up the final block to send from the child (based
+;; on the ::send-eof flag and the blocks remaining in the unsent
+;; queue), we:
+;; a) switch this to true
+;; b) set a corresponding flag on that final block.
 (s/def ::send-eof-processed boolean?)
+;; Once ::send-eof is set (which means that the stream from the
+;; child is closed), we keep things running until the server
+;; ACKs that it has received the EOF message.
+;; It does this with an ACK that encompasses the entire stream,
+;; from 0 past the end of stream (represented by sendacked+sendbytes,
+;; on line 177).
+;; Once we've received that signal, we can set this.
+(s/def ::send-eof-acked boolean?)
 
 ;; How many blocks has the client ACK'd?
 (s/def ::total-blocks nat-int?)
@@ -378,4 +399,40 @@
                                  ;; Maybe do this for something that's
                                  ;; internal to the message ns (et al)
                                  ::message-loop-name
+                                 ;; TODO: Split this into multiple streams.
+                                 ;; Want 1 for parent-> and another for
+                                 ;; child->, so each can handle EOF
+                                 ;; separately.
+                                 ;; Q: Does the reference implementation
+                                 ;; care which side signals that it's
+                                 ;; time to close the connection?
+                                 ;; Alt (probably better): Handle both
+                                 ;; those options w/ consume-async.
+                                 ;; The problem with this approach
+                                 ;; is that I have to coordinate state
+                                 ;; between/among the pieces.
+                                 ;; And then we still need another stream
+                                 ;; for command/control. Which also needs
+                                 ;; coordinated state that needs to be
+                                 ;; realized quickly.
+                                 ;; One of the main reasons that I need
+                                 ;; to query state before accepting input
+                                 ;; from the child is so I can apply
+                                 ;; back-pressure. Once I've added it to
+                                 ;; the queue, it's too late.
+                                 ;; (Actually, that isn't true. I can pass
+                                 ;; along a deferred and then block the
+                                 ;; caller on it).
+
+                                 ;; Another alt: Handle this through the
+                                 ;; state. Once ::send-eof has been set,
+                                 ;; ignore bytes from the child.
+                                 ;; Once ::receive-eof has been received,
+                                 ;; ignore messages from the parent.
+                                 ;; Once they've both been set, and the
+                                 ;; pipe to the child has been closed (because
+                                 ;; all bytes have been written), shut down
+                                 ;; the event loop and exit.
+
+                                 ;; This seems dubious, at best.
                                  ::stream]))
