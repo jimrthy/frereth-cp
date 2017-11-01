@@ -7,7 +7,8 @@
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.BigInt
-           io.netty.buffer.ByteBuf))
+           io.netty.buffer.ByteBuf
+           [java.io InputStream OutputStream]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -30,6 +31,12 @@
 ;;; Actor
 (s/def ::stream (s/and strm/sink?
                        strm/source?))
+;; TODO: Need better names
+(s/def ::from-child #(instance? OutputStream %))
+(s/def ::child-out #(instance? InputStream %))
+(s/def ::from-parent #(instance? OutputStream %))
+(s/def ::parent-out #(instance? InputStream %))
+
 
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
@@ -349,6 +356,15 @@
                                 ;; Q: Does this field make any sense at all?
                                 ;; (It's a hard-coded constant that doesn't
                                 ;; seem likely to ever change)
+                                ;; Even for the current implementation,
+                                ;; callers can override this between
+                                ;; building initial-state and calling start!
+                                ;; to override how the Piped I/O Stream
+                                ;; pairs work.
+                                ;; So A: Yes, absolutely
+                                ;; Except that what I'm using it for over
+                                ;; in message/start! is completely and
+                                ;; totally wrong.
                                 ::send-buf-size
                                 ::send-eof
                                 ::send-eof-acked
@@ -382,8 +398,15 @@
 ;;; about side-effects. So you probably don't want to try
 ;;; to validate this.
 ;;; TODO: add an optional status updating callback
-(s/def ::io-handle (s/keys :req [::->child
+(s/def ::io-handle (s/keys :req [::->child  ;; callbacks here
                                  ::->parent
+                                 ;; PipedIn/OutputStream pairs
+                                 ;; TODO: Need better names
+                                 ::from-child
+                                 ::child-out
+                                 ::from-parent
+                                 ::parent-out
+
                                  ::executor
                                  ;; This seems redundant.
                                  ;; Q: How often will I have an io-handle
@@ -398,41 +421,4 @@
                                  ;; old, outdated, immutable version of it.
                                  ;; Maybe do this for something that's
                                  ;; internal to the message ns (et al)
-                                 ::message-loop-name
-                                 ;; TODO: Split this into multiple streams.
-                                 ;; Want 1 for parent-> and another for
-                                 ;; child->, so each can handle EOF
-                                 ;; separately.
-                                 ;; Q: Does the reference implementation
-                                 ;; care which side signals that it's
-                                 ;; time to close the connection?
-                                 ;; Alt (probably better): Handle both
-                                 ;; those options w/ consume-async.
-                                 ;; The problem with this approach
-                                 ;; is that I have to coordinate state
-                                 ;; between/among the pieces.
-                                 ;; And then we still need another stream
-                                 ;; for command/control. Which also needs
-                                 ;; coordinated state that needs to be
-                                 ;; realized quickly.
-                                 ;; One of the main reasons that I need
-                                 ;; to query state before accepting input
-                                 ;; from the child is so I can apply
-                                 ;; back-pressure. Once I've added it to
-                                 ;; the queue, it's too late.
-                                 ;; (Actually, that isn't true. I can pass
-                                 ;; along a deferred and then block the
-                                 ;; caller on it).
-
-                                 ;; Another alt: Handle this through the
-                                 ;; state. Once ::send-eof has been set,
-                                 ;; ignore bytes from the child.
-                                 ;; Once ::receive-eof has been received,
-                                 ;; ignore messages from the parent.
-                                 ;; Once they've both been set, and the
-                                 ;; pipe to the child has been closed (because
-                                 ;; all bytes have been written), shut down
-                                 ;; the event loop and exit.
-
-                                 ;; This seems dubious, at best.
-                                 ::stream]))
+                                 ::message-loop-name]))

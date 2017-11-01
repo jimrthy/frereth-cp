@@ -31,6 +31,7 @@
             [manifold.stream :as strm])
   (:import clojure.lang.PersistentQueue
            [io.netty.buffer ByteBuf Unpooled]
+           [java.io PipedInputStream PipedOutputStream]
            java.util.concurrent.TimeoutException))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -969,19 +970,12 @@
         :ret ::specs/io-handle)
 (defn start!
   [{:keys [::specs/message-loop-name]
+    {:keys [::specs/send-buf-size]
+     :as outgoing} ::specs/outgoing
     :as state}
    parent-cb
    child-cb]
-  ;; This function is probably pointless now.
-  ;; Except as a wrapper abstraction, in case it
-  ;; turns out that I need to do more.
-  ;; Once this all settles down, if this is still
-  ;; this minimalist, refactor the start-event-loops!
-  ;; functionality into here to avoid the pointless
-  ;; indirection.
-  ;; TODO: That.
-  (let [
-        ;; TODO: Need to tune and monitor this execution pool
+  (let [;; TODO: Need to tune and monitor this execution pool
         ;; c.f. ztellman's dirigiste
         executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
         ;; This approach was a mistake.
@@ -994,11 +988,49 @@
         ;;s (strm/stream event-loop-buffer-size identity executor)
         s (strm/stream)
         s (strm/onto executor s)
+        from-child (PipedOutputStream.)
+        ;; Note that this really doesn't match up with reference
+        ;; implementation.
+        ;; This is more like the size of the buffer in the pipe
+        ;; from the child to this buffering process.
+        ;; Which is something that's baked into the operating
+        ;; system...it seems like it's somewhere in the vicinity
+        ;; of 16K.
+        ;; This is *totally* distinct from our send-buf-size,
+        ;; which is really all about the outgoing bytes we have pending,
+        ;; either in the un-ackd or un-sent queues.
+        ;; Still, this is a starting point.
+        child-out (PipedInputStream. from-child send-buf-size)
+        from-parent (PipedOutputStream.)
+        ;; This has the same caveats as the buffer size for
+        ;; child-out, except that I'm just picking a named
+        ;; constant that's in the same general vicinity as
+        ;; the size the reference implementation uses for
+        ;; the message buffer. I think that's where he
+        ;; stashes those.
+        parent-out (PipedInputStream. from-parent K/k-64)
+        ;; If I go with this approach, it seems like
+        ;; I really need similar pairs for writing data
+        ;; back out.
         io-handle {::specs/->parent parent-cb
                    ::specs/->child child-cb
+                   ::specs/from-child from-child
+                   ::specs/child-out child-out
+                   ::specs/from-parent from-parent
+                   ::specs/parent-out parent-out
                    ::specs/executor executor
                    ::specs/message-loop-name message-loop-name
                    ::specs/stream s}]
+    ;; In this world, we need loops that pull appropriately
+    ;; sized blocks of data out of from-parent and from-child
+    ;; and forwards it along to buffer appropriately.
+    (throw (ex-info "Start back here"
+                    ;; from-parent already involves sending individual
+                    ;; message packets.
+                    ;; Those really need to be combined into
+                    ;; a stream which the child must read as
+                    ;; quickly as possible.
+                    {::although "This doesn't make sense for from-parent"}))
     (start-event-loops! io-handle state)
     (log/info (utils/pre-log message-loop-name)
               (cl-format nil
@@ -1145,25 +1177,27 @@
   It's replacing one of the polling triggers that
   set off the main() event loop. Need to account for
   that fundamental strategic change"
-  [{:keys [::specs/message-loop-name
-           ::specs/stream]
+  [{:keys [::specs/from-parent
+           ::specs/parent-out
+           ::specs/message-loop-name]
     :as io-handle}
    ^bytes array-o-bytes]
 
+  ;; TODO: Roll this back to use the stream interface.
+  ;; It's already coping with distinct individual
+  ;; message packets.
+  ;; It should eventually combine them into a PipedStream
+  ;; to forward along to the child, but a lot of processing
+  ;; needs to happen first.
   (let [prelog (utils/pre-log message-loop-name)]
     (log/info prelog
               "Top of parent->!")
-    (let [success
-          (strm/put! stream [::parent-> array-o-bytes])]
-      (log/debug prelog "Parent put!. Setting up on-realized handler")
-      (dfrd/on-realized success
-                        (fn [x]
-                          (log/debug (utils/pre-log message-loop-name)
-                                     "Buffered bytes from parent, triggered from\n"
-                                     prelog))
-                        (fn [x]
-                          (log/warn (utils/pre-log message-loop-name)
-                                    "Failed  to buffer bytes from parent, triggered from\n"
-                                    prelog))))
-    (log/debug prelog "returning from parent->")
-    nil))
+    (let [pending (.available parent-out)
+          n (count array-o-bytes)
+          result (if (< (+ pending n) K/k-64)
+                   (do
+                     (.write from-parent array-o-bytes 0 n)
+                     true)
+                   (log/warn prelog "Message from parent overflowed"))]
+      (log/debug prelog "returning from parent->")
+      result)))
