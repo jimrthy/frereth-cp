@@ -5,8 +5,15 @@
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.util :as utils])
-  (:import [io.netty.buffer ByteBuf Unpooled]))
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.util :as utils]
+            [manifold.deferred :as dfrd]
+            [manifold.stream :as strm])
+  (:import clojure.lang.ExceptionInfo
+           [io.netty.buffer ByteBuf Unpooled]
+           [java.io
+            IOException
+            InputStream]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -129,6 +136,89 @@
                  ( .readableBytes buf))))
           0
           blocks))
+
+(defn read-next-bytes-from-child!
+  ([^InputStream child-out
+    prefix
+    available-bytes
+    max-to-read]
+   (let [prefix-gap (count prefix)]
+     (if (not= 0 available-bytes)
+       ;; Simplest scenario: we have bytes waiting to be consumed
+       (let [bytes-to-read (max available-bytes max-to-read)
+             bytes-read (byte-array (+ bytes-to-read prefix-gap))
+             n (.read child-out bytes-read prefix-gap bytes-to-read)]
+         (when (not= n bytes-to-read)
+           (throw (RuntimeException. "How did we get a read mismatch?")))
+         (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
+         bytes-read)
+       ;; More often, we should spend all our time waiting.
+       (let [next-prefix (.read child-out)]
+         (if (= next-prefix -1)
+           (if (< 0 prefix-gap)
+             prefix
+             ;; Q: Does it make sense to handle it this way?
+             (throw (IOException. "EOF"))))
+         (let [bytes-remaining (.available child-out)]
+           (if (< 0 bytes-remaining)
+             ;; Assume this means the client just sent us a sizeable
+             ;; chunk.
+             ;; Go ahead and recurse.
+             ;; This could perform poorly if we hit a race condition
+             ;; and the child's writing a single byte at a time
+             ;; as fast as we can loop, but the maximum buffer size
+             ;; should protect us from that being a real problem,
+             ;; and it seems like a fairly unlikely scenario.
+             ;; At this layer, we have to assume that our child
+             ;; code (which is really the library consumer) isn't
+             ;; deliberately malicious to its own performance.
+             (recur child-out
+                    prefix
+                    bytes-remaining
+                    (dec max-to-read))
+             (byte-array [prefix])))))))
+  ([child-out
+    available-bytes
+    max-to-read]
+   (read-next-bytes-from-child! child-out [] available-bytes max-to-read)))
+
+(defn process-next-bytes-from-child!
+  [prelog
+   ^InputStream child-out
+   stream
+   max-to-read]
+  (let [available-bytes (.available child-out)
+        array-o-bytes (read-next-bytes-from-child! child-out
+                                                   available-bytes
+                                                   max-to-read)]
+    ;; Here's an annoying detail:
+    ;; I *do* want to block here, at least for a while.
+    ;; Currently, this
+    ;; triggers the main event loop in action-trigger.
+    ;; Which leads to lots of other stuff happening.
+    ;; TODO: Tease that "lots of other stuff" apart.
+    ;; We do need to get these bytes added to the
+    ;; (now invisible) state buffer that's managed
+    ;; by that main event loop.
+    ;; And then that event loop should try to send
+    ;; it along to the parent, if it's been long enough
+    ;; since the last bunch of bytes.
+    ;; There's a definite balancing act in splitting
+    ;; work between these 2 threads.
+    ;; I want to pull bytes from the child as fast as
+    ;; possible, but there isn't any point if the main
+    ;; ioloop is bogged down handling fiddly state management
+    ;; details that would make more sense in this thread.
+    (let [blocker (dfrd/deferred)]
+      (strm/put! stream [::child-> array-o-bytes blocker])
+      (loop [n 6]
+        (let [waiting
+              (deref realized? 10000 ::timed-out)]
+          (when (= waiting ::timed-out)
+            (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
+            (if (< 0 n)
+              (recur (dec n))
+              (throw (ex-info "Giving up" {})))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -329,3 +419,42 @@
                                cur
                                blocks)))
           (update-in [::specs/outgoing ::specs/strm-hwm] + bytes-to-read)))))
+
+(s/fdef start-child-monitor!
+        :args (s/cat :initial-state ::specs/state
+                     :io-handle ::specs/io-handle)
+        :ret ::specs/child-output-loop)
+(defn start-child-monitor!
+  [{:keys [::message-loop-name]
+    {:keys [::specs/client-waiting-on-response]
+     :as flow-control} ::specs/flow-control
+    :as initial-state}
+   {:keys [::specs/child-out
+           ::specs/stream]
+    :as io-handle}]
+  ;; TODO: This needs pretty hefty unit testing
+  ;; TODO: Move this (and the pieces it calls) to from-child
+  (dfrd/future
+    (let [prelog (utils/pre-log message-loop-name)]
+      (try
+        (while (not (realized? client-waiting-on-response))
+          (process-next-bytes-from-child! prelog
+                                          child-out
+                                          stream
+                                          K/max-bytes-in-initiate-message))
+        (while true
+          (process-next-bytes-from-child! prelog
+                                          child-out
+                                          stream
+                                          K/standard-max-block-length))
+        (catch IOException ex
+          ;; TODO: Need to send an EOF signal to main ioloop so
+          ;; it can notify the parent (or quit, as the case may be)
+          (log/error ex
+                     prelog
+                     "TODO: Not Implemented. This should only happen when child closes pipe")
+          (throw (RuntimeException. ex)))
+        (catch ExceptionInfo ex
+          (log/error ex prelog "FIXME: Add details from calling .getData"))
+        (catch Exception ex
+          (log/error ex "Bady unexpected exception"))))))

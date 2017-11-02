@@ -47,7 +47,7 @@
 ;; used internally.
 (s/def ::pipe-from-child-size nat-int?)
 (s/def ::pipe-to-child-size nat-int?)
-;; Q: What would
+;; Q: Do we have access to anything more specific/general/useful?
 (s/def ::child-output-loop #(instance? java.util.concurrent.Future %))
 
 ;;; number of bytes in each block
