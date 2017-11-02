@@ -6,7 +6,7 @@
             [frereth-cp.util :as util]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
-  (:import clojure.lang.BigInt
+  (:import [clojure.lang BigInt IDeref]
            io.netty.buffer.ByteBuf
            [java.io InputStream OutputStream]))
 
@@ -32,11 +32,23 @@
 (s/def ::stream (s/and strm/sink?
                        strm/source?))
 ;; TODO: Need better names
+;; This is the pipe that the child writes to for sending data
 (s/def ::from-child #(instance? OutputStream %))
+;; This is the pipe that we read for buffering that data
 (s/def ::child-out #(instance? InputStream %))
-(s/def ::from-parent #(instance? OutputStream %))
-(s/def ::parent-out #(instance? InputStream %))
-
+;; This is the stream that we use to write bytes to the child
+(s/def ::to-child #(instance? OutputStream %))
+;; This is the stream the child reads
+(s/def ::child-in #(instance? InputStream %))
+;; These are the equivalent of the OS pipes that
+;; the reference implementation uses to pipe data in
+;; and out of the child.
+;; Note that they're totally distinct from the buffers
+;; used internally.
+(s/def ::pipe-from-child-size nat-int?)
+(s/def ::pipe-to-child-size nat-int?)
+;; Q: What would
+(s/def ::child-output-loop #(instance? java.util.concurrent.Future %))
 
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
@@ -162,13 +174,20 @@
 ;; at the end of the previous send to parent
 (s/def ::last-block-time int?)
 
-;; Undocumented.
+;; Undocumented in reference implementation.
 ;; Starts out at 512, then switches to 1024 as soon as
 ;; we can start processing a message that goes to the
 ;; child.
-;; I think I got this tangled up and am actually doing
-;; that little dance with some other field.
+;; This really needs to be a state flag:
+;; While a client is sending Initiate packets, waiting
+;; for an initial message back from the server, it has fewer
+;; bytes available for the payload portion of each
+;; packet.
+;; TODO: Convert this to a promise that we can use
+;; to just control that directly without the obscurity
+;; that this creates.
 (s/def ::max-block-length nat-int?)
+(s/def ::client-waiting-on-response #(instance? IDeref %))
 
 ;; circular queue beyond receivewritten; size must be power of 2 --DJB
 ;; This doesn't really make sense in a clojure/netty world --JRG
@@ -267,7 +286,6 @@
 ;; keywords seems most likely)
 (s/def ::callback (s/fspec :args (s/cat :buf bytes?)
                            :ret any?))
-(s/def ::->child ::callback)
 (s/def ::->parent ::callback)
 
 (s/def ::executor #(instance? java.util.concurrent.ExecutorService %))
@@ -315,7 +333,8 @@
 ;; Note that there are at least 3 completely different
 ;; pieces of state here:
 ;; 1. Traffic shaping
-(s/def ::flow-control (s/keys :req [::last-doubling
+(s/def ::flow-control (s/keys :req [::client-waiting-on-response
+                                    ::last-doubling
                                     ::last-edge
                                     ::last-speed-adjustment
                                     ::n-sec-per-block
@@ -338,6 +357,7 @@
 (s/def ::incoming (s/keys :req [::->child-buffer
                                 ::contiguous-stream-count
                                 ::gap-buffer
+                                ::pipe-to-child-size
                                 ::receive-eof
                                 ::receive-total-bytes
                                 ::receive-written
@@ -353,18 +373,10 @@
                                 ::last-panic
                                 ::max-block-length
                                 ::next-message-id
+                                ::pipe-from-child-size
                                 ;; Q: Does this field make any sense at all?
                                 ;; (It's a hard-coded constant that doesn't
                                 ;; seem likely to ever change)
-                                ;; Even for the current implementation,
-                                ;; callers can override this between
-                                ;; building initial-state and calling start!
-                                ;; to override how the Piped I/O Stream
-                                ;; pairs work.
-                                ;; So A: Yes, absolutely
-                                ;; Except that what I'm using it for over
-                                ;; in message/start! is completely and
-                                ;; totally wrong.
                                 ::send-buf-size
                                 ::send-eof
                                 ::send-eof-acked
@@ -404,8 +416,9 @@
                                  ;; TODO: Need better names
                                  ::from-child
                                  ::child-out
-                                 ::from-parent
-                                 ::parent-out
+
+                                 ::to-child
+                                 ::child-in
 
                                  ::executor
                                  ;; This seems redundant.
@@ -421,4 +434,5 @@
                                  ;; old, outdated, immutable version of it.
                                  ;; Maybe do this for something that's
                                  ;; internal to the message ns (et al)
-                                 ::message-loop-name]))
+                                 ::message-loop-name]
+                           :opt [::child-output-loop]))

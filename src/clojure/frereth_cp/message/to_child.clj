@@ -182,13 +182,13 @@
   (sorted-map))
 
 (s/fdef forward!
-        :args (s/cat :->child ::specs/->child
+        :args (s/cat :to-child ::specs/to-child
                      :primed ::specs/state)
   :ret ::specs/state)
 (defn forward!
   "Try sending data to child:"
   ;; lines 615-632
-  [->child
+  [to-child
    {:keys [::specs/incoming
            ::specs/message-loop-name]
     :as state}]
@@ -269,7 +269,7 @@
                           ;; in this implementation.
                           ;; TODO: Rearrange the logic. This part needs to
                           ;; succeed before the rest of those things happen.
-                          (->child bs)
+                          (.write to-child bs 0 (count bs))
                           (let [end-time (System/nanoTime)
                                 delta (- end-time start-time)
                                 msg (str "Child callback took " delta " ns")]
@@ -290,6 +290,8 @@
                     (.release buf)
                     (update-in state'
                                ;; Yes, this is already a vector
+                               ;; Q: Could I save any time by using a PersistentQueue
+                               ;; instead?
                                [::specs/incoming ::specs/->child-buffer]
                                (comp vec rest))
                     (catch RuntimeException ex

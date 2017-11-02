@@ -29,9 +29,9 @@
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
             [manifold.stream :as strm])
-  (:import clojure.lang.PersistentQueue
+  (:import [clojure.lang ExceptionInfo PersistentQueue]
            [io.netty.buffer ByteBuf Unpooled]
-           [java.io PipedInputStream PipedOutputStream]
+           [java.io IOException PipedInputStream PipedOutputStream]
            java.util.concurrent.TimeoutException))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -150,7 +150,7 @@
                      :state ::specs/state)
         :ret ::specs/state)
 (defn trigger-output
-  [{:keys [::specs/->child
+  [{:keys [::specs/to-child
            ::specs/message-loop-name]
     :as io-handle}
    {{:keys [::specs/next-action]} ::specs/flow-control
@@ -212,7 +212,7 @@
 (defn trigger-from-child
   [io-handle
    ^bytes array-o-bytes
-   accepted?        ; for side-effects/modifications. Eww.
+   IDeref accepted?
    {{:keys [::specs/strm-hwm]
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
@@ -274,16 +274,16 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [{:keys [::specs/->child
+  [{:keys [::specs/to-child
            ::specs/message-loop-name]
     :as io-handle}
    ^bytes message
    {{:keys [::specs/->child-buffer]} ::specs/incoming
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
-    (when-not ->child
+    (when-not to-child
       (throw (ex-info (str prelog
-                           "Missing ->child")
+                           "Missing to-child")
                       {::detail-keys (keys io-handle)
                        ::top-level-keys (keys state)
                        ::details state})))
@@ -371,7 +371,7 @@
                                      (assoc-in state
                                                [::specs/incoming ::specs/parent->buffer]
                                                message))
-                      state' (to-child/forward! ->child (or pre-processed
+                      state' (to-child/forward! to-child (or pre-processed
                                                             state))]
                   ;; This will update recent.
                   ;; In the reference implementation, that happens immediately
@@ -770,7 +770,7 @@
 ;;; handling the timer. But it's tempting.
 (defn schedule-next-timeout!
   [{:keys [::specs/->parent
-           ::specs/->child
+           ::specs/to-child
            ::specs/message-loop-name
            ::specs/stream]
     :as io-handle}
@@ -841,6 +841,122 @@
     ;; Don't rely on the return value of a function called for side-effects
     nil))
 
+(defn read-next-bytes-from-child!
+  ([child-out
+    prefix
+    available-bytes
+    max-to-read]
+   (let [prefix-gap (count prefix)]
+     (if (not= 0 available-bytes)
+       ;; Simplest scenario: we have bytes waiting to be consumed
+       (let [bytes-to-read (max available-bytes max-to-read)
+             bytes-read (byte-array (+ bytes-to-read prefix-gap))
+             n (.read child-out bytes-read prefix-gap bytes-to-read)]
+         (when (not= n bytes-to-read)
+           (throw (RuntimeException. "How did we get a read mismatch?")))
+         (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
+         bytes-read)
+       ;; More often, we should spend all our time waiting.
+       (let [next-prefix (.read child-out)]
+         (if (= next-prefix -1)
+           (if (< 0 prefix-gap)
+             prefix
+             ;; Q: Does it make sense to handle it this way?
+             (throw (IOException. "EOF"))))
+         (let [bytes-remaining (.available child-out)]
+           (if (< 0 bytes-remaining)
+             ;; Assume this means the client just sent us a sizeable
+             ;; chunk.
+             ;; Go ahead and recurse.
+             ;; This could perform poorly if we hit a race condition
+             ;; and the child's writing a single byte at a time
+             ;; as fast as we can loop, but the maximum buffer size
+             ;; should protect us from that being a real problem,
+             ;; and it seems like a fairly unlikely scenario.
+             ;; At this layer, we have to assume that our child
+             ;; code (which is really the library consumer) isn't
+             ;; deliberately malicious to its own performance.
+             (recur child-out
+                    prefix
+                    bytes-remaining
+                    (dec max-to-read))
+             (byte-array [prefix])))))))
+  ([child-out
+    available-bytes
+    max-to-read]
+   (read-next-bytes-from-child! child-out [] available-bytes max-to-read)))
+
+(defn process-next-bytes-from-child!
+  [prelog
+   child-out
+   stream
+   max-to-read]
+  (let [available-bytes (.available child-out)
+        array-o-bytes (read-next-bytes-from-child! child-out
+                                                   available-bytes
+                                                   max-to-read)]
+    ;; Here's an annoying detail:
+    ;; I *do* want to block here, at least for a while.
+    ;; Currently, this
+    ;; triggers the main event loop in action-trigger.
+    ;; Which leads to lots of other stuff happening.
+    ;; TODO: Tease that "lots of other stuff" apart.
+    ;; We do need to get these bytes added to the
+    ;; (now invisible) state buffer that's managed
+    ;; by that main event loop.
+    ;; And then that event loop should try to send
+    ;; it along to the parent, if it's been long enough
+    ;; since the last bunch of bytes.
+    ;; There's a definite balancing act in splitting
+    ;; work between these 2 threads.
+    ;; I want to pull bytes from the child as fast as
+    ;; possible, but there isn't any point if the main
+    ;; ioloop is bogged down handling fiddly state management
+    ;; details that would make more sense in this thread.
+    (let [blocker (dfrd/deferred)]
+      (strm/put! stream [::child-> array-o-bytes blocker])
+      (loop [n 6]
+        (let [waiting
+              (deref realized? 10000 ::timed-out)]
+          (when (= waiting ::timed-out)
+            (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
+            (if (< 0 n)
+              (recur (dec n))
+              (throw (ex-info "Giving up" {})))))))))
+
+(defn start-child-monitor!
+  [{:keys [::message-loop-name]
+    {:keys [::specs/client-waiting-on-response]
+     :as flow-control} ::specs/flow-control
+    :as initial-state}
+   {:keys [::specs/child-out
+           ::specs/stream]
+    :as io-handle}]
+  ;; TODO: This needs pretty hefty unit testing
+  ;; TODO: Move this (and the pieces it calls) to from-child
+  (dfrd/future
+    (let [prelog (utils/pre-log message-loop-name)]
+      (try
+        (while (not (realized? client-waiting-on-response))
+          (process-next-bytes-from-child! prelog
+                                          child-out
+                                          stream
+                                          K/max-bytes-in-initiate-message))
+        (while true
+          (process-next-bytes-from-child! prelog
+                                          child-out
+                                          stream
+                                          K/standard-max-block-length))
+        (catch IOException ex
+          (log/error ex
+                     prelog
+                     "TODO: Not Implemented. This should only happen when child closes pipe")
+          (throw (RuntimeException. ex)))
+        (catch ExceptionInfo ex
+          (log/error ex prelog "FIXME: Add details from calling .getData"))
+        (catch Exception ex
+          (log/error ex "Bady unexpected exception"))))))
+
 (s/fdef start-event-loops!
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state)
@@ -866,8 +982,12 @@
 
     ;; This covers line 260
     ;; Although it seems a bit silly to do it here
-    (let [state (assoc state ::specs/recent recent)]
-      (schedule-next-timeout! io-handle state))))
+    (let [state (assoc state
+                       ::specs/recent recent)
+          child-output-loop (start-child-monitor! state io-handle)]
+      (schedule-next-timeout! (assoc io-handle
+                                     ::specs/child-output-loop child-output-loop)
+                              state))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -881,87 +1001,105 @@
 (defn initial-state
   "Put together an initial state that's ready to start!"
   ([human-name
-    server?]
-   {::specs/flow-control {::specs/last-doubling 0
-                          ::specs/last-edge 0
-                          ::specs/last-speed-adjustment 0
-                          ;; Seems vital, albeit undocumented
-                          ::specs/n-sec-per-block K/sec->n-sec
-                          ::specs/rtt 0
-                          ::specs/rtt-average 0
-                          ::specs/rtt-deviation 0
-                          ::specs/rtt-highwater 0
-                          ::specs/rtt-lowwater 0
-                          ::specs/rtt-phase false
-                          ::specs/rtt-seen-older-high false
-                          ::specs/rtt-seen-older-low false
-                          ::specs/rtt-seen-recent-high false
-                          ::specs/rtt-seen-recent-low false
-                          ::specs/rtt-timeout K/sec->n-sec}
-    ::specs/incoming {::specs/->child-buffer []
-                      ::specs/contiguous-stream-count 0
-                      ::specs/gap-buffer (to-child/build-gap-buffer)
-                      ::specs/receive-eof ::specs/false
-                      ::specs/receive-total-bytes 0
-                      ::specs/receive-written 0
-                      ;; Note that the reference implementation
-                      ;; tracks receivebytes instead of the
-                      ;; address.
-                      ::specs/strm-hwm -1}
-    ::specs/outgoing {::specs/earliest-time 0
-                      ;; Start with something that's vaguely sane to
-                      ;; avoid 1-ms idle spin waiting for first
-                      ;; incoming message
-                      ::specs/last-block-time (System/nanoTime)
-                      ::specs/last-panic 0
-                      ;; Peers started as servers start out
-                      ;; with standard-max-block-length instead.
-                      ;; TODO: Account for that
-                      ::specs/max-block-length (if server?
-                                                 K/standard-max-block-length
-                                                 ;; TODO: Refactor/rename this to
-                                                 ;; initial-client-max-block-length
-                                                 K/initial-max-block-length)
-                      ::specs/next-message-id 1
-                      ::specs/ackd-addr 0
-                      ;; Q: Does this make any sense at all?
-                      ;; It isn't ever going to change, so I might
-                      ;; as well just use the hard-coded value
-                      ;; in constants and not waste the extra time/space
-                      ;; sticking it in here.
-                      ;; That almost seems like premature optimization,
-                      ;; but this approach seems like serious YAGNI.
-                      ::specs/send-buf-size K/send-byte-buf-size
-                      ::specs/send-eof ::specs/false
-                      ::specs/send-eof-acked false
-                      ::specs/send-eof-processed false
-                      ::specs/strm-hwm 0
-                      ::specs/total-blocks 0
-                      ::specs/total-block-transmissions 0
-                      ::specs/un-ackd-blocks (build-un-ackd-blocks)
-                      ::specs/un-sent-blocks PersistentQueue/EMPTY
-                      ::specs/want-ping (if server?
-                                          ::specs/false
-                                          ;; TODO: Add option for a
-                                          ;; client that started before the
-                                          ;; server, meaning that it waits
-                                          ;; for 1 second at a time before
-                                          ;; trying to send the next
-                                          ;; message
-                                          ::specs/immediate)}
+    server?
+    {{:keys [::specs/pipe-to-child-size]
+      :as incoming
+      :or {pipe-to-child-size K/k-64}} ::specs/incoming
+     {:keys [::specs/pipe-from-child-size]
+      :as outgoing
+      :or {pipe-from-child-size K/k-64}} ::specs/outgoing
+     :as opts}]
+   (let [pending-client-response (promise)]
+     (when server?
+       (deliver pending-client-response ::never-waited))
+     {::specs/flow-control {::specs/client-waiting-on-response pending-client-response
+                            ::specs/last-doubling 0
+                            ::specs/last-edge 0
+                            ::specs/last-speed-adjustment 0
+                            ;; Seems vital, albeit undocumented
+                            ::specs/n-sec-per-block K/sec->n-sec
+                            ::specs/rtt 0
+                            ::specs/rtt-average 0
+                            ::specs/rtt-deviation 0
+                            ::specs/rtt-highwater 0
+                            ::specs/rtt-lowwater 0
+                            ::specs/rtt-phase false
+                            ::specs/rtt-seen-older-high false
+                            ::specs/rtt-seen-older-low false
+                            ::specs/rtt-seen-recent-high false
+                            ::specs/rtt-seen-recent-low false
+                            ::specs/rtt-timeout K/sec->n-sec}
+      ::specs/incoming {::specs/->child-buffer []
+                        ::specs/contiguous-stream-count 0
+                        ::specs/gap-buffer (to-child/build-gap-buffer)
+                        ::specs/pipe-to-child-size pipe-to-child-size
+                        ::specs/receive-eof ::specs/false
+                        ::specs/receive-total-bytes 0
+                        ::specs/receive-written 0
+                        ;; Note that the reference implementation
+                        ;; tracks receivebytes instead of the
+                        ;; address.
+                        ::specs/strm-hwm -1}
+      ::specs/outgoing {::specs/ackd-addr 0
+                        ::specs/earliest-time 0
+                        ;; Start with something that's vaguely sane to
+                        ;; avoid 1-ms idle spin waiting for first
+                        ;; incoming message
+                        ::specs/last-block-time (System/nanoTime)
+                        ::specs/last-panic 0
+                        ;; Peers started as servers start out
+                        ;; with standard-max-block-length instead.
+                        ;; TODO: This needs to be replaced with a
+                        ;; promise named client-waiting-on-response
+                        ;; (used in message/start-child-monitor!)
+                        ;; that we can use as a flag to control this
+                        ;; directly instead of handling the state
+                        ;; management this way.
+                        ::specs/max-block-length (if server?
+                                                   K/standard-max-block-length
+                                                   ;; TODO: Refactor/rename this to
+                                                   ;; initial-client-max-block-length
+                                                   K/max-bytes-in-initiate-message)
+                        ::specs/next-message-id 1
+                        ::specs/pipe-from-child-size pipe-from-child-size
+                        ;; Q: Does this make any sense at all?
+                        ;; It isn't ever going to change, so I might
+                        ;; as well just use the hard-coded value
+                        ;; in constants and not waste the extra time/space
+                        ;; sticking it in here.
+                        ;; That almost seems like premature optimization,
+                        ;; but this approach seems like serious YAGNI.
+                        ::specs/send-buf-size K/send-byte-buf-size
+                        ::specs/send-eof ::specs/false
+                        ::specs/send-eof-acked false
+                        ::specs/send-eof-processed false
+                        ::specs/strm-hwm 0
+                        ::specs/total-blocks 0
+                        ::specs/total-block-transmissions 0
+                        ::specs/un-ackd-blocks (build-un-ackd-blocks)
+                        ::specs/un-sent-blocks PersistentQueue/EMPTY
+                        ::specs/want-ping (if server?
+                                            ::specs/false
+                                            ;; TODO: Add option for a
+                                            ;; client that started before the
+                                            ;; server, meaning that it waits
+                                            ;; for 1 second at a time before
+                                            ;; trying to send the next
+                                            ;; message
+                                            ::specs/immediate)}
 
-    ::specs/message-loop-name human-name
-    ;; In the original, this is a local in main rather than a global
-    ;; Q: Is there any difference that might matter to me, other
-    ;; than being allocated on the stack instead of the heap?
-    ;; (Assuming globals go on the heap. TODO: Look that up)
-    ;; Ironically, this may be one of the few pieces that counts
-    ;; as "global", since it really is involved whether we're
-    ;; talking about incoming/outgoing buffer management or
-    ;; flow control.
-    ::specs/recent 0})
+      ::specs/message-loop-name human-name
+      ;; In the original, this is a local in main rather than a global
+      ;; Q: Is there any difference that might matter to me, other
+      ;; than being allocated on the stack instead of the heap?
+      ;; (Assuming globals go on the heap. TODO: Look that up)
+      ;; Ironically, this may be one of the few pieces that counts
+      ;; as "global", since it really is involved whether we're
+      ;; talking about incoming/outgoing buffer management or
+      ;; flow control.
+      ::specs/recent 0}))
   ([human-name]
-   (initial-state human-name false)))
+   (initial-state human-name {} false)))
 
 (s/fdef start!
         :args (s/cat :state ::specs/state
@@ -970,8 +1108,10 @@
         :ret ::specs/io-handle)
 (defn start!
   [{:keys [::specs/message-loop-name]
-    {:keys [::specs/send-buf-size]
+    {:keys [::specs/pipe-from-child-size]
      :as outgoing} ::specs/outgoing
+    {:keys [::specs/pipe-to-child-size]
+     :as incoming} ::specs/incoming
     :as state}
    parent-cb
    child-cb]
@@ -1000,37 +1140,39 @@
         ;; which is really all about the outgoing bytes we have pending,
         ;; either in the un-ackd or un-sent queues.
         ;; Still, this is a starting point.
-        child-out (PipedInputStream. from-child send-buf-size)
-        from-parent (PipedOutputStream.)
+        child-out (PipedInputStream. from-child pipe-from-child-size)
+        to-child (PipedOutputStream.)
         ;; This has the same caveats as the buffer size for
         ;; child-out, except that I'm just picking a named
         ;; constant that's in the same general vicinity as
         ;; the size the reference implementation uses for
         ;; the message buffer. I think that's where he
         ;; stashes those.
-        parent-out (PipedInputStream. from-parent K/k-64)
+        child-in (PipedInputStream. to-child pipe-to-child-size)
         ;; If I go with this approach, it seems like
         ;; I really need similar pairs for writing data
         ;; back out.
         io-handle {::specs/->parent parent-cb
-                   ::specs/->child child-cb
+                   ;; This next piece really doesn't make
+                   ;; any sense, at this stage of the game.
+                   ;; For the first pass, the child should
+                   ;; read from child-in as fast as possible.
+                   ;; I can add a higher-level wrapper around
+                   ;; that later with this kind of callback
+                   ;; interface.
+                   ;; On one hand, having a higher level
+                   ;; abstraction like this hides an implementation
+                   ;; detail and seems a little nicer to not need
+                   ;; to implement yourself.
+                   ;; On the other, how many people would prefer
+                   ;; to just use the raw stream directly?
                    ::specs/from-child from-child
                    ::specs/child-out child-out
-                   ::specs/from-parent from-parent
-                   ::specs/parent-out parent-out
+                   ::specs/to-child to-child
+                   ::specs/child-in child-in
                    ::specs/executor executor
                    ::specs/message-loop-name message-loop-name
                    ::specs/stream s}]
-    ;; In this world, we need loops that pull appropriately
-    ;; sized blocks of data out of from-parent and from-child
-    ;; and forwards it along to buffer appropriately.
-    (throw (ex-info "Start back here"
-                    ;; from-parent already involves sending individual
-                    ;; message packets.
-                    ;; Those really need to be combined into
-                    ;; a stream which the child must read as
-                    ;; quickly as possible.
-                    {::although "This doesn't make sense for from-parent"}))
     (start-event-loops! io-handle state)
     (log/info (utils/pre-log message-loop-name)
               (cl-format nil

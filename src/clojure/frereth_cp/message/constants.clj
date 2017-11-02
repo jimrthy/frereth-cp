@@ -122,7 +122,7 @@ I think that's because it uses bitwise and for modulo to cope
 with the ring buffer semantics, but there may be a deeper motivation."
   128)
 
-(def initial-max-block-length
+(def max-bytes-in-initiate-message
   k-div2)
 
 (def standard-max-block-length k-1)

@@ -145,7 +145,7 @@
             ;; message arrives.
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
-            initialized (message/initial-state loop-name true)
+            initialized (message/initial-state loop-name {} true)
             io-handle (message/start! initialized  parent-cb child-cb)]
         (try
           (let [state (message/get-state io-handle 500 ::timed-out)]
@@ -459,9 +459,9 @@
                         (log/error bad "High-level test failure")
                         (is (not bad))))
 
-    (let [client-init (message/initial-state "Client" false)
+    (let [client-init (message/initial-state "Client" {} false)
           client-io (message/start! client-init client-parent-cb client-child-cb)
-          server-init (message/initial-state "Server" true)
+          server-init (message/initial-state "Server" {} true)
           ;; It seems like this next part really shouldn't happen until the initial message arrives
           ;; from the client.
           ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
@@ -594,7 +594,7 @@
 (deftest overflow-from-child
   ;; If the child sends bytes faster than we can
   ;; buffer/send, we need a way to signal back-pressure.
-  (let [start-state (message/initial-state "Overflowing Test" true)
+  (let [start-state (message/initial-state "Overflowing Test" {} true)
         parent-cb (fn [out]
                     (log/warn "parent-cb called with"
                               (count out) bytes)
@@ -693,6 +693,7 @@
                                 (log/info (str test-run "::srvr-child-cb Received all expected packets"))
                                 (deliver response @srvr-child-state))))
           srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
+                                                  {}
                                                   true)
           srvr-io-handle (message/start! srvr-initialized server-parent-cb server-child-cb)
 
@@ -718,6 +719,7 @@
                      ;; Q: (which failure? feature?)
                      (is false "This should never get called"))
           client-initialized (message/initial-state (str "(test " test-run ") Client w/ Big Outbound")
+                                                    {}
                                                     false)
           client-io-handle (message/start! client-initialized parent-cb child-cb)]
       (reset! client-io-atom client-io-handle)
