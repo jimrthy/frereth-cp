@@ -1013,6 +1013,8 @@
         ;;s (strm/stream event-loop-buffer-size identity executor)
         s (strm/stream)
         s (strm/onto executor s)
+        ;; Q: Is there any meaningful difference between
+        ;; using PipedIn-/Out-putStream pairs vs ByteArrayIn-/Out-putStreams?
         from-child (PipedOutputStream.)
         ;; Note that this really doesn't match up with reference
         ;; implementation.

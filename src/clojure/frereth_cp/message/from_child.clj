@@ -137,28 +137,47 @@
           0
           blocks))
 
+(s/fdef read-next-bytes-from-child!
+        :args (s/cat :message-loop-name ::specs/message-loop-name
+                     :child-out ::specs/child-out
+                     :prefix bytes?
+                     :available-bytes nat-int?
+                     :max-to-read nat-int?)
+        :ret (s/or :open bytes?
+                   :eof ::specs/eof-flag))
 (defn read-next-bytes-from-child!
-  ([^InputStream child-out
+  ([message-loop-name
+    ^InputStream child-out
     prefix
     available-bytes
     max-to-read]
-   (let [prefix-gap (count prefix)]
+   (let [prelog (utils/pre-log message-loop-name)
+         prefix-gap (count prefix)]
      (if (not= 0 available-bytes)
        ;; Simplest scenario: we have bytes waiting to be consumed
-       (let [bytes-to-read (max available-bytes max-to-read)
+       (let [bytes-to-read (min available-bytes max-to-read)
              bytes-read (byte-array (+ bytes-to-read prefix-gap))
+             _ (log/debug prelog "Reading" bytes-to-read "from child. Should not block")
              n (.read child-out bytes-read prefix-gap bytes-to-read)]
+         (log/debug prelog "Read" n "bytes")
          (when (not= n bytes-to-read)
            (throw (RuntimeException. "How did we get a read mismatch?")))
          (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
          bytes-read)
        ;; More often, we should spend all our time waiting.
-       (let [next-prefix (.read child-out)]
+       (let [_ (log/debug prelog "Blocking until we get a byte from the child")
+             next-prefix (.read child-out)]
+         (log/debug prelog "Read a byte from child. Q: Are there more?")
          (if (= next-prefix -1)
            (if (< 0 prefix-gap)
              prefix
              ;; Q: Does it make sense to handle it this way?
-             (throw (IOException. "EOF"))))
+             ;; It would be nice to just attach the EOF flag to
+             ;; the bytes we're getting ready to send along.
+             ;; That would mean having this return a data
+             ;; structure that includes both the byte array
+             ;; and the flag.
+             ::specs/normal))
          (let [bytes-remaining (.available child-out)]
            (if (< 0 bytes-remaining)
              ;; Assume this means the client just sent us a sizeable
@@ -172,8 +191,9 @@
              ;; At this layer, we have to assume that our child
              ;; code (which is really the library consumer) isn't
              ;; deliberately malicious to its own performance.
-             (recur child-out
-                    prefix
+             (recur message-loop-name
+                    child-out
+                    (conj  prefix next-prefix)
                     bytes-remaining
                     (dec max-to-read))
              (byte-array [prefix])))))))
@@ -182,15 +202,29 @@
     max-to-read]
    (read-next-bytes-from-child! child-out [] available-bytes max-to-read)))
 
+(s/fdef process-next-bytes-from-child!
+        :args (s/cat :message-loop-name ::specs/message-loop-name
+                     :child-out ::specs/child-out
+                     :stream ::specs/stream
+                     :max-to-read int?)
+        ;; In this scenario, nil is the "keep going" scenario
+        :ret (s/nilable ::specs/eof-flag))
 (defn process-next-bytes-from-child!
-  [prelog
+  [message-loop-name
    ^InputStream child-out
    stream
    max-to-read]
-  (let [available-bytes (.available child-out)
-        array-o-bytes (read-next-bytes-from-child! child-out
-                                                   available-bytes
-                                                   max-to-read)]
+  (let [prelog (utils/pre-log message-loop-name)
+        available-bytes (.available child-out)
+        ;; note that this may also be the EOF flag
+        array-o-bytes
+        (try
+          (read-next-bytes-from-child! child-out
+                                       available-bytes
+                                       max-to-read)
+          (catch RuntimeException ex
+            (log/error ex prelog)
+            ::specs/error))]
     ;; Here's an annoying detail:
     ;; I *do* want to block here, at least for a while.
     ;; Currently, this
@@ -214,11 +248,15 @@
       (loop [n 6]
         (let [waiting
               (deref realized? 10000 ::timed-out)]
-          (when (= waiting ::timed-out)
-            (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
-            (if (< 0 n)
-              (recur (dec n))
-              (throw (ex-info "Giving up" {})))))))))
+          (if (= waiting ::timed-out)
+            (do
+              (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
+              (if (< 0 n)
+                (recur (dec n))
+                ::specs/error))
+            (when-not (bytes? array-o-bytes)
+              (log/warn prelog "Got some EOF signal:" array-o-bytes)
+              array-o-bytes)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -432,21 +470,29 @@
    {:keys [::specs/child-out
            ::specs/stream]
     :as io-handle}]
-  ;; TODO: This needs pretty hefty unit testing
-  ;; TODO: Move this (and the pieces it calls) to from-child
+  ;; TODO: This needs pretty hefty automated tests
   (dfrd/future
-    (let [prelog (utils/pre-log message-loop-name)]
+    (let [prelog (utils/pre-log message-loop-name)
+          eof? (atom false)]
       (try
-        (while (not (realized? client-waiting-on-response))
-          (process-next-bytes-from-child! prelog
-                                          child-out
-                                          stream
-                                          K/max-bytes-in-initiate-message))
-        (while true
-          (process-next-bytes-from-child! prelog
-                                          child-out
-                                          stream
-                                          K/standard-max-block-length))
+        (loop []
+          (when (not (realized? client-waiting-on-response))
+            (let [eof'?
+                  (process-next-bytes-from-child! message-loop-name
+                                                  child-out
+                                                  stream
+                                                  K/max-bytes-in-initiate-message)]
+              (if (not eof'?)
+                (recur)
+                (swap! eof? not)))))
+        (while (not @eof?)
+          (let [eof'?
+                (process-next-bytes-from-child! message-loop-name
+                                                child-out
+                                                stream
+                                                K/standard-max-block-length)]
+            (when eof'?
+              (swap! eof? not))))
         (catch IOException ex
           ;; TODO: Need to send an EOF signal to main ioloop so
           ;; it can notify the parent (or quit, as the case may be)
