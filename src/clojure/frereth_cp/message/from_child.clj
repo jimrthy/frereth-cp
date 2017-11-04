@@ -160,25 +160,43 @@
              _ (log/debug prelog "Reading" bytes-to-read "from child. Should not block")
              n (.read child-out bytes-read prefix-gap bytes-to-read)]
          (log/debug prelog "Read" n "bytes")
-         (when (not= n bytes-to-read)
-           (throw (RuntimeException. "How did we get a read mismatch?")))
-         (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
-         bytes-read)
+         (if (not= n bytes-to-read)
+           (do
+             ;; If this happens frequently, the buffer's probably too small.
+             (log/warn prelog (str "Tried to read "
+                                   bytes-to-read
+                                   " bytes from the child.\nGot "
+                                   n
+                                   " instead.\n"))
+             (let [actual-result (byte-array (+ prefix-gap n))]
+               (b-t/byte-copy! actual-result 0 prefix-gap prefix)
+               (b-t/byte-copy! actual-result prefix-gap n bytes-read)
+               actual-result))
+           (do
+             (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
+             bytes-read)))
        ;; More often, we should spend all our time waiting.
        (let [_ (log/debug prelog "Blocking until we get a byte from the child")
              next-prefix (.read child-out)]
-         (log/debug prelog "Read a byte from child. Q: Are there more?")
+         (log/debug prelog (str "Read a byte from child ("
+                                next-prefix
+                                "). Q: Are there more?"))
          (if (= next-prefix -1)
+           ;; EOF
            (if (< 0 prefix-gap)
-             prefix
              ;; Q: Does it make sense to handle it this way?
              ;; It would be nice to just attach the EOF flag to
              ;; the bytes we're getting ready to send along.
              ;; That would mean having this return a data
              ;; structure that includes both the byte array
              ;; and the flag.
+             ;; For now, if we had a prefix, just return that
+             ;; and pretend that everything's normal.
+             ;; We'll get the EOF signal soon enough.
+             prefix
              ::specs/normal))
          (let [bytes-remaining (.available child-out)]
+           (log/info prelog bytes-remaining "more bytes waiting to be read")
            (if (< 0 bytes-remaining)
              ;; Assume this means the client just sent us a sizeable
              ;; chunk.
@@ -191,11 +209,24 @@
              ;; At this layer, we have to assume that our child
              ;; code (which is really the library consumer) isn't
              ;; deliberately malicious to its own performance.
-             (recur message-loop-name
-                    child-out
-                    (conj  prefix next-prefix)
-                    bytes-remaining
-                    (dec max-to-read))
+             (let [combined-prefix (byte-array (inc prefix-gap))]
+               (log/debug prelog
+                          "Getting ready to copy"
+                          prefix-gap
+                          "bytes from"
+                          prefix
+                          "into a new combined-prefix byte-array")
+               ;; This next part seems pretty awful.
+               ;; If nothing else, prefix should usually be empty
+               ;; here.
+               ;; TODO: profile and validate my intuition about this
+               (b-t/byte-copy! combined-prefix 0 prefix-gap prefix)
+               (aset-byte combined-prefix prefix-gap next-prefix)
+               (recur message-loop-name
+                      child-out
+                      combined-prefix
+                      bytes-remaining
+                      (dec max-to-read)))
              (byte-array [prefix])))))))
   ([child-out
     available-bytes
