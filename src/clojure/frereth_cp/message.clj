@@ -43,16 +43,6 @@
   ;; is currently very slow.
   1000)
 
-(def event-loop-buffer-size
-  "Q: How many event requests can we queue?"
-  ;; TODO: Play with this number
-  ;; It probably shouldn't be hard-coded. This
-  ;; makes more sense as a knob that clients can
-  ;; adjust.
-  ;; They obviously *can*, by altering the root
-  ;; binding. But that's a messy thing to do.
-  16)
-
 (def max-child-buffer-size
   "Maximum message blocks from parent to child that we'll buffer before dropping
 
@@ -459,27 +449,7 @@
         ;; goes away if I just eliminate all the logging
         min-resend-time (+ last-block-time n-sec-per-block)
         prelog (utils/pre-log message-loop-name)
-        log-message (cl-format nil
-                               (str "Minimum send time: ~:d\n"
-                                    "which is ~:d nanoseconds\n"
-                                    "after last block time ~:d.\n"
-                                    "Recent was ~:d ns in the past")
-                               min-resend-time
-                               n-sec-per-block
-                               ;; I'm calculating last-block-time
-                               ;; incorrectly, due to a misunderstanding
-                               ;; about the name.
-                               ;; It should really be the value of
-                               ;; recent, set immediately after
-                               ;; I send a block to parent.
-                               last-block-time
-                               (- now recent))
         default-next (+ recent (utils/seconds->nanos 60))  ; by default, wait 1 minute
-        log-message (str log-message (cl-format nil
-                                                "\nDefault +1 minute: ~:d from ~:d\nScheduling based on want-ping value '~a'"
-                                                default-next
-                                                recent
-                                                want-ping))
         ;; Lines 286-289
         next-based-on-ping (case want-ping
                              ::specs/false default-next
@@ -488,9 +458,6 @@
                              ;; I think the point there is for the
                              ;; client to give the server 1 second to start up
                              ::specs/second-1 (+ recent (utils/seconds->nanos 1)))
-        log-message (str log-message (cl-format nil
-                                                "\nBased on ping settings, adjusted next time to: ~:d"
-                                                next-based-on-ping))
         ;; Lines 290-292
         ;; Q: What is the actual point to this?
         ;; (the logic seems really screwy, but that's almost definitely
@@ -509,18 +476,6 @@
                                      (< 0 un-sent-count)))
                             (min next-based-on-ping min-resend-time)
                             next-based-on-ping)
-        log-message (str log-message
-                         "\nEOF/unsent criteria:\nun-ackd-count: "
-                         un-ackd-count
-                         "\nun-sent-count: "
-                         un-sent-count
-                         "\nsend-eof: "
-                         send-eof
-                         "\nsend-eof-processed: "
-                         send-eof-processed
-                         (cl-format nil
-                                    "\nDue to EOF status: ~:d"
-                                    next-based-on-eof))
         ;; Lines 293-296
         rtt-resend-time (+ earliest-time rtt-timeout)
         ;; In the reference implementation, 0 for a block's time
@@ -537,10 +492,6 @@
                                                       min-resend-time))
                                             (min next-based-on-eof rtt-resend-time)
                                             next-based-on-eof)
-        log-message (str log-message
-                     (cl-format nil
-                                "\nAdjusted for RTT: ~:d"
-                                next-based-on-earliest-block-time))
         ;; There's one last caveat, from 298-300:
         ;; It all swirls around watchtochild, which gets set up
         ;; between lines 276-279.
@@ -553,13 +504,53 @@
                                        (nil? watch-to-child))
                                 0
                                 next-based-on-earliest-block-time)
+        ;; Lines 302-305
+        actual-next (max based-on-closed-child recent)
+        mid1-time (System/nanoTime)
+        log-message (cl-format nil
+                               (str "Minimum send time: ~:d\n"
+                                    "which is ~:d nanoseconds\n"
+                                    "after last block time ~:d.\n"
+                                    "Recent was ~:d ns in the past")
+                               min-resend-time
+                               n-sec-per-block
+                               ;; I'm calculating last-block-time
+                               ;; incorrectly, due to a misunderstanding
+                               ;; about the name.
+                               ;; It should really be the value of
+                               ;; recent, set immediately after
+                               ;; I send a block to parent.
+                               last-block-time
+                               (- now recent))
+        log-message (str log-message (cl-format nil
+                                                "\nDefault +1 minute: ~:d from ~:d\nScheduling based on want-ping value '~a'"
+                                                default-next
+                                                recent
+                                                want-ping))
+        log-message (str log-message (cl-format nil
+                                                "\nBased on ping settings, adjusted next time to: ~:d"
+                                                next-based-on-ping))
+        log-message (str log-message
+                         "\nEOF/unsent criteria:\nun-ackd-count: "
+                         un-ackd-count
+                         "\nun-sent-count: "
+                         un-sent-count
+                         "\nsend-eof: "
+                         send-eof
+                         "\nsend-eof-processed: "
+                         send-eof-processed
+                         (cl-format nil
+                                    "\nDue to EOF status: ~:d"
+                                    next-based-on-eof))
+        log-message (str log-message
+                     (cl-format nil
+                                "\nAdjusted for RTT: ~:d"
+                                next-based-on-earliest-block-time))
         log-message (str log-message
                          (cl-format nil
                                     "\nAfter [pretending to] adjusting for closed/ignored child watcher: ~:d"
                                     based-on-closed-child))
-        ;; Lines 302-305
-        actual-next (max based-on-closed-child recent)
-        mid-time (System/nanoTime)
+        mid2-time (System/nanoTime)
         un-ackd-count (count un-ackd-blocks)
         alt (cond-> default-next
               (= want-ping ::specs/second-1) (do (+ recent (utils/seconds->nanos 1)))
@@ -589,10 +580,12 @@
                ;; Q: Is that due to reduced logging?
                (cl-format nil (str "Calculating next scheduled time took"
                                    " ~:d nanoseconds and calculated ~:d."
+                                   "\nBuilding the messages about this took ~:d nanoseconds"
                                    "\nAlt approach took ~:d and calculated ~:d")
-                          (- mid-time now)
+                          (- mid1-time now)
                           actual-next
-                          (- end-time mid-time)
+                          (- mid2-time mid1-time)
+                          (- end-time mid2-time)
                           alt))
     actual-next))
 
@@ -853,7 +846,7 @@
 ;;;          205-259 fork child
 (defn start-event-loops!
   [io-handle state]
-  (throw (RuntimeException. "Echo test broken again. Start back here."))
+  #_(throw (RuntimeException. "Echo test broken again. Start back here."))
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
   ;; That checks for input on:
@@ -870,6 +863,7 @@
     (let [state (assoc state
                        ::specs/recent recent)
           child-output-loop (from-child/start-child-monitor! state io-handle)]
+      (log/debug "Child monitor thread should be running now")
       (schedule-next-timeout! (assoc io-handle
                                      ::specs/child-output-loop child-output-loop)
                               state))))
@@ -1003,14 +997,6 @@
   (let [;; TODO: Need to tune and monitor this execution pool
         ;; c.f. ztellman's dirigiste
         executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
-        ;; This approach was a mistake.
-        ;; By default, executors run in a thread pool that's based
-        ;; around either
-        ;; 1. unbounded thread count
-        ;; 2. unbounded queues
-        ;; Specifically, the docs warn that, if you implement your
-        ;; own thread pool, you really need to do the same.
-        ;;s (strm/stream event-loop-buffer-size identity executor)
         s (strm/stream)
         s (strm/onto executor s)
         ;; Q: Is there any meaningful difference between
@@ -1063,8 +1049,7 @@
     (start-event-loops! io-handle state)
     (log/info (utils/pre-log message-loop-name)
               (cl-format nil
-                         "Started an event loop with buffer size ~d:\n~a"
-                   event-loop-buffer-size
+                         "Started an event loop:\n~a"
                    s))
     io-handle))
 

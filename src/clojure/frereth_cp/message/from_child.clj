@@ -228,10 +228,15 @@
                       bytes-remaining
                       (dec max-to-read)))
              (byte-array [prefix])))))))
-  ([child-out
+  ([message-loop-name
+    child-out
     available-bytes
     max-to-read]
-   (read-next-bytes-from-child! child-out [] available-bytes max-to-read)))
+   (read-next-bytes-from-child! message-loop-name
+                                child-out
+                                []
+                                available-bytes
+                                max-to-read)))
 
 (s/fdef process-next-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
@@ -250,7 +255,8 @@
         ;; note that this may also be the EOF flag
         array-o-bytes
         (try
-          (read-next-bytes-from-child! child-out
+          (read-next-bytes-from-child! message-loop-name
+                                       child-out
                                        available-bytes
                                        max-to-read)
           (catch RuntimeException ex
@@ -494,7 +500,7 @@
                      :io-handle ::specs/io-handle)
         :ret ::specs/child-output-loop)
 (defn start-child-monitor!
-  [{:keys [::message-loop-name]
+  [{:keys [:frereth-cp.message/message-loop-name]
     {:keys [::specs/client-waiting-on-response]
      :as flow-control} ::specs/flow-control
     :as initial-state}
@@ -502,36 +508,42 @@
            ::specs/stream]
     :as io-handle}]
   ;; TODO: This needs pretty hefty automated tests
-  (dfrd/future
-    (let [prelog (utils/pre-log message-loop-name)
-          eof? (atom false)]
-      (try
-        (loop []
-          (when (not (realized? client-waiting-on-response))
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/info prelog "Starting the child-monitor thread")
+    (dfrd/future
+      (let [prelog (utils/pre-log message-loop-name)
+            eof? (atom false)]
+        (try
+          (loop []
+            (log/debug prelog "Top of client-waiting-on-response loop")
+            (when (not (realized? client-waiting-on-response))
+              (let [eof'?
+                    (process-next-bytes-from-child! message-loop-name
+                                                    child-out
+                                                    stream
+                                                    K/max-bytes-in-initiate-message)]
+                (if (not eof'?)
+                  (recur)
+                  (swap! eof? not)))))
+          (while (not @eof?)
+            (log/debug prelog "Top of main child-read loop")
+            ;; This next call never seems to return.
             (let [eof'?
                   (process-next-bytes-from-child! message-loop-name
                                                   child-out
                                                   stream
-                                                  K/max-bytes-in-initiate-message)]
-              (if (not eof'?)
-                (recur)
-                (swap! eof? not)))))
-        (while (not @eof?)
-          (let [eof'?
-                (process-next-bytes-from-child! message-loop-name
-                                                child-out
-                                                stream
-                                                K/standard-max-block-length)]
-            (when eof'?
-              (swap! eof? not))))
-        (catch IOException ex
-          ;; TODO: Need to send an EOF signal to main ioloop so
-          ;; it can notify the parent (or quit, as the case may be)
-          (log/error ex
-                     prelog
-                     "TODO: Not Implemented. This should only happen when child closes pipe")
-          (throw (RuntimeException. ex)))
-        (catch ExceptionInfo ex
-          (log/error ex prelog "FIXME: Add details from calling .getData"))
-        (catch Exception ex
-          (log/error ex "Bady unexpected exception"))))))
+                                                  K/standard-max-block-length)]
+              (when eof'?
+                (swap! eof? not))))
+          (log/info prelog "Child monitor exiting")
+          (catch IOException ex
+            ;; TODO: Need to send an EOF signal to main ioloop so
+            ;; it can notify the parent (or quit, as the case may be)
+            (log/error ex
+                       prelog
+                       "TODO: Not Implemented. This should only happen when child closes pipe")
+            (throw (RuntimeException. ex)))
+          (catch ExceptionInfo ex
+            (log/error ex prelog "FIXME: Add details from calling .getData"))
+          (catch Exception ex
+            (log/error ex "Bady unexpected exception")))))))
