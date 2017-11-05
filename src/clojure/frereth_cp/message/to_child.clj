@@ -8,7 +8,8 @@
 
   Although there *is* the bit about closing the pipe to the child at
   the bottom of each event loop."
-  (:require [clojure.spec.alpha :as s]
+  (:require [clojure.pprint :refer (cl-format)]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
@@ -272,7 +273,7 @@
                           (.write to-child bs 0 (count bs))
                           (let [end-time (System/nanoTime)
                                 delta (- end-time start-time)
-                                msg (str "Child callback took " delta " ns")]
+                                msg (cl-format nil "Child callback took ~:d ns" delta)]
                             (if (< (* 1000000 callback-threshold-warning) delta)
                               (if (< (* 1000000 callback-threshold-error) delta)
                                 (log/error pre-log msg)

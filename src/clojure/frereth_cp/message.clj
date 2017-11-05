@@ -157,41 +157,41 @@
     ;; that scenario here, but it would involve
     ;; enough extra stateful contortions (we'd
     ;; have to peek
-    (log/debug prelog "Triggering Output")
-    (let [state
-          ;; This is a scenario when it seems like it would
-          ;; be nice to be able to peek into io-handle's stream.
-          ;; If a message from the parent has been buffered, it
-          ;; would be nice to move it from there into the outbound
-          ;; queue.
-          ;; Actually, there's probably a useful clue right there:
-          ;; It would be nice to have 1 queue for the outer API,
-          ;; which is what schedule-next-event! is looping around.
-          ;; And then multiple queues for the specifics, like
-          ;; incoming from child vs. parent vs. a timeout triggering
-          ;; a resend.
-          ;; Maybe in a future version.
-          (as-> state state
-            (assoc state ::specs/recent (System/nanoTime))
-            ;; It doesn't make any sense to call this if
-            ;; we were triggered by a message coming in from
-            ;; the parent.
-            ;; Even if there pending blocks are ready to
-            ;; send, outgoing messages are throttled by
-            ;; the flow-control logic.
-            ;; Likewise, there isn't a lot of sense in
-            ;; calling it from the child, due to the same
-            ;; throttling issues.
-            ;; This really only makes sense when the
-            ;; timer triggers to let us know that it's
-            ;; OK to send a new message.
-            ;; *However*:
-            ;; The timeout on that may completely change
-            ;; when the child schedules another send,
-            ;; or a message arrives from parent to
-            ;; update the RTT.
-            (to-parent/maybe-send-block! io-handle state))]
-      state)))
+    (log/debug prelog "Possibly sending message to parent")
+    ;; This is a scenario when it seems like it would
+    ;; be nice to be able to peek into io-handle's stream.
+    ;; If a message from the child just got buffered, it
+    ;; would be nice to move it from there into the outbound
+    ;; queue.
+    ;; Actually, there's probably a useful clue right there:
+    ;; It would be nice to have 1 queue for the outer API,
+    ;; which is what schedule-next-event! is looping around.
+    ;; And then multiple queues for the specifics, like
+    ;; incoming from child vs. parent vs. a timeout triggering
+    ;; a resend.
+    ;; Maybe in a future version.
+
+    ;; It doesn't make any sense to call this if
+    ;; we were triggered by a message coming in from
+    ;; the parent.
+    ;; Even if there pending blocks are ready to
+    ;; send, outgoing messages are throttled by
+    ;; the flow-control logic.
+    ;; Likewise, there isn't a lot of sense in
+    ;; calling it from the child, due to the same
+    ;; throttling issues.
+    ;; This really only makes sense when the
+    ;; timer triggers to let us know that it's
+    ;; OK to send a new message.
+    ;; *However*:
+    ;; The timeout on that may completely change
+    ;; when the child schedules another send,
+    ;; or a message arrives from parent to
+    ;; update the RTT.
+    (to-parent/maybe-send-block! io-handle
+                                 (assoc state
+                                        ::specs/recent
+                                        (System/nanoTime)))))
 
 (s/fdef trigger-from-child
         :args (s/cat :io-handle ::specs/io-handle
@@ -1194,15 +1194,14 @@
   It's replacing one of the polling triggers that
   set off the main() event loop. Need to account for
   that fundamental strategic change"
-  [{:keys [::specs/from-parent
-           ::specs/parent-out
-           ::specs/message-loop-name]
+  [{:keys [::specs/message-loop-name
+           ::specs/stream]
     :as io-handle}
    ^bytes array-o-bytes]
-
-  ;; TODO: Roll this back to use the stream interface.
+  ;; Note that it doesn't make sense to use the
+  ;; same kind of interface as child->.
   ;; It's already coping with distinct individual
-  ;; message packets.
+  ;; message packets from the parent.
   ;; It should eventually combine them into a PipedStream
   ;; to forward along to the child, but a lot of processing
   ;; needs to happen first.
@@ -1210,18 +1209,21 @@
     (try
       (log/info prelog
                 "Top of parent->!")
-      (let [pending (.available parent-out)
-            n (count array-o-bytes)
-            result (if (< (+ pending n) K/k-64)
-                     (do
-                       (log/debug prelog "Forwarding bytes to parent over" from-parent)
-                       ;; Q: Is anything listening to this?
-                       ;; A: Nope. It's no longer a thing.
-                       (.write from-parent array-o-bytes 0 n)
-                       (log/debug prelog "Message from parent piped toward child")
-                       true)
-                     (log/warn prelog "Message from parent overflowed"))]
+      (let [success
+            (strm/put! stream [::parent-> array-o-bytes])]
+        (log/debug prelog "Parent put!. Setting up on-realized handler")
+        (dfrd/on-realized success
+                          (fn [x]
+                            ;; Note that reusing prelog here would be a mistake,
+                            ;; since this really should happen on a different thread
+                            (log/debug (utils/pre-log message-loop-name
+                                                      "Buffered bytes from parent, triggered from\n"
+                                                      prelog)))
+                          (fn [x]
+                            (log/warn (utils/pre-log message-loop-name)
+                                      "Failed to buffer bytes from parent, triggered from\n"
+                                      prelog)))
         (log/debug prelog "returning from parent->")
-        result)
+        nil)
       (catch Exception ex
         (log/error ex prelog "Sending message to parent failed")))))
