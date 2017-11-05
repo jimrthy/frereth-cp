@@ -12,6 +12,7 @@
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.message.test-utilities :as test-helpers]
+            [frereth-cp.message.to-child :as to-child]
             [frereth-cp.message.to-parent :as to-parent]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils]
@@ -26,7 +27,7 @@
 ;;; Helper functions
 
 (defn try-multiple-sends
-  [f
+  [f  ;; Honestly, this is just child->!
    n
    io-handle
    payload
@@ -41,6 +42,8 @@
       (if (> 0 m)
         (let [failure (ex-info failure-message
                                failure-body)]
+          ;; Just make double-extra certain that
+          ;; this exception doesn't just disappear
           (log/error failure)
           (throw failure))
         (recur (dec m))))))

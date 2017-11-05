@@ -49,6 +49,7 @@
 (s/def ::pipe-to-child-size nat-int?)
 ;; Q: Do we have access to anything more specific/general/useful?
 (s/def ::child-output-loop #(instance? java.util.concurrent.Future %))
+(s/def ::child-input-loop #(instance? java.util.concurrent.Future %))
 
 ;;; number of bytes in each block
 ;;; Corresponds to blocklen
@@ -435,4 +436,6 @@
                                  ;; Maybe do this for something that's
                                  ;; internal to the message ns (et al)
                                  ::message-loop-name]
-                           :opt [::child-output-loop]))
+                           :opt [::child-input-loop
+                                 ::child-output-loop
+                                 ::pipe-from-child-size]))

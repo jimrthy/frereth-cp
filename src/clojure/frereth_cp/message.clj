@@ -29,7 +29,7 @@
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
             [manifold.stream :as strm])
-  (:import [clojure.lang PersistentQueue]
+  (:import [clojure.lang IDeref PersistentQueue]
            [io.netty.buffer ByteBuf Unpooled]
            [java.io IOException PipedInputStream PipedOutputStream]
            java.util.concurrent.TimeoutException))
@@ -202,7 +202,7 @@
 (defn trigger-from-child
   [io-handle
    ^bytes array-o-bytes
-   IDeref accepted?
+   ^IDeref accepted?
    {{:keys [::specs/strm-hwm]
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
@@ -629,7 +629,9 @@
           updater
           ;; Q: Is this worth switching to something like core.match or a multimethod?
           (case tag
-            ::child-> (partial trigger-from-child io-handle (second success) (nth success 2))
+            ::specs/child-> (let [bs (second success)
+                                  success? (nth success 2)]
+                              (partial trigger-from-child io-handle bs success?))
             ::drained (do (log/warn prelog
                                     ;; Actually, this seems like a strong argument for
                                     ;; having a pair of streams. Child could still have
@@ -845,10 +847,10 @@
 ;;; abstraction that just don't fit.
 ;;;          205-259 fork child
 (defn start-event-loops!
-  [{:keys [::specs/message-loop-name]
+  [{:keys [::specs/->child
+           ::specs/message-loop-name]
     :as io-handle}
    state]
-  #_(throw (RuntimeException. "Echo test broken again. Start back here."))
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
   ;; That checks for input on:
@@ -864,11 +866,13 @@
     ;; Although it seems a bit silly to do it here
     (let [state (assoc state
                        ::specs/recent recent)
-          child-output-loop (from-child/start-child-monitor! state io-handle)]
+          child-output-loop (from-child/start-child-monitor! state io-handle)
+          child-input-loop (to-child/start-parent-monitor! io-handle ->child)]
       (log/debug (utils/pre-log message-loop-name)
                  "Child monitor thread should be running now. Scheduling next ioloop timeout")
       (schedule-next-timeout! (assoc io-handle
-                                     ::specs/child-output-loop child-output-loop)
+                                     ::specs/child-output-loop child-output-loop
+                                     ::specs/child-input-loop child-input-loop)
                               state))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -996,9 +1000,19 @@
      :as incoming} ::specs/incoming
     :as state}
    parent-cb
+   ;; I'd like to provide the option to build your own
+   ;; input loop.
+   ;; It seems like this would really need to be a function that
+   ;; takes the PipedInputStream and builds a future that contains
+   ;; the loop.
+   ;; It wouldn't be bad to write, but it doesn't seem worthwhile
+   ;; just now.
    child-cb]
   (let [;; TODO: Need to tune and monitor this execution pool
         ;; c.f. ztellman's dirigiste
+        ;; For starters, I probably at least want the option to
+        ;; use an instrumented executor.
+        ;; Actually, that should probably be the default.
         executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
         s (strm/stream)
         s (strm/onto executor s)
@@ -1028,7 +1042,8 @@
         ;; If I go with this approach, it seems like
         ;; I really need similar pairs for writing data
         ;; back out.
-        io-handle {::specs/->parent parent-cb
+        io-handle {::specs/->child child-cb
+                   ::specs/->parent parent-cb
                    ;; This next piece really doesn't make
                    ;; any sense, at this stage of the game.
                    ;; For the first pass, the child should
@@ -1044,6 +1059,7 @@
                    ;; to just use the raw stream directly?
                    ::specs/from-child from-child
                    ::specs/child-out child-out
+                   ::specs/pipe-from-child-size pipe-from-child-size
                    ::specs/to-child to-child
                    ::specs/child-in child-in
                    ::specs/executor executor
@@ -1074,10 +1090,19 @@
         :ret any?)
 (defn halt!
   [{:keys [::specs/message-loop-name
-           ::specs/stream]
+           ::specs/stream
+           ::specs/from-child
+           ::specs/child-out
+           ::specs/to-child
+           ::specs/child-in]
     :as io-handle}]
-  (log/info (utils/pre-log message-loop-name) "Halting")
-  (strm/close! stream))
+  (log/info (utils/pre-log message-loop-name) "I/O Loop Halting")
+  (strm/close! stream)
+  (doseq [pipe [from-child
+                child-out
+                to-child
+                child-in]]
+    (.close pipe)))
 
 (s/fdef get-state
         :args (s/cat :io-handle ::specs/io-handle
@@ -1147,36 +1172,34 @@
   ;; Prior to that, it was limited to 4K.
 
 ;;;  319-336: Maybe read bytes from child
-  [{:keys [::specs/message-loop-name
-           ::specs/stream]
+  [{:keys [::specs/child-out
+           ::specs/from-child
+           ::specs/message-loop-name
+           ::specs/pipe-from-child-size]
     :as io-handle}
    array-o-bytes]
   (let [prelog (utils/pre-log message-loop-name)]
     (log/debug prelog
                "Top of child->!\n")
-    (when-not stream
-      (throw (ex-info (str prelog "Missing stream inside io-handle")
+    (when-not from-child
+      (throw (ex-info (str prelog "Missing PipedOutStream from child inside io-handle")
                       {::io-handle io-handle})))
-    (when (strm/closed? stream)
-      (throw (RuntimeException. (str prelog "Can't write to a closed stream"))))
-    (let [success (dfrd/deferred)
-          ;; TODO: Add a deferred parameter here to indicate success/failure.
-          ;; Then block this thread by calling deref and returns that value.
-          ;; Handler should fulfill that deferred based on whether it has
-          ;; room to buffer the message or not.
-          ]
-      (strm/put! stream [::child-> array-o-bytes success])
-      (let [buffered? (deref success child-buffer-timeout ::timed-out)
-            success (and buffered?
-                         (not= buffered? ::timed-out))]
-        (when (= ::timed-out buffered?)
-          ;; This is mainly a problem because it means we blocked
-          ;; the sending thread for a ridiculously long time.
-          ;; TODO: Add an arity that allows sender to supply something
-          ;; that's deliverable so it can decide how much blockage is acceptable.
-          (log/warn "Timed out trying to buffer bytes from child"))
-        (log/debug prelog "returning from child->")
-        success))))
+    (let [buffer-space (- pipe-from-child-size (.available child-out))
+          n (count array-o-bytes)]
+      (if (< buffer-space n)
+        (do
+          (log/warn "Tried to write"
+                    n
+                    "bytes, but only have room for"
+                    buffer-space
+                    "\nRefusing to block")
+          ;; Q: Add an override parameter to make this OK?
+          nil)
+        (do
+          (.write from-child array-o-bytes 0 n)
+          (.flush from-child)
+          (log/debug prelog "child-> buffered" n "bytes")
+          true)))))
 
 (s/fdef parent->!
         :args (s/cat :io-handle ::specs/io-handle
@@ -1216,9 +1239,9 @@
                           (fn [x]
                             ;; Note that reusing prelog here would be a mistake,
                             ;; since this really should happen on a different thread
-                            (log/debug (utils/pre-log message-loop-name
-                                                      "Buffered bytes from parent, triggered from\n"
-                                                      prelog)))
+                            (log/debug (utils/pre-log message-loop-name)
+                                       "Buffered bytes from parent, triggered from\n"
+                                       prelog))
                           (fn [x]
                             (log/warn (utils/pre-log message-loop-name)
                                       "Failed to buffer bytes from parent, triggered from\n"

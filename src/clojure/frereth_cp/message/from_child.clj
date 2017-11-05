@@ -198,16 +198,20 @@
            (if (= next-prefix -1)
              ;; EOF
              (if (< 0 prefix-gap)
-               ;; Q: Does it make sense to handle it this way?
-               ;; It would be nice to just attach the EOF flag to
-               ;; the bytes we're getting ready to send along.
-               ;; That would mean having this return a data
-               ;; structure that includes both the byte array
-               ;; and the flag.
-               ;; For now, if we had a prefix, just return that
-               ;; and pretend that everything's normal.
-               ;; We'll get the EOF signal soon enough.
-               prefix
+               (do
+                 (log/info "Reached EOF. Have"
+                           prefix-gap
+                           "bytes buffered to send first")
+                 ;; Q: Does it make sense to handle it this way?
+                 ;; It would be nice to just attach the EOF flag to
+                 ;; the bytes we're getting ready to send along.
+                 ;; That would mean having this return a data
+                 ;; structure that includes both the byte array
+                 ;; and the flag.
+                 ;; For now, if we had a prefix, just return that
+                 ;; and pretend that everything's normal.
+                 ;; We'll get the EOF signal soon enough.
+                 prefix)
                ::specs/normal))
            (let [bytes-remaining (.available child-out)]
              (log/info prelog bytes-remaining "more bytes waiting to be read")
@@ -230,20 +234,22 @@
                             "bytes from"
                             prefix
                             "into a new combined-prefix byte-array")
+                 (aset-byte combined-prefix
+                            prefix-gap
+                            (b-t/possibly-2s-complement-8 next-prefix))
                  ;; This next part seems pretty awful.
                  ;; If nothing else, prefix should usually be empty
                  ;; here.
                  ;; TODO: profile and validate my intuition about this
                  (b-t/byte-copy! combined-prefix 0 prefix-gap prefix)
-                 (aset-byte combined-prefix prefix-gap next-prefix)
                  ;; TODO: Ditch the try/catch so I can just switch back
-                 ;; to recur here
+                 ;; to using recur here
                  (read-next-bytes-from-child! message-loop-name
                                               child-out
                                               combined-prefix
                                               bytes-remaining
                                               (dec max-to-read)))
-               (byte-array [prefix]))))
+               (byte-array prefix))))
          (catch RuntimeException ex
            (log/error ex "Reading from child failed"))))))
   ([message-loop-name
@@ -255,6 +261,74 @@
                                 []
                                 available-bytes
                                 max-to-read)))
+
+(defn buffer-bytes-from-child!
+  [message-loop-name
+   stream
+   array-o-bytes]
+  ;; I can do better than this.
+  ;; Instead of forwarding the bytes directly for the i/o
+  ;; loop to process, pass along something (a monad?) that
+  ;; describes what the i/o loop should do (this should really
+  ;; amount to adding bytes to the outbound queue and then trying
+  ;; to send them)
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/debug prelog
+               "Received"
+               (count array-o-bytes)
+               "bytes from child. Trying to forward them to the main i/o loop")
+    ;; Here's an annoying detail:
+    ;; I *do* want to block here, at least for a while.
+    ;; Currently, this
+    ;; triggers the main event loop in action-trigger.
+    ;; Which leads to lots of other stuff happening.
+    ;; TODO: Tease that "lots of other stuff" apart.
+    ;; We do need to get these bytes added to the
+    ;; (now invisible) state buffer that's managed
+    ;; by that main event loop.
+    ;; And then that event loop should try to send
+    ;; it along to the parent, if it's been long enough
+    ;; since the last bunch of bytes.
+    ;; There's a definite balancing act in splitting
+    ;; work between these 2 threads.
+    ;; I want to pull bytes from the child as fast as
+    ;; possible, but there isn't any point if the main
+    ;; ioloop is bogged down handling fiddly state management
+    ;; details that would make more sense in this thread.
+
+    ;; FIXME: Ditch the magic numbers
+    (let [blocker (dfrd/deferred)
+          submitted (strm/try-put! stream
+                                   [::specs/child-> array-o-bytes blocker]
+                                   10000)]
+      (dfrd/on-realized submitted
+                        (fn [success]
+                          (log/debug
+                           (utils/pre-log message-loop-name)
+                           "Bytes from child posted to main i/o loop triggered from\n"
+                           prelog))
+                        (fn [failure]
+                          (log/error
+                           failure
+                           (utils/pre-log message-loop-name)
+                           "Failed to add bytes from child to main i/o loop triggered from\n"
+                           prelog)))
+      (loop [n 6]
+        (let [waiting
+              (deref blocker 10000 ::timed-out)]
+          (if (= waiting ::timed-out)
+            (do
+              (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
+              (if (< 0 n)
+                (recur (dec n))
+                ::specs/error))
+            (do
+              (if (bytes? array-o-bytes)
+                (log/debug prelog
+                           (count array-o-bytes)
+                           "bytes from child processed by main i/o loop")
+                (log/warn prelog "Got some EOF signal:" array-o-bytes))
+              array-o-bytes)))))))
 
 (s/fdef process-next-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
@@ -280,48 +354,9 @@
           (catch RuntimeException ex
             (log/error ex prelog)
             ::specs/error))]
-    ;; I can do better than this.
-    ;; Instead of forwarding the bytes directly for the i/o
-    ;; loop to process, pass along something (a monad?) that
-    ;; describes what the i/o loop should do (this should really
-    ;; amount to adding bytes to the outbound queue and then trying
-    ;; to send them)
-    (log/debug prelog
-               "Received"
-               (count array-o-bytes)
-               "bytes from child. Trying to forward them to the main i/o loop")
-    ;; Here's an annoying detail:
-    ;; I *do* want to block here, at least for a while.
-    ;; Currently, this
-    ;; triggers the main event loop in action-trigger.
-    ;; Which leads to lots of other stuff happening.
-    ;; TODO: Tease that "lots of other stuff" apart.
-    ;; We do need to get these bytes added to the
-    ;; (now invisible) state buffer that's managed
-    ;; by that main event loop.
-    ;; And then that event loop should try to send
-    ;; it along to the parent, if it's been long enough
-    ;; since the last bunch of bytes.
-    ;; There's a definite balancing act in splitting
-    ;; work between these 2 threads.
-    ;; I want to pull bytes from the child as fast as
-    ;; possible, but there isn't any point if the main
-    ;; ioloop is bogged down handling fiddly state management
-    ;; details that would make more sense in this thread.
-    (let [blocker (dfrd/deferred)]
-      (strm/put! stream [::child-> array-o-bytes blocker])
-      (loop [n 6]
-        (let [waiting
-              (deref realized? 10000 ::timed-out)]
-          (if (= waiting ::timed-out)
-            (do
-              (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
-              (if (< 0 n)
-                (recur (dec n))
-                ::specs/error))
-            (when-not (bytes? array-o-bytes)
-              (log/warn prelog "Got some EOF signal:" array-o-bytes)
-              array-o-bytes)))))))
+    (buffer-bytes-from-child! message-loop-name
+                              stream
+                              array-o-bytes)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

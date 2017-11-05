@@ -11,11 +11,14 @@
   (:require [clojure.pprint :refer (cl-format)]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
+            [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.util :as utils])
-  (:import [io.netty.buffer ByteBuf]))
+            [frereth-cp.util :as utils]
+            [manifold.deferred :as dfrd])
+  (:import [io.netty.buffer ByteBuf]
+           java.io.IOException))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic numbers
@@ -182,6 +185,72 @@
   []
   (sorted-map))
 
+(defn start-parent-monitor!
+  "This is probably a reasonable default for many/most use cases"
+  ;; I *do* want to provide the option to write your own, though.
+  ;; Maybe I should add an optional parameter: if you don't provide
+  ;; this, it will default to calling this.
+  [{:keys [::specs/message-loop-name
+           ::specs/child-in]
+    :as io-handle}
+   cb]
+  (dfrd/future
+    (let [prelog (utils/pre-log message-loop-name)
+          buffer (byte-array K/standard-max-block-length)]
+      (log/info prelog "Starting the loop watching for bytes the parent has sent toward the child")
+      (try
+        (loop []
+          (let [bytes-available (.available child-in)
+                holder
+                (if (< 0 bytes-available)
+                  (let [n (.read child-in buffer 0 bytes-available)]
+                    (if (<= 0 n)
+                      (let [holder (byte-array n)]
+                        (log/debug prelog
+                                   n "bytes received from parent")
+                        (b-t/byte-copy! holder buffer)
+                        holder)
+                      ::specs/normal))
+                  (do
+                    (log/info prelog "No bytes available for child. Blocking Parent Monitor")
+                    (let [byte1 (.read child-in)
+                          bytes-available (.available child-in)]
+                      (log/info "Unblocking the Parent Monitor thread")
+                      (if (neg? byte1)
+                        (do
+                          (log/warn "EOF")
+                          ::specs/normal)
+                        (if (< 0 bytes-available)
+                          (let [n (.read child-in buffer 0 bytes-available)]
+                            (if (<= 0 n)
+                              (let [holder (byte-array (inc n))]
+                                (log/debug prelog
+                                           (inc n)
+                                           "bytes received from parent after initial"
+                                           byte1)
+                                (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
+                                (b-t/byte-copy! holder 1 n buffer)
+                                holder)))
+                          (byte-array [byte1]))))))
+                start-time (System/nanoTime)]
+            (log/debug "Triggering child callback")
+            (cb holder)
+            (let [end-time (System/nanoTime)
+                  msg (cl-format nil
+                                 "Child callback took ~:d nanoseconds"
+                                 (- end-time start-time))]
+              (log/debug prelog msg))
+            (when-not (bytes? holder)
+              (recur))))
+        (catch IOException ex
+          (log/error ex
+                     prelog
+                     "Parent Monitor failed"))
+        (catch Exception ex
+          (log/error ex
+                     prelog
+                     "Parent Monitor failed unexpectedly"))))))
+
 (s/fdef forward!
         :args (s/cat :to-child ::specs/to-child
                      :primed ::specs/state)
@@ -233,8 +302,7 @@
                                 "triggering child's callback with"
                                 (count bs)
                                 "bytes")
-                      ;; Really need to isolate this in its own
-                      ;; try-catch block. Problems in the provided callback are
+                      ;; Problems in the provided callback are
                       ;; very different than problems at this level.
                       ;; The former should probably fail immediately.
                       ;; The latter should probably fail even more
