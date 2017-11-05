@@ -845,7 +845,9 @@
 ;;; abstraction that just don't fit.
 ;;;          205-259 fork child
 (defn start-event-loops!
-  [io-handle state]
+  [{:keys [::specs/message-loop-name]
+    :as io-handle}
+   state]
   #_(throw (RuntimeException. "Echo test broken again. Start back here."))
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
@@ -863,7 +865,8 @@
     (let [state (assoc state
                        ::specs/recent recent)
           child-output-loop (from-child/start-child-monitor! state io-handle)]
-      (log/debug "Child monitor thread should be running now")
+      (log/debug (utils/pre-log message-loop-name)
+                 "Child monitor thread should be running now. Scheduling next ioloop timeout")
       (schedule-next-timeout! (assoc io-handle
                                      ::specs/child-output-loop child-output-loop)
                               state))))
@@ -1204,14 +1207,21 @@
   ;; to forward along to the child, but a lot of processing
   ;; needs to happen first.
   (let [prelog (utils/pre-log message-loop-name)]
-    (log/info prelog
-              "Top of parent->!")
-    (let [pending (.available parent-out)
-          n (count array-o-bytes)
-          result (if (< (+ pending n) K/k-64)
-                   (do
-                     (.write from-parent array-o-bytes 0 n)
-                     true)
-                   (log/warn prelog "Message from parent overflowed"))]
-      (log/debug prelog "returning from parent->")
-      result)))
+    (try
+      (log/info prelog
+                "Top of parent->!")
+      (let [pending (.available parent-out)
+            n (count array-o-bytes)
+            result (if (< (+ pending n) K/k-64)
+                     (do
+                       (log/debug prelog "Forwarding bytes to parent over" from-parent)
+                       ;; Q: Is anything listening to this?
+                       ;; A: Nope. It's no longer a thing.
+                       (.write from-parent array-o-bytes 0 n)
+                       (log/debug prelog "Message from parent piped toward child")
+                       true)
+                     (log/warn prelog "Message from parent overflowed"))]
+        (log/debug prelog "returning from parent->")
+        result)
+      (catch Exception ex
+        (log/error ex prelog "Sending message to parent failed")))))

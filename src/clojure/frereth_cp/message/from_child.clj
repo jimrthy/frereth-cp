@@ -153,6 +153,14 @@
     max-to-read]
    (let [prelog (utils/pre-log message-loop-name)
          prefix-gap (count prefix)]
+     (log/debug prelog (str
+                        "Trying to read "
+                        available-bytes
+                        "/"
+                        max-to-read
+                        " bytes from child and append them to "
+                        (count prefix)
+                        " that we've already received"))
      (if (not= 0 available-bytes)
        ;; Simplest scenario: we have bytes waiting to be consumed
        (let [bytes-to-read (min available-bytes max-to-read)
@@ -175,59 +183,69 @@
            (do
              (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
              bytes-read)))
-       ;; More often, we should spend all our time waiting.
-       (let [_ (log/debug prelog "Blocking until we get a byte from the child")
-             next-prefix (.read child-out)]
-         (log/debug prelog (str "Read a byte from child ("
-                                next-prefix
-                                "). Q: Are there more?"))
-         (if (= next-prefix -1)
-           ;; EOF
-           (if (< 0 prefix-gap)
-             ;; Q: Does it make sense to handle it this way?
-             ;; It would be nice to just attach the EOF flag to
-             ;; the bytes we're getting ready to send along.
-             ;; That would mean having this return a data
-             ;; structure that includes both the byte array
-             ;; and the flag.
-             ;; For now, if we had a prefix, just return that
-             ;; and pretend that everything's normal.
-             ;; We'll get the EOF signal soon enough.
-             prefix
-             ::specs/normal))
-         (let [bytes-remaining (.available child-out)]
-           (log/info prelog bytes-remaining "more bytes waiting to be read")
-           (if (< 0 bytes-remaining)
-             ;; Assume this means the client just sent us a sizeable
-             ;; chunk.
-             ;; Go ahead and recurse.
-             ;; This could perform poorly if we hit a race condition
-             ;; and the child's writing a single byte at a time
-             ;; as fast as we can loop, but the maximum buffer size
-             ;; should protect us from that being a real problem,
-             ;; and it seems like a fairly unlikely scenario.
-             ;; At this layer, we have to assume that our child
-             ;; code (which is really the library consumer) isn't
-             ;; deliberately malicious to its own performance.
-             (let [combined-prefix (byte-array (inc prefix-gap))]
-               (log/debug prelog
-                          "Getting ready to copy"
-                          prefix-gap
-                          "bytes from"
-                          prefix
-                          "into a new combined-prefix byte-array")
-               ;; This next part seems pretty awful.
-               ;; If nothing else, prefix should usually be empty
-               ;; here.
-               ;; TODO: profile and validate my intuition about this
-               (b-t/byte-copy! combined-prefix 0 prefix-gap prefix)
-               (aset-byte combined-prefix prefix-gap next-prefix)
-               (recur message-loop-name
-                      child-out
-                      combined-prefix
-                      bytes-remaining
-                      (dec max-to-read)))
-             (byte-array [prefix])))))))
+       (try
+         ;; More often, we should spend all our time waiting.
+         (let [_ (log/debug prelog "Blocking until we get a byte from the child")
+               next-prefix (.read child-out)]
+           ;; My echo test is never returning from that.
+           ;; Which, really, should mean that the PipedInputStream never gets closed.
+           ;; Aside from the fact that the child is never echoing any bytes
+           ;; back.
+           ;; Actually, it never seems to receive any bytes.
+           (log/debug prelog (str "Read a byte from child ("
+                                  next-prefix
+                                  "). Q: Are there more?"))
+           (if (= next-prefix -1)
+             ;; EOF
+             (if (< 0 prefix-gap)
+               ;; Q: Does it make sense to handle it this way?
+               ;; It would be nice to just attach the EOF flag to
+               ;; the bytes we're getting ready to send along.
+               ;; That would mean having this return a data
+               ;; structure that includes both the byte array
+               ;; and the flag.
+               ;; For now, if we had a prefix, just return that
+               ;; and pretend that everything's normal.
+               ;; We'll get the EOF signal soon enough.
+               prefix
+               ::specs/normal))
+           (let [bytes-remaining (.available child-out)]
+             (log/info prelog bytes-remaining "more bytes waiting to be read")
+             (if (< 0 bytes-remaining)
+               ;; Assume this means the client just sent us a sizeable
+               ;; chunk.
+               ;; Go ahead and recurse.
+               ;; This could perform poorly if we hit a race condition
+               ;; and the child's writing a single byte at a time
+               ;; as fast as we can loop, but the maximum buffer size
+               ;; should protect us from that being a real problem,
+               ;; and it seems like a fairly unlikely scenario.
+               ;; At this layer, we have to assume that our child
+               ;; code (which is really the library consumer) isn't
+               ;; deliberately malicious to its own performance.
+               (let [combined-prefix (byte-array (inc prefix-gap))]
+                 (log/debug prelog
+                            "Getting ready to copy"
+                            prefix-gap
+                            "bytes from"
+                            prefix
+                            "into a new combined-prefix byte-array")
+                 ;; This next part seems pretty awful.
+                 ;; If nothing else, prefix should usually be empty
+                 ;; here.
+                 ;; TODO: profile and validate my intuition about this
+                 (b-t/byte-copy! combined-prefix 0 prefix-gap prefix)
+                 (aset-byte combined-prefix prefix-gap next-prefix)
+                 ;; TODO: Ditch the try/catch so I can just switch back
+                 ;; to recur here
+                 (read-next-bytes-from-child! message-loop-name
+                                              child-out
+                                              combined-prefix
+                                              bytes-remaining
+                                              (dec max-to-read)))
+               (byte-array [prefix]))))
+         (catch RuntimeException ex
+           (log/error ex "Reading from child failed"))))))
   ([message-loop-name
     child-out
     available-bytes
@@ -262,6 +280,16 @@
           (catch RuntimeException ex
             (log/error ex prelog)
             ::specs/error))]
+    ;; I can do better than this.
+    ;; Instead of forwarding the bytes directly for the i/o
+    ;; loop to process, pass along something (a monad?) that
+    ;; describes what the i/o loop should do (this should really
+    ;; amount to adding bytes to the outbound queue and then trying
+    ;; to send them)
+    (log/debug prelog
+               "Received"
+               (count array-o-bytes)
+               "bytes from child. Trying to forward them to the main i/o loop")
     ;; Here's an annoying detail:
     ;; I *do* want to block here, at least for a while.
     ;; Currently, this
@@ -500,13 +528,14 @@
                      :io-handle ::specs/io-handle)
         :ret ::specs/child-output-loop)
 (defn start-child-monitor!
-  [{:keys [:frereth-cp.message/message-loop-name]
+  [{:keys [::specs/message-loop-name]
     {:keys [::specs/client-waiting-on-response]
      :as flow-control} ::specs/flow-control
     :as initial-state}
    {:keys [::specs/child-out
            ::specs/stream]
     :as io-handle}]
+  {:pre [message-loop-name]}
   ;; TODO: This needs pretty hefty automated tests
   (let [prelog (utils/pre-log message-loop-name)]
     (log/info prelog "Starting the child-monitor thread")
@@ -515,7 +544,7 @@
             eof? (atom false)]
         (try
           (loop []
-            (log/debug prelog "Top of client-waiting-on-response loop")
+            (log/debug prelog "Top of client-waiting-on-initial-response loop")
             (when (not (realized? client-waiting-on-response))
               (let [eof'?
                     (process-next-bytes-from-child! message-loop-name

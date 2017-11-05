@@ -70,7 +70,7 @@
                      ::specs/send-eof ::specs/false
                      ::specs/start-pos 0})]
       (is (= K/max-msg-len (count incoming)))
-      (let [response (promise)
+      (let [response (dfrd/deferred)
             parent-state (atom 0)
             parent-cb (fn [buf]
                         (is (s/valid? bytes? buf))
@@ -103,40 +103,42 @@
                        ;; TODO: Add another similar test that throws an
                        ;; exception here, for the sake of hardening the
                        ;; caller
-                       (is (bytes? array-o-bytes)
-                           (str "child-cb Expected a byte-array. Got a "
-                                (class array-o-bytes)))
-                       (when array-o-bytes
-                         (let [msg-len (count array-o-bytes)
-                               prelog (utils/pre-log "child-cb")
-                               locator (Exception.)]
-                           (if (not= 0 msg-len)
-                             (do
-                               (log/debug prelog
-                                          "Echoing back an incoming message:"
-                                          msg-len
-                                          "bytes\n"
-                                          "Called from:\n"
-                                          (utils/get-stack-trace (Exception.)))
-                               (when (not= K/k-1 msg-len)
-                                 (log/warn prelog
-                                           "Incoming message doesn't match length we sent"
-                                           {::expected K/k-1
-                                            ::actual msg-len
-                                            ::details (vec array-o-bytes)}))
-                               ;; Just echo it directly back.
-                               (let [io-handle @io-handle-atom]
-                                 (is io-handle)
-                                 (swap! child-message-counter inc)
-                                 (swap! strm-address + msg-len)
-                                 (try-multiple-sends message/child->!
-                                                     5
-                                                     io-handle
-                                                     array-o-bytes
-                                                     (str "Buffered bytes from child")
-                                                     "Giving up on buffering bytes from child"
-                                                     {})))
-                             (log/warn prelog "Empty incoming message. Highly suspicious")))))
+                       (let [prelog (utils/pre-log "child-cb")]
+                         ;; We aren't getting here
+                         (log/info prelog "Incoming to child")
+                         (is (bytes? array-o-bytes)
+                             (str "child-cb Expected a byte-array. Got a "
+                                  (class array-o-bytes)))
+                         (when array-o-bytes
+                           (let [msg-len (count array-o-bytes)
+                                 locator (Exception.)]
+                             (if (not= 0 msg-len)
+                               (do
+                                 (log/debug prelog
+                                            "Echoing back an incoming message:"
+                                            msg-len
+                                            "bytes\n"
+                                            "Called from:\n"
+                                            (utils/get-stack-trace (Exception.)))
+                                 (when (not= K/k-1 msg-len)
+                                   (log/warn prelog
+                                             "Incoming message doesn't match length we sent"
+                                             {::expected K/k-1
+                                              ::actual msg-len
+                                              ::details (vec array-o-bytes)}))
+                                 ;; Just echo it directly back.
+                                 (let [io-handle @io-handle-atom]
+                                   (is io-handle)
+                                   (swap! child-message-counter inc)
+                                   (swap! strm-address + msg-len)
+                                   (try-multiple-sends message/child->!
+                                                       5
+                                                       io-handle
+                                                       array-o-bytes
+                                                       (str "Buffered bytes from child")
+                                                       "Giving up on buffering bytes from child"
+                                                       {})))
+                               (log/warn prelog "Empty incoming message. Highly suspicious"))))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.
@@ -157,31 +159,30 @@
 
               ;; TODO: Add similar tests that send a variety of
               ;; gibberish messages
-              (let [wrote (dfrd/future (message/parent->! io-handle incoming))
+              (let [wrote (dfrd/future
+                            (log/debug loop-name "Writing message from parent")
+                            (message/parent->! io-handle incoming)
+                            (log/debug "Message should be headed to child"))
                     outcome (deref response 1000 ::timeout)]
-                (is (not= outcome ::timeout))
-                (when-not (= outcome ::timeout)
-                  (is (= 2 @parent-state))
-                  ;; I'm getting the response message header here, which is
-                  ;; correct, even though it seems wrong.
-                  ;; In the real thing, these are the bytes I'm getting ready
-                  ;; to send over the wire
-                  (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
-                  (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
-                                                         (vec outcome)))]
-                    (is (= (count message-body) (count without-header)))
-                    (is (b-t/bytes= message-body without-header))))
+                (if (= outcome ::timeout)
+                  (do
+                    (log/warn "Parent never got message from child")
+                    (is (not= outcome ::timeout)))
+                  (do
+                    (is (= 2 @parent-state))
+                    ;; I'm getting the response message header here, which is
+                    ;; correct, even though it seems wrong.
+                    ;; In the real thing, these are the bytes I'm getting ready
+                    ;; to send over the wire
+                    (is (= (count outcome) (+ msg-len K/header-length K/min-padding-length)))
+                    (let [without-header (byte-array (drop (+ K/header-length K/min-padding-length)
+                                                           (vec outcome)))]
+                      (is (= (count message-body) (count without-header)))
+                      (is (b-t/bytes= message-body without-header)))))
                 (is (realized? wrote) "Initial write from parent hasn't returned yet.")
                 (let [state (message/get-state io-handle 500 ::time-out)]
                   (is (not= state ::timeout))
                   (when (not= state ::timeout)
-                    ;; This test fails because
-                    ;; (get-in state [::specs/outgoing ::specs/send-buf])
-                    ;; is either a byte-array (seems likely) or a vector.
-                    ;; According to spec, it must be a ByteBuf.
-                    ;; Honestly, I'm mixing 2 different abstraction layers,
-                    ;; because they happen to represent the same thing.
-                    (comment (throw (RuntimeException. "FIXME: Start back here.")))
                     (is (not
                          (s/explain-data ::specs/state state)))
                     (log/info "Checking test outcome")
