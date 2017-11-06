@@ -176,6 +176,49 @@
                  incoming
                  gap-buffer)))
 
+(s/fdef read-bytes-from-parent!
+        :args (s/cat :io-handle ::specs/io-handle
+                     :buffer bytes?)
+        :ret (s/or :buffer bytes?
+                   :eof ::specs/eof-flag))
+(defn read-bytes-from-parent!
+  [{:keys [::specs/child-in
+           ::specs/message-loop-name]
+    :as io-handle}
+   #^bytes buffer]
+  (let [prelog (utils/pre-log message-loop-name)
+        bytes-available (.available child-in)]
+    (if (< 0 bytes-available)
+      (let [n (.read child-in buffer 0 bytes-available)]
+        (if (<= 0 n)
+          (let [holder (byte-array n)]
+            (log/debug prelog
+                       n "bytes received from parent")
+            (b-t/byte-copy! holder buffer)
+            holder)
+          ::specs/normal))
+      (do
+        (log/info prelog "No bytes available for child. Blocking Parent Monitor")
+        (let [byte1 (.read child-in)
+              bytes-available (.available child-in)]
+          (log/info "Unblocking the Parent Monitor thread")
+          (if (neg? byte1)
+            (do
+              (log/warn "EOF")
+              ::specs/normal)
+            (if (< 0 bytes-available)
+              (let [n (.read child-in buffer 0 bytes-available)]
+                (if (<= 0 n)
+                  (let [holder (byte-array (inc n))]
+                    (log/debug prelog
+                               (inc n)
+                               "bytes received from parent after initial"
+                               byte1)
+                    (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
+                    (b-t/byte-copy! holder 1 n buffer)
+                    holder)))
+              (byte-array [byte1]))))))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -200,38 +243,7 @@
       (log/info prelog "Starting the loop watching for bytes the parent has sent toward the child")
       (try
         (loop []
-          (let [bytes-available (.available child-in)
-                holder
-                (if (< 0 bytes-available)
-                  (let [n (.read child-in buffer 0 bytes-available)]
-                    (if (<= 0 n)
-                      (let [holder (byte-array n)]
-                        (log/debug prelog
-                                   n "bytes received from parent")
-                        (b-t/byte-copy! holder buffer)
-                        holder)
-                      ::specs/normal))
-                  (do
-                    (log/info prelog "No bytes available for child. Blocking Parent Monitor")
-                    (let [byte1 (.read child-in)
-                          bytes-available (.available child-in)]
-                      (log/info "Unblocking the Parent Monitor thread")
-                      (if (neg? byte1)
-                        (do
-                          (log/warn "EOF")
-                          ::specs/normal)
-                        (if (< 0 bytes-available)
-                          (let [n (.read child-in buffer 0 bytes-available)]
-                            (if (<= 0 n)
-                              (let [holder (byte-array (inc n))]
-                                (log/debug prelog
-                                           (inc n)
-                                           "bytes received from parent after initial"
-                                           byte1)
-                                (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
-                                (b-t/byte-copy! holder 1 n buffer)
-                                holder)))
-                          (byte-array [byte1]))))))
+          (let [holder (read-bytes-from-parent! io-handle buffer)
                 start-time (System/nanoTime)]
             (log/debug "Triggering child callback")
             (cb holder)
@@ -243,9 +255,9 @@
             (when-not (bytes? holder)
               (recur))))
         (catch IOException ex
-          (log/error ex
-                     prelog
-                     "Parent Monitor failed"))
+          (log/warn ex
+                    prelog
+                    "This should happen because the stream from parent closed"))
         (catch Exception ex
           (log/error ex
                      prelog

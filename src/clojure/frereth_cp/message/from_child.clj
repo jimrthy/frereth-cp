@@ -6,6 +6,7 @@
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K-shared]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])

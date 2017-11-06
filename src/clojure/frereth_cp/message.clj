@@ -882,19 +882,29 @@
         :args (s/cat :human-name ::specs/message-loop-name
                      ;; Q: What (if any) is the difference to spec that this
                      ;; argument is optional?
-                     :want-ping ::specs/want-ping)
+                     :want-ping ::specs/want-ping
+                     :opts ::specs/state)
         :ret ::specs/state)
 (defn initial-state
   "Put together an initial state that's ready to start!"
   ([human-name
     server?
     {{:keys [::specs/pipe-to-child-size]
-      :as incoming
-      :or {pipe-to-child-size K/k-64}} ::specs/incoming
+      :or {pipe-to-child-size K/k-64}
+      :as incoming} ::specs/incoming
      {:keys [::specs/pipe-from-child-size]
-      :as outgoing
-      :or {pipe-from-child-size K/k-64}} ::specs/outgoing
+      :or {pipe-from-child-size K/k-64}
+      :as outgoing} ::specs/outgoing
      :as opts}]
+   (log/debug "Building state for initial loop based around options:\n"
+              (utils/pretty opts))
+   (log/debug "Specifically, that translated into these overrides:\n"
+              (utils/pretty {::->child-size pipe-to-child-size
+                             ::child->size pipe-from-child-size})
+              "Based around\n"
+              (utils/pretty incoming)
+              "and\n"
+              (utils/pretty outgoing))
    (let [pending-client-response (promise)]
      (when server?
        (deliver pending-client-response ::never-waited))
@@ -995,9 +1005,11 @@
 (defn start!
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/pipe-from-child-size]
+     :or {pipe-from-child-size K/k-64}
      :as outgoing} ::specs/outgoing
     {:keys [::specs/pipe-to-child-size]
-     :as incoming} ::specs/incoming
+     :as incoming
+     :or {pipe-to-child-size K/k-64}} ::specs/incoming
     :as state}
    parent-cb
    ;; I'd like to provide the option to build your own
@@ -1008,6 +1020,11 @@
    ;; It wouldn't be bad to write, but it doesn't seem worthwhile
    ;; just now.
    child-cb]
+  (log/debug "Starting an I/O loop.\nBuffering"
+             pipe-from-child-size
+             "bytes from child\nand"
+             pipe-to-child-size
+             "bytes back to it")
   (let [;; TODO: Need to tune and monitor this execution pool
         ;; c.f. ztellman's dirigiste
         ;; For starters, I probably at least want the option to
@@ -1180,12 +1197,17 @@
    array-o-bytes]
   (let [prelog (utils/pre-log message-loop-name)]
     (log/debug prelog
-               "Top of child->!\n")
+               "Top of child->!")
     (when-not from-child
       (throw (ex-info (str prelog "Missing PipedOutStream from child inside io-handle")
                       {::io-handle io-handle})))
     (let [buffer-space (- pipe-from-child-size (.available child-out))
           n (count array-o-bytes)]
+      (log/debug prelog
+                 "Trying to send"
+                 n
+                 "bytes; have room for"
+                 buffer-space)
       (if (< buffer-space n)
         (do
           (log/warn "Tried to write"

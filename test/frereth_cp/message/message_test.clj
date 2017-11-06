@@ -595,25 +595,43 @@
               (log/error ex "Trying to halt server"))))))))
 (comment (handshake))
 
+(deftest check-initial-state-override
+  (let [opts {::specs/outgoing {::specs/pipe-from-child-size K/k-1}
+              ::specs/incoming {::specs/pipe-to-child-size K/k-4}}
+        start-state (message/initial-state "Overflowing Test" true opts)]
+    (is (= K/k-1 (get-in start-state [::specs/outgoing ::specs/pipe-from-child-size])))
+    (is (= K/k-4 (get-in start-state [::specs/incoming ::specs/pipe-to-child-size])))))
+
 (deftest overflow-from-child
   ;; If the child sends bytes faster than we can
   ;; buffer/send, we need a way to signal back-pressure.
-  (let [start-state (message/initial-state "Overflowing Test" {} true)
+  (let [opts {::specs/outgoing {::specs/pipe-from-child-size K/k-1}}
+        start-state (message/initial-state "Overflowing Test" true opts)
         parent-cb (fn [out]
                     (log/warn "parent-cb called with"
                               (count out) bytes)
                     (is (not out) "Should never get called"))
         rcvd (atom [])
         child-cb (fn [in]
+                   (log/info "child-cb received" in)
                    (swap! rcvd conj in))
-        event-loop (message/start! start-state parent-cb child-cb)]
+        event-loop (message/start! start-state
+                                   parent-cb
+                                   child-cb)]
+    (is (= K/k-1 (get-in start-state [::specs/outgoing ::specs/pipe-from-child-size])))
+    (is (= K/k-1 (::specs/pipe-from-child-size event-loop)))
+    (is (= 0 (.available (::specs/child-out event-loop))))
     (try
       ;; Start by trying to send a buffer that's just flat-out too big
-      (is (not (message/child->! event-loop (byte-array (* 4 K/recv-byte-buf-size)))))
-
-
-      (comment) (throw (RuntimeException. "Not Implemented"))
+      (is (not (message/child->! event-loop (byte-array K/k-4))))
       (finally
+        ;; This is premature. Honestly, I need to call close! first,
+        ;; give the loop a chance to send out its EOF signal, and then
+        ;; kill it.
+        ;; It doesn't matter as much here as it does for the handshake
+        ;; test (since there's no "other side" loop to ACK the EOF, but
+        ;; it's worth doing if only to demonstrate the basic
+        ;; point.
         (message/halt! event-loop)))))
 
 (deftest bigger-outbound
