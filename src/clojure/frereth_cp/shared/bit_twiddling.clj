@@ -22,7 +22,8 @@
 (defn byte-copy!
   "Copies the bytes from src to dst"
   ([dst ^bytes src]
-   (let [m (count src)]
+   (let [m (min (count src)
+                (count dst))]
      (run! (fn [n]
              (aset-byte dst n (aget src n)))
            (range m))))

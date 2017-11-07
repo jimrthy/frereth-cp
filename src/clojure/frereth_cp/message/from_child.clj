@@ -263,7 +263,15 @@
                                 available-bytes
                                 max-to-read)))
 
-(defn buffer-bytes-from-child!
+(s/fdef forward-bytes-from-child!
+        :args (s/cat :message-loop-name ::specs/message-loop-name
+                     :stream ::specs/stream
+                     :array-o-bytes (s/or :message bytes?
+                                          :eof ::specs/eof-flag))
+        :fn #(= (:ret %) (-> % :args :array-o-bytes))
+        :ret (s/or :message bytes?
+                   :eof ::specs/eof-flag))
+(defn forward-bytes-from-child!
   [message-loop-name
    stream
    array-o-bytes]
@@ -306,7 +314,7 @@
                         (fn [success]
                           (log/debug
                            (utils/pre-log message-loop-name)
-                           "Bytes from child posted to main i/o loop triggered from\n"
+                           "Bytes from child successfully posted to main i/o loop triggered from\n"
                            prelog))
                         (fn [failure]
                           (log/error
@@ -336,8 +344,8 @@
                      :child-out ::specs/child-out
                      :stream ::specs/stream
                      :max-to-read int?)
-        ;; In this scenario, nil is the "keep going" scenario
-        :ret (s/nilable ::specs/eof-flag))
+        :ret (s/or :message bytes?
+                   :eof ::specs/eof-flag))
 (defn process-next-bytes-from-child!
   [message-loop-name
    ^InputStream child-out
@@ -355,7 +363,7 @@
           (catch RuntimeException ex
             (log/error ex prelog)
             ::specs/error))]
-    (buffer-bytes-from-child! message-loop-name
+    (forward-bytes-from-child! message-loop-name
                               stream
                               array-o-bytes)))
 
@@ -587,8 +595,8 @@
                                                     child-out
                                                     stream
                                                     K/max-bytes-in-initiate-message)]
-                (if (not eof'?)
-                  (recur)
+                (if (bytes? eof'?)
+                  (recur)  ; regular message. Keep going
                   (swap! eof? not)))))
           (while (not @eof?)
             (log/debug prelog "Top of main child-read loop")

@@ -17,7 +17,8 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd])
-  (:import [io.netty.buffer ByteBuf]
+  (:import clojure.lang.ExceptionInfo
+           [io.netty.buffer ByteBuf]
            java.io.IOException))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -186,37 +187,63 @@
            ::specs/message-loop-name]
     :as io-handle}
    #^bytes buffer]
+  {:pre [buffer
+         child-in]}
   (let [prelog (utils/pre-log message-loop-name)
-        bytes-available (.available child-in)]
+        bytes-available (.available child-in)
+        max-n (count buffer)]
     (if (< 0 bytes-available)
-      (let [n (.read child-in buffer 0 bytes-available)]
+      (let [n (.read child-in buffer 0 (min bytes-available
+                                            max-n))]
         (if (<= 0 n)
+          ;; Can't just return buffer: we don't
+          ;; have a good way to tell the caller
+          ;; how many bytes we just received
           (let [holder (byte-array n)]
             (log/debug prelog
                        n "bytes received from parent")
-            (b-t/byte-copy! holder buffer)
+            (b-t/byte-copy! holder 0 n buffer)
             holder)
           ::specs/normal))
       (do
         (log/info prelog "No bytes available for child. Blocking Parent Monitor")
+        ;; Q: Do I really need to work with this "read single byte to unblock
+        ;; and then seem how many more are available" nonsense?
+        ;; I think I implemented it originally because writers weren't
+        ;; calling .flush, so this would buffer until full.
+        ;; TODO: Experiment with this and see how well this works using
+        ;; the easier approach.
         (let [byte1 (.read child-in)
               bytes-available (.available child-in)]
-          (log/info "Unblocking the Parent Monitor thread")
+          (assert bytes-available)
+          (log/info prelog "Parent Monitor thread unblocked")
           (if (neg? byte1)
             (do
               (log/warn "EOF")
               ::specs/normal)
             (if (< 0 bytes-available)
-              (let [n (.read child-in buffer 0 bytes-available)]
-                (if (<= 0 n)
-                  (let [holder (byte-array (inc n))]
-                    (log/debug prelog
-                               (inc n)
-                               "bytes received from parent after initial"
-                               byte1)
-                    (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
-                    (b-t/byte-copy! holder 1 n buffer)
-                    holder)))
+              (do
+                (log/debug prelog
+                           "Trying to read"
+                           bytes-available
+                           "bytes from"
+                           child-in
+                           "into"
+                           (count buffer)
+                           "bytes in"
+                           buffer)
+                ;; Have to account for the initial unblocking byte
+                (let [n (.read child-in buffer 0 (min bytes-available
+                                                      (dec max-n)))]
+                  (if (<= 0 n)
+                    (let [holder (byte-array (inc n))]
+                      (log/debug prelog
+                                 (inc n)
+                                 "bytes received from parent after initial"
+                                 byte1)
+                      (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
+                      (b-t/byte-copy! holder 1 n buffer)
+                      holder))))
               (byte-array [byte1]))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -245,15 +272,30 @@
         (loop []
           (let [holder (read-bytes-from-parent! io-handle buffer)
                 start-time (System/nanoTime)]
-            (log/debug "Triggering child callback")
-            (cb holder)
+            (log/debug prelog "Triggering child callback")
+            (try
+              (cb holder)
+              (catch ExceptionInfo ex
+                (log/error ex
+                           prelog
+                           (str "At least we can log something interesting with this:\n"
+                                (utils/pretty (.getData ex))))
+                (assert (not ex) (str prelog
+                                      "Child callback failed")))
+              (catch Exception ex
+                (log/error ex
+                           prelog
+                           "This is not acceptable behavior at all")
+                (assert (not ex) (str prelog
+                                      "Child callback failed"))))
             (let [end-time (System/nanoTime)
                   msg (cl-format nil
                                  "Child callback took ~:d nanoseconds"
                                  (- end-time start-time))]
               (log/debug prelog msg))
-            (when-not (bytes? holder)
+            (when (bytes? holder)
               (recur))))
+        (log/warn prelog "parent-monitor loop exited")
         (catch IOException ex
           (log/warn ex
                     prelog

@@ -624,6 +624,13 @@
     (try
       ;; Start by trying to send a buffer that's just flat-out too big
       (is (not (message/child->! event-loop (byte-array K/k-4))))
+      ;; TODO: Send messages that are just long enough as fast as possible
+      ;; until one fails because it would have blocked.
+      ;; Then wait a bit and try again, with smaller block sizes
+      ;; Actually, don't do that here. The test is probably interesting
+      ;; for metrics, but it really needs a pair of i/o loops.
+      ;; And, really, it gets much more interesting when you add
+      ;; crypto to the mix.
       (finally
         ;; This is premature. Honestly, I need to call close! first,
         ;; give the loop a chance to send out its EOF signal, and then
@@ -638,8 +645,9 @@
   ;; Flip-side of echo: I want to see what happens
   ;; when the child sends bytes that don't fit into
   ;; a single message packet.
-  (let [test-run (gensym)]
-    (log/info test-run "Start testing writing big chunk of outbound data")
+  (let [test-run (gensym)
+        prelog (utils/pre-log test-run)]
+    (log/info prelog "Start testing writing big chunk of outbound data")
     ;; TODO: split this into 2 tests
     ;; 1 should stall out like the current implementation,
     ;; waiting for ACKs (maybe drop every other packet?
@@ -674,53 +682,72 @@
                              ;; TODO: Add a test that buffers these
                              ;; up and then sends them
                              ;; all at once
-                             (log/info test-run
+                             (log/info (utils/pre-log test-run)
                                        "Message from server to client."
                                        "\nThis really should just be an ACK")
                              (message/parent->! @client-io-atom bs))
           server-child-cb (fn [incoming]
-                            (log/info test-run "Incoming to server's child")
+                            (let [prelog (utils/pre-log test-run)]
+                              (log/info prelog "Incoming to server's child")
 
-                            ;; Q: Which version better depicts how the reference implementation works?
-                            ;; Better Q: Which approach makes more sense?
-                            ;; (Seems obvious...don't want to waste bandwidth if it's just going
-                            ;; to a broken router that will never deliver. But there's a lot of
-                            ;; experience behind this sort of thing, and it would be a terrible
-                            ;; mistake to ignore that accumulated wisdom)
+                              ;; Q: Which version better depicts how the reference implementation works?
+                              ;; Better Q: Which approach makes more sense?
+                              ;; (Seems obvious...don't want to waste bandwidth if it's just going
+                              ;; to a broken router that will never deliver. But there's a lot of
+                              ;; experience behind this sort of thing, and it would be a terrible
+                              ;; mistake to ignore that accumulated wisdom)
 
+                              ;; That comment above is fairly rotten.
+                              ;; I think it stemmed from my scheduling algorithm
+                              ;; going off the rails and trying to send messages as fast as possible,
+                              ;; under some circumstances.
+                              ;; TODO: Check out the history, make sure this comment is
+                              ;; in the correct vicinity, and then hopefully delete them both.
 
-                            (let [response-state @srvr-child-state]
-                              (log/debug (str test-run
-                                              "::server-child-cb ("
-                                              (count incoming)
-                                              " bytes): "
-                                              (-> response-state
-                                                  (dissoc :buffer)
-                                                  (assoc :buffer-size (count (:buffer response-state))))))
-                              ;; The first few blocks should max out the message size.
-                              ;; The way the test is set up, the last will be
-                              ;; (+ 512 64).
-                              ;; It doesn't seem worth the hoops it would take to validate that.
-                              (swap! srvr-child-state
-                                     (fn [cur]
-                                       (log/info test-run "Incrementing state count")
-                                       (-> cur
-                                           (update :count inc)
-                                           ;; Seems a little silly to include the ACKs.
-                                           ;; Should probably think this through more thoroughly
-                                           (update :buffer conj (vec incoming)))))
-                              ;; I would like to get 8 callbacks here:
-                              ;; 1 for each kilobyte of message the child tries to send.
-                              (when (= packet-count (:count @srvr-child-state))
-                                (log/info (str test-run "::srvr-child-cb Received all expected packets"))
-                                (deliver response @srvr-child-state))))
+                              (let [response-state @srvr-child-state]
+                                (if (keyword? incoming)
+                                  (do
+                                    (is (s/valid? ::specs/eof-flag incoming))
+                                    (message/close! nil))
+                                  (log/debug (str test-run
+                                                  "::server-child-cb ("
+                                                  (count incoming)
+                                                  " bytes): "
+                                                  (-> response-state
+                                                      (dissoc :buffer)
+                                                      (assoc :buffer-size (count (:buffer response-state)))))))
+                                ;; The first few blocks should max out the message size.
+                                ;; The way the test is set up, the last will be
+                                ;; (+ 512 64).
+                                ;; It doesn't seem worth the hoops it would take to validate that.
+                                (swap! srvr-child-state
+                                       (fn [cur]
+                                         (log/info prelog "Incrementing state count")
+                                         (-> cur
+                                             (update :count inc)
+                                             ;; Seems a little silly to include the ACKs.
+                                             ;; Should probably think this through more thoroughly
+                                             (update :buffer conj (vec incoming)))))
+                                ;; I would like to get 8 callbacks here:
+                                ;; 1 for each message packet the child tries to send.
+                                ;; I'm actually receiving 6:
+                                ;; 4 1K blocks, 256 bytes, and an EOF indicator.
+                                ;; It seems like this almost definitely involves
+                                ;; PipedStream buffering.
+                                ;; TODO: Need to double-check that and consider
+                                ;; very diligently what I think about it.
+                                ;; (At first glance, it seems totally incorrect).
+                                (when (= packet-count (:count @srvr-child-state))
+                                  (log/info prelog
+                                            "::srvr-child-cb Received all expected packets")
+                                  (deliver response @srvr-child-state)))))
           srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
-                                                  {}
-                                                  true)
+                                                  true
+                                                  {})
           srvr-io-handle (message/start! srvr-initialized server-parent-cb server-child-cb)
 
           parent-cb (fn [bs]
-                      (log/info test-run "Forwarding buffer to server")
+                      (log/info (utils/pre-log test-run) "Forwarding buffer to server")
                       ;; This approach is over-simplified for the sake
                       ;; of testing.
                       ;; In reality, we need to pull off this queue as
@@ -731,7 +758,7 @@
                       (message/parent->! srvr-io-handle bs))
           child-message-counter (atom 0)
           strm-address (atom 0)
-          child-cb (fn [_]
+          child-cb (fn [bs]
                      ;; This is for messages from elsewhere to the child.
                      ;; This test is all about the child spewing "lots" of data
                      ;; TODO: Honestly, need a test that really does just start off by
@@ -739,16 +766,16 @@
                      ;; is warmed up.
                      ;; Library should be robust enough to handle that failure.
                      ;; Q: (which failure? feature?)
-                     (is false "This should never get called"))
+                     (is (not bs) "This should never get called"))
           client-initialized (message/initial-state (str "(test " test-run ") Client w/ Big Outbound")
-                                                    {}
-                                                    false)
+                                                    false
+                                                    {})
           client-io-handle (message/start! client-initialized parent-cb child-cb)]
       (reset! client-io-atom client-io-handle)
       (try
         (let [;; Note that this is what the child sender should be supplying
               message-body (byte-array (range msg-len))]
-          (log/debug test-run "Replicating child-send to " client-io-handle)
+          (log/debug prelog "Replicating child-send to " client-io-handle)
           (try-multiple-sends message/child->!
                               5
                               client-io-handle
@@ -760,7 +787,7 @@
                               {::buffer-size msg-len})
           (let [outcome (deref response 10000 ::timeout)
                 end-time (System/nanoTime)]
-            (log/info test-run
+            (log/info prelog
                       "Verifying that state hasn't errored out after"
                       (float (utils/nanos->millis (- end-time start-time))) "milliseconds")
             ;; Q: Can I do anything better in terms of checking for errors?
@@ -805,7 +832,7 @@
             ;; and I need to see what's really going on again
             (comment (is (not outcome) "What should we have here?"))))
       (finally
-          (log/info "Ending test" test-run)
+          (log/info "Ending test" prelog)
           (try
             (message/halt! client-io-handle)
             (catch RuntimeException ex
@@ -815,6 +842,25 @@
             (catch RuntimeException ex
               (is not ex))))))))
 (comment (bigger-echo))
+
+(deftest smarter-overflowing
+  ;; Should be a smarter version of bigger-echo
+  ;; I want to try keeping the child's outbound pipe
+  ;; saturated.
+  ;; To do this well, I really need it to provide status
+  ;; notifications when write space becomes available.
+  ;; Or just take the easy approach (which would generally
+  ;; perform better for most use cases) and provide an
+  ;; optional parameter to child-> to allow the write to
+  ;; block.
+  ;; Both options are better than what I have now, which
+  ;; amounts to polling for the state until some space
+  ;; opens up, then hoping some other thread doesn't
+  ;; write that first.
+  ;; Another option comes to mind:
+  ;; Switch to returning the available buffer size on
+  ;; failure, and false on success
+  (throw (RuntimeException. "Implement this")))
 
 (comment
   (deftest parallel-parent-test
