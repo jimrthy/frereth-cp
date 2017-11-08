@@ -693,6 +693,10 @@
                       (help/earliest-block-time message-loop-name un-ackd-blocks))
             (update ::specs/outgoing dissoc ::specs/next-block-queue)))
       (do
+        ;; To aid in traffic analysis, should intermittently send meaningless
+        ;; garbage when nothing else is available.
+        ;; TODO: Lots of research to make sure I do this correctly.
+        ;; (The obvious downside is increased bandwidth)
         (log/debug prelog
                    "Nothing to send")
         state))))

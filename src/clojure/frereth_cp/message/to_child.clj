@@ -220,6 +220,7 @@
           (if (neg? byte1)
             (do
               (log/warn "EOF")
+              ;; Q: Do I need to .close child-in here?
               ::specs/normal)
             (if (< 0 bytes-available)
               (do

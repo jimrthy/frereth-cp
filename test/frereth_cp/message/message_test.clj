@@ -107,12 +107,9 @@
                        ;; exception here, for the sake of hardening the
                        ;; caller
                        (let [prelog (utils/pre-log "child-cb")]
-                         ;; We aren't getting here
-                         (log/info prelog "Incoming to child")
-                         (is (bytes? array-o-bytes)
-                             (str "child-cb Expected a byte-array. Got a "
-                                  (class array-o-bytes)))
-                         (when array-o-bytes
+                         (log/info prelog "Incoming to child:" array-o-bytes)
+                         (is array-o-bytes "Falsey callback")
+                         (if (bytes? array-o-bytes)
                            (let [msg-len (count array-o-bytes)
                                  locator (Exception.)]
                              (if (not= 0 msg-len)
@@ -141,7 +138,10 @@
                                                        (str "Buffered bytes from child")
                                                        "Giving up on buffering bytes from child"
                                                        {})))
-                               (log/warn prelog "Empty incoming message. Highly suspicious"))))))
+                               (log/warn prelog "Empty incoming message. Highly suspicious")))
+                           (do
+                             (log/warn prelog "TODO: Add a defered that waits for this and verifies success")
+                             (is (s/valid? ::specs/eof-flag array-o-bytes))))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.

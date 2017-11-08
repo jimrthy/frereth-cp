@@ -28,7 +28,7 @@
         :args (s/cat :buf ::specs/buf
                      :start-pos ::specs/start-pos))
 (defn build-individual-block
-  [buf start-pos]
+  [buf]
   {::specs/ackd? false
    ::specs/buf buf
    ;; TODO: Add a signal for marking this true
@@ -36,11 +36,7 @@
    ;; in the message ns)
    ::specs/send-eof ::specs/false
    ::specs/transmissions 0
-   ::specs/time (System/nanoTime)
-   ;; There's the possibility of using a Nagle
-   ;; algorithm later to consolidate smaller blocks,
-   ;; so maybe it doesn't make sense to mess with it here.
-   ::specs/start-pos start-pos})
+   ::specs/time (System/nanoTime)})
 (comment
   ;; This seems to be ridiculously slow.
   ;; TODO: Check the timing. Maybe it speeds up as the JIT
@@ -302,7 +298,7 @@
           ;; array-o-bytes into it instead.
           ;; Doing a memcpy also seems a lot more wasteful.
           _ (.writerIndex buf buf-size)
-          block (build-individual-block message-loop-name buf)]
+          block (build-individual-block buf)]
       (log/debug prelog
                  buf-size
                  "-byte Block to add")
@@ -312,7 +308,11 @@
                     ::specs/un-sent-blocks]} ::specs/outgoing
             :keys [::specs/message-loop-name]
             :as state}]
-        (let [nested-prelog (utils/pre-log message-loop-name)]
+        (let [nested-prelog (utils/pre-log message-loop-name)
+              ;; There's the possibility of using a Nagle
+              ;; algorithm later to consolidate smaller blocks,
+              ;; so maybe it doesn't make sense to mess with it here.
+              block (assoc block ::specs/start-pos strm-hwm)]
           (log/debug nested-prelog
                      (str "Adding new message block(s) to "
                           ;; TODO: Might be worth logging the actual contents
@@ -330,6 +330,14 @@
             ;; long before this due to buffer overflows.
             ;; OTOH, the spec *does* define this as the end
             ;; of the stream.
+            ;; Actually, no it doesn't.
+            ;; This may be a bug in the reference implementation.
+            ;; Or my basic translation.
+            ;; End of stream is when the address hits stream-length-limit.
+            ;; It seems like it would make more sense to
+            ;; a) force-close the child output
+            ;; b) wait for ACK
+            ;; c) then exit
             ;; So, when ackd-addr gets here (or possibly
             ;; strm-hwm), we're done.
             ;; TODO: Revisit this.
@@ -338,9 +346,7 @@
               (update-in [::specs/outgoing ::specs/un-sent-blocks]
                          conj
                          block)
-              (update-in [::specs/outgoing ::specs/strm-hwm] + buf-size)))
-
-        (throw (RuntimeException. "How much work can we do elsewhere?"))))))
+              (update-in [::specs/outgoing ::specs/strm-hwm] + buf-size)))))))
 
 (s/fdef forward-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
