@@ -26,17 +26,11 @@
 
 (s/fdef build-individual-block
         :args (s/cat :buf ::specs/buf
-                     :length ::specs/length
                      :start-pos ::specs/start-pos))
 (defn build-individual-block
-  [buf length start-pos]
+  [buf start-pos]
   {::specs/ackd? false
    ::specs/buf buf
-   ;; Q: Is there any good justification for tracking this
-   ;; both here and in the buf?
-   ;; A: No.
-   ;; TODO: Make this go away.
-   ::specs/length length
    ;; TODO: Add a signal for marking this true
    ;; (It probably needs to involve a close! function
    ;; in the message ns)
@@ -58,8 +52,7 @@
     (doseq i (range 1000)
            (build-individual-block ::garbage 256 (* 256 i)))
     (time (doseq i (range 1000)
-                 (build-individual-block ::garbage 256 (* 256 i)))))
-  )
+                 (build-individual-block ::garbage 256 (* 256 i))))))
 
 (s/fdef build-block-descriptions
         :args (s/cat :message-loop-name ::specs/message-loop-name
@@ -73,18 +66,20 @@
    strm-hwm
    ^ByteBuf buf
    max-block-length]
-  {:pre [#(< 0 max-block-length)]}
-  ;; If max-block-length is < 1024, then we're a client that has not
-  ;; yet received a response to its Initiate packet. Which could arrive
-  ;; at any time.
-  ;; Really want to pull as many bytes as we can from the array, then
-  ;; put it back (at the head of the queue, which is problematic)
-  ;; to be read again during the
-  ;; next iteration (when we might have received an ACK that will let
-  ;; us double up on the bandwidth usage).
-  ;; This takes me back to an older implementation where I add bytes
-  ;; to a ByteBuf and notify handlers that more bytes are available.
-  ;; Or to the reference implementation's ring buffers.
+  ;; This has been through multiple incarnations.
+  ;; Most started with the assumption that we know how
+  ;; big the block size is here.
+  ;; That's a terrible assumption.
+  ;; For one thing, it's annoying to feed that into
+  ;; here.
+  ;; For another, it's really part of global state.
+  ;; Isolate that part and trust that callers knew
+  ;; what they were doing and sent us a properly-sized
+  ;; buffer.
+
+  ;; Actually, given that restriction, this function
+  ;; is pointless.
+  (throw (RuntimeException. "obsolete"))
   (let [cap (.capacity buf)
         remainder (mod cap max-block-length)
         block-count (int (Math/ceil (/ cap max-block-length)))]
@@ -116,7 +111,7 @@
                                     remainder
                                     max-block-length))
                          slice (.slice buf (* n max-block-length) length)]
-                     (build-individual-block slice length (+ strm-hwm (* n max-block-length)))))
+                     (build-individual-block slice (+ strm-hwm (* n max-block-length)))))
                  (range block-count))]
         ;; Make sure that releasing an individual slice
         ;; doesn't release the entire thing
@@ -124,7 +119,7 @@
         ;; (surely it isn't very long...right?)
         (.retain buf (dec block-count))
         result)
-      [(build-individual-block buf cap strm-hwm)])))
+      [(build-individual-block buf strm-hwm)])))
 
 (s/fdef count-buffered-bytes
         :args (s/cat :blocks ::specs/blocks)
@@ -263,6 +258,90 @@
                                 available-bytes
                                 max-to-read)))
 
+(s/fdef build-byte-consumer
+        ;; TODO: This is screaming for generative testing
+        :args (s/cat :message-loop-name ::specs/message-loop-name
+                     :array-o-bytes bytes?)
+        :ret ::specs/state)
+(defn build-byte-consumer
+  "Accepts a byte-array from the child."
+  ;; Lines 319-337
+  ;; The obvious approach is just to feed ByteBuffers
+  ;; from this callback to the parent's callback.
+
+  ;; That obvious approach completely misses the point that
+  ;; this namespace is about buffering. We need to hang onto
+  ;; those buffers here until they've been ACK'd.
+  [message-loop-name
+   ^bytes array-o-bytes]
+  (let [prelog (utils/pre-log message-loop-name)]
+    ;; Note that back-pressure no longer gets applied if we
+    ;; already have ~124K pending because caller started
+    ;; dropping packets.
+    ;; (It doesn't seem like it should matter, except
+    ;; as an upstream signal that there's some kind of
+    ;; problem)
+    (let [buf-size (count array-o-bytes)
+          ;; Q: Use Pooled direct buffers instead?
+          ;; A: Direct buffers wouldn't make any sense.
+          ;; After we get done with all the slicing and
+          ;; dicing that needs to happen to get the bytes
+          ;; to the parent, they still need to be translated
+          ;; back into byte arrays so they can be encrypted.
+          ;; Pooled buffers might make sense, except that
+          ;; we're starting from a byte array. So it would
+          ;; be silly to copy it.
+          buf (Unpooled/wrappedBuffer array-o-bytes)
+          ;; The writer index indicates the space that's
+          ;; available for reading.
+          ;; Needing to do this feels wrong.
+          ;; Honestly, I'm relying on functionality
+          ;; that doesn't seem to be quite documented.
+          ;; It almost seems as though I really should be
+          ;; setting up a new [pooled] buffer and reading
+          ;; array-o-bytes into it instead.
+          ;; Doing a memcpy also seems a lot more wasteful.
+          _ (.writerIndex buf buf-size)
+          block (build-individual-block message-loop-name buf)]
+      (log/debug prelog
+                 buf-size
+                 "-byte Block to add")
+      (fn [{{:keys [::specs/ackd-addr
+                    ::specs/max-block-length
+                    ::specs/strm-hwm
+                    ::specs/un-sent-blocks]} ::specs/outgoing
+            :keys [::specs/message-loop-name]
+            :as state}]
+        (let [nested-prelog (utils/pre-log message-loop-name)]
+          (log/debug nested-prelog
+                     (str "Adding new message block(s) to "
+                          ;; TODO: Might be worth logging the actual contents
+                          ;; when it's time to trace
+                          (count un-sent-blocks)
+                          " unsent others from a thunk built by\n"
+                          prelog))
+          (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
+            ;; Want to be sure standard error handlers don't catch
+            ;; this...it needs to force a fresh handshake.
+            ;; Note that this check has major problems:
+            ;; This is the number of bytes we have buffered
+            ;; that have not yet been ACK'd.
+            ;; We really should have quit reading from the child
+            ;; long before this due to buffer overflows.
+            ;; OTOH, the spec *does* define this as the end
+            ;; of the stream.
+            ;; So, when ackd-addr gets here (or possibly
+            ;; strm-hwm), we're done.
+            ;; TODO: Revisit this.
+            (throw (AssertionError. "End of stream")))
+          (-> state
+              (update-in [::specs/outgoing ::specs/un-sent-blocks]
+                         conj
+                         block)
+              (update-in [::specs/outgoing ::specs/strm-hwm] + buf-size)))
+
+        (throw (RuntimeException. "How much work can we do elsewhere?"))))))
+
 (s/fdef forward-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
                      :stream ::specs/stream
@@ -275,24 +354,41 @@
   [message-loop-name
    stream
    array-o-bytes]
+  ;; This seems overly convoluted.
+  ;; message/child-> writes bytes to a PipedOutputStream.
+  ;; start-child-monitor! has an event loop that centers around
+  ;; process-next-bytes-from-child!
+  ;; That calls read-next-bytes-from-child!, which pulls bytes
+  ;; from the associated PipedInputStream, then calls
+  ;; forward-bytes-from-child!
+  ;; This, in turn, tries to put those bytes onto the manifold
+  ;; stream that feeds into the main i/o loop. This winds up
+  ;; calling message/trigger-from-child which, in turn,
+  ;; starts setting up the real buffering that checks for
+  ;; room (which needed to happen before we accepted them in
+  ;; the first place) followed by calling consume-from-child.
+  ;; That converts the incoming bytes to a block description
+  ;; and adds it to the un-sent-blocks queue.
+
   ;; I can do better than this.
   ;; Instead of forwarding the bytes directly for the i/o
   ;; loop to process, pass along something (a monad?) that
   ;; describes what the i/o loop should do (this should really
   ;; amount to adding bytes to the outbound queue and then trying
   ;; to send them)
-  (let [prelog (utils/pre-log message-loop-name)]
+  (let [prelog (utils/pre-log message-loop-name)
+        callback (build-byte-consumer message-loop-name array-o-bytes)]
+    ;; FIXME: Build a partial function that the main ioloop can
+    ;; call in order to really put the new message buffers onto
+    ;; its un-sent-quueue.
+    ;; Send that instead of the raw bytes.
     (log/debug prelog
                "Received"
                (count array-o-bytes)
                "bytes from child. Trying to forward them to the main i/o loop")
     ;; Here's an annoying detail:
     ;; I *do* want to block here, at least for a while.
-    ;; Currently, this
-    ;; triggers the main event loop in action-trigger.
-    ;; Which leads to lots of other stuff happening.
-    ;; TODO: Tease that "lots of other stuff" apart.
-    ;; We do need to get these bytes added to the
+    ;; Then we do to get these bytes added to the
     ;; (now invisible) state buffer that's managed
     ;; by that main event loop.
     ;; And then that event loop should try to send
@@ -308,7 +404,7 @@
     ;; FIXME: Ditch the magic numbers
     (let [blocker (dfrd/deferred)
           submitted (strm/try-put! stream
-                                   [::specs/child-> array-o-bytes blocker]
+                                   [::specs/child-> callback blocker]
                                    10000)]
       (dfrd/on-realized submitted
                         (fn [success]
@@ -322,6 +418,8 @@
                            (utils/pre-log message-loop-name)
                            "Failed to add bytes from child to main i/o loop triggered from\n"
                            prelog)))
+      ;; message-test pretty much duplicates this in try-multiple-sends
+      ;; TODO: eliminate the duplication
       (loop [n 6]
         (let [waiting
               (deref blocker 10000 ::timed-out)]
@@ -338,6 +436,44 @@
                            "bytes from child processed by main i/o loop")
                 (log/warn prelog "Got some EOF signal:" array-o-bytes))
               array-o-bytes)))))))
+
+(s/fdef room-for-child-bytes?
+        :args (s/cat :state ::specs/state)
+        :ret boolean?)
+(defn room-for-child-bytes?
+  ;; The reference implementation doesn't take the size of
+  ;; the incoming message into account here.
+  ;; It doesn't need to.
+  ;; It pulls bytes out of a pipe, up to max-block-length
+  ;; at a time.
+  ;; Q: Do I want to?
+  ;; A: I have to. If it tries to send too much in one
+  ;; shot, that's going to overflow the buffer.
+  ;; The easy approach is to just let the client buffer as many
+  ;; bytes as it likes, but then it doesn't have any way to learn
+  ;; that the network's down until memory's full.
+  "Does send-buf have enough space left for any message from child?"
+  [{{:keys [::specs/ackd-addr
+            ::specs/strm-hwm]} ::specs/outgoing
+    :as state}]
+  {:pre [ackd-addr
+         strm-hwm]}
+  ;; Line 322: This also needs to account for acked-addr
+  ;; For whatever reason, DJB picked this (-4K) as the
+  ;; end-point to refuse to read
+  ;; more child data before we hit send-byte-buf-size.
+  ;; Presumably that reason remains valid.
+  ;; (Although it seems like it would make more sense to
+  ;; look at the actual message that we're considering...
+  ;; I'm just not quite ready to make that particular
+  ;; break with his implementation)
+
+  ;; Q: Is that an important part of the algorithm, or is
+  ;; it "just" dealing with the fact that we have a circular
+  ;; buffer with parts that have not yet been GC'd?
+  ;; And is it possible to tease apart that distinction?
+  (let [send-bytes (- strm-hwm ackd-addr)]
+    (< (+ send-bytes K/k-4) K/send-byte-buf-size)))
 
 (s/fdef process-next-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
@@ -363,6 +499,15 @@
           (catch RuntimeException ex
             (log/error ex prelog)
             ::specs/error))]
+    ;; In order to do this, we have to query for state.
+    ;; Which is obnoxious.
+    ;; *And* we need to watch for buffer space to
+    ;; open up so we can proceed.
+    ;; But this really is the best place to apply
+    ;; back-pressure.
+    (log/warn prelog
+              (str "Need to check room-for-child-bytes?"
+                   " before calling read-next-bytes-from-child!"))
     (forward-bytes-from-child! message-loop-name
                               stream
                               array-o-bytes)))
@@ -382,59 +527,6 @@
           (map count-buffered-bytes [un-ackd-blocks
                                      un-sent-blocks])))
 
-(s/fdef room-for-child-bytes?
-        :args (s/cat :state ::specs/state)
-        :ret boolean?)
-(defn room-for-child-bytes?
-  ;; The reference implementation doesn't take the size of
-  ;; the incoming message into account here.
-  ;; It doesn't need to.
-  ;; It pulls bytes out of a pipe, up to max-block-length
-  ;; at a time.
-  ;; Q: Do I want to?
-  ;; A: I have to. If it tries to send too much in one
-  ;; shot, that's going to overflow the [hypothetical] buffer.
-  ;; The easy approach is to just let the client buffer as many
-  ;; bytes as it likes, but then it doesn't have any way to learn
-  ;; that the network's down until memory's full.
-  ;; TODO: Look at using a pair of PipedInputStream and
-  ;; PipedOutputStream again.
-  ;; I've dabbled with those in the past and rejected them.
-  ;; But I don't remember why.
-  ;; And, frankly, they seem like exactly what I want/need.
-  ;; First problem that I see:
-  ;; Writing to PipedOutputStream simply blocks until all
-  ;; bytes are written. There doesn't seem to be a good way
-  ;; to find out whether it will block until I try.
-  ;; Although I could check the input stream and compare the
-  ;; available bytes against the buffer size.
-  ;; I think I vaguely remember having issues when the
-  ;; buffer wraps.
-  ;; TODO: Give that a try. It seems like it was designed
-  ;; specifically for the issues I have now.
-  "Does send-buf have enough space left for any message from child?"
-  [{{:keys [::specs/ackd-addr
-            ::specs/strm-hwm]} ::specs/outgoing
-    :as state}]
-  {:pre [ackd-addr
-         strm-hwm]}
-  ;; Line 322: This also needs to account for acked-addr
-  ;; For whatever reason, DJB picked this (-4K) as the
-  ;; end-point to refuse to read
-  ;; more child data before we hit send-byte-buf-size.
-  ;; Presumably that reason remains valid.
-  ;; (Although it seems like it would make more sense to
-  ;; look at the actual message that we're considering...
-  ;; I'm just not quite ready to make that particular
-  ;; break with his implementation)
-
-  ;; Q: Is that an important part of the algorithm, or is
-  ;; it "just" dealing with the fact that we have a circular
-  ;; buffer with parts that have not yet been GC'd?
-  ;; And is it possible to tease apart that distinction?
-  (let [send-bytes (- strm-hwm ackd-addr)]
-    (< (+ send-bytes K/k-4) K/send-byte-buf-size)))
-
 (s/fdef blocks-not-sent?
         :args (s/cat :state ::specs/state)
         :ret boolean?)
@@ -443,129 +535,6 @@
   [{{:keys [::specs/un-sent-blocks]} ::specs/outgoing
     :as state}]
   (< 0 (count un-sent-blocks)))
-
-(s/fdef consume-from-child
-        ;; TODO: This is screaming for generative testing
-        :args (s/cat :state ::specs/state
-                     :array-o-bytes bytes?)
-        :ret ::specs/state)
-(defn consume-from-child
-  "Accepts a byte-array from the child.
-
-  Lines 319-337"
-  ;; The obvious approach is just to feed ByteBuffers
-  ;; from this callback to the parent's callback.
-
-  ;; That obvious approach completely misses the point that
-  ;; this namespace is about buffering. We need to hang onto
-  ;; those buffers here until they've been ACK'd.
-  [{{:keys [::specs/ackd-addr
-            ::specs/max-block-length
-            ::specs/strm-hwm
-            ::specs/un-sent-blocks]} ::specs/outgoing
-    :keys [::specs/message-loop-name]
-    :as state}
-   ;; Child should neither know nor care that netty is involved,
-   ;; so a ByteBuf really isn't appropriate here.
-   ;; Much better to just just accept a byte array.
-   ;; A clojure vector of bytes would generally be better than that.
-   ;; A clojure object that we could just serialize to either
-   ;; EDN, transit, or Fressian seems
-   ;; like it would be best.
-   ;; Of course, we should allow the byte array for apps that
-   ;; want/need to do their own serialization.
-   ;; And it's important to remember that, like TCP, this is meant
-   ;; to be a streaming protocol.
-   ;; So the higher-level options don't make sense at this level.
-   ;; Though it seems like it would be nice to generally be able
-   ;; to just hand the message to a serializer and have it handle
-   ;; the streaming.
-   ^bytes array-o-bytes]
-  (let [prelog (utils/pre-log message-loop-name)]
-    (log/debug prelog
-               (str "Adding new message block(s) to "
-                    ;; TODO: Might be worth logging the actual contents
-                    ;; when it's time to trace
-                    (count un-sent-blocks)
-                    " unsent others"))
-    ;; Note that back-pressure gets applied if we
-    ;; already have ~124K pending because caller started
-    ;; dropping packets.
-    ;; (It doesn't seem like it should matter, except
-    ;; as an upstream signal that there's some kind of
-    ;; problem)
-    (let [buf-size (count array-o-bytes)
-          ;; Q: Use Pooled direct buffers instead?
-          ;; A: Direct buffers wouldn't make any sense.
-          ;; After we get done with all the slicing and
-          ;; dicing that needs to happen to get the bytes
-          ;; to the parent, they still need to be translated
-          ;; back into byte arrays so they can be encrypted.
-          ;; Pooled buffers might make sense, except that
-          ;; we're starting from a byte array. So it would
-          ;; be silly to copy it.
-          buf (Unpooled/wrappedBuffer array-o-bytes)
-          ;; The writer index indicates the space that's
-          ;; available for reading.
-          ;; Needing to do this feels wrong.
-          ;; Honestly, I'm relying on functionality
-          ;; that doesn't seem to be quite documented.
-          ;; It almost seems as though I really should be
-          ;; setting up a new [pooled] buffer and reading
-          ;; array-o-bytes into it instead.
-          ;; That also seems a lot more wasteful.
-          _ (.writerIndex buf buf-size)
-          ;; In the original, this is the offset into the circular
-          ;; buf where we're going to start writing incoming bytes.
-          pos (rem (inc strm-hwm) K/send-byte-buf-size)
-          available-buffer-space (- K/send-byte-buf-size pos)
-          ;; I'm pretty sure this concept throws a major
-          ;; wrench into my gears.
-          ;; I don't remember handling this sort of buffering
-          ;; at all.
-          ;; Q: If I drop the extra bytes, how do I inform the
-          ;; client?
-          bytes-to-read (min available-buffer-space buf-size)
-          ;; Major(?) issue with this approach:
-          ;; If the client child starts by writing (for example), 16K bytes
-          ;; all at once, we'll break that into 32 blocks to send.
-          ;; After the server responds with the first message packet (which
-          ;; is probably the ACK), the available message size increases
-          ;; significantly.
-          ;; This seems like a good reason to rethink the big picture
-          ;; strategy I'm using here.
-          blocks (build-block-descriptions message-loop-name strm-hwm buf max-block-length)]
-      ;; Q: What are the odds that calling pretty here accounts for
-      ;; the huge timing delays I'm seeing between this log message
-      ;; and the one at the top of build-block-descriptions?
-      (log/debug prelog
-                 (str (count blocks)
-                      " Block(s) to add:\n"
-                      (utils/pretty blocks)))
-      (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
-        ;; Want to be sure standard error handlers don't catch
-        ;; this...it needs to force a fresh handshake.
-        ;; Note that this check has major problems:
-        ;; This is the number of bytes we have buffered
-        ;; that have not yet been ACK'd.
-        ;; We really should have quit reading from the child
-        ;; long before this due to buffer overflows.
-        ;; OTOH, the spec *does* define this as the end
-        ;; of the stream.
-        ;; So, when ackd-addr gets here (or possibly
-        ;; strm-hwm), we're done.
-        ;; TODO: Revisit this.
-        (throw (AssertionError. "End of stream")))
-      (-> state
-          (update-in [::specs/outgoing ::specs/un-sent-blocks]
-                     (fn [cur]
-                       ;; un-sent-blocks is a PersistentQueue.
-                       ;; Can't just concat.
-                       (reduce (fn [acc block]
-                                 (conj acc block))
-                               cur
-                               blocks)))
-          (update-in [::specs/outgoing ::specs/strm-hwm] + bytes-to-read)))))
 
 (s/fdef start-child-monitor!
         :args (s/cat :initial-state ::specs/state

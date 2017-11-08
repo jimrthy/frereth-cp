@@ -195,63 +195,31 @@
 
 (s/fdef trigger-from-child
         :args (s/cat :io-handle ::specs/io-handle
-                     :array-o-bytes bytes?
+                     :callback (s/fspec :args (s/cat :state ::specs/state)
+                                        :ret ::specs/state)
                      :accepted? dfrd/deferrable?
                      :state ::specs/state)
         :ret ::specs/state)
 (defn trigger-from-child
   [io-handle
-   ^bytes array-o-bytes
+   callback
    ^IDeref accepted?
    {{:keys [::specs/strm-hwm]
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}]
-  {:pre [array-o-bytes]}
+  {:pre [callback]}
   (let [prelog (utils/pre-log message-loop-name)]
     (log/info prelog
-              "trigger-from-child\nSending"
-              (count array-o-bytes)
-              "bytes\nSent stream address:"
+              "trigger-from-child"
+              "\nSent stream address:"
               strm-hwm)
-    (let [state' (if (from-child/room-for-child-bytes? state)
-                   (do
-                     (deliver accepted? true)
-                     (log/debug prelog
-                                "There is room for another message")
-                     (let [result (from-child/consume-from-child state array-o-bytes)]
-                       result))
-                   ;; trigger-output does some state management, even
-                   ;; if we discard the incoming bytes because our
-                   ;; buffer is full.
-                   ;; TODO: Need a way to signal the child to
-                   ;; try again shortly
-                   ;; (this seems like a fairly ugly implementation flaw)
-                   ;; Reference implementation does not have this weakness.
-                   ;; If the buffer's too full, it just refuses to pull
-                   ;; more bytes.
-                   ;; Which means the child will eventually start getting
-                   ;; EAGAIN failures.
-                   ;; In order to make that work, this really needs to
-                   ;; happen in child->! (which really means that its
-                   ;; return value needs to be meaningful).
-                   ;; That really means that it has to start by asking the
-                   ;; Actor for its state. Which currently isn't exactly
-                   ;; efficient.
-                   (do
-                     ;; TODO: Should probably hints to the client to help
-                     ;; it solve the problem.
-                     (deliver accepted? false)
-                     (log/error prelog
-                                "Discarding incoming bytes")
-                     state))]
+    (deliver accepted? true)
+    (let [state' (callback state)]
       ;; TODO: check whether we can do output now.
       ;; It's pointless to call this if we just have
       ;; to wait for the timer to expire.
-      (let [state'' (trigger-output
-                     io-handle
-                     state')]
-        state''))))
+      (trigger-output io-handle state'))))
 
 (s/fdef trigger-from-parent
         :args (s/cat :io-handle ::specs/io-handle
@@ -629,9 +597,9 @@
           updater
           ;; Q: Is this worth switching to something like core.match or a multimethod?
           (case tag
-            ::specs/child-> (let [bs (second success)
+            ::specs/child-> (let [callback (second success)
                                   success? (nth success 2)]
-                              (partial trigger-from-child io-handle bs success?))
+                              (partial trigger-from-child io-handle callback success?))
             ::drained (do (log/warn prelog
                                     ;; Actually, this seems like a strong argument for
                                     ;; having a pair of streams. Child could still have
@@ -1162,18 +1130,21 @@
   ;; And this is mostly about side-effects, so time
   ;; is a vital implicit input.
   "Send bytes from a child buffer...if we have room"
-  ;; The only real question seems to be what happens
-  ;; when that buffer overflows.
-
-  ;; In the original, that buffer is really just an
-  ;; anonymous pipe between the processes, so there
-  ;; should be quite a lot of room.
-
-  ;; According to the pipe(7) man page, linux provides
-  ;; 16 \"pages\" of buffer space. So 64K, if the page
-  ;; size is 4K. At least, it has since 2.6.11.
-
-  ;; Prior to that, it was limited to 4K.
+  ;; Child should neither know nor care that netty is involved,
+  ;; so a ByteBuf really isn't appropriate here.
+  ;; Much better to just just accept a byte array.
+  ;; A clojure vector of bytes would generally be better than that.
+  ;; A clojure object that we could just serialize to either
+  ;; EDN, transit, or Fressian seems
+  ;; like it would be best.
+  ;; Of course, we should allow the byte array for apps that
+  ;; want/need to do their own serialization.
+  ;; And it's important to remember that, like TCP, this is meant
+  ;; to be a streaming protocol.
+  ;; So the higher-level options don't make sense at this level.
+  ;; Though it seems like it would be nice to generally be able
+  ;; to just hand the message to a serializer and have it handle
+  ;; the streaming.
 
 ;;;  319-336: Maybe read bytes from child
   [{:keys [::specs/child-out
