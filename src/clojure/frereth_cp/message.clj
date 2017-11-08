@@ -1089,19 +1089,6 @@
                    s))
     io-handle))
 
-(s/fdef close!
-        :args (s/cat :state ::state-wrapper)
-        :ret any?)
-(defn close!
-  "Flush buffer and send EOF"
-  [state]
-  ;; Actually, I don't think there's any "flush buffer" concept.
-  ;; Though there probably should be.
-  ;; TODO: This needs to send a signal to the stream
-  ;; telling it which direction got closed.
-  ;; I obviously need to put more time/effort into this
-  (throw (RuntimeException. "Q: How should this work?")))
-
 (s/fdef halt!
         :args (s/cat :io-handle ::specs/io-handle)
         :ret any?)
@@ -1280,3 +1267,22 @@
         nil)
       (catch Exception ex
         (log/error ex prelog "Sending message to parent failed")))))
+
+(s/fdef close!
+        :args (s/cat :io-handle ::io-handle)
+        :ret any?)
+(defn close!
+  "Notify parent that child is done sending"
+  [{{:keys [::specs/from-child]} ::specs/outgoing
+    :as io-handle}]
+  {:pre [from-child]}
+  ;; The only stream that makes sense to close this way
+  ;; is the one from the child.
+  ;; The other side, really, controls when it sends EOF.
+  ;; Once the final byte has been sent to child, that
+  ;; code should control closing that pipe pair.
+
+  ;; The child-monitor loop should handle this
+  ;; sort of detail
+  (comment (child-> io-handle ::specs/normal))
+  (.close from-child))

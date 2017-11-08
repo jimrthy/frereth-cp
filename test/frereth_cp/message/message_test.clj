@@ -785,6 +785,7 @@
                                    " bytes to child")
                               "Buffering big message from child failed"
                               {::buffer-size msg-len})
+          (message/close! client-io-handle ::indicate-child-done)
           (let [outcome (deref response 10000 ::timeout)
                 end-time (System/nanoTime)]
             (log/info prelog
