@@ -300,8 +300,8 @@
           _ (.writerIndex buf buf-size)
           block (build-individual-block buf)]
       (log/debug prelog
-                 buf-size
-                 "-byte Block to add")
+                 (str buf-size
+                      "-byte Block to add"))
       (fn [{{:keys [::specs/ackd-addr
                     ::specs/max-block-length
                     ::specs/strm-hwm

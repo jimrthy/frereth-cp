@@ -20,6 +20,8 @@
 
 (s/def ::big-int (s/or :int int?
                        :big-int #(instance? BigInt %)))
+;; N.B. blocklen, in the reference, really corresponds
+;; to .readableBytes here
 (s/def ::buf #(instance? ByteBuf %))
 
 ;;; Just something human-readable to help me track which log
@@ -50,10 +52,6 @@
 ;; Q: Do we have access to anything more specific/general/useful?
 (s/def ::child-output-loop #(instance? java.util.concurrent.Future %))
 (s/def ::child-input-loop #(instance? java.util.concurrent.Future %))
-
-;;; number of bytes in each block
-;;; Corresponds to blocklen
-(s/def ::length int?)
 
 (s/def ::message-id int?)
 
@@ -94,15 +92,6 @@
 ;; This is really block from the child
 (s/def ::block (s/keys :req [::ackd?
                              ::buf
-                             ;; We already have length in ::buf, under .getReadableBytes.
-                             ;; It would save space and be less error prone to just use
-                             ;; that.
-                             ;; By the same token, it would almost definitely be more efficient
-                             ;; to swittch ::buf to a ByteArray.
-                             ;; So keeping this here helps loosen the coupling and makes
-                             ;; things more flexible if/when someone does decide to make that
-                             ;; switch.
-                             ::length
                              ::message-id
                              ;; It's pointless to include this in every message.
                              ;; We only need 1.

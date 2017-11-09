@@ -28,25 +28,27 @@
   [start stop
    acc
    {:keys [::specs/start-pos
-           ::specs/transmissions]
+           ::specs/transmissions
+           ::specs/buf]
     :as block}]
   {:pre [transmissions]}
   (log/debug (str "flag-acked-blocks: " start "-" stop
                   " for\n" block))
-  (if (<= start
-          start-pos
-          (+ start-pos (::specs/length block))
-          stop)
-    (do
-      (log/trace "(it's a match)")
-      (update acc
-              ::specs/outgoing
-              (fn [cur]
-                (-> cur
-                    (mark-block-ackd block)
-                    (update ::specs/total-blocks inc)
-                    (update ::specs/total-block-transmissions + transmissions)))))
-    acc))
+  (let [length (.readableBytes buf)]
+    (if (<= start
+            start-pos
+            (+ start-pos length)
+            stop)
+      (do
+        (log/trace "(it's a match)")
+        (update acc
+                ::specs/outgoing
+                (fn [cur]
+                  (-> cur
+                      (mark-block-ackd block)
+                      (update ::specs/total-blocks inc)
+                      (update ::specs/total-block-transmissions + transmissions)))))
+      acc)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

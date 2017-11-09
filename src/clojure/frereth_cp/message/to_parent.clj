@@ -19,7 +19,8 @@
         ;; constraints: u multiple of 16; u >= 16; u <= 1088; u >= 48 + blocklen[pos]
         ;; (-- DJB, line 387)
         :fn (fn [{:keys [:args :ret]}]
-              (let [{:keys [::specs/length] :as block} (:block args)]
+              (let [buf (get-in args [:block ::specs/buf])
+                    length (.readableBytes buf)]
                 (>= ret (+ 48 length))))
         :ret (s/and nat-int?
                     #(= 0 (mod % 16))
@@ -27,24 +28,23 @@
                     #(<= 1088 %)))
 (defn calculate-padded-size
   "Set the number of bytes we're going to send for this block"
-  [{:keys [::specs/length] :as block}]
-  ;; Q: Why the extra 16?
-  ;; Current guess: Allows at least 16 bytes of padding.
-  ;; Then we'll round up to an arbitrary length.
-  ;; Q: When/where did I quit adjusting for padding?
-  ;; Whenever it happened, this is part of my problem
-  (condp >= (+ K/header-length K/min-padding-length length) #_length
-    ;; Stair-step the number of bytes that will get sent for this block
-    ;; This probably has something to do with traffic-shaping
-    ;; analysis
-    ;; Q: Would named constants be useful here at all?
-    192 192
-    320 320
-    576 576
-    1088 1088
-    ;; This is supposed to be fatal, although that seems a little
-    ;; heavy-handed
-    (throw (AssertionError. (str length "-byte block too big")))))
+  [{:keys [::specs/buf] :as block}]
+  (let [length (.readableBytes buf)]
+    ;; Q: Why the extra 16?
+    ;; A: Allows at least 16 bytes of padding.
+    ;; Then we'll round up to an arbitrary length.
+    (condp >= (+ K/header-length K/min-padding-length length)
+           ;; Stair-step the number of bytes that will get sent for this block
+           ;; This probably has something to do with traffic-shaping
+           ;; analysis
+           ;; Q: Would named constants be useful here at all?
+           192 192
+           320 320
+           576 576
+           1088 1088
+           ;; This is supposed to be fatal, although that seems a little
+           ;; heavy-handed
+           (throw (AssertionError. (str length "-byte block too big"))))))
 
 (s/fdef calculate-message-data-packet-length-flags
         :args ::specs/block
@@ -57,12 +57,13 @@
                     ;; aren't covered by the spec
                     #(< (+ K/k-1 K/eof-error) %)))
 (defn calculate-message-data-packet-length-flags
-  [{:keys [::specs/length] :as block}]
-  (bit-or length
-          (case (::specs/send-eof block)
-            ::specs/false 0
-            ::specs/normal K/eof-normal
-            ::specs/error K/eof-error)))
+  [{:keys [::specs/buf] :as block}]
+  (let [length (.readableBytes buf)]
+    (bit-or length
+            (case (::specs/send-eof block)
+              ::specs/false 0
+              ::specs/normal K/eof-normal
+              ::specs/error K/eof-error))))
 
 (s/fdef build-message-block-description
         :args (s/cat :message-loop-name ::specs/message-loop-name
@@ -90,6 +91,7 @@
               (< K/k-1 length))
       (throw (AssertionError. (str "illegal block length: " length))))
 
+    ;; Comment rot. Q: *Which* concern?
     ;; For now, that concern is premature optimization.
     ;; Back to regularly scheduled actual implementation comments:
     ;; Note that we also need padding.
@@ -312,8 +314,8 @@
                      (str "Getting ready to build message block for message "
                           current-message-id
                           "\nbased on:\n")
-                     #_(utils/pretty current-message)
-                     current-message)
+                     #_(utils/pretty updated-message)
+                     updated-message)
           (let [buf (build-message-block-description message-loop-name
                                                      updated-message)
                 ;; Reference implementation waits until after the actual write before setting any of

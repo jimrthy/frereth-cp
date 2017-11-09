@@ -708,7 +708,7 @@
                                 (if (keyword? incoming)
                                   (do
                                     (is (s/valid? ::specs/eof-flag incoming))
-                                    (message/close! nil))
+                                    (message/close! @client-io-atom))
                                   (log/debug (str test-run
                                                   "::server-child-cb ("
                                                   (count incoming)
@@ -785,7 +785,7 @@
                                    " bytes to child")
                               "Buffering big message from child failed"
                               {::buffer-size msg-len})
-          (message/close! client-io-handle ::indicate-child-done)
+          (message/close! client-io-handle)
           (let [outcome (deref response 10000 ::timeout)
                 end-time (System/nanoTime)]
             (log/info prelog

@@ -678,7 +678,9 @@
               ;; one for bytes travelling the other direction)
               state' (try (updater state)
                           (catch RuntimeException ex
-                            (log/error ex "Running updater failed")
+                            (log/error ex
+                                       prelog
+                                       "Running updater failed")
                             ;; The eternal question in this scenario:
                             ;; Fail fast, or hope we can keep limping
                             ;; along?
@@ -1244,9 +1246,11 @@
         :ret any?)
 (defn close!
   "Notify parent that child is done sending"
-  [{{:keys [::specs/from-child]} ::specs/outgoing
+  [{:keys [::specs/from-child]
     :as io-handle}]
-  {:pre [from-child]}
+  #_{:pre [from-child]}
+  (assert from-child (str "Missing from-child among\n"
+                          (keys io-handle)))
   ;; The only stream that makes sense to close this way
   ;; is the one from the child.
   ;; The other side, really, controls when it sends EOF.
