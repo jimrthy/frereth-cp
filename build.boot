@@ -2,17 +2,17 @@
 (def version "0.0.1-SNAPSHOT")
 
 (set-env! :resource-paths #{"src/clojure"}
-          :source-paths   #{"dev" "dev-resources" "src/java" "test"}
-          :dependencies   '[[adzerk/boot-test "RELEASE" :scope "test"]
-                            [aleph "0.4.3"]
-                            [org.apache.logging.log4j/log4j-core "2.8.2" :scope "test"]
-                            [org.apache.logging.log4j/log4j-1.2-api "2.8.2" :scope "test"]
-                            [org.clojure/clojure "1.9.0-beta1"]
-                            [org.clojure/spec.alpha "0.1.123"]
-                            [org.clojure/test.check "0.10.0-alpha2" :scope "test"]
-                            [org.clojure/tools.logging "0.4.0"]
-                            [samestep/boot-refresh "0.1.0" :scope "test"]
-                            [tolitius/boot-check "0.1.4" :scope "test"]])
+          :dependencies '[[adzerk/boot-test "RELEASE" :scope "test"]
+                          [aleph "0.4.3"]
+                          [org.apache.logging.log4j/log4j-core "2.8.2" :scope "test"]
+                          [org.apache.logging.log4j/log4j-1.2-api "2.8.2" :scope "test"]
+                          [org.clojure/clojure "1.9.0-beta1"]
+                          [org.clojure/spec.alpha "0.1.123"]
+                          [org.clojure/test.check "0.10.0-alpha2" :scope "test"]
+                          [org.clojure/tools.logging "0.4.0"]
+                          [samestep/boot-refresh "0.1.0" :scope "test"]
+                          [tolitius/boot-check "0.1.4" :scope "test"]]
+          :source-paths   #{"src/java" "test"})
 
 (task-options!
  aot {:namespace   #{'frereth-cp.server 'frereth-cp.client}}
@@ -41,11 +41,16 @@
   (let [dir (if (seq dir) dir #{"target"})]
     (comp (javac) (aot) (pom) (uber) (jar) (target :dir dir))))
 
+(deftask dev
+  []
+  (merge-env! :source-paths #{"dev" "dev-resources"})
+  identity)
+
 (deftask cider-repl
   "Set up a REPL for connecting from CIDER"
   []
   ;; Just because I'm prone to forget one of the vital helper steps
-  (comp (cider) (javac) (repl)))
+  (comp (dev) (cider) (javac) (repl)))
 
 (deftask run
   "Run the project."
