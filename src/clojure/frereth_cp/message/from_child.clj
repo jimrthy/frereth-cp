@@ -146,13 +146,13 @@
    (let [prelog (utils/pre-log message-loop-name)
          prefix-gap (count prefix)]
      (log/debug prelog (str
-                        "Trying to read "
+                        "Trying to pull "
                         available-bytes
                         "/"
                         max-to-read
                         " bytes from child and append them to "
                         (count prefix)
-                        " that we've already received"))
+                        " that we've already pulled"))
      (if (not= 0 available-bytes)
        ;; Simplest scenario: we have bytes waiting to be consumed
        (let [bytes-to-read (min available-bytes max-to-read)
@@ -191,7 +191,8 @@
              ;; EOF
              (if (< 0 prefix-gap)
                (do
-                 (log/info "Reached EOF. Have"
+                 (log/info prelog
+                           "Reached EOF. Have"
                            prefix-gap
                            "bytes buffered to send first")
                  ;; Q: Does it make sense to handle it this way?
@@ -204,44 +205,46 @@
                  ;; and pretend that everything's normal.
                  ;; We'll get the EOF signal soon enough.
                  prefix)
-               ::specs/normal))
-           (let [bytes-remaining (.available child-out)]
-             (log/info prelog bytes-remaining "more bytes waiting to be read")
-             (if (< 0 bytes-remaining)
-               ;; Assume this means the client just sent us a sizeable
-               ;; chunk.
-               ;; Go ahead and recurse.
-               ;; This could perform poorly if we hit a race condition
-               ;; and the child's writing a single byte at a time
-               ;; as fast as we can loop, but the maximum buffer size
-               ;; should protect us from that being a real problem,
-               ;; and it seems like a fairly unlikely scenario.
-               ;; At this layer, we have to assume that our child
-               ;; code (which is really the library consumer) isn't
-               ;; deliberately malicious to its own performance.
-               (let [combined-prefix (byte-array (inc prefix-gap))]
-                 (log/debug prelog
-                            "Getting ready to copy"
-                            prefix-gap
-                            "bytes from"
-                            prefix
-                            "into a new combined-prefix byte-array")
-                 (aset-byte combined-prefix
-                            prefix-gap
-                            (b-t/possibly-2s-complement-8 next-prefix))
-                 ;; This next part seems pretty awful.
-                 ;; If nothing else, prefix should usually be empty
-                 ;; here.
-                 ;; TODO: profile and validate my intuition about this
-                 (b-t/byte-copy! combined-prefix 0 prefix-gap prefix)
-                 ;; TODO: Ditch the try/catch so I can just switch back
-                 ;; to using recur here
-                 (read-next-bytes-from-child! message-loop-name
-                                              child-out
-                                              combined-prefix
-                                              bytes-remaining
-                                              (dec max-to-read)))
-               (byte-array prefix))))
+               (do
+                 (log/warn prelog "Signalling normal EOF")
+                 ::specs/normal))
+             (let [bytes-remaining (.available child-out)]
+               (log/info prelog bytes-remaining "more bytes waiting to be read")
+               (if (< 0 bytes-remaining)
+                 ;; Assume this means the client just sent us a sizeable
+                 ;; chunk.
+                 ;; Go ahead and recurse.
+                 ;; This could perform poorly if we hit a race condition
+                 ;; and the child's writing a single byte at a time
+                 ;; as fast as we can loop, but the maximum buffer size
+                 ;; should protect us from that being a real problem,
+                 ;; and it seems like a fairly unlikely scenario.
+                 ;; At this layer, we have to assume that our child
+                 ;; code (which is really the library consumer) isn't
+                 ;; deliberately malicious to its own performance.
+                 (let [combined-prefix (byte-array (inc prefix-gap))]
+                   (log/debug prelog
+                              "Getting ready to copy"
+                              prefix-gap
+                              "bytes from"
+                              prefix
+                              "into a new combined-prefix byte-array")
+                   (aset-byte combined-prefix
+                              prefix-gap
+                              (b-t/possibly-2s-complement-8 next-prefix))
+                   ;; This next part seems pretty awful.
+                   ;; If nothing else, prefix should usually be empty
+                   ;; here.
+                   ;; TODO: profile and validate my intuition about this
+                   (b-t/byte-copy! combined-prefix 0 prefix-gap prefix)
+                   ;; TODO: Ditch the try/catch so I can just switch back
+                   ;; to using recur here
+                   (read-next-bytes-from-child! message-loop-name
+                                                child-out
+                                                combined-prefix
+                                                bytes-remaining
+                                                (dec max-to-read)))
+                 (byte-array prefix)))))
          (catch RuntimeException ex
            (log/error ex "Reading from child failed"))))))
   ([message-loop-name

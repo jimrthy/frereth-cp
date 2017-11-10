@@ -28,6 +28,7 @@
 
 (defn try-multiple-sends
   [f  ;; Honestly, this is just child->!
+   prelog
    n
    io-handle
    payload
@@ -132,6 +133,7 @@
                                    (swap! child-message-counter inc)
                                    (swap! strm-address + msg-len)
                                    (try-multiple-sends message/child->!
+                                                       prelog
                                                        5
                                                        io-handle
                                                        array-o-bytes
@@ -347,15 +349,17 @@
         client-child-cb (fn [bs]
                           (is bs)
                           (let [s (String. bs)
-                                incoming (edn/read-string s)]
+                                incoming (edn/read-string s)
+                                prelog (utils/pre-log "Client w/ Big Outbound: child callback")]
                             (is (< 0 (count s)))
                             (is incoming)
                             ;; We're receiving the initial ::orly? response in State 0.
                             ;; The ::yarly disappears
                             ;; FIXME: Where?
-                            (log/info (str "Client (state "
+                            (log/info prelog
+                                      (str "Client State: "
                                            @client-state
-                                           ") received: "
+                                           "\nreceived: "
                                            incoming ", a " (class incoming)))
                             (let [next-message
                                   (condp = @client-state
@@ -406,6 +410,7 @@
                               (when next-message
                                 (let [actual (.getBytes (pr-str next-message))]
                                   (try-multiple-sends message/child->!
+                                                      prelog
                                                       5
                                                       @client-atom
                                                       actual
@@ -437,6 +442,7 @@
                                       rsp)
                             (let [actual (.getBytes (pr-str rsp))]
                               (try-multiple-sends message/child->!
+                                                  prelog
                                                   5
                                                   @server-atom
                                                   actual
@@ -450,6 +456,7 @@
                               (log/info prelog "Client requested chzbrgr. Send out of lock-step")
                               (let [chzbrgr (byte-array (range cheezburgr-length))]
                                 (try-multiple-sends message/child->!
+                                                    prelog
                                                     5
                                                     @server-atom
                                                     chzbrgr
@@ -551,6 +558,7 @@
               helo (.getBytes (pr-str ::ohai!))]
           ;; Kick off the exchange
           (try-multiple-sends message/child->!
+                              prelog
                               5
                               client-io
                               helo
@@ -777,6 +785,7 @@
               message-body (byte-array (range msg-len))]
           (log/debug prelog "Replicating child-send to " client-io-handle)
           (try-multiple-sends message/child->!
+                              prelog
                               5
                               client-io-handle
                               message-body

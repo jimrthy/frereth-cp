@@ -237,6 +237,7 @@
     :as io-handle}
    ^bytes message
    {{:keys [::specs/->child-buffer]} ::specs/incoming
+    {:keys [::specs/client-waiting-on-response]} ::specs/flow-control
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
     (when-not to-child
@@ -247,6 +248,15 @@
                        ::details state})))
 
     (log/debug prelog "Incoming from parent")
+
+    ;; This is an important side-effect that permanently converts the
+    ;; "mode" of the i/o loop that's pulling bytes from the child's
+    ;; output pipe.
+    ;; Now that we've gotten a response back, we can switch from
+    ;; initiate packets to message packets, which effectively doubles
+    ;; the signal bandwidth.
+    (when-not (realized? client-waiting-on-response)
+      (deliver client-waiting-on-response true))
 
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
@@ -466,7 +476,15 @@
         ;; It's convoluted enough that I don't want to try to dig into it tonight
         ;; It looks like the key to this is whether the pipe to the child
         ;; is still open.
-        watch-to-child "There's a lot involved in this decision"
+        ;; Note that switching to PipedI/OStreams should have made this easier.
+        ;; Or possibly more complex.
+        ;; If I've interpreted this part correctly, it really means that
+        ;; the reference implementation is basing this part of its scheduling
+        ;; on whether the pipe to child is closed.
+        ;; Q: What are the odds that's one of the FDs on which he's polling?
+        ;; TODO: Double-check that.
+        ;; And figure out a good way to replicate that sort of thing.
+        watch-to-child "FIXME: Is there a good way to test for this?"
         based-on-closed-child (if (and (not= 0 (+ (count gap-buffer)
                                                   (count ->child-buffer)))
                                        (nil? watch-to-child))
@@ -993,7 +1011,7 @@
    child-cb]
   (log/debug "Starting an I/O loop.\nSize of pipe from child:"
              pipe-from-child-size
-             "\nSise of pipe to child:"
+             "\nSize of pipe to child:"
              pipe-to-child-size)
   (let [;; TODO: Need to tune and monitor this execution pool
         ;; c.f. ztellman's dirigiste
@@ -1163,10 +1181,17 @@
                       {::io-handle io-handle})))
     (let [buffer-space (- pipe-from-child-size (.available child-out))
           n (count array-o-bytes)]
+      ;; It seems like it would be nice to be able to block here, based
+      ;; on how many bytes we really have buffered internally.
+      ;; At this point, we're really in the equivalent of the
+      ;; reference implementation's "real" child process.
+      ;; All it has is a pipe that we promise to never block.
+      ;; Although we might send back "try again later"
+      ;; responses.
       (log/debug prelog
                  "Trying to send"
                  n
-                 "bytes; have room for"
+                 "bytes from child; have buffer space for"
                  buffer-space)
       (if (< buffer-space n)
         (do

@@ -69,7 +69,7 @@ Based on earliestblocktime_compute, in lines 138-153
 
   ;; This gets called right after we flag the blocks
   ;; that have been ACK'd
-  (let [un-flagged (remove ::ackd? un-acked-blocks)]
+  (let [un-flagged (remove ::specs/ackd? un-acked-blocks)]
     (log/debug (utils/pre-log message-loop-name)
                "Calculating min-time across"
                (count un-flagged)

@@ -257,6 +257,14 @@
 ;;;                So everything else is shifted right by 8 bytes
     (let [q (get-in state [::specs/outgoing next-block-queue])
           current-message (first q)]
+      ;; This is where message correlation would be
+      ;; a good thing, at least for new messages.
+      ;; Really should pull pull all the bytes we can
+      ;; send (which depends on whether :client-waiting-on-response
+      ;; in :flow-control has been delivered) from q.
+      ;; Although that consolidation probably doesn't make a lot
+      ;; of sense here
+      ;; TODO: make that happen
       (log/debug pre-log
                  (str "Next message should come from "
                       (count q)
@@ -310,6 +318,7 @@
           ;; alt: try converting current-message to a transient before using it to
           ;; build updated message
           ;; cheaper alt: eliminate the call to pretty below
+          ;; Q: How much difference did that make?
           (log/debug pre-log
                      (str "Getting ready to build message block for message "
                           current-message-id
