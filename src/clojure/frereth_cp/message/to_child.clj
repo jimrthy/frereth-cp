@@ -213,39 +213,48 @@
         ;; calling .flush, so this would buffer until full.
         ;; TODO: Experiment with this and see how well this works using
         ;; the easier approach.
-        (let [byte1 (.read child-in)
+        (let [byte1 (try (.read child-in)
+                         (catch IOException ex
+                           ::specs/normal))
               bytes-available (.available child-in)]
           (assert bytes-available)
           (log/info prelog "Parent Monitor thread unblocked")
-          (if (neg? byte1)
-            (do
-              (log/warn "EOF")
-              ;; Q: Do I need to .close child-in here?
-              ::specs/normal)
-            (if (< 0 bytes-available)
-              (do
-                (log/debug prelog
-                           "Trying to read"
-                           bytes-available
-                           "bytes from"
-                           child-in
-                           "into"
-                           (count buffer)
-                           "bytes in"
-                           buffer)
-                ;; Have to account for the initial unblocking byte
-                (let [n (.read child-in buffer 0 (min bytes-available
-                                                      (dec max-n)))]
-                  (if (<= 0 n)
-                    (let [holder (byte-array (inc n))]
-                      (log/debug prelog
-                                 (inc n)
-                                 "bytes received from parent after initial"
-                                 byte1)
-                      (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
-                      (b-t/byte-copy! holder 1 n buffer)
-                      holder))))
-              (byte-array [byte1]))))))))
+          (let [result
+                (cond (neg? byte1) (do
+                                     (log/warn "EOF")
+                                     ;; Q: Do I need to .close child-in here?
+                                     ;; A: It won't hurt. But doing it here probably
+                                     ;; doesn't make a lot of sense.
+                                     ::specs/normal)
+                      (keyword? byte1) byte1
+                      (< 0 bytes-available)
+                      (do
+                        (log/debug prelog
+                                   "Trying to read"
+                                   bytes-available
+                                   "bytes from"
+                                   child-in
+                                   "into"
+                                   (count buffer)
+                                   "bytes in"
+                                   buffer)
+                        ;; Have to account for the initial unblocking byte
+                        (let [n (.read child-in buffer 0 (min bytes-available
+                                                              (dec max-n)))]
+                          (if (<= 0 n)
+                            (let [holder (byte-array (inc n))]
+                              (log/debug prelog
+                                         (inc n)
+                                         "bytes received from parent after initial"
+                                         byte1)
+                              (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
+                              (b-t/byte-copy! holder 1 n buffer)
+                              holder))))
+                      :else (byte-array [byte1]))]
+            (when (keyword? result)
+              ;; We got this because the connected PipedOutputStream closed.
+              (.close child-in))
+            result))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

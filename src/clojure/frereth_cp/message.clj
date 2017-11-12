@@ -1088,7 +1088,7 @@
            ::specs/to-child
            ::specs/child-in]
     :as io-handle}]
-  (log/info (utils/pre-log message-loop-name) "I/O Loop Halting")
+  (log/info (utils/pre-log message-loop-name) "I/O Loop Halt Requested")
   (strm/close! stream)
   (doseq [pipe [from-child
                 child-out

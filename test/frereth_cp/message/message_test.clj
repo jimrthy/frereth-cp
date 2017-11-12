@@ -39,7 +39,7 @@
     (if (f io-handle payload)
       (do
         (log/info success-message)
-        (log/debug "Took" (- (inc n) m) "attempt(s)"))
+        (log/debug prelog "Sending took" (- (inc n) m) "attempt(s)"))
       (if (> 0 m)
         (let [failure (ex-info failure-message
                                failure-body)]
@@ -78,8 +78,9 @@
             parent-state (atom 0)
             parent-cb (fn [buf]
                         (is (s/valid? bytes? buf))
-                        (let [response-state @parent-state]
-                          (log/debug (utils/pre-log "parent-cb")
+                        (let [response-state @parent-state
+                              prelog (utils/pre-log "parent-cb")]
+                          (log/debug prelog
                                      "Current response-state: "
                                      response-state
                                      "\nCalled from:\n"
@@ -87,6 +88,8 @@
                           (let [new-state
                                 (swap! parent-state inc)]
                             (when (= 2 new-state)
+                              (log/info prelog
+                                        "Test complete")
                               (deliver response buf)))))
             ;; I have a circular dependency between
             ;; child-cb and initialized.
@@ -168,7 +171,11 @@
                             (log/debug loop-name "Writing message from parent")
                             (message/parent->! io-handle incoming)
                             (log/debug "Message should be headed to child"))
-                    outcome (deref response 1000 ::timeout)]
+                    ;; The time delay here is pretty crazy.
+                    ;; It seems as though it should never take human-noticeable time.
+                    ;; And yet I've seen this test fail on my desktop
+                    ;; because it took 1050 seconds.
+                    outcome (deref response 2000 ::timeout)]
                 (if (= outcome ::timeout)
                   (do
                     (log/warn "Parent never got message from child")
@@ -186,6 +193,7 @@
                       (is (b-t/bytes= message-body without-header)))))
                 (is (realized? wrote) "Initial write from parent hasn't returned yet.")
                 (let [state (message/get-state io-handle 500 ::time-out)]
+                  (log/info "Final state query returned")
                   (is (not= state ::timeout))
                   (when (not= state ::timeout)
                     (is (not
@@ -212,6 +220,7 @@
           (catch ExceptionInfo ex
             (log/error loop-name ex "Starting the event loop"))
           (finally
+            (log/warn "Signalling I/O loop halt")
             (message/halt! io-handle)))))))
 (comment (basic-echo))
 
