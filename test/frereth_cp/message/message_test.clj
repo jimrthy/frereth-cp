@@ -75,8 +75,22 @@
                      ::specs/start-pos 0})]
       (is (= K/max-msg-len (count incoming)))
       (let [response (dfrd/deferred)
+            ;; I have circular dependencies among
+            ;; the io-handle, child-cb, and parent-cb.
+            ;; The callbacks both need access to the
+            ;; io-handle. But I can't create the io-handle
+            ;; without them.
+            ;; Hopefully this is just an artifact of the
+            ;; way I wrote this test and not a fundamental
+            ;; design flaw.
+            io-handle-atom (atom nil)
             parent-state (atom 0)
             parent-cb (fn [buf]
+                        ;; This is really a mock-up of the entire
+                        ;; encryption/networking stack.
+                        ;; In a lot of ways, this mimics what a
+                        ;; really simplistic child on the "other side"
+                        ;; might do.
                         (is (s/valid? bytes? buf))
                         (let [response-state @parent-state
                               prelog (utils/pre-log "parent-cb")]
@@ -89,30 +103,30 @@
                                 (swap! parent-state inc)]
                             (when (= 2 new-state)
                               (log/info prelog
-                                        "Test complete")
+                                        "Echo sent. Pretending other child triggers done")
+                              ;; This seems like a good time for the parent
+                              ;; to send EOF
+                              (let [{:keys [::specs/to-child]
+                                     :as io-handle} @io-handle-atom]
+                                ;; This part of the circular dependency
+                                ;; is absolutely not realistic.
+                                ;; The real message code that receives
+                                ;; the EOF signal needs to do this.
+                                ;; It only makes sense in this test because
+                                ;; I'm totally mocking out any sort of real
+                                ;; interaction.
+                                (.close to-child))
                               (deliver response buf)))))
-            ;; I have a circular dependency between
-            ;; child-cb and initialized.
-            ;; child-cb is getting called inside an
-            ;; agent send handler,
-            ;; which means I have the agent state
-            ;; directly available, but not the actual
-            ;; agent.
-            ;; That's what it needs, because child->!
-            ;; is going to trigger another send.
-            ;; Wrapping it inside an atom is obnoxious, but
-            ;; it works.
-            ;; Don't do anything like this for anything real.
-            io-handle-atom (atom nil)
             child-message-counter (atom 0)
             strm-address (atom 0)
+            child-finished (dfrd/deferred)
             child-cb (fn [array-o-bytes]
                        ;; TODO: Add another similar test that throws an
                        ;; exception here, for the sake of hardening the
                        ;; caller
                        (let [prelog (utils/pre-log "child-cb")]
                          (log/info prelog "Incoming to child:" array-o-bytes)
-                         (is array-o-bytes "Falsey callback")
+                         (is array-o-bytes "Falsey reached callback")
                          (if (bytes? array-o-bytes)
                            (let [msg-len (count array-o-bytes)
                                  locator (Exception.)]
@@ -144,9 +158,14 @@
                                                        "Giving up on buffering bytes from child"
                                                        {})))
                                (log/warn prelog "Empty incoming message. Highly suspicious")))
-                           (do
-                             (log/warn prelog "TODO: Add a defered that waits for this and verifies success")
-                             (is (s/valid? ::specs/eof-flag array-o-bytes))))))
+                           (let [{:keys [::specs/from-child]
+                                  :as io-handle} @io-handle-atom]
+                             (log/warn prelog "Child received EOF. Mark done.")
+                             ;; Doing this broke quite a few other pieces.
+                             ;; FIXME: Start back here.
+                             (.close from-child)
+                             (is (s/valid? ::specs/eof-flag array-o-bytes))
+                             (deliver child-finished array-o-bytes)))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.
@@ -157,6 +176,11 @@
             ;; message quickly, but the behavior seems suspicious.
             initialized (message/initial-state loop-name {} true)
             io-handle (message/start! initialized  parent-cb child-cb)]
+        (dfrd/on-realized child-finished
+                          (fn [success]
+                            (is (= success ::specs/normal)))
+                          (fn [failure]
+                            (is (not failure) "Child echoer failed")))
         (try
           (let [state (message/get-state io-handle 500 ::timed-out)]
             (is (not= state ::timed-out))
@@ -199,6 +223,14 @@
                     (is (not
                          (s/explain-data ::specs/state state)))
                     (log/info "Checking test outcome")
+
+                    ;; EOF isn't reaching the child in time.
+                    ;; This seems like a strong indicator that I'm either
+                    ;; a. not signaling it in a sensible place
+                    ;; b. not forwarding it from wherever it is being signaled
+                    ;; c. all of the above
+                    (let [child-completion (deref child-finished 500 ::child-timed-out)]
+                      (is (= ::specs/normal child-completion)))
 
                     (let [{:keys [::specs/incoming
                                   ::specs/outgoing]} state]

@@ -360,51 +360,63 @@
     ;; possible, but there isn't any point if the main
     ;; ioloop is bogged down handling fiddly state management
     ;; details that would make more sense in this thread.
-
-    ;; FIXME: Ditch the magic numbers
-    (let [blocker (dfrd/deferred)
-          submitted (strm/try-put! stream
-                                   [::specs/child-> callback blocker]
-                                   10000)]
-      (dfrd/on-realized submitted
-                        (fn [success]
-                          (log/debug
-                           (utils/pre-log message-loop-name)
-                           "Bytes from child successfully posted to main i/o loop triggered from\n"
-                           prelog))
-                        (fn [failure]
-                          (log/error
-                           failure
-                           (utils/pre-log message-loop-name)
-                           "Failed to add bytes from child to main i/o loop triggered from\n"
-                           prelog)))
-      ;; message-test pretty much duplicates this in try-multiple-sends
-      ;; TODO: eliminate the duplication
-      (loop [n 6]
-        (log/debug prelog
-                   "Waiting for ACK that bytes have been buffered. Attempts left:"
-                   n)
-        (let [waiting
-              (deref blocker 10000 ::timed-out)]
-          (if (= waiting ::timed-out)
+    (if-not (strm/closed? stream)
+      ;; FIXME: Ditch the magic numbers
+      (let [blocker (dfrd/deferred)
+            submitted (strm/try-put! stream
+                                     [::specs/child-> callback blocker]
+                                     10000 ::timed-out)]
+        (dfrd/on-realized submitted
+                          (fn [success]
+                            (log/debug
+                             (utils/pre-log message-loop-name)
+                             (str "Bytes from child successfully ("
+                                  success
+                                  ") posted to main i/o loop triggered from\n"
+                                  prelog)))
+                          (fn [failure]
+                            (log/error
+                             failure
+                             (utils/pre-log message-loop-name)
+                             (str "Failed to add bytes ("
+                                  failure
+                                  ") from child to main i/o loop triggered from\n"
+                                  prelog))))
+        ;; message-test pretty much duplicates this in try-multiple-sends
+        ;; TODO: eliminate the duplication
+        (loop [n 10]
+          (if-not (strm/closed? stream)
             (do
-              (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
-              (if (< 0 n)
-                (recur (dec n))
-                ::specs/error))
-            (do
-              (if (bytes? array-o-bytes)
-                (log/debug prelog
-                           (count array-o-bytes)
-                           "bytes from child processed by main i/o loop")
-                (log/warn prelog "Got some EOF signal:" array-o-bytes))
-              ;; Q: Does returning this really gain me anything?
-              ;; It seems like it would be simpler (for the sake of callers)
-              ;; to just return nil on success, or one of the ::specs/eof-flag
-              ;; set when it's time to stop.
-              ;; I was doing it that way at one point.
-              ;; Q: Why did I switch?
-              array-o-bytes)))))))
+              (log/debug prelog
+                         "Waiting for ACK that bytes have been buffered. Attempts left:"
+                         n)
+              (let [waiting
+                    (deref blocker 10000 ::timed-out)]
+                (if (= waiting ::timed-out)
+                  (do
+                    (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
+                    (if (< 0 n)
+                      (recur (dec n))
+                      ::specs/error))
+                  (do
+                    (if (bytes? array-o-bytes)
+                      (log/debug prelog
+                                 (count array-o-bytes)
+                                 "bytes from child processed by main i/o loop")
+                      (log/warn prelog "Got some EOF signal:" array-o-bytes))
+                    ;; Q: Does returning this really gain me anything?
+                    ;; It seems like it would be simpler (for the sake of callers)
+                    ;; to just return nil on success, or one of the ::specs/eof-flag
+                    ;; set when it's time to stop.
+                    ;; I was doing it that way at one point.
+                    ;; Q: Why did I switch?
+                    array-o-bytes))))
+            (log/warn prelog
+                      "Destination stream closed waiting to put"
+                      array-o-bytes))))
+      (log/warn prelog
+                "Destination stream closed. Discarding message\n"
+                array-o-bytes))))
 
 (s/fdef room-for-child-bytes?
         :args (s/cat :state ::specs/state)
@@ -478,7 +490,7 @@
               (str "Need to check room-for-child-bytes?"
                    " before calling read-next-bytes-from-child!"))
     (when (keyword? array-o-bytes)
-      (log/warn "EOF flag. Closing the PipedInputStream")
+      (log/warn prelog "EOF flag. Closing the PipedInputStream")
       (.close child-out))
     (forward-bytes-from-child! message-loop-name
                               stream
