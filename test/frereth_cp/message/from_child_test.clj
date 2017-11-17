@@ -20,7 +20,9 @@
                                                                                       :un-sent-blocks PersistentQueue/EMPTY}}
         bytes-to-send (byte-array (range 8193))]
     (let [{:keys [::specs/outgoing]
-           :as result} (from-child/consume-from-child start-state bytes-to-send)]
+           :as result} (comment (from-child/consume-from-child start-state bytes-to-send))]
+      ;; I managed to break this during a refactoring
+      (throw (RuntimeException. "Into what did consume-from-child change?"))
       (is (= 8193 (::specs/strm-hwm outgoing)))
       (is (= 0 (::specs/ackd-addr outgoing)))
       (is (= 512 (::specs/max-block-length outgoing)))

@@ -240,7 +240,8 @@
                       (is (= (inc (::specs/strm-hwm incoming))
                              (::specs/contiguous-stream-count incoming)))
                       (is (= 2 (::specs/next-message-id outgoing)))
-                      ;; Still have the message buffered.
+                      ;; There's nothing on the other side to send back
+                      ;; an ACK. But it should have been sent.
                       (is (= msg-len (from-child/buffer-size outgoing)))
                       (is (= 0 (count (::specs/un-sent-blocks outgoing))))
                       (is (= 1 (count (::specs/un-ackd-blocks outgoing))))

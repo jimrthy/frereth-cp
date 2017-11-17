@@ -217,6 +217,13 @@
   ;; this namespace is about buffering. We need to hang onto
   ;; those buffers here until they've been ACK'd.
   [message-loop-name
+   ;; TODO: This needs a better name.
+   ;; Under normal operating conditions, it *is*
+   ;; a byte-array.
+   ;; But then we hit EOF, and it gets repurposed.
+   ;; Actually, that kind of says it all.
+   ;; TODO: Add an EOF flag here so we don't have
+   ;; to do that repurposing.
    array-o-bytes]
   (let [prelog (utils/pre-log message-loop-name)
         buf-size (if (keyword? array-o-bytes)
@@ -225,7 +232,7 @@
         block
         (if (keyword? array-o-bytes)
           (assoc
-           (build-individual-block nil)
+           (build-individual-block (Unpooled/wrappedBuffer (byte-array 0)))
            ::specs/send-eof array-o-bytes)
           ;; Note that back-pressure no longer gets applied if we
           ;; already have ~124K pending because caller started
@@ -316,28 +323,6 @@
   [message-loop-name
    stream
    array-o-bytes]
-  ;; This seems overly convoluted.
-  ;; message/child-> writes bytes to a PipedOutputStream.
-  ;; start-child-monitor! has an event loop that centers around
-  ;; process-next-bytes-from-child!
-  ;; That calls read-next-bytes-from-child!, which pulls bytes
-  ;; from the associated PipedInputStream, then calls
-  ;; forward-bytes-from-child!
-  ;; This, in turn, tries to put those bytes onto the manifold
-  ;; stream that feeds into the main i/o loop. This winds up
-  ;; calling message/trigger-from-child which, in turn,
-  ;; starts setting up the real buffering that checks for
-  ;; room (which needed to happen before we accepted them in
-  ;; the first place) followed by calling consume-from-child.
-  ;; That converts the incoming bytes to a block description
-  ;; and adds it to the un-sent-blocks queue.
-
-  ;; I can do better than this.
-  ;; Instead of forwarding the bytes directly for the i/o
-  ;; loop to process, pass along something (a monad?) that
-  ;; describes what the i/o loop should do (this should really
-  ;; amount to adding bytes to the outbound queue and then trying
-  ;; to send them)
   (let [prelog (utils/pre-log message-loop-name)
         callback (build-byte-consumer message-loop-name array-o-bytes)]
     (log/debug prelog

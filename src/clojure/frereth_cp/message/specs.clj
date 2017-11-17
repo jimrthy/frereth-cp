@@ -91,8 +91,20 @@
 
 ;; This is really block from the child
 (s/def ::block (s/keys :req [::ackd?
+                             ;; I have a problem here.
+                             ;; On EOF, this gets set to nil.
+                             ;; I *could* set the top-level spec
+                             ;; to be nilable, but that violates the
+                             ;; basic point.
+                             ;; I could also add something like a
+                             ;; ::maybe-buf spec right above this
+                             ;; (that was my first inclination),
+                             ;; but then I'd have to track it down
+                             ;; and rename it everywhere.
+                             ;; Best option that comes to mind immediately:
+                             ;; track down where the EOF buffer is getting
+                             ;; created and adjust it to add the empty buf.
                              ::buf
-                             ::message-id
                              ;; It's pointless to include this in every message.
                              ;; We only need 1.
                              ;; TODO: Make this optional and eliminate it from all but the
@@ -100,7 +112,8 @@
                              ::send-eof
                              ::start-pos
                              ::time
-                             ::transmissions]))
+                             ::transmissions]
+                       :opt [::message-id]))
 (s/def ::blocks (s/and (s/coll-of ::block)))
 
 ;; Blocks from child that have been sent to parent, but not acknowledged
