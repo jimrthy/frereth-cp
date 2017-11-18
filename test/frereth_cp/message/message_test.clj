@@ -211,7 +211,7 @@
                     (log/warn "Parent didn't get complete message from child")
                     (is (not= outcome ::timeout)))
                   (do
-                    (is (= 2 @parent-state))
+                    (is (= 3 @parent-state))
                     ;; I'm getting the response message header here, which is
                     ;; correct, even though it seems wrong.
                     ;; In the real thing, these are the bytes I'm getting ready
@@ -245,7 +245,7 @@
                       (is (= msg-len (::specs/contiguous-stream-count incoming)))
                       (is (= (inc (::specs/strm-hwm incoming))
                              (::specs/contiguous-stream-count incoming)))
-                      (is (= 2 (::specs/next-message-id outgoing)))
+                      (is (= 3 (::specs/next-message-id outgoing)))
                       ;; There's nothing on the other side to send back
                       ;; an ACK. But it should have been sent.
                       (is (= msg-len (from-child/buffer-size outgoing)))
@@ -260,7 +260,7 @@
                       ;; This includes both the packet we're echoing back
                       ;; and the EOF signal.
                       (is (= 2 (count (::specs/un-ackd-blocks outgoing))))
-                      (is (= ::specs/false (::specs/send-eof outgoing)))
+                      (is (= ::specs/normal (::specs/send-eof outgoing)))
                       (is (= msg-len (::specs/strm-hwm outgoing)))
                       ;; Keeping around as a reminder for when the implementation changes
                       ;; and I need to see what's really going on again

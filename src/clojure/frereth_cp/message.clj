@@ -596,6 +596,20 @@
    {:keys [::specs/message-loop-name]
     :as io-handle}
    state
+   ;; This is a variant that consists of a [tag callback] pair
+   ;; It's tempting to destructure this here.
+   ;; That makes the code a little more concise,
+   ;; and easier to read. But it also makes
+   ;; error handling more difficult.
+   ;; I've had enough trouble getting and keeping
+   ;; this correct that I want to retain this more
+   ;; verbose approach, at least until the entire
+   ;; thing settles down a bit.
+   ;; Besides, I don't actually know what's in
+   ;; success until I check the tag.
+   ;; So I could destructure it here as [tag & args],
+   ;; then destructure args later. But that makes
+   ;; it less obviously a win.
    success]
   (let [prelog (utils/pre-log message-loop-name)  ; might be on a different thread
         fmt (str "Interrupting event loop waiting for ~:d ms "
@@ -627,9 +641,8 @@
           updater
           ;; Q: Is this worth switching to something like core.match or a multimethod?
           (case tag
-            ::specs/child-> (let [callback (second success)
-                                  success? (nth success 2)]
-                              (partial trigger-from-child io-handle callback success?))
+            ::specs/child-> (let [[_ callback ack] success]
+                              (partial trigger-from-child io-handle callback ack))
             ::drained (do (log/warn prelog
                                     ;; Actually, this seems like a strong argument for
                                     ;; having a pair of streams. Child could still have

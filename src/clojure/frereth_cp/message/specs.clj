@@ -63,6 +63,9 @@
 ;; This maps to a bitflag to send over the wire:
 ;; 2048 for normal EOF after sendbytes
 ;; 4096 for error after sendbytes
+;; TODO: Refactor-rename these to ::eof-normal and ::eof-error
+;; And possibly even ::eof-false.
+;; This version is just confusing.
 (s/def ::eof-flag #{::false ::normal ::error})
 (s/def ::receive-eof ::eof-flag)
 ;; In the reference implementation, this gets changed from 0 (aka ::false) when

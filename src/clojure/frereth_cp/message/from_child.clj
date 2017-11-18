@@ -206,7 +206,8 @@
         :args (s/cat :message-loop-name ::specs/message-loop-name
                      :array-o-bytes (s/or :message bytes?
                                           :eof ::specs/eof-flag))
-        :ret ::specs/state)
+        :ret (s/fspec :args (s/cat :state ::specs/state)
+                      :ret ::specs/state))
 (defn build-byte-consumer
   "Accepts a byte-array from the child."
   ;; Lines 319-337
@@ -226,9 +227,13 @@
    ;; to do that repurposing.
    array-o-bytes]
   (let [prelog (utils/pre-log message-loop-name)
-        buf-size (if (keyword? array-o-bytes)
+        eof? (keyword? array-o-bytes)
+        buf-size (if eof?
                    0
                    (count array-o-bytes))
+        repr (if eof?
+               (str "EOF: " array-o-bytes)
+               (str buf-size "-byte array"))
         block
         (if (keyword? array-o-bytes)
           (assoc
@@ -277,7 +282,9 @@
             ;; so maybe it doesn't make sense to mess with it here.
             block (assoc block ::specs/start-pos strm-hwm)]
         (log/debug nested-prelog
-                   (str "Adding new message block(s) to "
+                   (str "Adding new message block built around "
+                        repr
+                        " to "
                         ;; TODO: Might be worth logging the actual contents
                         ;; when it's time to trace
                         (count un-sent-blocks)
@@ -305,11 +312,15 @@
           ;; strm-hwm), we're done.
           ;; TODO: Revisit this.
           (throw (AssertionError. "End of stream")))
-        (-> state
-            (update-in [::specs/outgoing ::specs/un-sent-blocks]
-                       conj
-                       block)
-            (update-in [::specs/outgoing ::specs/strm-hwm] + buf-size))))))
+        (let [result
+              (-> state
+                  (update-in [::specs/outgoing ::specs/un-sent-blocks]
+                             conj
+                             block)
+                  (update-in [::specs/outgoing ::specs/strm-hwm] + buf-size))]
+          (if eof?
+            (assoc-in result [::specs/outgoing ::specs/send-eof] array-o-bytes)
+            result))))))
 
 (s/fdef forward-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
