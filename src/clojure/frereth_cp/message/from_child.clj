@@ -378,12 +378,12 @@
               (let [waiting
                     (deref blocker 10000 ::timed-out)]
                 (if (= waiting ::timed-out)
-                  (do
+                  (do  ;; Timed out
                     (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
                     (if (< 0 n)
                       (recur (dec n))
                       ::specs/error))
-                  (do
+                  (do  ;; Bytes buffered
                     (if (bytes? array-o-bytes)
                       (log/debug prelog
                                  (count array-o-bytes)
@@ -476,6 +476,16 @@
                    " before calling read-next-bytes-from-child!"))
     (when (keyword? array-o-bytes)
       (log/warn prelog "EOF flag. Closing the PipedInputStream")
+      ;; It's tempting to make this a function in the top-level
+      ;; message ns, like child-close!
+      ;; But then I'd need to manage a circular dependency to
+      ;; call it from here.
+      ;; I don't like the tight coupling this creates with
+      ;; the implementation details, but it
+      ;; isn't all *that* bad. It's not like I call this from
+      ;; all over the place.
+      ;; It's a little tempting to refactor this into its
+      ;; own function, but that just seems silly.
       (.close child-out))
     (forward-bytes-from-child! message-loop-name
                               stream

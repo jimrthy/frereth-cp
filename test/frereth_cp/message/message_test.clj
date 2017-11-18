@@ -101,7 +101,11 @@
                                      (utils/get-stack-trace (Exception.)))
                           (let [new-state
                                 (swap! parent-state inc)]
-                            (when (= 2 new-state)
+                            ;; Should get 3 message packets:
+                            ;; 1. ACK
+                            ;; 2. message being echoed
+                            ;; 3. EOF
+                            (when (= 3 new-state)
                               (log/info prelog
                                         "Echo sent. Pretending other child triggers done")
                               ;; This seems like a good time for the parent
@@ -149,21 +153,23 @@
                                    (is io-handle)
                                    (swap! child-message-counter inc)
                                    (swap! strm-address + msg-len)
-                                   (try-multiple-sends message/child->!
-                                                       prelog
-                                                       5
-                                                       io-handle
-                                                       array-o-bytes
-                                                       (str "Buffered bytes from child")
-                                                       "Giving up on buffering bytes from child"
-                                                       {})))
+                                   (try
+                                     (try-multiple-sends message/child->!
+                                                         prelog
+                                                         5
+                                                         io-handle
+                                                         array-o-bytes
+                                                         (str "Buffered bytes from child")
+                                                         "Giving up on buffering bytes from child"
+                                                         {})
+                                     (finally
+                                       (log/info "Sending EOF after the message block")
+                                       (message/child-close! @io-handle-atom)))))
                                (log/warn prelog "Empty incoming message. Highly suspicious")))
                            (let [{:keys [::specs/from-child]
                                   :as io-handle} @io-handle-atom]
                              (log/warn prelog "Child received EOF. Mark done.")
-                             ;; Doing this broke quite a few other pieces.
-                             ;; FIXME: Start back here.
-                             (.close from-child)
+                             (message/child-close! io-handle)
                              (is (s/valid? ::specs/eof-flag array-o-bytes))
                              (deliver child-finished array-o-bytes)))))
             ;; It's tempting to treat this test as a server.
@@ -202,7 +208,7 @@
                     outcome (deref response 2000 ::timeout)]
                 (if (= outcome ::timeout)
                   (do
-                    (log/warn "Parent never got message from child")
+                    (log/warn "Parent didn't get complete message from child")
                     (is (not= outcome ::timeout)))
                   (do
                     (is (= 2 @parent-state))
@@ -243,8 +249,17 @@
                       ;; There's nothing on the other side to send back
                       ;; an ACK. But it should have been sent.
                       (is (= msg-len (from-child/buffer-size outgoing)))
+                      ;; This isn't getting sent.
+                      ;; I suspect this is a testing artifact.
+                      ;; Though I could be doing something dumb like
+                      ;; closing the outgoing pipe before I've written the
+                      ;; EOF signal (actually, if that happened, it should
+                      ;; never reach here).
+                      ;; FIXME: Need to rectify this.
                       (is (= 0 (count (::specs/un-sent-blocks outgoing))))
-                      (is (= 1 (count (::specs/un-ackd-blocks outgoing))))
+                      ;; This includes both the packet we're echoing back
+                      ;; and the EOF signal.
+                      (is (= 2 (count (::specs/un-ackd-blocks outgoing))))
                       (is (= ::specs/false (::specs/send-eof outgoing)))
                       (is (= msg-len (::specs/strm-hwm outgoing)))
                       ;; Keeping around as a reminder for when the implementation changes

@@ -69,18 +69,30 @@ Based on earliestblocktime_compute, in lines 138-153
 
   ;; This gets called right after we flag the blocks
   ;; that have been ACK'd
-  (let [un-flagged (remove ::specs/ackd? un-acked-blocks)]
-    (log/debug (utils/pre-log message-loop-name)
+  (let [un-flagged (remove ::specs/ackd? un-acked-blocks)
+        prelog (utils/pre-log message-loop-name)]
+    (log/debug prelog
                "Calculating min-time across"
                (count un-flagged)
                "un-ACK'd blocks")
     (if (< 0 (count un-flagged))
-      (apply min (map ::specs/time
-                      ;; In the original,
-                      ;; time 0 means it's been ACK'd and is ready to discard
-                      ;; Having the time serve dual purposes
-                      ;; kept tripping me up.
-                      un-flagged))
+      (let [original (apply min (map ::specs/time
+                                     ;; In the original,
+                                     ;; time 0 means it's been ACK'd and is ready to discard
+                                     ;; Having the time serve dual purposes
+                                     ;; kept tripping me up.
+                                     un-flagged))
+            ;; Should be able to do this because un-ackd-blocks is
+            ;; a set that's sorted by :time.
+            ;; Probably can't, because un-flagged is a lazy seq
+            ;; that could throw out that ordering.
+            ;; TODO: Switch from remove to set/select
+            likely-successor (-> un-flagged first ::specs/time)]
+        (when (not= original likely-successor)
+          (log/warn prelog
+                    "Time calculation mismatch. Expected"
+                    original "got" likely-successor))
+        original)
       0)))
 
 (s/fdef drop-ackd!

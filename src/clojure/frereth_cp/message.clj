@@ -215,6 +215,18 @@
               "\nSent stream address:"
               strm-hwm)
     (deliver accepted? true)
+    ;; The scheduling rules change once the child
+    ;; sends EOF.
+    ;; This isn't happening.
+    ;; I'm fairly sure that my echo test is getting
+    ;; stuck waiting for an ACK for its initial
+    ;; message, so it never even tries to send
+    ;; the EOF.
+    ;; This seems like the most likely
+    ;; place to "modify" state when we get the signal
+    ;; so the outbound scheduler will know that it's
+    ;; time to just do its best to flush everything.
+    ;; That also seems a bit messy.
     (let [state' (callback state)]
       ;; TODO: check whether we can do output now.
       ;; It's pointless to call this if we just have
@@ -1266,14 +1278,13 @@
       (catch Exception ex
         (log/error ex prelog "Sending message to parent failed")))))
 
-(s/fdef close!
+(s/fdef child-close!
         :args (s/cat :io-handle ::io-handle)
         :ret any?)
-(defn close!
+(defn child-close!
   "Notify parent that child is done sending"
   [{:keys [::specs/from-child]
     :as io-handle}]
-  #_{:pre [from-child]}
   (assert from-child (str "Missing from-child among\n"
                           (keys io-handle)))
   ;; The only stream that makes sense to close this way
@@ -1283,6 +1294,6 @@
   ;; code should control closing that pipe pair.
 
   ;; The child-monitor loop should handle this
-  ;; sort of detail
+  ;; detail
   (comment (child-> io-handle ::specs/normal))
   (.close from-child))
