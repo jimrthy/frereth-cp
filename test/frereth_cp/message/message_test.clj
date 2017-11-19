@@ -101,10 +101,24 @@
                                      (utils/get-stack-trace (Exception.)))
                           (let [new-state
                                 (swap! parent-state inc)]
-                            ;; Should get 3 message packets:
+                            ;; I'd like to get 3 message packets here:
                             ;; 1. ACK
                             ;; 2. message being echoed
                             ;; 3. EOF
+                            ;; What I'm getting instead is:
+                            ;; 1. ACK
+                            ;; 2. message being echoed
+                            ;; 3. message being echoed because I havent responded with an ACK
+                            ;; There may be ways around this, but none of the ones that come
+                            ;; to mind just now seem worth the time/effort.
+                            ;; This test pretty obviously isn't about a
+                            ;; realistic message exchange. It's really
+                            ;; just about verifying that I got the echo.
+                            ;; Everything else going on in here is really just
+                            ;; a distraction from that fundamental point.
+                            ;; They're good distractions, and the system's gotten
+                            ;; much more robust because of them.
+                            ;; FIXME: Revisit this soon.
                             (when (= 3 new-state)
                               (log/info prelog
                                         "Echo sent. Pretending other child triggers done")
@@ -184,6 +198,7 @@
             io-handle (message/start! initialized  parent-cb child-cb)]
         (dfrd/on-realized child-finished
                           (fn [success]
+                            (log/info "Child just signalled EOF")
                             (is (= success ::specs/normal)))
                           (fn [failure]
                             (is (not failure) "Child echoer failed")))
@@ -249,13 +264,10 @@
                       ;; There's nothing on the other side to send back
                       ;; an ACK. But it should have been sent.
                       (is (= msg-len (from-child/buffer-size outgoing)))
-                      ;; This isn't getting sent.
-                      ;; I suspect this is a testing artifact.
-                      ;; Though I could be doing something dumb like
-                      ;; closing the outgoing pipe before I've written the
-                      ;; EOF signal (actually, if that happened, it should
-                      ;; never reach here).
-                      ;; FIXME: Need to rectify this.
+                      ;; The EOF still doesn't look like it's getting sent.
+                      ;; Although it must be for the parent to have signaled
+                      ;; that it's done.
+                      ;; TODO: Figure out what's going on.
                       (is (= 0 (count (::specs/un-sent-blocks outgoing))))
                       ;; This includes both the packet we're echoing back
                       ;; and the EOF signal.
