@@ -592,7 +592,7 @@
                     (let [rcvd-blocks (:buffer outcome)
                           ;; This is not working at all.
                           ;; Q: Why not?
-                          byte-seq (concat (concat rcvd-blocks))
+                          byte-seq (into [] (apply concat rcvd-blocks))
                           _ (log/debug prelog
                                        "Trying to recreate the incoming stream from"
                                        (count byte-seq)
@@ -603,8 +603,10 @@
                                        "\nBased upon"
                                        (count rcvd-blocks)
                                        "instances of"
-                                       (class (first rcvd-blocks)))
-                          rcvd-strm (byte-array (first byte-seq))]
+                                       (class (first rcvd-blocks))
+                                       "\nFirst one:\n"
+                                       (first rcvd-blocks))
+                          rcvd-strm (byte-array byte-seq)]
                       (is (= (count message-body) (count rcvd-strm)))
                       (is (b-t/bytes= message-body rcvd-strm)))))))))
         (let [{:keys [::specs/incoming
