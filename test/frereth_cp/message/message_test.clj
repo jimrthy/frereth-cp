@@ -432,7 +432,7 @@
   ;; a single message packet.
   (let [test-run (gensym)
         prelog (utils/pre-log test-run)]
-    (log/info prelog "Start testing writing big chunk of outbound data")
+    (log/info prelog "Start test writing big chunk of outbound data")
     ;; TODO: split this into 2 tests
     ;; 1 should stall out like the current implementation,
     ;; waiting for ACKs (maybe drop every other packet?
@@ -445,19 +445,18 @@
     (let [start-time (System/nanoTime)
           packet-count 9  ; trying to make life interesting
           ;; Add an extra quarter-K just for giggles
-          msg-len (+ (* (dec packet-count) K/k-div2) K/k-div4)
+          msg-len (+ (* (dec packet-count) K/k-1) K/k-div4)
           response (promise)
-          srvr-child-state (atom {:count 0
-                                  :buffer []})
+          srvr-child-state (atom {:address 0
+                                  :buffer []
+                                  :count 0})
+          srvr-io-atom (atom nil)
           ;; I have a circular dependency between
           ;; the client's child-cb, server-parent-cb,
           ;; and initialized.
-          ;; The callbacks get called inside an
-          ;; agent send handler,
-          ;; which means I have the agent state
-          ;; directly available, but not the actual
-          ;; agent.
-          ;; That's what it needs, because child->!
+          ;; The callbacks have access to the state
+          ;; value, but not the io-loop handle.
+          ;; They need that, because child->!
           ;; is going to trigger another send.
           ;; Wrapping it inside an atom is obnoxious, but
           ;; it works.
@@ -470,6 +469,7 @@
                              (log/info (utils/pre-log test-run)
                                        "Message from server to client."
                                        "\nThis really should just be an ACK")
+                             ;; This is simulating the network
                              (message/parent->! @client-io-atom bs))
           server-child-cb (fn [incoming]
                             (let [prelog (utils/pre-log test-run)]
@@ -489,43 +489,41 @@
                               ;; TODO: Check out the history, make sure this comment is
                               ;; in the correct vicinity, and then hopefully delete them both.
 
-                              (let [response-state @srvr-child-state]
+                              (let [packet-size (if (keyword? incoming)
+                                                  0
+                                                  (count incoming))
+                                    response-state @srvr-child-state]
                                 (if (keyword? incoming)
                                   (do
+                                    (log/warn prelog "Server child received EOF" incoming)
                                     (is (s/valid? ::specs/eof-flag incoming))
                                     (message/close! @client-io-atom))
-                                  (log/debug (str test-run
-                                                  "::server-child-cb ("
-                                                  (count incoming)
+                                  (log/debug prelog
+                                             (str "::server-child-cb ("
+                                                  packet-size
                                                   " bytes): "
                                                   (-> response-state
                                                       (dissoc :buffer)
                                                       (assoc :buffer-size (count (:buffer response-state)))))))
-                                ;; The first few blocks should max out the message size.
-                                ;; The way the test is set up, the last will be
-                                ;; (+ 512 64).
-                                ;; It doesn't seem worth the hoops it would take to validate that.
                                 (swap! srvr-child-state
                                        (fn [cur]
                                          (log/info prelog "Incrementing state count")
-                                         (-> cur
-                                             (update :count inc)
-                                             ;; Seems a little silly to include the ACKs.
-                                             ;; Should probably think this through more thoroughly
-                                             (update :buffer conj (vec incoming)))))
-                                ;; I would like to get 8 callbacks here:
-                                ;; 1 for each message packet the child tries to send.
-                                ;; I'm actually receiving 6:
-                                ;; 4 1K blocks, 256 bytes, and an EOF indicator.
-                                ;; It seems like this almost definitely involves
-                                ;; PipedStream buffering.
-                                ;; TODO: Need to double-check that and consider
-                                ;; very diligently what I think about it.
-                                ;; (At first glance, it seems totally incorrect).
-                                (when (= packet-count (:count @srvr-child-state))
+                                         (let [incoming (if (keyword? incoming)
+                                                          [incoming]
+                                                          incoming)]
+                                           (-> cur
+                                               (update :count inc)
+                                               ;; Seems a little silly to include the ACKs.
+                                               ;; Should probably think this through more thoroughly
+                                               ;; ACKs shouldn't get here.
+                                               ;; TODO: Verify that.
+                                               (update :buffer conj (vec incoming))
+                                               (update :address + packet-size)))))
+                                (when (= msg-len (:address @srvr-child-state))
                                   (log/info prelog
-                                            "::srvr-child-cb Received all expected packets")
-                                  (deliver response @srvr-child-state)))))
+                                            "::srvr-child-cb Received all expected bytes")
+                                  (deliver response @srvr-child-state)
+                                  (message/close! @srvr-io-atom)))))
           srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
                                                   true
                                                   {})
@@ -543,20 +541,24 @@
                       (message/parent->! srvr-io-handle bs))
           child-message-counter (atom 0)
           strm-address (atom 0)
-          child-cb (fn [bs]
+          child-cb (fn [eof]
                      ;; This is for messages from elsewhere to the child.
-                     ;; This test is all about the child spewing "lots" of data
+                     ;; This test is all about the *child* spewing "lots" of data.
+                     ;; So I don't expect it to ever receive anything except the EOF
+                     ;; marker.
+
                      ;; TODO: Honestly, need a test that really does just start off by
                      ;; sending megabytes (or gigabytes) of data as soon as the connection
                      ;; is warmed up.
-                     ;; Library should be robust enough to handle that failure.
-                     ;; Q: (which failure? feature?)
-                     (is (not bs) "This should never get called"))
+                     ;; Library should be robust enough to handle that.
+                     (is (s/valid? ::specs/eof-flag eof) "This should only get called for EOF"))
           client-initialized (message/initial-state (str "(test " test-run ") Client w/ Big Outbound")
                                                     false
                                                     {})
           client-io-handle (message/start! client-initialized parent-cb child-cb)]
+      (reset! srvr-io-atom srvr-io-handle)
       (reset! client-io-atom client-io-handle)
+
       (try
         (let [;; Note that this is what the child sender should be supplying
               message-body (byte-array (range msg-len))]
@@ -574,6 +576,7 @@
           (message/close! client-io-handle)
           (let [outcome (deref response 10000 ::timeout)
                 end-time (System/nanoTime)]
+            (is (not= outcome ::timeout))
             (log/info prelog
                       "Verifying that state hasn't errored out after"
                       (float (utils/nanos->millis (- end-time start-time))) "milliseconds")
@@ -584,25 +587,26 @@
               (when (not= ::timeout outcome)
                 (is (not (instance? Exception outcome)))
                 (when-not (= outcome ::timeout)
-                  (let [result-buffer (:buffer outcome)]
-                    (is (= packet-count (count result-buffer)))
-                    (is (= K/max-bytes-in-initiate-message (count (first result-buffer))))
-                    (doseq [packet (butlast result-buffer)]
-                      (is (= (count packet) K/k-div2)))
-                    (let [final (last result-buffer)]
-                      (is (= (count final) K/k-div4)))
-                    (let [rcvd-strm
-                          (reduce (fn [acc block]
-                                    (conj acc block))
-                                  []
-                                  result-buffer)]
-                      (is (b-t/bytes= (->> rcvd-strm
-                                           first
-                                           byte-array)
-                                      (->> message-body
-                                           vec
-                                           (take K/max-bytes-in-initiate-message)
-                                           byte-array))))))))))
+                  (let [stream-address (:address outcome)]
+                    (is (= msg-len stream-address))
+                    (let [rcvd-blocks (:buffer outcome)
+                          ;; This is not working at all.
+                          ;; Q: Why not?
+                          byte-seq (concat (concat rcvd-blocks))
+                          _ (log/debug prelog
+                                       "Trying to recreate the incoming stream from"
+                                       (count byte-seq)
+                                       "'somethings' in a"
+                                       (class byte-seq)
+                                       "that looks like\n"
+                                       byte-seq
+                                       "\nBased upon"
+                                       (count rcvd-blocks)
+                                       "instances of"
+                                       (class (first rcvd-blocks)))
+                          rcvd-strm (byte-array (first byte-seq))]
+                      (is (= (count message-body) (count rcvd-strm)))
+                      (is (b-t/bytes= message-body rcvd-strm)))))))))
         (let [{:keys [::specs/incoming
                       ::specs/outgoing]
                :as outcome} (message/get-state client-io-handle 500 ::time-out)]
@@ -610,11 +614,8 @@
           (when (not= outcome ::time-out)
             (is outgoing)
             (is (= msg-len (::specs/ackd-addr outgoing)))
-            (let [n-m-id (::specs/next-message-id outgoing)]
-              (is (= (inc packet-count) n-m-id)))
             (is (= 0 (from-child/buffer-size outcome)))
-            ;; TODO: I do need a test that triggers EOF
-            (is (= ::specs/false (::specs/send-eof outgoing)))
+            (is (= ::specs/normal (::specs/send-eof outgoing)))
             ;; Keeping around as a reminder for when the implementation changes
             ;; and I need to see what's really going on again
             (comment (is (not outcome) "What should we have here?"))))
