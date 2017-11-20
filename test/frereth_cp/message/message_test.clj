@@ -633,13 +633,54 @@
               (is not ex))))))))
 (comment (bigger-echo))
 
+;;;; TODO: Consolidate these next 2 to eliminate duplication
+(defn srvr->client-consumer
+  [client-io time-out succeeded? bs]
+  (let [prelog (utils/pre-log "server->client consumer")]
+    (log/info prelog "Message from server to client")
+    (let [client-state (message/get-state client-io time-out ::timed-out)]
+      (if (or (= ::timed-out client-state)
+              (instance? Throwable client-state)
+              (nil? client-state))
+        (let [problem (if (instance? Throwable client-state)
+                        client-state
+                        (ex-info "Non-exception in server->client consumer"
+                                 {::problem client-state}))]
+          (log/error problem prelog "Client failed!")
+          (dfrd/error! succeeded? problem))
+        (message/parent->! client-io bs)))))
+
+(defn client->srvr-consumer
+  [server-io time-out succeeded? bs]
+  ;; Note that, at this point, we're blocking the
+  ;; server's I/O loop.
+  ;; Whatever happens here must return control
+  ;; quickly.
+  (let [prelog (utils/pre-log "client->server")]
+    (log/info prelog "Incoming")
+    ;; Checking for the server state is wasteful here.
+    ;; And very dubious...depending on implementation details,
+    ;; it wouldn't take much to shift this over to triggering
+    ;; a deadlock (since we're really running on the event loop
+    ;; thread).
+    ;; Actually, I'm a little surprised that this works at all.
+    ;; And it definitely *has* had issues.
+    ;; Q: But is it worth it for the test's sake?
+    (let [srvr-state (message/get-state server-io time-out ::timed-out)]
+      (if (or (= ::timed-out srvr-state)
+              (instance? Throwable srvr-state)
+              (nil? srvr-state))
+        (let [problem (if (instance? Throwable srvr-state)
+                        srvr-state
+                        (ex-info "Non-exception in client->server consumer"
+                                 {::problem srvr-state}))]
+          (do
+            (log/error problem prelog "Server failed!")
+            (dfrd/error! succeeded? problem)))
+        (message/parent->! server-io bs)))))
+
+;;;; TODO: Refactor this (and its variations) into its own namespace
 (deftest handshake
-  ;; The stop values going back to to-child/consolidate-message-block
-  ;; are gibberish. This probably ties in with my failures to cope with
-  ;; ::ackd-addr.
-  ;; This definitely seems to tie in with message.helpers, when it receives
-  ;; ACKs in gap buffers
-  ;; TODO: Need to address that.
   (let [prelog (utils/pre-log "Handshake test")]
     (log/info prelog
               "Top")
@@ -665,13 +706,17 @@
           client-child-cb (fn [bs]
                             (is bs)
                             (let [s (String. bs)
+                                  ;; This approach was wishful thinking. I've been getting
+                                  ;; lucky up to now, because it happened to work.
+                                  ;; Now that I'm getting close to a working implementation,
+                                  ;; I'm receiving a real stream of bytes instead of the distinct
+                                  ;; messages that I was receiving initially.
+                                  ;; That is what I want, but it complicates this test.
+                                  ;; TODO: Need to cope with this.
                                   incoming (edn/read-string s)
-                                  prelog (utils/pre-log "Client w/ Big Outbound: child callback")]
+                                  prelog (utils/pre-log "Handshake Client: child callback")]
                               (is (< 0 (count s)))
                               (is incoming)
-                              ;; We're receiving the initial ::orly? response in State 0.
-                              ;; The ::yarly disappears
-                              ;; FIXME: Where?
                               (log/info prelog
                                         (str "Client State: "
                                              @client-state
@@ -687,7 +732,9 @@
                                           ::icanhazchzbrgr?)
                                       2 (do
                                           (is (= incoming ::kk))
-                                          ;; This is the ACK associated
+                                          ;; This is the protocol-level ACK
+                                          ;; (which is different than the CurveCP
+                                          ;; ACK message) associated
                                           ;; with the chzbrgr request
                                           ;; No response to send for this
                                           nil)
@@ -708,10 +755,9 @@
                                           (log/info "Client child callback is done")
                                           (dfrd/success! succeeded? ::kthxbai)
                                           (try
-                                            ;; This fails because I haven't really
-                                            ;; decided how I want to handle EOF.
                                             (message/close! @client-atom)
                                             (catch RuntimeException ex
+                                              ;; CIDER doesn't realize that this is a failure.
                                               ;; I blame something screwy in the testing
                                               ;; harness. I *do* see this error message
                                               ;; and the stack trace.
@@ -750,22 +796,25 @@
                                         ::ohai! ::orly?
                                         ::yarly ::kk
                                         ::icanhazchzbrgr? ::kk
-                                        ::kthxbai ::kk)]
+                                        ::kthxbai ::kk
+                                        ::specs/normal ::specs/normal)]
                               (log/info prelog
                                         "Server received"
                                         incoming
                                         "\nwhich triggers"
                                         rsp)
-                              (let [actual (.getBytes (pr-str rsp))]
-                                (try-multiple-sends message/child->!
-                                                    prelog
-                                                    5
-                                                    @server-atom
-                                                    actual
-                                                    "Message buffered to child"
-                                                    "Giving up on forwarding to child"
-                                                    {::response rsp
-                                                     ::request incoming}))
+                              (if (not= rsp ::specs/normal)
+                                (let [actual (.getBytes (pr-str rsp))]
+                                  (try-multiple-sends message/child->!
+                                                      prelog
+                                                      5
+                                                      @server-atom
+                                                      actual
+                                                      "Message buffered to child"
+                                                      "Giving up on forwarding to child"
+                                                      {::response rsp
+                                                       ::request incoming}))
+                                (message/close! @server-atom))
                               (when (= incoming ::icanhazchzbrgr?)
                                 ;; One of the main points is that this doesn't need to be a lock-step
                                 ;; request/response.
@@ -798,76 +847,9 @@
         (reset! server-atom server-io)
 
         (try
-          (strm/consume (fn [bs]
-                          ;; Note that, at this point, we're blocking the
-                          ;; server's I/O loop.
-                          ;; Whatever happens here must return control
-                          ;; quickly.
-                          (let [prelog (utils/pre-log "client->server")]
-                            (log/info prelog "Incoming")
-                            ;; Checking for the server state is wasteful here.
-                            ;; And very dubious...depending on implementation details,
-                            ;; it wouldn't take much to shift this over to triggering
-                            ;; a deadlock (since we're really running on the event loop
-                            ;; thread).
-                            ;; Actually, I'm a little surprised that this works at all.
-                            ;; Q: But is it worth it for the test's sake?
-                            ;; A: Well, now that the RTT adjustments are taking effect,
-                            ;; I'm hitting the deadlocks I expected.
-                            ;; I *think* the problem is this sequence:
-                            ;; 1. the event loop triggers this
-                            ;; 2. this sends a get-state request
-                            ;; 3. that request can never succeed, because it's waiting
-                            ;; for this thread to return to start handling those sorts
-                            ;; of requests again.
-                            ;; It seems a little strange that adding RTT adjustments would
-                            ;; bring this problem to light.
-                            ;; But, honestly, it seems more strange that it ever worked.
-
-                            ;; The obvious solution starts with what the library client
-                            ;; should do here: get the callback and push the incoming
-                            ;; message onto another queue to deal with later.
-
-                            ;; But, honestly, it would be easier for the library to
-                            ;; do that.
-                            ;; Not necessarily better, since callers *could* handle
-                            ;; things more directly here. But it's very tempting.
-
-                            ;; And yet...how did this approach ever work?
-
-                            ;; Actually, it's probably worth keeping in mind that
-                            ;; *this* approach never did.
-
-                            ;; An approach with the same basic code, built around agents,
-                            ;; never did either. It just failed in different ways that
-                            ;; drove me to switch to this Actor-based approach.
-                            (let [srvr-state (message/get-state server-io time-out ::timed-out)]
-                              (if (or (= ::timed-out srvr-state)
-                                      (instance? Throwable srvr-state)
-                                      (nil? srvr-state))
-                                (let [problem (if (instance? Throwable srvr-state)
-                                                srvr-state
-                                                (ex-info "Non-exception in client->server consumer"
-                                                         {::problem srvr-state}))]
-                                  (do
-                                    (log/error problem prelog "Server failed!")
-                                    (dfrd/error! succeeded? problem)))
-                                (message/parent->! server-io bs)))))
+          (strm/consume (partial client->srvr-consumer server-io time-out succeeded?)
                         client->server)
-          (strm/consume (fn [bs]
-                          (let [prelog (utils/pre-log "server->client consumer")]
-                            (log/info prelog "Message from server to client")
-                            (let [client-state (message/get-state client-io time-out ::timed-out)]
-                              (if (or (= ::timed-out client-state)
-                                      (instance? Throwable client-state)
-                                      (nil? client-state))
-                                (let [problem (if (instance? Throwable client-state)
-                                                client-state
-                                                (ex-info "Non-exception in server->client consumer"
-                                                         {::problem client-state}))]
-                                  (log/error problem prelog "Client failed!")
-                                  (dfrd/error! succeeded? problem))
-                                (message/parent->! client-io bs)))))
+          (strm/consume (partial srvr->client-consumer client-io time-out succeeded?)
                         server->client)
 
           (let [initial-message (Unpooled/buffer K/k-1)
@@ -917,7 +899,11 @@
               (message/halt! server-io)
               (catch Exception ex
                 (log/error ex "Trying to halt server")))))))))
-(comment (handshake))
+(comment
+  (handshake)
+  (count (str ::kk))
+  (String. (byte-array [0 1 2]))
+  )
 
 (deftest check-initial-state-override
   (let [opts {::specs/outgoing {::specs/pipe-from-child-size K/k-1}
