@@ -12,6 +12,9 @@
             [manifold.stream :as strm])
   (:import io.netty.buffer.Unpooled))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Helper functions
+
 ;;;; TODO: Consolidate these next 2 to eliminate duplication
 (defn srvr->client-consumer
   [client-io time-out succeeded? bs]
@@ -58,6 +61,139 @@
             (dfrd/error! succeeded? problem)))
         (message/parent->! server-io bs)))))
 
+(defn server-mock-child
+  [server-atom chzbrgr-length bs]
+  (let [prelog (utils/pre-log "Server's child callback")
+        incoming (if-not (keyword? bs)
+                   (edn/read-string (String. bs))
+                   bs)
+        _ (log/debug prelog
+                     (str "Matching '" incoming
+                          "', a " (class incoming)) )
+        rsp (condp = incoming
+              ::ohai! ::orly?
+              ::yarly ::kk
+              ::icanhazchzbrgr? ::kk
+              ::kthxbai ::kk
+              ::specs/normal ::specs/normal)]
+    (log/info prelog
+              "Server received"
+              incoming
+              "\nwhich triggers"
+              rsp)
+    (if (not= rsp ::specs/normal)
+      (let [actual (.getBytes (pr-str rsp))]
+        (m-t/try-multiple-sends message/child->!
+                                prelog
+                                5
+                                @server-atom
+                                actual
+                                "Message buffered to child"
+                                "Giving up on forwarding to child"
+                                {::response rsp
+                                 ::request incoming}))
+      (message/close! @server-atom))
+    (when (= incoming ::icanhazchzbrgr?)
+      ;; One of the main points is that this doesn't need to be a lock-step
+      ;; request/response.
+      (log/info prelog "Client requested chzbrgr. Send out of lock-step")
+      (let [chzbrgr (byte-array (range chzbrgr-length))]
+        (m-t/try-multiple-sends message/child->!
+                                prelog
+                                5
+                                @server-atom
+                                chzbrgr
+                                "Buffered chzbrgr to child"
+                                "Giving up on sending chzbrgr"
+                                {})))))
+
+(defn mock-client-child
+  [client-atom client-state succeeded? chzbrgr-length bs]
+  (is bs)
+  (let [s (if-not (keyword? bs)
+            (String. bs)
+            ;; It's wasteful to convert this to a string just
+            ;; so I can read the next line.
+            ;; Then again, this entire approach is broken and needs
+            ;; to be revisited.
+            (pr-str bs))
+        ;; This approach was wishful thinking. I've been getting
+        ;; lucky up to now, because it happened to work.
+        ;; Now that I'm getting close to a working implementation,
+        ;; I'm receiving a real stream of bytes instead of the distinct
+        ;; messages that I was receiving initially.
+        ;; That is what I want, but it complicates this test.
+        ;; TODO: Need to cope with this.
+        incoming (edn/read-string s)
+        prelog (utils/pre-log "Handshake Client: child callback")]
+    (is (< 0 (count s)))
+    (is incoming)
+    (log/info prelog
+              (str "Client State: "
+                   @client-state
+                   "\nreceived: "
+                   incoming ", a " (class incoming)))
+    (let [next-message
+          (condp = @client-state
+            0 (do
+                (is (= incoming ::orly?))
+                ::yarly)
+            1 (do
+                (is (= incoming ::kk))
+                ::icanhazchzbrgr?)
+            2 (do
+                (is (= incoming ::kk))
+                ;; This is the protocol-level ACK
+                ;; (which is different than the CurveCP
+                ;; ACK message) associated
+                ;; with the chzbrgr request
+                ;; No response to send for this
+                nil)
+            3 (do
+                ;; This is based around an implementation
+                ;; detail that the message stream really consists
+                ;; of either
+                ;; a) the same byte array sent by the other side
+                ;; b) several of those byte arrays, if the block
+                ;; is too big to send all at once.
+                ;; TODO: don't rely on that.
+                ;; It really would be more efficient for the other
+                ;; side to batch up the ACK and this response
+                (is (b-t/bytes= incoming (byte-array (range chzbrgr-length))))
+                ::kthxbai)
+            4 (do
+                (is (= incoming ::kk))
+                (log/info "Client child callback is done")
+                (dfrd/success! succeeded? ::kthxbai)
+                (try
+                  (message/close! @client-atom)
+                  (catch RuntimeException ex
+                    ;; CIDER doesn't realize that this is a failure.
+                    ;; I blame something screwy in the testing
+                    ;; harness. I *do* see this error message
+                    ;; and the stack trace.
+                    (log/error ex "This really shouldn't pass")
+                    (is (not ex))))
+                nil))]
+      (swap! client-state inc)
+      ;; Hmm...I've wound up with a circular dependency
+      ;; on the io-handle again.
+      ;; Q: Is this a problem with my architecture, or just
+      ;; a testing artifact?
+      (when next-message
+        (let [actual (.getBytes (pr-str next-message))]
+          (m-t/try-multiple-sends message/child->!
+                                  prelog
+                                  5
+                                  @client-atom
+                                  actual
+                                  (str "Buffered bytes from child")
+                                  "Giving up on sending message from child"
+                                  {}))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Tests functions
+
 (deftest handshake
   (let [prelog (utils/pre-log "Handshake test")]
     (log/info prelog
@@ -80,83 +216,8 @@
           ;; Although this *does* take me back to the beginning, where
           ;; I was trying to figure out ways to gen the tests based upon
           ;; a protocol defined by something like spec.
-          cheezburgr-length 182
-          client-child-cb (fn [bs]
-                            (is bs)
-                            (let [s (String. bs)
-                                  ;; This approach was wishful thinking. I've been getting
-                                  ;; lucky up to now, because it happened to work.
-                                  ;; Now that I'm getting close to a working implementation,
-                                  ;; I'm receiving a real stream of bytes instead of the distinct
-                                  ;; messages that I was receiving initially.
-                                  ;; That is what I want, but it complicates this test.
-                                  ;; TODO: Need to cope with this.
-                                  incoming (edn/read-string s)
-                                  prelog (utils/pre-log "Handshake Client: child callback")]
-                              (is (< 0 (count s)))
-                              (is incoming)
-                              (log/info prelog
-                                        (str "Client State: "
-                                             @client-state
-                                             "\nreceived: "
-                                             incoming ", a " (class incoming)))
-                              (let [next-message
-                                    (condp = @client-state
-                                      0 (do
-                                          (is (= incoming ::orly?))
-                                          ::yarly)
-                                      1 (do
-                                          (is (= incoming ::kk))
-                                          ::icanhazchzbrgr?)
-                                      2 (do
-                                          (is (= incoming ::kk))
-                                          ;; This is the protocol-level ACK
-                                          ;; (which is different than the CurveCP
-                                          ;; ACK message) associated
-                                          ;; with the chzbrgr request
-                                          ;; No response to send for this
-                                          nil)
-                                      3 (do
-                                          ;; This is based around an implementation
-                                          ;; detail that the message stream really consists
-                                          ;; of either
-                                          ;; a) the same byte array sent by the other side
-                                          ;; b) several of those byte arrays, if the block
-                                          ;; is too big to send all at once.
-                                          ;; TODO: don't rely on that.
-                                          ;; It really would be more efficient for the other
-                                          ;; side to batch up the ACK and this response
-                                          (is (b-t/bytes= incoming (byte-array (range cheezburgr-length))))
-                                          ::kthxbai)
-                                      4 (do
-                                          (is (= incoming ::kk))
-                                          (log/info "Client child callback is done")
-                                          (dfrd/success! succeeded? ::kthxbai)
-                                          (try
-                                            (message/close! @client-atom)
-                                            (catch RuntimeException ex
-                                              ;; CIDER doesn't realize that this is a failure.
-                                              ;; I blame something screwy in the testing
-                                              ;; harness. I *do* see this error message
-                                              ;; and the stack trace.
-                                              (log/error ex "This really shouldn't pass")
-                                              (is (not ex))))
-                                          nil))]
-                                (swap! client-state inc)
-                                ;; Hmm...I've wound up with a circular dependency
-                                ;; on the io-handle again.
-                                ;; Q: Is this a problem with my architecture, or just
-                                ;; a testing artifact?
-                                (when next-message
-                                  (let [actual (.getBytes (pr-str next-message))]
-                                    (m-t/try-multiple-sends message/child->!
-                                                            prelog
-                                                            5
-                                                            @client-atom
-                                                            actual
-                                                            (str "Buffered bytes from child")
-                                                            "Giving up on sending message from child"
-                                                            {}))))))
+          chzbrgr-length 182
+          client-child-cb (partial mock-client-child client-atom client-state succeeded? chzbrgr-length)
 
           server-atom (atom nil)
           server-parent-cb (fn [bs]
@@ -164,48 +225,7 @@
                                        "Sending a" (class bs) "to server's parent")
                              (let [sent (strm/try-put! server->client bs time-out ::timed-out)]
                                (is (not= @sent ::timed-out))))
-          server-child-cb (fn [bs]
-                            (let [prelog (utils/pre-log "Server's child callback")
-                                  incoming (edn/read-string (String. bs))
-                                  _ (log/debug prelog
-                                               (str "Matching '" incoming
-                                                    "', a " (class incoming)) )
-                                  rsp (condp = incoming
-                                        ::ohai! ::orly?
-                                        ::yarly ::kk
-                                        ::icanhazchzbrgr? ::kk
-                                        ::kthxbai ::kk
-                                        ::specs/normal ::specs/normal)]
-                              (log/info prelog
-                                        "Server received"
-                                        incoming
-                                        "\nwhich triggers"
-                                        rsp)
-                              (if (not= rsp ::specs/normal)
-                                (let [actual (.getBytes (pr-str rsp))]
-                                  (m-t/try-multiple-sends message/child->!
-                                                          prelog
-                                                          5
-                                                          @server-atom
-                                                          actual
-                                                          "Message buffered to child"
-                                                          "Giving up on forwarding to child"
-                                                          {::response rsp
-                                                           ::request incoming}))
-                                (message/close! @server-atom))
-                              (when (= incoming ::icanhazchzbrgr?)
-                                ;; One of the main points is that this doesn't need to be a lock-step
-                                ;; request/response.
-                                (log/info prelog "Client requested chzbrgr. Send out of lock-step")
-                                (let [chzbrgr (byte-array (range cheezburgr-length))]
-                                  (m-t/try-multiple-sends message/child->!
-                                                          prelog
-                                                          5
-                                                          @server-atom
-                                                          chzbrgr
-                                                          "Buffered chzbrgr to child"
-                                                          "Giving up on sending chzbrgr"
-                                                          {})))))]
+          server-child-cb (partial server-mock-child server-atom chzbrgr-length)]
       (dfrd/on-realized succeeded?
                         (fn [good]
                           (log/info "----------> Test should have passed <-----------"))
