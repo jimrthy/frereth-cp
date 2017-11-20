@@ -151,7 +151,7 @@
                 ::rtt-lowwater]} (if (= 0 rtt-average)
                                    {::n-sec-per-block rtt
                                     ::rtt-average rtt
-                                    ::rtt-deviation (/ rtt 2)
+                                    ::rtt-deviation (/ rtt 2.0)
                                     ::rtt-highwater rtt
                                     ::rtt-lowwater rtt}
                                    {::n-sec-per-block n-sec-per-block
@@ -161,24 +161,24 @@
                                     ::rtt-lowwater rtt-lowwater})]
 
     (let [rtt-delta (- rtt-average rtt)
-          rtt-average (+ rtt-average (/ rtt-delta 8))
+          rtt-average (+ rtt-average (/ rtt-delta 8.0))
           rtt-delta (if (> 0 rtt-delta)
                       (- rtt-delta)
                       rtt-delta)
           rtt-delta (- rtt-delta rtt-deviation)
-          rtt-deviation (+ rtt-deviation (/ rtt-delta 4))
+          rtt-deviation (+ rtt-deviation (/ rtt-delta 4.0))
           rtt-timeout (+ rtt-average (* 4 rtt-deviation))
           ;; adjust for delayed acks with anti-spiking: --DJB
           rtt-timeout (+ rtt-timeout (* 8 n-sec-per-block))
 
           ;; recognizing top and bottom of congestion cycle:  --DJB
           rtt-delta (- rtt rtt-highwater)
-          rtt-highwater (+ rtt-highwater (/ rtt-delta K/k-1))
+          rtt-highwater (+ rtt-highwater (/ rtt-delta K/k-1f))
           rtt-delta (- rtt rtt-lowwater)
           rtt-lowwater (+ rtt-lowwater
                           (if (> rtt-delta 0)
-                            (/ rtt-delta K/k-8)
-                            (/ rtt-delta K/k-div4)))
+                            (/ rtt-delta K/k-8f)
+                            (/ rtt-delta K/k-div4f)))
           ;; Q: Are these actually used anywhere else?
           recently-seen-rtt-high? (> rtt-average (+ rtt-highwater K/ms-5))
           rtt-seen-recent-high recently-seen-rtt-high?
