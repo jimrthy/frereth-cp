@@ -410,9 +410,12 @@
             (log/warn prelog
                       "Destination stream closed waiting to put"
                       array-o-bytes))))
-      (log/warn prelog
-                "Destination stream closed. Discarding message\n"
-                array-o-bytes))))
+      (do
+        (log/warn prelog
+                  "Destination stream closed. Discarding message\n"
+                  array-o-bytes)
+        ;; Q: Is there any way to recover from this?
+        ::specs/error))))
 
 (s/fdef room-for-child-bytes?
         :args (s/cat :state ::specs/state)
@@ -569,6 +572,9 @@
                                                   stream
                                                   K/standard-max-block-length)]
               (when-not (bytes? eof'?)
+                (when (nil? eof'?)
+                  (throw (ex-info "What just happened?"
+                                  {::context prelog})))
                 (log/warn prelog "EOF signal received:" eof'?)
                 (swap! eof? not))))
           (log/warn prelog "Child monitor exiting")

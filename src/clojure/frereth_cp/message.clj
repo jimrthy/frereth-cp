@@ -1165,6 +1165,11 @@
                      :array-o-bytes (s/or :message bytes?
                                           :eof #(instance? Throwable %)))
         ;; Truthy on success
+        ;; TODO: Flip the meaning here.
+        ;; Have it return (s/nilabl nat-int?) instead.
+        ;; nil meas success.
+        ;; An integer indicates how many bytes we *could*
+        ;; have buffered.
         :ret boolean?)
 (defn child->!
   ;; TODO: Add a capturing version of this and parent->!

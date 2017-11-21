@@ -27,6 +27,15 @@
 ;;; Helper functions
 
 (defn try-multiple-sends
+  ;; Q: Does this make any sense at all?
+  ;; A: Well, a little. If the put! would
+  ;; have blocked, this call just fails.
+  ;; Without a good explanation about what
+  ;; to try differently.
+  ;; So the problem is really a bad API.
+  ;; TODO: Convert child->! to return nil
+  ;; on success and the number of bytes that
+  ;; *are* available on failure.
   [f  ;; Honestly, this is just child->!
    prelog
    n
