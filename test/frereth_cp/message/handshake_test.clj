@@ -9,58 +9,71 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils]
+            [gloss.core :as gloss]
+            [gloss.io :as io]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import io.netty.buffer.Unpooled))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+
+(s/def ::prefix (s/nilable bytes?))
+(s/def ::count nat-int?)
+(s/def ::state (s/keys :req [::count
+                             ::prefix]))
+(s/def ::next-object any?)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Magic constants
+
+(def protocol
+  (gloss/compile-frame
+   (gloss/finite-frame :uint16
+                       (gloss/string :utf-8))
+   pr-str
+   edn/read-string))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Helper functions
 
-;;;; TODO: Consolidate these next 2 to eliminate duplication
+(defn consumer
+  [io-handle prelog time-out succeeded? bs]
+  ;; Note that, at this point, we're blocking the
+  ;; I/O loop.
+  ;; Whatever happens here must return control
+  ;; quickly.
+  (log/info prelog "Message over network")
+  ;; Checking for the server state is wasteful here.
+  ;; And very dubious...depending on implementation details,
+  ;; it wouldn't take much to shift this over to triggering
+  ;; a deadlock (since we're really running on the event loop
+  ;; thread).
+  ;; Actually, I'm a little surprised that this works at all.
+  ;; And it definitely *has* had issues.
+  ;; Q: But is it worth it for the test's sake?
+  (let [state (message/get-state io-handle time-out ::timed-out)]
+    (if (or (= ::timed-out state)
+            (instance? Throwable state)
+            (nil? state))
+      (let [problem (if (instance? Throwable state)
+                      state
+                      (ex-info "Non-exception"
+                               {::problem state}))]
+        (log/error problem prelog "Failed!")
+        (dfrd/error! succeeded? problem))
+      (message/parent->! io-handle (io/encode protocol bs)))))
+
 (defn srvr->client-consumer
+  "This processes bytes that are headed from the server to the client"
   [client-io time-out succeeded? bs]
   (let [prelog (utils/pre-log "server->client consumer")]
-    (log/info prelog "Message from server to client")
-    (let [client-state (message/get-state client-io time-out ::timed-out)]
-      (if (or (= ::timed-out client-state)
-              (instance? Throwable client-state)
-              (nil? client-state))
-        (let [problem (if (instance? Throwable client-state)
-                        client-state
-                        (ex-info "Non-exception in server->client consumer"
-                                 {::problem client-state}))]
-          (log/error problem prelog "Client failed!")
-          (dfrd/error! succeeded? problem))
-        (message/parent->! client-io bs)))))
+    (consumer client-io prelog time-out succeeded? bs)))
 
 (defn client->srvr-consumer
   [server-io time-out succeeded? bs]
-  ;; Note that, at this point, we're blocking the
-  ;; server's I/O loop.
-  ;; Whatever happens here must return control
-  ;; quickly.
-  (let [prelog (utils/pre-log "client->server")]
-    (log/info prelog "Incoming")
-    ;; Checking for the server state is wasteful here.
-    ;; And very dubious...depending on implementation details,
-    ;; it wouldn't take much to shift this over to triggering
-    ;; a deadlock (since we're really running on the event loop
-    ;; thread).
-    ;; Actually, I'm a little surprised that this works at all.
-    ;; And it definitely *has* had issues.
-    ;; Q: But is it worth it for the test's sake?
-    (let [srvr-state (message/get-state server-io time-out ::timed-out)]
-      (if (or (= ::timed-out srvr-state)
-              (instance? Throwable srvr-state)
-              (nil? srvr-state))
-        (let [problem (if (instance? Throwable srvr-state)
-                        srvr-state
-                        (ex-info "Non-exception in client->server consumer"
-                                 {::problem srvr-state}))]
-          (do
-            (log/error problem prelog "Server failed!")
-            (dfrd/error! succeeded? problem)))
-        (message/parent->! server-io bs)))))
+  (let [prelog (utils/pre-log "server->client consumer")]
+    (consumer server-io prelog time-out succeeded? bs)))
 
 (defn buffer-response!
   [io-handle
@@ -69,29 +82,22 @@
    success-message
    error-message
    error-details]
-  ;; This actually sends a stream of data.
-  ;; So prepend with the byte count
-  (let [printed (pr-str response)
-        payload (.getBytes printed)
-        response-length (count payload)
-        ;; 2 bytes for length encoding
-        buffer (+ 2 response-length)]
-    (b-t/uint16-pack! buffer 0 response-length)
-    (b-t/byte-copy! buffer 2 response-length payload)
-    (m-t/try-multiple-sends message/child->!
-                            prelog
-                            5
-                            io-handle
-                            buffer
-                            success-message
-                            error-message
-                            error-details)))
+  (let [frames (io/encode protocol response)]
+    (doseq [frame frames]
+      (let [array (if (.hasArray frame)
+                    (.array frame)
+                    (let [result (byte-array (.readableBytes frame))]
+                      (.readBytes frame result)))]
+        ;; This is actually a java.nio.HeapByteBuffer.
+        ;; Which is a totally different animal from a reference-counted ByteBuf
+        ;; from netty.
+        (comment (.release frame))
+        (when-not
+            (message/child->! io-handle array)
+          (throw (ex-info "Sending failed"
+                          {::failed-on frame
+                           ::context prelog})))))))
 
-(s/def ::prefix (s/nilable bytes?))
-(s/def ::count nat-int?)
-(s/def ::state (s/keys :req [::count
-                             ::prefix]))
-(s/def ::next-object any?)
 (s/fdef extract-next-object-from-stream
         :args (s/cat :state ::state
                      :bs bytes?)
@@ -101,6 +107,7 @@
   "This is probably generally applicable"
   [{:keys [::prefix]
     :as state} bs]
+  (throw (RuntimeException. "Obsolete"))
   ;; Q: How much easier would using ByteBuf make this?
   ;; As it is, I feel like this needs its own unit test.
   (log/debug "Trying to extract object number"
@@ -141,9 +148,12 @@
   [server-atom state-atom chzbrgr-length bs]
   (let [prelog (utils/pre-log "Server's child callback")
         _ (log/debug prelog "Message arrived at server's child")
-        {:keys [::state]
-         incoming ::next-object} (extract-next-object-from-stream @state-atom bs)]
-    (reset! state-atom state)
+        ;; Hopefully, sticking encode-to-stream in the middle of
+        ;; the mock networking layer will allow this to just
+        ;; go back to working magically again
+        incoming (if-not (keyword? bs)
+                   (io/decode protocol bs)
+                   bs)]
     (when incoming
       (log/debug prelog
                  (str "Matching '" incoming
@@ -184,8 +194,9 @@
   [client-atom client-state succeeded? chzbrgr-length bs]
   (let [prelog (utils/pre-log "Handshake Client: child callback")
         _ (log/debug prelog "Message arrived at client's child")
-        {incoming ::next-object
-         :keys [::state]} (extract-next-object-from-stream @client-state bs)]
+        incoming (if-not (keyword? bs)
+                   (io/decode protocol bs)
+                   bs)]
     (is bs)
     (is (< 0 (count bs)))
     (log/info prelog
@@ -193,11 +204,10 @@
                    @client-state
                    "\nreceived: "
                    incoming ", a " (class incoming)))
-    (reset! client-state state)
     (when incoming
-      (let [{:keys [::count]} state
+      (let [{n ::count} @client-state
             next-message
-            (condp = (dec count)
+            (condp = n
               0 (do
                   (is (= incoming ::orly?))
                   ::yarly)
@@ -238,19 +248,25 @@
                       (log/error ex "This really shouldn't pass")
                       (is (not ex))))
                   nil))]
+        (log/info prelog
+                  incoming
+                  "triggered a response:"
+                  next-message)
         ;; Hmm...I've wound up with a circular dependency
         ;; on the io-handle again.
         ;; Q: Is this a problem with my architecture, or just
         ;; a testing artifact?
         (when next-message
+          (swap! client-state update ::count inc)
           (buffer-response! @client-atom
                             prelog
                             next-message
                             "Buffered bytes from child"
-                            "Giving up on sending message from child"))))))
+                            "Giving up on sending message from child"
+                            {}))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Tests functions
+;;; Tests
 
 (deftest handshake
   (let [prelog (utils/pre-log "Handshake test")]
@@ -314,9 +330,9 @@
 
         (try
           (strm/consume (partial client->srvr-consumer server-io time-out succeeded?)
-                        client->server)
+                        (strm/map #(io/encode protocol %) client->server))
           (strm/consume (partial srvr->client-consumer client-io time-out succeeded?)
-                        server->client)
+                        (strm/map #(io/encode protocol %) server->client))
 
           (let [initial-message (Unpooled/buffer K/k-1)
                 helo (.getBytes (pr-str ::ohai!))]
