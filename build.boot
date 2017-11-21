@@ -3,16 +3,22 @@
 
 (set-env! :resource-paths #{"src/clojure"}
           :dependencies '[[adzerk/boot-test "RELEASE" :scope "test"]
-                          [aleph "0.4.3"]
-                          [org.apache.logging.log4j/log4j-core "2.8.2" :scope "test"]
-                          [org.apache.logging.log4j/log4j-1.2-api "2.8.2" :scope "test"]
-                          [org.clojure/clojure "1.9.0-beta1"]
-                          [org.clojure/spec.alpha "0.1.123"]
-                          [org.clojure/test.check "0.10.0-alpha2" :scope "test"]
-                          [org.clojure/tools.logging "0.4.0"]
-                          [samestep/boot-refresh "0.1.0" :scope "test"]
-                          [tolitius/boot-check "0.1.4" :scope "test"]]
-          :source-paths   #{"src/java" "test"})
+                          [aleph "0.4.4" :exclusions [org.clojure/tools.logging]]
+                          ;; TODO: Eliminate these logging dependencies.
+                          ;; I have no business imposing them on library
+                          ;; users
+                          [org.apache.logging.log4j/log4j-core "2.9.1" :scope "test"]
+                          [org.apache.logging.log4j/log4j-1.2-api "2.9.1" :scope "test"]
+                          [org.clojure/clojure "1.9.0-RC1"]
+                          [org.clojure/spec.alpha "0.1.143"]
+                          [org.clojure/test.check "0.10.0-alpha2" :scope "test" :exclusions [org.clojure/clojure]]
+                          ;; TODO: Eliminate this dependency. It's another one
+                          ;; that I really don't have any business imposing on anyone else
+                          [org.clojure/tools.logging "0.4.0" :exclusions [org.clojure/clojure]]
+                          ;; TODO: Move this into the dev task
+                          [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]
+                          [tolitius/boot-check "0.1.6" :scope "test"]]
+          :source-paths   #{"src/java"})
 
 (task-options!
  aot {:namespace   #{'frereth-cp.server 'frereth-cp.client}}
@@ -31,6 +37,8 @@
 
 (require '[samestep.boot-refresh :refer [refresh]])
 (require '[tolitius.boot-check :as check])
+(require '[adzerk.boot-test :refer [test]])
+(require '[boot.pod :as pod])
 
 (deftask build
   "Build the project locally as a JAR."
@@ -41,16 +49,34 @@
   (let [dir (if (seq dir) dir #{"target"})]
     (comp (javac) (aot) (pom) (uber) (jar) (target :dir dir))))
 
+(deftask check-conflicts
+  "Verify there are no dependency conflicts."
+  []
+  (with-pass-thru fs
+    (require '[boot.pedantic :as pedant])
+    (let [dep-conflicts (resolve 'pedant/dep-conflicts)]
+      (if-let [conflicts (not-empty (dep-conflicts pod/env))]
+        (throw (ex-info (str "Unresolved dependency conflicts. "
+                             "Use :exclusions to resolve them!")
+                        conflicts))
+        (println "\nVerified there are no dependency conflicts.")))))
+
 (deftask dev
   []
   (merge-env! :source-paths #{"dev" "dev-resources"})
+  identity)
+
+(deftask testing
+  []
+  (merge-env! :dependencies '[[gloss "0.2.6" :scope "test"]]
+              :source-paths #{"test"})
   identity)
 
 (deftask cider-repl
   "Set up a REPL for connecting from CIDER"
   []
   ;; Just because I'm prone to forget one of the vital helper steps
-  (comp (dev) (cider) (javac) (repl)))
+  (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl)))
 
 (deftask run
   "Run the project."
@@ -60,5 +86,3 @@
   ;; Q: Does it make any sense to keep it around?
   (require '[frereth-cp.server :as app])
   (apply (resolve 'app/-main) file))
-
-(require '[adzerk.boot-test :refer [test]])
