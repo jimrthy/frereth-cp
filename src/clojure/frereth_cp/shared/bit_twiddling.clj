@@ -110,14 +110,18 @@ OTOH, I'm only using it for coping with the nonce.
       (throw ex))))
 
 (defn possibly-2s-uncomplement-n
-  "Note that this is specifically for a single byte"
+  "Uncomplement n, for size maximum"
   [n maximum]
   (if (<= 0 n)
     n
     (+ n maximum)))
 
-;; Q: Would it be worth writing a macro or three to
-;; avoid the duplication that follows?
+;; Q: Would it be worth writing a macro to
+;; eliminate the duplication that follows?
+(comment
+  (defmacro def-2s-uncomplementer
+    [docstring size]
+    (let [max-sym (symbol )])))
 
 (defn possibly-2s-uncomplement-8
   "Note that this is specifically for a single byte"
@@ -189,9 +193,29 @@ So stick with this translation.
      (uint64-pack! dst 0 x)
      dst)))
 
-;; TODO: If I ever need to add 32- 16- and/or 8-bit
-;; versions, redo this as a macro to avoid the code
+;; TODO: redo this as a macro to avoid the code
 ;; duplication.
+(s/fdef uint16-unpack
+        :args (s/cat :src bytes?)
+        ;; TODO: Validate range?
+        :ret (s/and int?))
+(defn uint16-unpack
+  "Unpack an array of 2 bytes into a 16-bit short"
+  ([^bytes src offset]
+   (reduce (fn [acc n]
+             (-> acc
+                 (bit-shift-left Byte/SIZE)
+                 (bit-or (->> n
+                              (+ offset)
+                              (aget src)
+                              possibly-2s-uncomplement-8
+                              ;; This next line should be redundant
+                              (bit-and 0xff)))))
+           0
+           (range 2 -1 -1)))
+  ([^bytes src]
+   (uint16-unpack src 0)))
+
 (s/fdef uint64-unpack
         :args (s/cat :src (and bytes?
                                #(= (count %) 8)))

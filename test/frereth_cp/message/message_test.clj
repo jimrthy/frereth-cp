@@ -495,7 +495,7 @@
                                   (do
                                     (log/warn prelog "Server child received EOF" incoming)
                                     (is (s/valid? ::specs/eof-flag incoming))
-                                    (message/close! @client-io-atom))
+                                    (message/child-close! @client-io-atom))
                                   (log/debug prelog
                                              (str "::server-child-cb ("
                                                   packet-size
@@ -521,7 +521,7 @@
                                   (log/info prelog
                                             "::srvr-child-cb Received all expected bytes")
                                   (deliver response @srvr-child-state)
-                                  (message/close! @srvr-io-atom)))))
+                                  (message/child-close! @srvr-io-atom)))))
           srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
                                                   true
                                                   {})
@@ -571,7 +571,7 @@
                                    " bytes to child")
                               "Buffering big message from child failed"
                               {::buffer-size msg-len})
-          (message/close! client-io-handle)
+          (message/child-close! client-io-handle)
           (let [outcome (deref response 10000 ::timeout)
                 end-time (System/nanoTime)]
             (is (not= outcome ::timeout))
