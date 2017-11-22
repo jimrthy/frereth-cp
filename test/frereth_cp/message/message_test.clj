@@ -47,14 +47,14 @@
   (loop [m n]
     (if (f io-handle payload)
       (do
-        (log/info success-message)
+        (log/info prelog success-message)
         (log/debug prelog "Sending took" (- (inc n) m) "attempt(s)"))
       (if (> 0 m)
         (let [failure (ex-info failure-message
                                failure-body)]
           ;; Just make double-extra certain that
           ;; this exception doesn't just disappear
-          (log/error failure)
+          (log/error prelog failure)
           (throw failure))
         (recur (dec m))))))
 

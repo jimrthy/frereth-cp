@@ -62,7 +62,7 @@
                                {::problem state}))]
         (log/error problem prelog "Failed!")
         (dfrd/error! succeeded? problem))
-      (message/parent->! io-handle (io/encode protocol bs)))))
+      (message/parent->! io-handle bs))))
 
 (defn srvr->client-consumer
   "This processes bytes that are headed from the server to the client"
@@ -76,13 +76,14 @@
     (consumer server-io prelog time-out succeeded? bs)))
 
 (defn buffer-response!
+  "Serialize and send a message from the child"
   [io-handle
    prelog
-   response
+   message
    success-message
    error-message
    error-details]
-  (let [frames (io/encode protocol response)]
+  (let [frames (io/encode protocol message)]
     (doseq [frame frames]
       (let [array (if (.hasArray frame)
                     (.array frame)
@@ -97,106 +98,79 @@
           (throw (ex-info "Sending failed"
                           {::failed-on frame
                            ::context prelog})))))))
+(comment
+  (io/encode protocol ::test))
 
-(s/fdef extract-next-object-from-stream
-        :args (s/cat :state ::state
-                     :bs bytes?)
-        :ret (s/keys :req [::state
-                           ::next-object]))
-(defn extract-next-object-from-stream
-  "This is probably generally applicable"
-  [{:keys [::prefix]
-    :as state} bs]
-  (throw (RuntimeException. "Obsolete"))
-  ;; Q: How much easier would using ByteBuf make this?
-  ;; As it is, I feel like this needs its own unit test.
-  (log/debug "Trying to extract object number"
-             (inc (::count state))
-             "from stream based upon"
-             prefix "and" bs)
+(defn decoder
+  [src]
+  (io/decode-stream src protocol))
+
+(defn decode-bytes->child
+  [decode-src decode-sink bs]
+  (log/debug "Trying to decode" bs)
   (if-not (keyword? bs)
-    (let [prefix-count (count prefix)
-          buffer-size (+ prefix-count
-                         (count bs))
-          actual (if prefix
-                   (let [buffer (byte-array buffer-size)]
-                     (b-t/byte-copy! buffer prefix)
-                     (b-t/byte-copy! buffer prefix-count bs)
-                     buffer)
-                   bs)
-          object-length (b-t/uint16-unpack actual)]
-      (let [next-object
-            (if (<= object-length (+ 2 buffer-size))
-              (let [next-object-bytes (b-t/sub-byte-array actual 2 (+ 2 object-length))]
-                (edn/read-string (b-t/->string next-object-bytes)))
-              nil)]
-        (let [slice-of-bs (if next-object
-                            (b-t/sub-byte-array actual (+ 2 object-length))
-                            actual)]
-          {::next-object next-object
-           ::state (-> state
-                       (assoc ::prefix slice-of-bs)
-                       (update ::count inc))})))
-    ;; Getting an EOF in the middle of the stream shouldn't
-    ;; really be possible, but it would be annoying.
-    ;; (i.e. if ::state has a ::prefix)
-    ;; TODO: Warn about that scenario
-    {::next-object bs
-     ::state state}))
+    (let [decoded (strm/try-take! decode-sink 10)]
+      (strm/put! decode-src bs)
+      (deref decoded 5 false))
+    bs))
 
 (defn server-mock-child
-  [server-atom state-atom chzbrgr-length bs]
+  [server-atom state-atom decode-src decode-sink chzbrgr-length bs]
   (let [prelog (utils/pre-log "Server's child callback")
         _ (log/debug prelog "Message arrived at server's child")
-        ;; Hopefully, sticking encode-to-stream in the middle of
-        ;; the mock networking layer will allow this to just
-        ;; go back to working magically again
-        incoming (if-not (keyword? bs)
-                   (io/decode protocol bs)
-                   bs)]
-    (when incoming
-      (log/debug prelog
-                 (str "Matching '" incoming
-                      "', a " (class incoming)))
-      (let [rsp (condp = incoming
-                  ::ohai! ::orly?
-                  ::yarly ::kk
-                  ::icanhazchzbrgr? ::kk
-                  ::kthxbai ::kk
-                  ::specs/normal ::specs/normal)]
-        (log/info prelog
-                  "Server received"
-                  incoming
-                  "\nwhich triggers"
-                  rsp)
-        (if (not= rsp ::specs/normal)
-          (buffer-response! @server-atom
-                            prelog
-                            rsp
-                            "Message buffered to child"
-                            "Giving up on forwarding to child"
-                            {::response rsp
-                             ::request incoming})
-          (message/child-close! @server-atom))
-        (when (= incoming ::icanhazchzbrgr?)
-          ;; One of the main points is that this doesn't need to be a lock-step
-          ;; request/response.
-          (log/info prelog "Client requested chzbrgr. Send out of lock-step")
-          (let [chzbrgr (byte-array (range chzbrgr-length))]
+        incoming (decode-bytes->child decode-src decode-sink bs)]
+    (if incoming
+      (do
+        (log/debug prelog
+                   (str "Matching '" incoming
+                        "', a " (class incoming)))
+        (let [rsp (condp = incoming
+                    ::ohai! ::orly?
+                    ::yarly ::kk
+                    ::icanhazchzbrgr? ::kk
+                    ::kthxbai ::kk
+                    ::specs/normal ::specs/normal)]
+          (log/info prelog
+                    "Server received"
+                    incoming
+                    "\nwhich triggers"
+                    rsp)
+          (if (not= rsp ::specs/normal)
             (buffer-response! @server-atom
                               prelog
-                              chzbrgr
-                              "Buffered chzbrgr to child"
-                              "Giving up on sending chzbrgr"
-                              {})))))))
+                              rsp
+                              "Message buffered to child"
+                              "Giving up on forwarding to child"
+                              {::response rsp
+                               ::request incoming})
+            (message/child-close! @server-atom))
+          (when (= incoming ::icanhazchzbrgr?)
+            ;; One of the main points is that this doesn't need to be a lock-step
+            ;; request/response.
+            (log/info prelog "Client requested chzbrgr. Send out of lock-step")
+            ;; Only 3 messages are arriving at the client.
+            ;; This almost definitely means that the chzbrgr is the problem.
+            ;; Trying to send a raw byte-array here definitely does not work.
+            ;; Sending the lazy seq that range produces seems like a bad idea.
+            ;; Sending a vec like this doesn't help.
+            ;; Note that, whatever I *do* send here, the client needs to
+            ;; be updated to expect that type.
+            (let [chzbrgr (vec (range chzbrgr-length))]
+              (buffer-response! @server-atom
+                                prelog
+                                chzbrgr
+                                "Buffered chzbrgr to child"
+                                "Giving up on sending chzbrgr"
+                                {})))))
+      (log/debug prelog
+                 "Partial message in"
+                 bs))))
 
 (defn mock-client-child
-  [client-atom client-state succeeded? chzbrgr-length bs]
+  [client-atom client-state decode-src decode-sink succeeded? chzbrgr-length bs]
   (let [prelog (utils/pre-log "Handshake Client: child callback")
         _ (log/debug prelog "Message arrived at client's child")
-        incoming (if-not (keyword? bs)
-                   (io/decode protocol bs)
-                   bs)]
+        incoming (decode-bytes->child decode-src decode-sink bs)]
     (is bs)
     (is (< 0 (count bs)))
     (log/info prelog
@@ -232,7 +206,7 @@
                   ;; TODO: don't rely on that.
                   ;; It really would be more efficient for the other
                   ;; side to batch up the ACK and this response
-                  (is (b-t/bytes= incoming (byte-array (range chzbrgr-length))))
+                  (is (b-t/bytes= incoming (range chzbrgr-length)))
                   ::kthxbai)
               4 (do
                   (is (= incoming ::kk))
@@ -268,6 +242,22 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Tests
 
+(deftest check-decoder
+  ;; Tests for checking my testing code seems like a really bad sign.
+  ;; Then again, this really is an integration test. It's covering
+  ;; a *lot* of functionality.
+  ;; And I've made it extra-complicated by refusing to consider
+  ;; adding serialization by default.
+  (let [s (strm/stream)
+        xfrm-node (decoder s)
+        msg ::message
+        msg-frames (io/encode protocol msg)]
+    (is (= 2 (count msg-frames)))
+    (doseq [frame msg-frames]
+      (strm/put! s frame))
+    (let [outcome (strm/try-take! xfrm-node ::drained 40 ::timed-out)]
+      (is (= msg (deref outcome 10 ::time-out-2))))))
+
 (deftest handshake
   (let [prelog (utils/pre-log "Handshake test")]
     (log/info prelog
@@ -292,15 +282,27 @@
           ;; I was trying to figure out ways to gen the tests based upon
           ;; a protocol defined by something like spec.
           chzbrgr-length 182
+          clnt-decode-src (strm/stream)
+          clnt-decode-sink (decoder clnt-decode-src)
           client-child-cb (partial mock-client-child
                                    client-atom
                                    client-state
+                                   clnt-decode-src
+                                   clnt-decode-sink
                                    succeeded?
                                    chzbrgr-length)
 
           server-atom (atom nil)
           server-state-atom (atom {::prefix nil
                                    ::count 0})
+          ;; Note that any realistic server would actually need 1
+          ;; decoder per connected client.
+          ;; Then again, the server really should wind up with 1 messaging
+          ;; ioloop per client, so this is more realistic than it might
+          ;; seem at first.
+          ;; At least, that's really the reference implementation's design.
+          srvr-decode-src (strm/stream)
+          srvr-decode-sink (decoder srvr-decode-src)
           server-parent-cb (fn [bs]
                              (log/info (utils/pre-log "Server's parent callback")
                                        "Sending a" (class bs) "to server's parent")
@@ -309,6 +311,8 @@
           server-child-cb (partial server-mock-child
                                    server-atom
                                    server-state-atom
+                                   srvr-decode-src
+                                   srvr-decode-sink
                                    chzbrgr-length)]
       (dfrd/on-realized succeeded?
                         (fn [good]
@@ -330,24 +334,21 @@
 
         (try
           (strm/consume (partial client->srvr-consumer server-io time-out succeeded?)
-                        (strm/map #(io/encode protocol %) client->server))
+                        client->server)
           (strm/consume (partial srvr->client-consumer client-io time-out succeeded?)
-                        (strm/map #(io/encode protocol %) server->client))
+                        server->client)
 
-          (let [initial-message (Unpooled/buffer K/k-1)
-                helo (.getBytes (pr-str ::ohai!))]
+          (let [initial-message (Unpooled/buffer K/k-1)]
             ;; Kick off the exchange
-            (m-t/try-multiple-sends message/child->!
-                                    prelog
-                                    5
-                                    client-io
-                                    helo
-                                    "HELO sent"
-                                    "Sending HELO failed"
-                                    {})
+            (buffer-response! client-io
+                              prelog
+                              ::ohai!
+                              "Sequence Initiated"
+                              "Handshake initiation failed"
+                              {})
             ;; TODO: Find a reasonable value for this timeout
             (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
-              (log/info "handshake-test run through. Need to see what happened")
+              (log/info prelog "handshake-test run through. Need to see what happened")
               (let [client-message-state (message/get-state client-io time-out ::timed-out)]
                 (when (or (= client-message-state ::timed-out)
                           (instance? Throwable client-state)

@@ -910,7 +910,8 @@
       :as outgoing} ::specs/outgoing
      :as opts}]
    (let [prelog (utils/pre-log human-name)]
-     (log/debug "Building state for initial loop based around options:\n"
+     (log/debug prelog
+                "Building state for initial loop based around options:\n"
                 (utils/pretty opts)
                 "Specifically, that translated into these overrides:\n"
                 (utils/pretty {::->child-size pipe-to-child-size
@@ -1034,73 +1035,74 @@
    ;; It wouldn't be bad to write, but it doesn't seem worthwhile
    ;; just now.
    child-cb]
-  (log/debug "Starting an I/O loop.\nSize of pipe from child:"
-             pipe-from-child-size
-             "\nSize of pipe to child:"
-             pipe-to-child-size)
-  (let [;; TODO: Need to tune and monitor this execution pool
-        ;; c.f. ztellman's dirigiste
-        ;; For starters, I probably at least want the option to
-        ;; use an instrumented executor.
-        ;; Actually, that should probably be the default.
-        executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
-        s (strm/stream)
-        s (strm/onto executor s)
-        ;; Q: Is there any meaningful difference between
-        ;; using PipedIn-/Out-putStream pairs vs ByteArrayIn-/Out-putStreams?
-        from-child (PipedOutputStream.)
-        ;; Note that this really doesn't match up with reference
-        ;; implementation.
-        ;; This is more like the size of the buffer in the pipe
-        ;; from the child to this buffering process.
-        ;; Which is something that's baked into the operating
-        ;; system...it seems like it's somewhere in the vicinity
-        ;; of 16K.
-        ;; This is *totally* distinct from our send-buf-size,
-        ;; which is really all about the outgoing bytes we have pending,
-        ;; either in the un-ackd or un-sent queues.
-        ;; Still, this is a starting point.
-        child-out (PipedInputStream. from-child pipe-from-child-size)
-        to-child (PipedOutputStream.)
-        ;; This has the same caveats as the buffer size for
-        ;; child-out, except that I'm just picking a named
-        ;; constant that's in the same general vicinity as
-        ;; the size the reference implementation uses for
-        ;; the message buffer. I think that's where he
-        ;; stashes those.
-        child-in (PipedInputStream. to-child pipe-to-child-size)
-        ;; If I go with this approach, it seems like
-        ;; I really need similar pairs for writing data
-        ;; back out.
-        io-handle {::specs/->child child-cb
-                   ::specs/->parent parent-cb
-                   ;; This next piece really doesn't make
-                   ;; any sense, at this stage of the game.
-                   ;; For the first pass, the child should
-                   ;; read from child-in as fast as possible.
-                   ;; I can add a higher-level wrapper around
-                   ;; that later with this kind of callback
-                   ;; interface.
-                   ;; On one hand, having a higher level
-                   ;; abstraction like this hides an implementation
-                   ;; detail and seems a little nicer to not need
-                   ;; to implement yourself.
-                   ;; On the other, how many people would prefer
-                   ;; to just use the raw stream directly?
-                   ::specs/from-child from-child
-                   ::specs/child-out child-out
-                   ::specs/pipe-from-child-size pipe-from-child-size
-                   ::specs/to-child to-child
-                   ::specs/child-in child-in
-                   ::specs/executor executor
-                   ::specs/message-loop-name message-loop-name
-                   ::specs/stream s}]
-    (start-event-loops! io-handle state)
-    (log/info (utils/pre-log message-loop-name)
-              (cl-format nil
-                         "Started an event loop:\n~a"
-                   s))
-    io-handle))
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/debug "Starting an I/O loop.\nSize of pipe from child:"
+               pipe-from-child-size
+               "\nSize of pipe to child:"
+               pipe-to-child-size)
+    (let [;; TODO: Need to tune and monitor this execution pool
+          ;; c.f. ztellman's dirigiste
+          ;; For starters, I probably at least want the option to
+          ;; use an instrumented executor.
+          ;; Actually, that should probably be the default.
+          executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
+          s (strm/stream)
+          s (strm/onto executor s)
+          ;; Q: Is there any meaningful difference between
+          ;; using PipedIn-/Out-putStream pairs vs ByteArrayIn-/Out-putStreams?
+          from-child (PipedOutputStream.)
+          ;; Note that this really doesn't match up with reference
+          ;; implementation.
+          ;; This is more like the size of the buffer in the pipe
+          ;; from the child to this buffering process.
+          ;; Which is something that's baked into the operating
+          ;; system...it seems like it's somewhere in the vicinity
+          ;; of 16K.
+          ;; This is *totally* distinct from our send-buf-size,
+          ;; which is really all about the outgoing bytes we have pending,
+          ;; either in the un-ackd or un-sent queues.
+          ;; Still, this is a starting point.
+          child-out (PipedInputStream. from-child pipe-from-child-size)
+          to-child (PipedOutputStream.)
+          ;; This has the same caveats as the buffer size for
+          ;; child-out, except that I'm just picking a named
+          ;; constant that's in the same general vicinity as
+          ;; the size the reference implementation uses for
+          ;; the message buffer. I think that's where he
+          ;; stashes those.
+          child-in (PipedInputStream. to-child pipe-to-child-size)
+          ;; If I go with this approach, it seems like
+          ;; I really need similar pairs for writing data
+          ;; back out.
+          io-handle {::specs/->child child-cb
+                     ::specs/->parent parent-cb
+                     ;; This next piece really doesn't make
+                     ;; any sense, at this stage of the game.
+                     ;; For the first pass, the child should
+                     ;; read from child-in as fast as possible.
+                     ;; I can add a higher-level wrapper around
+                     ;; that later with this kind of callback
+                     ;; interface.
+                     ;; On one hand, having a higher level
+                     ;; abstraction like this hides an implementation
+                     ;; detail and seems a little nicer to not need
+                     ;; to implement yourself.
+                     ;; On the other, how many people would prefer
+                     ;; to just use the raw stream directly?
+                     ::specs/from-child from-child
+                     ::specs/child-out child-out
+                     ::specs/pipe-from-child-size pipe-from-child-size
+                     ::specs/to-child to-child
+                     ::specs/child-in child-in
+                     ::specs/executor executor
+                     ::specs/message-loop-name message-loop-name
+                     ::specs/stream s}]
+      (start-event-loops! io-handle state)
+      (log/info prelog
+                (cl-format nil
+                           "Started an event loop:\n~a"
+                           s))
+      io-handle)))
 
 (s/fdef halt!
         :args (s/cat :io-handle ::specs/io-handle)
