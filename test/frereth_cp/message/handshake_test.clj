@@ -101,8 +101,11 @@
 (comment
   (io/encode protocol ::test)
   (let [chzbrgr-length 182
-        frames (io/encode protocol (vec (range chzbrgr-length)))]
-    frames)
+        frames (io/encode protocol (range chzbrgr-length))
+        [length payload] frames
+        chzbrgr (byte-array (.getShort length))]
+    (.get payload chzbrgr)
+    (String. chzbrgr))
   )
 
 (defn decoder
@@ -160,7 +163,15 @@
             ;; Note that, whatever I *do* send here, the client needs to
             ;; be updated to expect that type.
             (let [chzbrgr (vec (range chzbrgr-length))]
-              ;; This is buffering 162 bytes. That seems wrong.
+              ;; This is buffering far more bytes than expected.
+              ;; That's because it's encoding an EDN string instead of
+              ;; the raw byte-array with which I started.
+              ;; (Can't just supply a byte-array because the other
+              ;; side doesn't have a reader override to decode that.
+              ;; And it wouldn't gain anything to add it, since it would
+              ;; still be the string representation of the numbers.
+              ;; That's annoying, but it should be good enough for
+              ;; purposes of this test.
               (buffer-response! @server-atom
                                 prelog
                                 chzbrgr
@@ -211,7 +222,7 @@
                   ;; TODO: don't rely on that.
                   ;; It really would be more efficient for the other
                   ;; side to batch up the ACK and this response
-                  (is (b-t/bytes= incoming (range chzbrgr-length)))
+                  (is (b-t/bytes= incoming (vec (range chzbrgr-length))))
                   ::kthxbai)
               4 (do
                   (is (= incoming ::kk))

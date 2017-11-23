@@ -363,7 +363,7 @@
                     (let [bs (byte-array (.readableBytes buf))]
                       (.readBytes buf bs)
                       (log/info pre-log
-                                "triggering child's callback with"
+                                "Signalling child's input loop with"
                                 (count bs)
                                 "bytes")
                       ;; Problems in the provided callback are
@@ -386,7 +386,7 @@
                       (try
                         ;; TODO: Switch back to
                         ;; using milliseconds here because it's supposedly
-                        ;; ~2x faster than nanoTime, and this resolution
+                        ;; *much* faster than nanoTime, and this resolution
                         ;; seems plenty granular
                         (let [start-time (System/nanoTime)]
                           ;; There's a major difference between this and
