@@ -552,7 +552,7 @@
         mid-time (System/nanoTime)
         un-ackd-count (count un-ackd-blocks)
         alt (cond-> default-next
-              (= want-ping ::specs/second-1) (do (+ recent (utils/seconds->nanos 1)))
+              (= want-ping ::specs/second-1) (+ recent (utils/seconds->nanos 1))
               (= want-ping ::specs/immediate) (min min-resend-time)
               ;; If the outgoing buffer is not full
               ;; And:
@@ -566,8 +566,9 @@
                      (if (not= ::specs/false send-eof)
                        (not send-eof-processed)
                        (< 0 un-sent-count)))) (min min-resend-time)
-              (and (not= un-ackd-count)
-                   (>= rtt-resend-time min-resend-time)) (min rtt-resend-time))
+              (and (not= 0 un-ackd-count)
+                   (>= rtt-resend-time
+                       min-resend-time)) (min rtt-resend-time))
         end-time (System/nanoTime)]
     (log/debug prelog "Scheduling considerations\n" log-message)
     (when-not (= actual-next alt)
