@@ -660,10 +660,10 @@ Line 608"
                    ;; We just have to have something.
                    ;; (This comment is because I have to keep remembering
                    ;; how truthiness works in C)
-                   (throw (ex-info "Missing the incoming message-id"
+                   (throw (ex-info (str log-prefix "Missing the incoming message-id")
                                    extracted)))
                  (when-let [ack-msg (prep-send-ack extracted msg-id)]
-                   (log/debug (str message-loop-name ": Have an ACK to send back"))
+                   (log/debug log-prefix (str "Have an ACK to send back"))
                    ;; since this is called for side-effects, ignore the
                    ;; return value.
                    ;; TODO: Place this in a buffer of side-effects that should

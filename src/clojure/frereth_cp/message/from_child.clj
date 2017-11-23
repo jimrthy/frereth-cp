@@ -270,6 +270,12 @@
                        (str buf-size
                             "-byte Block to add"))
             (build-individual-block buf)))]
+    ;; The main point to logging this is to correlate the
+    ;; incoming byte-array with the outgoing ByteBuf identifiers
+    (log/debug prelog (str "Prepping thunk for "
+                           array-o-bytes
+                           " baked into block description:\n"
+                           block))
     (fn [{{:keys [::specs/ackd-addr
                   ::specs/max-block-length
                   ::specs/strm-hwm
@@ -337,11 +343,16 @@
   (let [prelog (utils/pre-log message-loop-name)
         callback (build-byte-consumer message-loop-name array-o-bytes)]
     (log/debug prelog
-               "Received"
-               (if (bytes? array-o-bytes)
-                 (count array-o-bytes)
-                 array-o-bytes)
-               "bytes(?) from child. Trying to forward them to the main i/o loop")
+               (str
+                "Received "
+                (if (bytes? array-o-bytes)
+                  (count array-o-bytes)
+                  array-o-bytes)
+                " bytes(?) from child"
+                (if (bytes? array-o-bytes)
+                  (str " in " array-o-bytes)
+                  "")
+                ". Trying to forward them to the main i/o loop"))
     ;; Here's an annoying detail:
     ;; I *do* want to block here, at least for a while.
     ;; Then we do to get these bytes added to the
@@ -366,7 +377,8 @@
                           (fn [success]
                             (log/debug
                              (utils/pre-log message-loop-name)
-                             (str "Bytes from child successfully ("
+                             (str array-o-bytes
+                                  " from child successfully ("
                                   success
                                   ") posted to main i/o loop triggered from\n"
                                   prelog)))
@@ -374,7 +386,9 @@
                             (log/error
                              failure
                              (utils/pre-log message-loop-name)
-                             (str "Failed to add bytes ("
+                             (str "Failed to add bytes "
+                                  array-o-bytes
+                                  " ("
                                   failure
                                   ") from child to main i/o loop triggered from\n"
                                   prelog))))

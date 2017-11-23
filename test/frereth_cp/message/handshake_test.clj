@@ -72,7 +72,7 @@
 
 (defn client->srvr-consumer
   [server-io time-out succeeded? bs]
-  (let [prelog (utils/pre-log "server->client consumer")]
+  (let [prelog (utils/pre-log "client->server consumer")]
     (consumer server-io prelog time-out succeeded? bs)))
 
 (defn buffer-response!
@@ -99,7 +99,11 @@
                           {::failed-on frame
                            ::context prelog})))))))
 (comment
-  (io/encode protocol ::test))
+  (io/encode protocol ::test)
+  (let [chzbrgr-length 182
+        frames (io/encode protocol (vec (range chzbrgr-length)))]
+    frames)
+  )
 
 (defn decoder
   [src]
@@ -156,6 +160,7 @@
             ;; Note that, whatever I *do* send here, the client needs to
             ;; be updated to expect that type.
             (let [chzbrgr (vec (range chzbrgr-length))]
+              ;; This is buffering 162 bytes. That seems wrong.
               (buffer-response! @server-atom
                                 prelog
                                 chzbrgr

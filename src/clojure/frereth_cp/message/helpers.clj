@@ -69,6 +69,7 @@ Based on earliestblocktime_compute, in lines 138-153
 
   ;; This gets called right after we flag the blocks
   ;; that have been ACK'd
+  ;; TODO: Switch from remove to set/select
   (let [un-flagged (remove ::specs/ackd? un-acked-blocks)
         prelog (utils/pre-log message-loop-name)]
     (log/debug prelog
@@ -86,7 +87,8 @@ Based on earliestblocktime_compute, in lines 138-153
             ;; a set that's sorted by :time.
             ;; Probably can't, because un-flagged is a lazy seq
             ;; that could throw out that ordering.
-            ;; TODO: Switch from remove to set/select
+            ;; This seems to be working.
+            ;; TODO: Switch to this version
             likely-successor (-> un-flagged first ::specs/time)]
         (when (not= original likely-successor)
           (log/warn prelog

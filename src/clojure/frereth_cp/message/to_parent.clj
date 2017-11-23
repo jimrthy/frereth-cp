@@ -635,13 +635,17 @@
     (dfrd/on-realized succeeded?
                       (fn [succeeded]
                         (log/info (utils/pre-log message-loop-name)
-                                  (str "Bytes forwarded to parent, triggered by\n"
+                                  (str "Bytes in "
+                                       send-buf
+                                       "  forwarded to parent, triggered by\n"
                                        triggerer
                                        succeeded)))
                       (fn [failed]
                         (log/error failed
                                    (utils/pre-log message-loop-name)
-                                   (str "Failed to forward bytes to parent.\n"
+                                   (str "Failed to forward bytes in "
+                                        send-buf
+                                        " to parent.\n"
                                         "Probably don't care.\n"
                                         "Triggered by\n"
                                         triggerer))))))
@@ -686,7 +690,8 @@
                    ;; TODO: Fix the spec.
                    ;; That probably means switching the key name.
                    n
-                   "bytes to parent")
+                   "bytes to parent in"
+                   send-buf)
         ;; TODO: This is one of the side-effects that I really should
         ;; be accumulating rather than calling willy-nilly.
         (block->parent! message-loop-name ->parent send-buf)
