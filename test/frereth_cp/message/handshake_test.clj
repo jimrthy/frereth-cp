@@ -264,15 +264,44 @@
   ;; a *lot* of functionality.
   ;; And I've made it extra-complicated by refusing to consider
   ;; adding serialization by default.
-  (let [s (strm/stream)
-        xfrm-node (decoder s)
-        msg ::message
-        msg-frames (io/encode protocol msg)]
-    (is (= 2 (count msg-frames)))
-    (doseq [frame msg-frames]
-      (strm/put! s frame))
-    (let [outcome (strm/try-take! xfrm-node ::drained 40 ::timed-out)]
-      (is (= msg (deref outcome 10 ::time-out-2))))))
+  (try "Fundamental idea"
+    (let [s (strm/stream)
+          xfrm-node (decoder s)
+          msg ::message
+          msg-frames (io/encode protocol msg)]
+      (is (= 2 (count msg-frames)))
+      (doseq [frame msg-frames]
+        (strm/put! s frame))
+      (let [outcome (strm/try-take! xfrm-node ::drained 40 ::timed-out)]
+        (is (= msg (deref outcome 10 ::time-out-2))))))
+  (testing "Wrappers"
+    (let [decode-src (strm/stream)
+          decode-sink (decoder decode-src)
+          msg {::a 1
+               ::b 2
+               ::c #{3 4 5}}
+          frames (io/encode protocol msg)
+          binary-frames (reduce (fn [acc frame]
+                                  (let [n (- (.limit frame)
+                                             (.position frame))
+                                        result (byte-array n)]
+                                    (.get frame result)
+                                    (conj acc frame)))
+                                []
+                                frames)
+          decoded (map (partial decode-bytes->child
+                                decode-src
+                                decode-sink) binary-frames)]
+      (is (= 2 (count frames)))
+      (is (= 2 (count binary-frames)))
+      (is (= 2 (count decoded)))
+      (is (not (first decoded)))
+      ;; Current test implementation hinges on this.
+      ;; It doesn't work.
+      ;; Just glancing at the gloss source code,
+      ;; based on what I know about it, really
+      ;; seems as though this should work.
+      (is (= msg (second decoded))))))
 
 (deftest handshake
   (let [prelog (utils/pre-log "Handshake test")]
