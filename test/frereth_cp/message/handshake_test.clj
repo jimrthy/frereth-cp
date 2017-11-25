@@ -84,6 +84,7 @@
    error-message
    error-details]
   (let [frames (io/encode protocol message)]
+    (log/debug prelog "Ready to send" (count frames) "message frames")
     (doseq [frame frames]
       (let [array (if (.hasArray frame)
                     (.array frame)
@@ -93,11 +94,11 @@
         ;; Which is a totally different animal from a reference-counted ByteBuf
         ;; from netty.
         (comment (.release frame))
-        (when-not
-            (message/child->! io-handle array)
+        (if-not (message/child->! io-handle array)
           (throw (ex-info "Sending failed"
                           {::failed-on frame
-                           ::context prelog})))))))
+                           ::context prelog}))
+          (log/debug prelog (str (count array) "-byte frame sent")))))))
 (comment
   (io/encode protocol ::test)
   (let [chzbrgr-length 182
@@ -114,13 +115,20 @@
 
 (defn decode-bytes->child
   [decode-src decode-sink bs]
-  (comment (log/debug "Trying to decode" bs))
+  (comment) (log/debug (str "Trying to decode "
+                            (if-not (keyword? bs)
+                              (count bs)
+                              "")
+                            " bytes in ") bs)
   (if-not (keyword? bs)
-    (let [decoded (strm/try-take! decode-sink ::drained 10 false)]
-      (log/debug "Putting bytes into decoder")
-      (strm/put! decode-src bs)
-      (log/debug "Waiting for bytes to come out of decoder")
-      (deref decoded 10 false))
+    (do
+      (when (= 2 (count bs))
+        (log/debug (str "This is probably a prefix expecting "
+                        (b-t/uint16-unpack bs)
+                        " bytes")))
+      (let [decoded (strm/try-take! decode-sink ::drained 10 false)]
+        (strm/put! decode-src bs)
+        (deref decoded 10 false)))
     bs))
 
 (defn server-mock-child
@@ -188,6 +196,19 @@
   [client-atom client-state decode-src decode-sink succeeded? chzbrgr-length bs]
   (let [prelog (utils/pre-log "Handshake Client: child callback")
         _ (log/debug prelog "Message arrived at client's child")
+        ;; It looks as though buffering is to blame for this.
+        ;; The server is sending back the ::kk and the chzbrgr.
+        ;; In a message packet that looks bigger than I expect
+        ;; (even accounting for the fact that it's EDN rather than
+        ;; a "real" byte-array).
+        ;; I'm getting that big message here in state 2, extracting
+        ;; ::kk, and then doing nothing.
+        ;; I think I need another layer of indirection.
+        ;; This should stuff the incoming message frames into
+        ;; decode-src.
+        ;; And then I need the actual handler to either s/consume
+        ;; or s/map from decode-sink.
+        ;; TODO: Start back with this.
         incoming (decode-bytes->child decode-src decode-sink bs)]
     (is bs)
     (is (< 0 (count bs)))
@@ -196,7 +217,7 @@
                    @client-state
                    "\nreceived: "
                    incoming ", a " (class incoming)))
-    (when incoming
+    (if incoming
       (let [{n ::count} @client-state
             next-message
             (condp = n
@@ -255,7 +276,8 @@
                             next-message
                             "Buffered bytes from child"
                             "Giving up on sending message from child"
-                            {}))))))
+                            {})))
+      (log/debug prelog "No bytes decoded"))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Tests
@@ -271,11 +293,14 @@
           xfrm-node (decoder s)
           msg ::message
           msg-frames (io/encode protocol msg)]
-      (is (= 2 (count msg-frames)))
-      (doseq [frame msg-frames]
-        (strm/put! s frame))
-      (let [outcome (strm/try-take! xfrm-node ::drained 40 ::timed-out)]
-        (is (= msg (deref outcome 10 ::time-out-2))))))
+      (try
+        (is (= 2 (count msg-frames)))
+        (doseq [frame msg-frames]
+          (strm/put! s frame))
+        (let [outcome (strm/try-take! xfrm-node ::drained 40 ::timed-out)]
+          (is (= msg (deref outcome 10 ::time-out-2))))
+        (finally
+          (strm/close! s)))))
   (testing "Wrappers"
     (let [decode-src (strm/stream)
           decode-sink (decoder decode-src)
@@ -295,19 +320,22 @@
                                 decode-src
                                 decode-sink)
                        binary-frames)]
-      (dorun decoded)
-      (is (= 2 (count frames)))
-      (is (= 2 (count binary-frames)))
-      (is (= 2 (count decoded)))
-      (is (not (first decoded)))
-      ;; Current test implementation hinges on this.
-      ;; It doesn't work.
-      ;; Just glancing at the gloss source code,
-      ;; based on what I know about it, really
-      ;; seems as though this should work.
-      ;; TODO: Try just using the ByteBuffer.
-      ;; Or maybe a ByteBuf?
-      (is (= msg (second decoded))))))
+      (try
+        (dorun decoded)
+        (is (= 2 (count frames)))
+        (is (= 2 (count binary-frames)))
+        (is (= 2 (count decoded)))
+        (is (not (first decoded)))
+        ;; Current test implementation hinges on this.
+        ;; It doesn't work.
+        ;; Just glancing at the gloss source code,
+        ;; based on what I know about it, really
+        ;; seems as though this should work.
+        ;; TODO: Try just using the ByteBuffer.
+        ;; Or maybe a ByteBuf?
+        (is (= msg (second decoded)))
+        (finally
+          (strm/close! decode-src))))))
 
 (deftest handshake
   (let [prelog (utils/pre-log "Handshake test")]
@@ -332,6 +360,9 @@
           ;; Although this *does* take me back to the beginning, where
           ;; I was trying to figure out ways to gen the tests based upon
           ;; a protocol defined by something like spec.
+          ;; Note that doubling this would expand to at least 2 packets,
+          ;; since sending a raw byte-buffer really isn't an option.
+          ;; And it's silly to pretend that this is a unit test.
           chzbrgr-length 182
           clnt-decode-src (strm/stream)
           clnt-decode-sink (decoder clnt-decode-src)
@@ -427,6 +458,8 @@
                            ::count)))))
           (finally
             (log/info "Cleaning up")
+            (strm/close! clnt-decode-src)
+            (strm/close! srvr-decode-src)
             (try
               (message/halt! client-io)
               (catch Exception ex

@@ -430,8 +430,6 @@
       ;; DJB reuses the incoming message that we're preparing
       ;; to ACK, locked to 192 bytes.
       ;; Q: Is that worth the GC savings?
-      ;; Note that, if I switch to his approach, he did
-      ;; not bother to 0 out the rest of the message
       (let [response (byte-array 192)]
         ;; XXX: delay acknowledgments  --DJB
         ;; 0 ID for pure ACK (4 bytes)
@@ -485,9 +483,11 @@ Line 608"
         :ret ::specs/state)
 (defn flag-blocks-ackd-by-id
   "Reference implementation ignores these"
-  ;; And it's weird to have both this and the gap
-  ;; acknowledgment. Which, as written, still seems
-  ;; really wrong.
+  ;; Q: Should this go away?
+  ;; Only recognize the flag by address, which means
+  ;; that bytes reached the child.
+  ;; It probably doesn't make any meaningful difference, but
+  ;; that approach seems safer.
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing

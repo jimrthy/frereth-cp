@@ -90,7 +90,7 @@
        ;; Simplest scenario: we have bytes waiting to be consumed
        (let [bytes-to-read (min available-bytes max-to-read)
              bytes-read (byte-array (+ bytes-to-read prefix-gap))
-             _ (log/debug prelog "Reading" bytes-to-read "from child. Should not block")
+             _ (log/debug prelog "Reading" bytes-to-read bytes" from child. Should not block")
              n (.read child-out bytes-read prefix-gap bytes-to-read)]
          (log/debug prelog "Read" n "bytes")
          (if (not= n bytes-to-read)
