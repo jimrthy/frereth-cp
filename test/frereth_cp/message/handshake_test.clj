@@ -114,11 +114,13 @@
 
 (defn decode-bytes->child
   [decode-src decode-sink bs]
-  (log/debug "Trying to decode" bs)
+  (comment (log/debug "Trying to decode" bs))
   (if-not (keyword? bs)
-    (let [decoded (strm/try-take! decode-sink 10)]
+    (let [decoded (strm/try-take! decode-sink ::drained 10 false)]
+      (log/debug "Putting bytes into decoder")
       (strm/put! decode-src bs)
-      (deref decoded 5 false))
+      (log/debug "Waiting for bytes to come out of decoder")
+      (deref decoded 10 false))
     bs))
 
 (defn server-mock-child
@@ -286,12 +288,14 @@
                                              (.position frame))
                                         result (byte-array n)]
                                     (.get frame result)
-                                    (conj acc frame)))
+                                    (conj acc result)))
                                 []
                                 frames)
           decoded (map (partial decode-bytes->child
                                 decode-src
-                                decode-sink) binary-frames)]
+                                decode-sink)
+                       binary-frames)]
+      (dorun decoded)
       (is (= 2 (count frames)))
       (is (= 2 (count binary-frames)))
       (is (= 2 (count decoded)))
@@ -301,6 +305,8 @@
       ;; Just glancing at the gloss source code,
       ;; based on what I know about it, really
       ;; seems as though this should work.
+      ;; TODO: Try just using the ByteBuffer.
+      ;; Or maybe a ByteBuf?
       (is (= msg (second decoded))))))
 
 (deftest handshake
