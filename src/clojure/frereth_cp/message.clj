@@ -215,18 +215,6 @@
               "\nSent stream address:"
               strm-hwm)
     (deliver accepted? true)
-    ;; The scheduling rules change once the child
-    ;; sends EOF.
-    ;; This isn't happening.
-    ;; I'm fairly sure that my echo test is getting
-    ;; stuck waiting for an ACK for its initial
-    ;; message, so it never even tries to send
-    ;; the EOF.
-    ;; This seems like the most likely
-    ;; place to "modify" state when we get the signal
-    ;; so the outbound scheduler will know that it's
-    ;; time to just do its best to flush everything.
-    ;; That also seems a bit messy.
     (let [state' (callback state)]
       ;; TODO: check whether we can do output now.
       ;; It's pointless to call this if we just have
@@ -458,6 +446,10 @@
         ;; 3. Have we sent an un-ACK'd EOF?
         un-ackd-count (count un-ackd-blocks)
         un-sent-count(count un-sent-blocks)
+        ;; Strange things happen once EOF gets set. This goes into
+        ;; a much tighter loop, but we can't send messages that
+        ;; quickly.
+        ;; FIXME: Do a better job coordinating the scheduling.
         next-based-on-eof (if (and (< (+ un-ackd-count
                                          un-sent-count)
                                       K/max-outgoing-blocks)

@@ -587,7 +587,8 @@
   "Actually send the message block to the parent"
   ;; Corresponds to line 404 under the sendblock: label
   [message-loop-name
-   ->parent ^ByteBuf send-buf]
+   ->parent
+   ^bytes send-buf]
   {:pre [send-buf]}
   ;; Note that I've ditched the special offset+7
   ;; That kind of length calculation is just built
@@ -630,20 +631,24 @@
   ;; For now:
   ;; Try putting this inside a dfrd/future
   ;; TODO: Compare/contrast with using a regular future
-  (let [succeeded? (dfrd/future (->parent send-buf))
+  (let [size (count send-buf)
+        succeeded? (dfrd/future (->parent send-buf))
         triggerer (utils/pre-log message-loop-name)]
     (dfrd/on-realized succeeded?
                       (fn [succeeded]
                         (log/info (utils/pre-log message-loop-name)
-                                  (str "Bytes in "
+                                  (str size
+                                       " bytes in "
                                        send-buf
-                                       "  forwarded to parent, triggered by\n"
+                                       " forwarded to parent, triggered by\n"
                                        triggerer
                                        succeeded)))
                       (fn [failed]
                         (log/error failed
                                    (utils/pre-log message-loop-name)
-                                   (str "Failed to forward bytes in "
+                                   (str "Failed to forward "
+                                        size
+                                        " bytes in "
                                         send-buf
                                         " to parent.\n"
                                         "Probably don't care.\n"

@@ -245,7 +245,6 @@
               4 (do
                   (is (= incoming ::kk))
                   (log/info "Client child callback is done")
-                  (dfrd/success! succeeded? ::kthxbai)
                   (try
                     (message/child-close! @client-atom)
                     (catch RuntimeException ex
@@ -255,7 +254,14 @@
                       ;; and the stack trace.
                       (log/error ex "This really shouldn't pass")
                       (is (not ex))))
-                  nil))]
+                  nil)
+              5 (do
+                  ;; Actually, this isn't correct.
+                  ;; Once the other side sends an ACK for our
+                  ;; EOF, this should be done.
+                  (is (= incoming ::specs/normal))
+                  (log/info "Received server EOF")
+                  (dfrd/success! succeeded? ::kthxbai)))]
         (log/info prelog2
                   incoming
                   "from\n"
@@ -274,7 +280,7 @@
                             "Buffered bytes from child"
                             "Giving up on sending message from child"
                             {}))
-        (let [result (> 5 n)]
+        (let [result (> 6 n)]
           (log/debug prelog2 "returning" result)
           result))
       (log/error prelog "No bytes decoded. Shouldn't have gotten here"))))
@@ -396,6 +402,9 @@
           ;; At least, that's really the reference implementation's design.
           srvr-decode-src (strm/stream)
           srvr-decode-sink (decoder srvr-decode-src)
+          ;; Important note: In general, clients will not write these.
+          ;; These are really hooks for sending the bytes to the encryption
+          ;; layer.
           server-parent-cb (fn [bs]
                              (log/info (utils/pre-log "Server's parent callback")
                                        "Sending a" (class bs) "to server's parent")
