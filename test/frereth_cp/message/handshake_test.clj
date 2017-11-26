@@ -192,92 +192,89 @@
                  "Partial message in"
                  bs))))
 
-(defn mock-client-child
-  [client-atom client-state decode-src decode-sink succeeded? chzbrgr-length bs]
+(defn client-child-processor
+  "Process the messages queued by mock-client-child"
+  [client-atom client-state-atom succeeded? chzbrgr-length incoming]
+  (is incoming)
+  (is (or (keyword? incoming)
+          (< 0 (count incoming))))
   (let [prelog (utils/pre-log "Handshake Client: child callback")
-        _ (log/debug prelog "Message arrived at client's child")
-        ;; It looks as though buffering is to blame for this.
-        ;; The server is sending back the ::kk and the chzbrgr.
-        ;; In a message packet that looks bigger than I expect
-        ;; (even accounting for the fact that it's EDN rather than
-        ;; a "real" byte-array).
-        ;; I'm getting that big message here in state 2, extracting
-        ;; ::kk, and then doing nothing.
-        ;; I think I need another layer of indirection.
-        ;; This should stuff the incoming message frames into
-        ;; decode-src.
-        ;; And then I need the actual handler to either s/consume
-        ;; or s/map from decode-sink.
-        ;; TODO: Start back with this.
-        incoming (decode-bytes->child decode-src decode-sink bs)]
-    (is bs)
-    (is (< 0 (count bs)))
+        client-state @client-state-atom]
     (log/info prelog
               (str "Client State: "
-                   @client-state
+                   client-state
                    "\nreceived: "
                    incoming ", a " (class incoming)))
     (if incoming
-      (let [{n ::count} @client-state
-            next-message
-            (condp = n
-              0 (do
-                  (is (= incoming ::orly?))
-                  ::yarly)
-              1 (do
-                  (is (= incoming ::kk))
-                  ::icanhazchzbrgr?)
-              2 (do
-                  (is (= incoming ::kk))
-                  ;; This is the protocol-level ACK
-                  ;; (which is different than the CurveCP
-                  ;; ACK message) associated
-                  ;; with the chzbrgr request
-                  ;; No response to send for this
-                  nil)
-              3 (do
-                  ;; This is based around an implementation
-                  ;; detail that the message stream really consists
-                  ;; of either
-                  ;; a) the same byte array sent by the other side
-                  ;; b) several of those byte arrays, if the block
-                  ;; is too big to send all at once.
-                  ;; TODO: don't rely on that.
-                  ;; It really would be more efficient for the other
-                  ;; side to batch up the ACK and this response
-                  (is (b-t/bytes= incoming (vec (range chzbrgr-length))))
-                  ::kthxbai)
-              4 (do
-                  (is (= incoming ::kk))
-                  (log/info "Client child callback is done")
-                  (dfrd/success! succeeded? ::kthxbai)
-                  (try
-                    (message/child-close! @client-atom)
-                    (catch RuntimeException ex
-                      ;; CIDER doesn't realize that this is a failure.
-                      ;; I blame something screwy in the testing
-                      ;; harness. I *do* see this error message
-                      ;; and the stack trace.
-                      (log/error ex "This really shouldn't pass")
-                      (is (not ex))))
-                  nil))]
-        (log/info prelog
-                  incoming
-                  "triggered a response:"
-                  next-message)
-        ;; Hmm...I've wound up with a circular dependency
-        ;; on the io-handle again.
-        ;; Q: Is this a problem with my architecture, or just
-        ;; a testing artifact?
-        (when next-message
-          (swap! client-state update ::count inc)
-          (buffer-response! @client-atom
-                            prelog
-                            next-message
-                            "Buffered bytes from child"
-                            "Giving up on sending message from child"
-                            {})))
-      (log/debug prelog "No bytes decoded"))))
+      (let [result (dfrd/future
+                     (let [{n ::count} client-state
+                           next-message
+                           (condp = n
+                             0 (do
+                                 (is (= incoming ::orly?))
+                                 ::yarly)
+                             1 (do
+                                 (is (= incoming ::kk))
+                                 ::icanhazchzbrgr?)
+                             2 (do
+                                 (is (= incoming ::kk))
+                                 ;; This is the protocol-level ACK
+                                 ;; (which is different than the CurveCP
+                                 ;; ACK message) associated
+                                 ;; with the chzbrgr request
+                                 ;; No response to send for this
+                                 nil)
+                             3 (do
+                                 ;; This is based around an implementation
+                                 ;; detail that the message stream really consists
+                                 ;; of either
+                                 ;; a) the same byte array sent by the other side
+                                 ;; b) several of those byte arrays, if the block
+                                 ;; is too big to send all at once.
+                                 ;; TODO: don't rely on that.
+                                 ;; It really would be more efficient for the other
+                                 ;; side to batch up the ACK and this response
+                                 (is (b-t/bytes= incoming (vec (range chzbrgr-length))))
+                                 ::kthxbai)
+                             4 (do
+                                 (is (= incoming ::kk))
+                                 (log/info "Client child callback is done")
+                                 (dfrd/success! succeeded? ::kthxbai)
+                                 (try
+                                   (message/child-close! @client-atom)
+                                   (catch RuntimeException ex
+                                     ;; CIDER doesn't realize that this is a failure.
+                                     ;; I blame something screwy in the testing
+                                     ;; harness. I *do* see this error message
+                                     ;; and the stack trace.
+                                     (log/error ex "This really shouldn't pass")
+                                     (is (not ex))))
+                                 nil))]
+                       (log/info prelog
+                                 incoming
+                                 "triggered a response:"
+                                 next-message)
+                       (swap! client-state update ::count inc)
+                       ;; Hmm...I've wound up with a circular dependency
+                       ;; on the io-handle again.
+                       ;; Q: Is this a problem with my architecture, or just
+                       ;; a testing artifact?
+                       (when next-message
+                         (buffer-response! @client-atom
+                                           prelog
+                                           next-message
+                                           "Buffered bytes from child"
+                                           "Giving up on sending message from child"
+                                           {}))
+                       (<= 5 n)))])
+      (log/error prelog "No bytes decoded. Shouldn't have gotten here"))))
+
+(defn mock-client-child
+  "This is the callback for messages arriving from server"
+  [decode-src bs]
+  (let [prelog (utils/pre-log "Handshake Client: child callback")]
+    (log/debug prelog "Message arrived at client's child")
+    (strm/put! decode-src bs)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Tests
@@ -364,16 +361,22 @@
           ;; since sending a raw byte-buffer really isn't an option.
           ;; And it's silly to pretend that this is a unit test.
           chzbrgr-length 182
+          ;; For this implementation, it would make more sense to use
+          ;; strm/onto to put this onto an executor. I'm not doing so
+          ;; because tracking all the different threads that are involved
+          ;; is already annoying, and this test isn't about trying to
+          ;; maximize throughput/bandwidth/responsiveness.
+          ;; (My first run after switching to this approach stretches
+          ;; the callback out to around 23 ms, which is completely unacceptable)
           clnt-decode-src (strm/stream)
           clnt-decode-sink (decoder clnt-decode-src)
-          client-child-cb (partial mock-client-child
-                                   client-atom
-                                   client-state
-                                   clnt-decode-src
-                                   clnt-decode-sink
-                                   succeeded?
-                                   chzbrgr-length)
-
+          client-child-cb (partial mock-client-child clnt-decode-src)
+          client-child-processing (strm/consume-async (partial client-child-processor
+                                                               client-atom
+                                                               client-state
+                                                               succeeded?
+                                                               chzbrgr-length)
+                                                      clnt-decode-sink)
           server-atom (atom nil)
           server-state-atom (atom {::prefix nil
                                    ::count 0})
@@ -429,8 +432,11 @@
                               "Handshake initiation failed"
                               {})
             ;; TODO: Find a reasonable value for this timeout
-            (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
+            (let [really-succeeded? (deref succeeded? 10000 ::timed-out)
+                  child-finished? (deref client-child-processing 500 ::timed-out)]
               (log/info prelog "handshake-test run through. Need to see what happened")
+              (is (and child-finished?
+                       (not= ::timed-out child-finished?)))
               (let [client-message-state (message/get-state client-io time-out ::timed-out)]
                 (when (or (= client-message-state ::timed-out)
                           (instance? Throwable client-state)
