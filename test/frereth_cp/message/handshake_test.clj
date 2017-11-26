@@ -198,7 +198,7 @@
   (is incoming)
   (is (or (keyword? incoming)
           (< 0 (count incoming))))
-  (let [prelog (utils/pre-log "Handshake Client: child callback")
+  (let [prelog (utils/pre-log "Handshake Client: child process trigger")
         client-state @client-state-atom]
     (log/info prelog
               (str "Client State: "
@@ -207,7 +207,8 @@
                    incoming ", a " (class incoming)))
     (if incoming
       (let [result (dfrd/future
-                     (let [{n ::count} client-state
+                     (let [prelog2 (utils/pre-log "Handshake Client: child processor")
+                           {n ::count} client-state
                            next-message
                            (condp = n
                              0 (do
@@ -234,7 +235,8 @@
                                  ;; TODO: don't rely on that.
                                  ;; It really would be more efficient for the other
                                  ;; side to batch up the ACK and this response
-                                 (is (b-t/bytes= incoming (vec (range chzbrgr-length))))
+                                 (is (b-t/bytes= incoming
+                                                 (byte-array (vec (range chzbrgr-length)))))
                                  ::kthxbai)
                              4 (do
                                  (is (= incoming ::kk))
@@ -250,11 +252,13 @@
                                      (log/error ex "This really shouldn't pass")
                                      (is (not ex))))
                                  nil))]
-                       (log/info prelog
+                       (log/info prelog2
                                  incoming
+                                 "from\n"
+                                 prelog
                                  "triggered a response:"
                                  next-message)
-                       (swap! client-state update ::count inc)
+                       (swap! client-state-atom update ::count inc)
                        ;; Hmm...I've wound up with a circular dependency
                        ;; on the io-handle again.
                        ;; Q: Is this a problem with my architecture, or just
@@ -266,7 +270,9 @@
                                            "Buffered bytes from child"
                                            "Giving up on sending message from child"
                                            {}))
-                       (<= 5 n)))])
+                       (let [result (> 5 n)]
+                         (log/debug prelog2 "returning" result)
+                         result)))])
       (log/error prelog "No bytes decoded. Shouldn't have gotten here"))))
 
 (defn mock-client-child
