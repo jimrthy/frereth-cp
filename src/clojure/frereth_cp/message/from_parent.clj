@@ -146,24 +146,13 @@
       (log/debug prelog
                  (str "Setting up initial read from position "
                       starting-point
-                      ": " D' " bytes"))
-      (if (and (<= D K/k-1)
-               ;; In the reference implementation,
-               ;; len = 16 * (unsigned long long) messagelen[pos]
-               ;; (assigned at line 443)
-               ;; This next check looks like it really
-               ;; amounts to "have we read all the bytes
-               ;; in this block from the parent pipe?"
-               ;; It doesn't make a lot of sense in this
-               ;; approach
-               ;; Except that it's a sanity check on the
-               ;; extraction code.
-               (= D message-length))
+                      ": " D' " bytes/flags"))
+      (if (<= D K/k-1)
         ;; start-byte and stop-byte are really addresses in the
         ;; message stream
         (let [stop-byte (+ D start-byte)]
           (log/debug prelog
-                     "Start by processing ACK from"
+                     "Calculating ACK gaps from"
                      start-byte
                      "to"
                      ;; It looks like there's a 1-off error here.
@@ -198,7 +187,7 @@
           ;; we've passed along to the child.
           (when (<= stop-byte (+ receive-written K/recv-byte-buf-size))
             ;; 576-579: SF (StopFlag? deals w/ EOF)
-            (let [receive-eof (case SF
+            (let [receive-eof (condp = SF
                                 0 ::specs/false
                                 K/eof-normal ::specs/normal
                                 K/eof-error ::specs/error)
@@ -225,6 +214,7 @@
                  ::max-k max-k
                  ::delta-k delta-k
                  ::max-rcvd max-rcvd
+                 ::receive-eof receive-eof
                  ;; Yes, this might well be nil if there's no reason to "change"
                  ;; the "global state".
                  ;; This feels pretty hackish.
@@ -259,7 +249,8 @@
     (if calculated
       (let [{:keys [::delta-k
                     ::max-rcvd
-                    ::min-k]
+                    ::min-k
+                    ::receive-eof]
              overridden-recv-total-bytes ::receive-total-bytes
              ^Long max-k ::max-k} calculated]
         ;; There are at least a couple of curve balls in the air right here:
@@ -286,31 +277,35 @@
         ;;    in the original).
         ;;    It's cleared on line 630, after we've written the bytes to the
         ;;    child pipe.
-        ;; I'm fairly certain this is what that for loop amounts to
+        ;; I'm fairly certain that for loop amounts to:
 
         (if (not= 0 message-id)
-          (do
-            (-> state
-                (assoc-in [::specs/incoming ::specs/strm-hwm] (min max-rcvd
-                                                                   (+ strm-hwm delta-k)))
-                (update-in [::specs/incoming ::specs/receive-total-bytes]
-                           (fn [cur]
-                             ;; calculate-start-stop-bytes might have overriden for this
-                             ;; In the outer scope.
-                             (or overridden-recv-total-bytes
-                                 cur)))
-                (update-in [::specs/incoming ::specs/gap-buffer]
-                           assoc
-                           ;; These are the absolute stream positions
-                           ;; of the values that are left
-                           [(+ start-byte min-k) (+ start-byte max-k)]
-                           incoming-buf)))
+          (let [current-eof (get-in state [::specs/incoming ::specs/receive-eof])]
+            (update state
+                    ::specs/incoming
+                    (fn [cur]
+                      (cond-> cur
+                        (not= current-eof receive-eof) (assoc ::specs/receive-eof
+                                                              receive-eof)
+                        true (assoc ::specs/strm-hwm
+                                    (min max-rcvd
+                                         (+ strm-hwm delta-k)))
+                        ;; calculate-start-stop-bytes might have overriden for this
+                        ;; In the outer scope.
+                        overridden-recv-total-bytes (assoc ::specs/receive-total-bytes
+                                                           overridden-recv-total-bytes)
+                        true (update ::specs/gap-buffer
+                                     assoc
+                                     ;; These are the absolute stream positions
+                                     ;; of the values that are left
+                                     [(+ start-byte min-k) (+ start-byte max-k)]
+                                     incoming-buf)))))
           (do
             ;; This seems problematic, but that's because
             ;; it's easy to tangle up the outgoing vs. incoming buffers.
             ;; The ACK was for the sake of the un-ackd-blocks in
             ;; outgoing.
-            ;; The gap-buffer that we are *not* updating is about
+            ;; The gap-buffer that we are *not* updating is filled with
             ;; arriving messages that might have been dropped/misordered
             ;; due to UDP issues.
             (log/debug (utils/pre-log message-loop-name)
@@ -582,6 +577,8 @@ Line 608"
   lines 444-609"
   [io-handle
    {{^bytes parent->buffer ::specs/parent->buffer} ::specs/incoming
+    {original-eof ::specs/receive-eof
+     :as original-incoming} ::specs/incoming
     ;; It seems really strange to have anything that involves
     ;; the outgoing blocks in here.
     ;; But there's an excellent chance that the incoming message
@@ -589,7 +586,6 @@ Line 608"
     {:keys [::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing
     :keys [::specs/flow-control
-           ::specs/incoming
            ::specs/message-loop-name]
     :as state}]
   ;; Keep in mind that parent->buffer is an array of bytes that has
@@ -637,7 +633,8 @@ Line 608"
                 starting-hwm (get-in state [::specs/incoming ::specs/strm-hwm])
                 {:keys [::specs/flow-control
                         ::specs/outgoing]
-                 {:keys [::specs/strm-hwm]
+                 {:keys [::specs/receive-eof
+                         ::specs/strm-hwm]
                   :as incoming} ::specs/incoming
                  :as extracted} (extract-message! state packet)]
             (log/debug log-prefix
@@ -651,7 +648,8 @@ Line 608"
                        "\n\tFields:\n"
                        (keys extracted))
             ;; Q: Did fresh data arrive?
-            (if (not= starting-hwm strm-hwm)
+            (if (or (not= starting-hwm strm-hwm)
+                    (not= original-eof receive-eof))
               (or
                (let [msg-id (::specs/message-id packet)]
                  (log/debug log-prefix (str "ACK message-id " msg-id "?"))

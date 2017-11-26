@@ -4,6 +4,7 @@
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
+            [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))
