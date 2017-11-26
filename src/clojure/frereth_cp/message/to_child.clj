@@ -341,7 +341,7 @@
       (log/debug pre-log
                  "Have"
                  block-count
-                 "consolidated blocks ready to go to child")
+                 "consolidated block(s) ready to go to child")
       (if (< 0 block-count)
         ;; Q: If I have a ton of messages to deliver, do I really want to call the child
         ;; repeatedly right here and now?
