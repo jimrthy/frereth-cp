@@ -76,35 +76,33 @@
   (byte (- (bit-and n K/max-8-uint) K/max-8-int)))
 
 (defn possibly-2s-complement-8
-  "It seems ridiculous to need to do this
-Q: Is this valid? It seems overly simplistic.
+  "If an unsigned byte is greater than 127, it needs to be negated.
 
-According to wikipedia, I really need to do
-  (let [mask (pow 2 (dec Byte/SIZE))]
-    (+ (- (bit-and input mask))
-       (bit-and input (bit-not mask))))
+Thanks, java, for having a crippled numeric stack."
+  ;; It seems ridiculous to need to do this
+  ;; Q: Is this approach valid? It seems overly simplistic.
+  ;; According to wikipedia, I really need to do
+  ;; (let [mask (pow 2 (dec Byte/SIZE))]
+  ;;    (+ (- (bit-and input mask))
+  ;;       (bit-and input (bit-not mask))))
 
-Alternatively, it suggests just doing
-(-> n bit-not inc)
+  ;; Alternatively, it suggests just doing
+  ;; (-> n bit-not inc)
 
-TODO: Double check the math to verify that I
-really *am* doing one or the other.
+  ;; TODO: Double check the math to verify that I
+  ;; really *am* doing one or the other.
 
-And, realistically, this is a place where
-performance probably matters.
-
-OTOH, I'm only using it for coping with the nonce.
-  "
+  ;; And, realistically, this is a place where
+  ;; performance probably matters.
   [n]
+  {:pre [(nat-int? n)
+         (> 256 n)]}
   (try
     (byte (if (< n K/max-8-int)
             n
-            ;; Note that we do not want the negative
-            ;; equivalent, which is what this would do:
+            ;; This version just does not work.
             #_(-> n bit-not inc)
-            ;; That could problems when it converted 208
-            ;; to -208, which is still out of range.
-            (- n (inc K/max-8-int))))
+            (- n (inc K/max-8-uint))))
     (catch IllegalArgumentException ex
       (println "Failed to convert " n)
       (throw ex))))
@@ -192,6 +190,10 @@ So stick with this translation.
    (let [dst (byte-array 8)]
      (uint64-pack! dst 0 x)
      dst)))
+(comment
+  ;; There's a bug with this implementation.
+  ;; FIXME: Sort that out.
+  (vec (uint64-pack! 180)))
 
 ;; TODO: redo this as a macro to avoid the code
 ;; duplication.

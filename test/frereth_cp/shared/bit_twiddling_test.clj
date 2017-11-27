@@ -1,24 +1,32 @@
 (ns frereth-cp.shared.bit-twiddling-test
-  (:require [clojure.test :refer (deftest is testing)]
+  (:require [clojure.test :refer (are deftest is testing)]
             [frereth-cp.shared.bit-twiddling :as b-t]))
 
 (deftest complement-2s
-  (testing "positives"
-    (is (= 0 (b-t/possibly-2s-complement-8 0)))
-    (is (= 1 (b-t/possibly-2s-complement-8 1)))
-    (is (= 127 (b-t/possibly-2s-complement-8 0x7f))))
-  (testing "negatives"
-    (is (= -1 (b-t/possibly-2s-complement-8 0xff)))
-    (is (= -128 (b-t/possibly-2s-complement-8 0x80)))))
+  (are [x expected] (= expected (b-t/possibly-2s-complement-8 x))
+    0 0
+    1 1
+    0x7f 127
+    0xff -1
+    0x80 -128
+    ;; Q: Am I interpreting this correctly?
+    208 -48
+    180 -76))
 
 (deftest uncomplement-2s
-  (testing "positives"
-    (is (= 0 (b-t/possibly-2s-uncomplement-8 0)))
-    (is (= 1 (b-t/possibly-2s-uncomplement-8 1)))
-    (is (= 127 (b-t/possibly-2s-uncomplement-8 127))))
-  (testing "negatives"
-    (is (= 0xff (b-t/possibly-2s-uncomplement-8 -1)))
-    (is (= 0x80 (b-t/possibly-2s-uncomplement-8 -128)))))
+  (are [x expected] (= expected (b-t/possibly-2s-uncomplement-8 x))
+    0 0
+    1 1
+    127 127
+    -1 0xff
+    -128 0x80))
+
+(deftest byte-1-uint64-pack
+  ;; This is really just a circular truism.
+  ;; uint64-pack! is built around possibly-2s-complement-8.
+  (are [expected] (= (aget (b-t/uint64-pack! expected) 0)
+                     (b-t/possibly-2s-complement-8 expected))
+    1 127 128 180))
 
 (deftest known-uint64-pack-unpack
   (testing "This number has specifically caused problems"
