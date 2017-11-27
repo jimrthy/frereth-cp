@@ -90,7 +90,7 @@
        ;; Simplest scenario: we have bytes waiting to be consumed
        (let [bytes-to-read (min available-bytes max-to-read)
              bytes-read (byte-array (+ bytes-to-read prefix-gap))
-             _ (log/debug prelog "Reading" bytes-to-read bytes" from child. Should not block")
+             _ (log/debug prelog "Reading" bytes-to-read " byte(s) from child. Should not block")
              n (.read child-out bytes-read prefix-gap bytes-to-read)]
          (log/debug prelog "Read" n "bytes")
          (if (not= n bytes-to-read)
@@ -279,7 +279,8 @@
     (fn [{{:keys [::specs/ackd-addr
                   ::specs/max-block-length
                   ::specs/strm-hwm
-                  ::specs/un-sent-blocks]} ::specs/outgoing
+                  ::specs/un-sent-blocks]
+           :as outgoing} ::specs/outgoing
           :keys [::specs/message-loop-name]
           :as state}]
       (let [nested-prelog (utils/pre-log message-loop-name)
@@ -318,15 +319,34 @@
           ;; strm-hwm), we're done.
           ;; TODO: Revisit this.
           (throw (AssertionError. "End of stream")))
-        (let [result
-              (-> state
-                  (update-in [::specs/outgoing ::specs/un-sent-blocks]
-                             conj
-                             block)
-                  (update-in [::specs/outgoing ::specs/strm-hwm] + buf-size))]
-          (if eof?
-            (assoc-in result [::specs/outgoing ::specs/send-eof] array-o-bytes)
-            result))))))
+        (let [result (update state
+                             ::specs/outgoing
+                             (fn [cur]
+                               (log/debug (str nested-prelog
+                                               "Updating outgoing\n"
+                                               cur
+                                               "\nby addinging "
+                                               buf-size
+                                               " to "
+                                               strm-hwm))
+                               (let [result
+                                     (-> cur
+                                         (update ::specs/un-sent-blocks
+                                                 conj
+                                                 block)
+                                         (update ::specs/strm-hwm + buf-size))]
+                                 (if eof?
+                                   (assoc result
+                                          ::specs/send-eof array-o-bytes
+                                          ;; This seems redundant, since we're
+                                          ;; setting send-eof at the same time.
+                                          ;; TODO: Just eliminate this.
+                                          ;; Anything that checks for it can
+                                          ;; just check for (not= send-eof ::specs/false)
+                                          ;; instead.
+                                          ::specs/send-eof-processed true)
+                                   result))))]
+          result)))))
 
 (s/fdef forward-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name

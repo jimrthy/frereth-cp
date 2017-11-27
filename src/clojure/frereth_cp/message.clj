@@ -29,7 +29,7 @@
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
             [manifold.stream :as strm])
-  (:import [clojure.lang IDeref PersistentQueue]
+  (:import [clojure.lang ExceptionInfo IDeref PersistentQueue]
            [io.netty.buffer ByteBuf Unpooled]
            [java.io IOException PipedInputStream PipedOutputStream]
            java.util.concurrent.TimeoutException))
@@ -171,23 +171,36 @@
     ;; a resend.
     ;; Maybe in a future version.
 
-    ;; It doesn't make any sense to call this if
+    ;; It doesn't seem to make any sense to call this if
     ;; we were triggered by a message coming in from
     ;; the parent.
+
     ;; Even if there pending blocks are ready to
     ;; send, outgoing messages are throttled by
     ;; the flow-control logic.
+
     ;; Likewise, there isn't a lot of sense in
     ;; calling it from the child, due to the same
     ;; throttling issues.
+
     ;; This really only makes sense when the
     ;; timer triggers to let us know that it's
     ;; OK to send a new message.
+
     ;; *However*:
     ;; The timeout on that may completely change
     ;; when the child schedules another send,
     ;; or a message arrives from parent to
     ;; update the RTT.
+
+    ;; I've seen this happen: child sends two
+    ;; messages in quick succession. We refuse
+    ;; to send the second until the first gets
+    ;; an ACK. Once the ACK does arrive, then
+    ;; this can send the second without going
+    ;; through the scheduling process again.
+    ;; At the moment, that part's slow enough
+    ;; for this to be a noticeable win.
     (to-parent/maybe-send-block! io-handle
                                  (assoc state
                                         ::specs/recent
@@ -349,6 +362,11 @@
                   ;; i.e. Is it worth doing that at the top of the trigger
                   ;; functions instead?
                   (trigger-output io-handle state'))
+                (catch ExceptionInfo ex
+                  (log/error ex
+                             (str prelog
+                                  "Details:\n"
+                                  (utils/pretty (.getData ex)))))
                 (catch RuntimeException ex
                   (log/error ex
                              prelog
@@ -387,6 +405,9 @@
   ;; to resend an outbound block that hasn't been ACK'd yet.
   (trigger-output io-handle state))
 
+(s/fdef choose-next-scheduled-time
+        :args (s/cat :state ::specs/state)
+        :ret nat-int?)
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
             ::specs/rtt-timeout]} ::specs/flow-control
@@ -713,6 +734,12 @@
               ;; a great reason to not introduce a second
               ;; one for bytes travelling the other direction)
               state' (try (updater state)
+                          (catch ExceptionInfo ex
+                            (log/error ex
+                                       (str
+                                        prelog
+                                        "Running updater failed.\nDetails:\n"
+                                        (.getData ex))))
                           (catch RuntimeException ex
                             (log/error ex
                                        prelog
@@ -776,6 +803,10 @@
            ::specs/stream]
     :as io-handle}
    {:keys [::specs/recent]
+    {:keys [::specs/receive-eof
+            ::specs/receive-total-bytes
+            ::specs/receive-written]} ::specs/incoming
+    {:keys [::specs/send-eof-acked]} ::specs/outgoing
     :as state}]
   {:pre [recent]}
   (let [{{:keys [::specs/next-action]
@@ -787,7 +818,10 @@
                           "Top of scheduler at ~:d"
                           now))
     (if (not (strm/closed? stream))
-      (do
+      (if (and send-eof-acked
+               (not= receive-eof ::specs/false)
+               (= receive-written receive-total-bytes))
+        (log/warn prelog "Main ioloop is done. Exiting.")
         ;; TODO: add a debugging step that stores state and the
         ;; calculated time so I can just look at exactly what I have
         ;; when everything goes sideways
@@ -1029,7 +1063,8 @@
    ;; just now.
    child-cb]
   (let [prelog (utils/pre-log message-loop-name)]
-    (log/debug "Starting an I/O loop.\nSize of pipe from child:"
+    (log/debug prelog
+               "Starting an I/O loop.\nSize of pipe from child:"
                pipe-from-child-size
                "\nSize of pipe to child:"
                pipe-to-child-size)

@@ -509,6 +509,21 @@ Line 608"
           state
           ackd-blocks))
 
+(s/fdef cope-with-child-eof
+        :args (s/cat :state ::specs/state)
+        :ret ::specs/state)
+(defn cope-with-child-eof
+  "If the child's sent EOF, and all blocks have been sent/ACK'd, we're done"
+  [{{:keys [::specs/send-eof
+            ::specs/un-ackd-blocks
+            ::specs/un-sent-blocks]} ::specs/outgoing
+    :as state}]
+  (if (and (not= ::specs/normal send-eof)
+           (empty? un-ackd-blocks)
+           (empty? un-sent-blocks))
+    (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
+    state))
+
 (s/fdef handle-incoming-ack
         :args (s/cat :state ::specs/state
                      :packet ::specs/packet)
@@ -532,6 +547,7 @@ Line 608"
     ;; ACK pure ACKs
     (as-> (if (not= 0 acked-message)
             ;; Gaping open Q: Do I really want to do this?
+            ;; (the reference implementation absolutely does not)
             (let [ackd-blocks (filter #(= acked-message (::specs/message-id %))
                                       un-ackd-blocks)]
               (flag-blocks-ackd-by-id initial-state
@@ -550,20 +566,9 @@ Line 608"
                       (get-in state
                               [::specs/outgoing
                                ::specs/un-ackd-blocks])))
-      ;; Calling update-statistics breaks things. This version
-      ;; causes my event loop to time out when nothing else is happening
-      ;; when I try to query for the state
-      (help/drop-ackd! state)
-      (update-in state
-                 [::specs/outgoing ::specs/un-ackd-blocks]
-                 (fn [blocks]
-                   (reduce (fn [acc block]
-                             (log/debug log-prefix
-                                        "Dropping recently ACK'd"
-                                        block)
-                             (disj acc block))
-                           blocks
-                           (filter ::specs/ackd? blocks)))))))
+      (-> state
+          help/drop-ackd!
+          cope-with-child-eof))))
 
 (s/fdef handle-comprehensible-message!
         :args (s/cat :io-handle ::specs/io-handle
