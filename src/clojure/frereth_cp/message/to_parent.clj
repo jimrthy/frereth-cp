@@ -442,7 +442,7 @@
                               (count un-ackd-blocks)
                               earliest-time
                               n-sec-per-block
-                              rtt-timeout
+                              (int rtt-timeout)
                               recent))
         state))))
 

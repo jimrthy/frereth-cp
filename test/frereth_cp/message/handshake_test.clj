@@ -44,6 +44,14 @@
   ;; I/O loop.
   ;; Whatever happens here must return control
   ;; quickly.
+  ;; Note also that this really isn't something
+  ;; that clients should be writing.
+  ;; This is really just mocking out all the pieces
+  ;; that the parent handles (like encryption
+  ;; and network writes) to transmit to its peer.
+  ;; Then again, you *could* do something like
+  ;; this, to experiment with the unencrypted
+  ;; networking protocol.
   (log/info prelog "Message over network")
   ;; Checking for the server state is wasteful here.
   ;; And very dubious...depending on implementation details,
@@ -53,7 +61,10 @@
   ;; Actually, I'm a little surprised that this works at all.
   ;; And it definitely *has* had issues.
   ;; Q: But is it worth it for the test's sake?
+  ;; Better Q: Is this the sort of thing that will trip
+  ;; us up with surprising behavior if it doesn't work?
   (let [state (message/get-state io-handle time-out ::timed-out)]
+    (log/debug prelog "get-state returned:" state)
     (if (or (= ::timed-out state)
             (instance? Throwable state)
             (nil? state))
@@ -106,6 +117,8 @@
                            ::context prelog}))
           (log/debug prelog (str (count array) "-byte frame sent")))))))
 (comment
+  ;; Inline test for test-helper.
+  ;; This seems like a bad sign.
   (io/encode protocol ::test)
   (let [chzbrgr-length 182
         frames (io/encode protocol (range chzbrgr-length))

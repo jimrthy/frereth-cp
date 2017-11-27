@@ -264,7 +264,12 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
   ;; un-ackd-blocks to a sorted-map? (The trick there is
   ;; that I'd need to pick a key. start-pos seems pretty
   ;; obvious, but I don't have that readily available
-  ;; when I initially create the block)
+  ;; when I initially create the block).
+  ;; Q: What about the time? Since that's what I'm
+  ;; sorting by anyway.
+  ;; TODO: Worry about this later. I'm sure I have
+  ;; bigger bottlenecks that will show up once
+  ;; things run well enough to stick a profiler on it.
   (-> outgoing
       (update ::specs/un-ackd-blocks disj block)
       (update ::specs/un-ackd-blocks
@@ -274,6 +279,8 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                      true))))
 
 ;;; Q: Would these wrappers make more sense under shared/bit-twiddling?
+;;; A: Yes.
+;;; TODO: Almost definitely need to cope with 2s complements.
 
 (defn read-long
   [^ByteBuf bb]
