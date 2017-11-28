@@ -140,7 +140,7 @@
             base-expectations #:frereth-cp.message.from-parent {:min-k 0
                                                                 :max-k size
                                                                 :delta-k size
-                                                                :max-rcvd K/k-128
+                                                                :max-rcvd K/recv-byte-buf-size
                                                                 :receive-eof ::specs/false
                                                                 ;; This should remain nil until we receive
                                                                 ;; EOF.
@@ -181,7 +181,16 @@
           ;; So delta-k is 0.
           (try
             ;; Note that this test passes when (= 0 receive-written)
-            (let [state (assoc-in start-state [::specs/incoming ::specs/receive-written] (dec K/k-2))
+            (let [state (update start-state
+                                ::specs/incoming
+                                (fn [cur]
+                                  (assoc cur
+                                         ;; Let's pretend that that first 1K
+                                         ;; message has been received, but the
+                                         ;; second has not
+                                         ::specs/receive-written K/k-1
+                                         ::specs/contiguous-stream-count K/k-1
+                                         ::specs/strm-hwm (dec K/k-2))))
                   extracted (update start-state ::specs/incoming
                                     (fn [cur]
                                       (-> cur
@@ -189,9 +198,18 @@
                                           (assoc ::specs/gap-buffer {}))))
                   ack (from-parent/prep-send-ack extracted 1)
                   decoded-pkt (from-parent/deserialize human-name ack)
-                  expected' (assoc base-expectations
-                                   ::from-parent/max-k 0
-                                   ::from-parent/delta-k 0)
+                  expected' (-> base-expectations
+                                (assoc ::from-parent/max-k 0
+                                       ::from-parent/delta-k 0)
+                                ;; This is really based on receive-written.
+                                ;; Which provides a strong motivation for keeping
+                                ;; it distinct from contiguous-stream-count.
+                                ;; We don't want to buffer bytes that are too
+                                ;; far off before we've had a chance to close
+                                ;; the gap by writing them to the child.
+                                ;; Q: realistically, how far will these two ever
+                                ;; be able to deviate?
+                                (update ::from-parent/max-rcvd + K/k-1))
                   calculated'' (from-parent/calculate-start-stop-bytes state decoded-pkt)]
               (is (= expected' calculated'')))
             (catch NullPointerException ex

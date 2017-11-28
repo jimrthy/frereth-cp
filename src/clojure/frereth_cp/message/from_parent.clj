@@ -197,10 +197,12 @@
                                         stop-byte)]
               ;; 581-588: copy incoming into receivebuf
               (comment (throw (RuntimeException. "Setting receive-written has broken this")))
-              ;; Q: Am I setting it twice now?
-              (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
+              (let [gap-after-start (- receive-written start-byte)
+                    min-k (if (< 0 gap-after-start)
+                            0 gap-after-start)  ; drop bytes we've already written
                     ;; Address at the limit of our buffer size
                     max-rcvd (+ receive-written K/recv-byte-buf-size)
+                    ;; N.B.: D is a relative address.
                     ^Long max-k (min D (- max-rcvd start-byte))
                     delta-k (- max-k min-k)]
                 (assert (<= 0 max-k))
@@ -220,7 +222,7 @@
                  ::receive-eof receive-eof
                  ;; Yes, this might well be nil if there's no reason to "change"
                  ;; the "global state".
-                 ;; This feels pretty hackish.
+                 ;; This smells suspiciously tightly coupled.
                  ::receive-total-bytes receive-total-bytes}))))
         (do
           (log/warn prelog
@@ -423,6 +425,8 @@
                  (str "Building an ACK for message "
                       message-id
                       "\nup to address "
+                      ;; TODO: Honestly, receive-written would
+                      ;; be more accurate here.
                       contiguous-stream-count
                       "/"
                       strm-hwm))
