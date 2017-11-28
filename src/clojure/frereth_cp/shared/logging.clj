@@ -83,6 +83,9 @@
           (add-log-entry entries# ~'~tag-holder label# message#)))))
   (let [tag (keyword (str *ns*) (name level))]
     ;; The auto-gensymmed parameter names are obnoxious
+    ;; And largely irrelevant.
+    ;; This isn't the kind of macro that you nest inside
+    ;; other macros.
     `(defn ~level
        ([entries#
          label#

@@ -2,12 +2,12 @@
   (:require [clojure.edn :as edn]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (are deftest is testing)]
-            [clojure.tools.logging :as log]
             [frereth-cp.message :as message]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.message-test :as m-t]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
             [gloss.core :as gloss]
             [gloss.io :as io]
@@ -366,6 +366,8 @@
         (is (= msg (second decoded)))
         (finally
           (strm/close! decode-src))))))
+(comment (check-decoder)
+         )
 
 (deftest handshake
   (let [prelog (utils/pre-log "Handshake test")]
