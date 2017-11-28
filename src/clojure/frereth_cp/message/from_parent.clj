@@ -193,8 +193,11 @@
                                 K/eof-error ::specs/error)
                   ;; Note that this needs to update the "global state" because
                   ;; we've reached the end of the stream.
-                  receive-total-bytes (when receive-eof stop-byte)]
+                  receive-total-bytes (when (not= ::specs/false receive-eof)
+                                        stop-byte)]
               ;; 581-588: copy incoming into receivebuf
+              (comment (throw (RuntimeException. "Setting receive-written has broken this")))
+              ;; Q: Am I setting it twice now?
               (let [min-k (max 0 (- receive-written start-byte))  ; drop bytes we've already written
                     ;; Address at the limit of our buffer size
                     max-rcvd (+ receive-written K/recv-byte-buf-size)
@@ -390,9 +393,10 @@
     :keys [::specs/message-loop-name]
     :as state}
    message-id]
-  {:pre [message-id
-         (some? receive-eof)
-         receive-total-bytes
+  {:pre [contiguous-stream-count
+         message-id
+         receive-eof
+         (nat-int? receive-total-bytes)
          strm-hwm]}
   ;; XXX: incorporate selective acknowledgments --DJB
   ;; never acknowledge a pure acknowledgment --DJB

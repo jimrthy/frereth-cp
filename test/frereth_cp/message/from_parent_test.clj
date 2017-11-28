@@ -110,7 +110,7 @@
       ::specs/length size
       ::specs/send-eof send-eof}))
   ([^bytes src start-pos]
-   (build-message-block-description src 0 false))
+   (build-message-block-description src 0 ::specs/false))
   ([^bytes src]
    (build-message-block-description src 0)))
 
@@ -136,44 +136,67 @@
             ;; Just pick something arbitrary that's easy to identify.
             ;; Not that it matters for the purposes of this test.
             src (byte-array (take K/k-1 (repeat 3)))
-            dscr (build-message-block-description src)]
-        (let [^bytes pkt (to-parent/build-message-block-description human-name 1 dscr)
+            dscr (build-message-block-description src)
+            base-expectations #:frereth-cp.message.from-parent {:min-k 0
+                                                                :max-k size
+                                                                :delta-k size
+                                                                :max-rcvd K/k-128
+                                                                :receive-eof ::specs/false
+                                                                ;; This should remain nil until we receive
+                                                                ;; EOF.
+                                                                ;; TODO: Add a test step for that
+                                                                :receive-total-bytes nil}
+            ;; Rubber meets the road.
+            ;; receive-bytes is the "number of initial bytes fully received"
+            ;; receive-written is "within receivebytes, number of bytes given to child"
+            start-state {::specs/incoming #:frereth-cp.message.specs{:contiguous-stream-count 0
+                                                                     :receive-eof ::specs/false
+                                                                     :receive-total-bytes 0
+                                                                     :receive-written 0
+                                                                     :strm-hwm 0}
+                         ::specs/message-loop-name "from-parent-test/check-start-stop-calculation"}]
+        (let [^bytes pkt (to-parent/build-message-block-description human-name (assoc dscr ::specs/message-id 1))
               decoded-packet (from-parent/deserialize human-name pkt)
-              ;; Rubber meets the road.
-              ;; receive-bytes is the "number of initial bytes fully received"
-              ;; receive-written is "within receivebytes, number of bytes given to child"
-              start-state {::specs/incoming {::specs/receive-bytes 0
-                                             ::specs/receive-written 0}}
               calculated (from-parent/calculate-start-stop-bytes start-state decoded-packet)]
-          (is (= #:frereth-cp.message.from-parent {:min-k 0
-                                                   :max-k size
-                                                   :delta-k size
-                                                   :max-rcvd K/k-128
-                                                   ;; The value here depends on the
-                                                   ;; send-eof flag.
-                                                   :receive-total-bytes nil}
-                 calculated))
-          (testing " - 2"
-            (try
-              (let [size (dec K/k-1)
-                    src (byte-array (take size (repeat 49)))
-                    dscr (build-message-block-description src)
-                    ^bytes pkt (to-parent/build-message-block-description human-name 2 dscr)
-                    decoded-packet (from-parent/deserialize human-name pkt)
-                    state' (update-in start-state
-                                      [::specs/incoming
-                                       ::specs/receive-bytes]
-                                      +
-                                      (::from-parent/delta-k calculated))
-                    calculated' (from-parent/calculate-start-stop-bytes state' decoded-packet)]
-                (is (= #:frereth-cp.message.from-parent {:min-k 0
-                                                         :max-k size
-                                                         :delta-k size
-                                                         :max-rcvd K/k-128
-                                                         :receive-total-bytes nil}
-                       calculated')))
-              (catch NullPointerException ex
-                (is (not ex) "Setting up calculation")))))))))
+          (is (= base-expectations
+                 calculated)))
+        (testing " - 2"
+          (try
+            (let [size (dec K/k-1)
+                  src (byte-array (take size (repeat 49)))
+                  dscr (build-message-block-description src)
+                  ^bytes pkt (to-parent/build-message-block-description human-name (assoc dscr ::specs/message-id 2))
+                  decoded-packet (from-parent/deserialize human-name pkt)
+                  calculated' (from-parent/calculate-start-stop-bytes start-state decoded-packet)
+                  expected' (assoc base-expectations
+                                   ::from-parent/max-k size
+                                   ::from-parent/delta-k size)]
+              (is (= expected'
+                     calculated')))
+            (catch NullPointerException ex
+              (log/error ex "Step 2")
+              (is (not ex) "Setting up calculation"))))
+        (testing " - ACK"
+          ;; Main point here: there aren't any bytes to read.
+          ;; So delta-k is 0.
+          (try
+            ;; Note that this test passes when (= 0 receive-written)
+            (let [state (assoc-in start-state [::specs/incoming ::specs/receive-written] (dec K/k-2))
+                  extracted (update start-state ::specs/incoming
+                                    (fn [cur]
+                                      (-> cur
+                                          (assoc ::specs/receive-written 42)
+                                          (assoc ::specs/gap-buffer {}))))
+                  ack (from-parent/prep-send-ack extracted 1)
+                  decoded-pkt (from-parent/deserialize human-name ack)
+                  expected' (assoc base-expectations
+                                   ::from-parent/max-k 0
+                                   ::from-parent/delta-k 0)
+                  calculated'' (from-parent/calculate-start-stop-bytes state decoded-pkt)]
+              (is (= expected' calculated'')))
+            (catch NullPointerException ex
+              (is (not ex) "Setting up ACK calculation"))))))))
+(comment (check-start-stop-calculation))
 
 (deftest start-with-gap
   (testing "with a gap"

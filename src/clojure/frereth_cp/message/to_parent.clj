@@ -67,8 +67,7 @@
 
 (s/fdef build-message-block-description
         :args (s/cat :message-loop-name ::specs/message-loop-name
-                     :next-message-id ::specs/next-message-id
-                     :block-to-send ::specs/block)
+                     :block-description ::specs/block)
         :ret bytes?)
 (defn build-message-block-description
   ^ByteBuf [message-loop-name

@@ -236,6 +236,18 @@
 ;; without gaps.
 ;; Actually, this is probably the real point
 ;; behind receivebytes in the original.
+;; Note that there *is* an important, albeit
+;; subtle, distinction, between this and
+;; ::receive-written.
+;; This gets updated when the gap-buffer
+;; that's ready to write to the child has its
+;; holes filled.
+;; That gets updated when the bytes are written
+;; to the pipe that connects to the child's callback.
+;; Q: Is this distinction worth the confusion?
+;; At the very least, it seems like it would reduce
+;; that to shove this, ::receive-written, and
+;; ::strm-hwm into another nested map.
 (s/def ::contiguous-stream-count nat-int?)
 
 ;; For a gap-buffer entry, what is the starting address?

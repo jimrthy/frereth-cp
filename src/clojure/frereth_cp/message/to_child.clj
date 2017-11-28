@@ -277,6 +277,12 @@
                 "Signalling child's input loop with"
                 n
                 "bytes")
+      ;; This wall of comments and the associated
+      ;; timing check aren't exactly rotten, but the actual
+      ;; callback that provokes them has moved into its
+      ;; own personal ioloop.
+      ;; TODO: Synchronize these.
+
       ;; Problems in the provided callback are
       ;; very different than problems at this level.
       ;; The former should probably fail immediately.
@@ -339,6 +345,12 @@
            ;; instead?
            [::specs/incoming ::specs/->child-buffer]
            (comp vec rest))
+          ;; Actually, if this tracks the bytes that were
+          ;; really and truly sent to the child, this shouldn't
+          ;; update until that callback returns inside that child's
+          ;; private ioloop.
+          ;; That gets quite a bit more finicky.
+          ;; TODO: Consider my options.
           (update-in [::specs/incoming ::specs/receive-written] + n)))
     (catch RuntimeException ex
       ;; Reference implementation specifically copes with
