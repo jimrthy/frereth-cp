@@ -13,6 +13,10 @@
 
 (set! *warn-on-reflection* true)
 
+(defn jvm-version
+  []
+  (System/getProperty "java.runtime.version"))
+
 (defn pre-log
   [human-name]
   (pprint/cl-format nil
