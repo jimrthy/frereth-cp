@@ -3,13 +3,23 @@
 
 (set-env! :resource-paths #{"src/clojure"}
           :dependencies '[[adzerk/boot-test "RELEASE" :scope "test"]
+                          ;; This uses a version of netty that's about 6 months
+                          ;; old.
+                          ;; That might not be a huge deal...but there have been
+                          ;; 6 bug fix releases since then.
+                          ;; TODO: Switch to newer version and see how it works.
+                          ;; (The current version includes an exception that has
+                          ;; started showing up when I allocate an uninitialized
+                          ;; unpooled buffer. I don't know why I haven't seen
+                          ;; this before. According to the github issue, it's
+                          ;; harmless).
                           [aleph "0.4.4" :exclusions [org.clojure/tools.logging]]
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
                           ;; users
-                          [org.apache.logging.log4j/log4j-core "2.9.1" :scope "test"]
-                          [org.apache.logging.log4j/log4j-1.2-api "2.9.1" :scope "test"]
-                          [org.clojure/clojure "1.9.0-RC1"]
+                          [org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
+                          [org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
+                          [org.clojure/clojure "1.9.0-RC2"]
                           [org.clojure/spec.alpha "0.1.143"]
                           [org.clojure/test.check "0.10.0-alpha2" :scope "test" :exclusions [org.clojure/clojure]]
                           ;; TODO: Eliminate this dependency. It's another one
@@ -68,7 +78,13 @@
 
 (deftask testing
   []
-  (merge-env! :dependencies '[[gloss "0.2.6" :scope "test"]]
+  (merge-env! :dependencies '[[gloss "0.2.6"
+                               :scope "test"
+                               :exclusions [byte-streams
+                                            io.aleph/dirigiste
+                                            manifold
+                                            org.clojure/tools.logging
+                                            riddley]]]
               :source-paths #{"test"})
   identity)
 
