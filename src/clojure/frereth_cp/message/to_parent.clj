@@ -441,7 +441,7 @@
                               (count un-ackd-blocks)
                               earliest-time
                               n-sec-per-block
-                              (int rtt-timeout)
+                              (long rtt-timeout)
                               recent))
         state))))
 
@@ -461,14 +461,20 @@
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
+  ;; Centered around lines 358-361
+  ;; It seems crazy that 3 lines of C expand to this much
+  ;; code. But that's what happens when you add error
+  ;; handling and logging.
   #_{:pre [strm-hwm]}
   (when-not strm-hwm
     (throw (ex-info "Missing strm-hwm"
                     {::among (keys outgoing)
                      ::have strm-hwm
                      ::details outgoing})))
-  (let [result
-        (and (>= recent (+ earliest-time n-sec-per-block))
+  (let [earliest-send-time (+ earliest-time n-sec-per-block)
+        un-ackd-count (count un-ackd-blocks)
+        result
+        (and (>= recent earliest-send-time)
              ;; If we have too many outgoing blocks being
              ;; tracked, don't put more in flight.
              ;; There's obviously something going wrong
@@ -479,7 +485,7 @@
              ;; would guarantee that none of them ever get sent.
              ;; So only consider the ones that have already
              ;; been put on the wire.
-             (< (count un-ackd-blocks) K/max-outgoing-blocks)
+             (< un-ackd-count K/max-outgoing-blocks)
              (or (not= ::specs/false want-ping)
                  ;; This next style clause is used several times in
                  ;; the reference implementation.
@@ -487,10 +493,15 @@
                  ;; it's really a not
                  ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
                  ;; C programmers have assured me that it translates into
-                 (if (not= ::specs/false send-eof)
-                   (not send-eof-processed)
-                   (or (< 0 (count un-ackd-blocks))
-                       (< 0 (count un-sent-blocks))))))]
+                 (if (= ::specs/false send-eof)
+                   (or (< 0 un-ackd-count)
+                       (< 0 (count un-sent-blocks)))
+                   ;; I think my handshake test is broken now because of this:
+                   ;; I'm setting send-eof-processed too soon.
+                   ;; The reference implementation sets that flag
+                   ;; after checking this (line 376), just before it builds
+                   ;; the message packet that it's going to send.
+                   (not send-eof-processed))))]
     (when-not result
       (let [fmt (str "~a: Bad preconditions for sending a new block:\n"
                      "recent: ~:d <? ~:d\n"
@@ -504,7 +515,7 @@
                               fmt
                               message-loop-name
                               recent
-                              (+ earliest-time n-sec-per-block)
+                              earliest-send-time
                               (count un-sent-blocks)
                               (count un-ackd-blocks)
                               want-ping

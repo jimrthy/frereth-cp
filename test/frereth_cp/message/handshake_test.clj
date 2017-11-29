@@ -150,73 +150,77 @@
         (deref decoded 10 false)))
     bs))
 
-(defn server-mock-child
-  [server-atom state-atom decode-src decode-sink chzbrgr-length bs]
-  (let [prelog (utils/pre-log "Server's child callback")
-        _ (log/debug prelog "Message arrived at server's child")
-        incoming (decode-bytes->child decode-src decode-sink bs)]
-    (if incoming
-      (do
-        (log/debug prelog
-                   (str "Matching '" incoming
-                        "', a " (class incoming)))
-        (let [rsp (condp = incoming
-                    ::ohai! ::orly?
-                    ::yarly ::kk
-                    ::icanhazchzbrgr? ::kk
-                    ::kthxbai ::kk
-                    ::specs/normal ::specs/normal)]
-          (log/info prelog
-                    "Server received"
-                    incoming
-                    "\nwhich triggers"
-                    rsp)
-          (if (not= rsp ::specs/normal)
-            (buffer-response! @server-atom
-                              prelog
-                              rsp
-                              "Message buffered to child"
-                              "Giving up on forwarding to child"
-                              {::response rsp
-                               ::request incoming})
-            (message/child-close! @server-atom))
-          (when (= incoming ::icanhazchzbrgr?)
-            ;; One of the main points is that this doesn't need to be a lock-step
-            ;; request/response.
-            (log/info prelog "Client requested chzbrgr. Send out of lock-step")
-            ;; Only 3 messages are arriving at the client.
-            ;; This almost definitely means that the chzbrgr is the problem.
-            ;; Trying to send a raw byte-array here definitely does not work.
-            ;; Sending the lazy seq that range produces seems like a bad idea.
-            ;; Sending a vec like this doesn't help.
-            ;; Note that, whatever I *do* send here, the client needs to
-            ;; be updated to expect that type.
-            (let [chzbrgr (vec (range chzbrgr-length))]
-              ;; This is buffering far more bytes than expected.
-              ;; That's because it's encoding an EDN string instead of
-              ;; the raw byte-array with which I started.
-              ;; (Can't just supply a byte-array because the other
-              ;; side doesn't have a reader override to decode that.
-              ;; And it wouldn't gain anything to add it, since it would
-              ;; still be the string representation of the numbers.
-              ;; That's annoying, but it should be good enough for
-              ;; purposes of this test.
-              (buffer-response! @server-atom
-                                prelog
-                                chzbrgr
-                                "Buffered chzbrgr to child"
-                                "Giving up on sending chzbrgr"
-                                {})))))
-      (log/debug prelog
-                 "Partial message in"
-                 bs))))
+(defn server-child-processor
+  [server-atom state-atom chzbrgr-length incoming]
+  (is incoming)
+  (is (or (keyword? incoming)
+          (and (bytes? incoming)
+               (< 0 (count incoming)))))
+  (let [prelog (utils/pre-log "Handshake Server: child process trigger")
+        _ (log/debug prelog "Message arrived at server's child")]
+    (log/debug prelog
+               (str "Matching '" incoming
+                    "', a " (class incoming)))
+    (let [rsp (condp = incoming
+                ::ohai! ::orly?
+                ::yarly ::kk
+                ::icanhazchzbrgr? ::kk
+                ::kthxbai ::kk
+                ::specs/normal ::specs/normal)]
+      (log/info prelog
+                "Server received"
+                incoming
+                "\nwhich triggers"
+                rsp)
+      (if (not= rsp ::specs/normal)
+        (buffer-response! @server-atom
+                          prelog
+                          rsp
+                          "Message buffered to child"
+                          "Giving up on forwarding to child"
+                          {::response rsp
+                           ::request incoming})
+        (message/child-close! @server-atom))
+      (when (= incoming ::icanhazchzbrgr?)
+        ;; One of the main points is that this doesn't need to be a lock-step
+        ;; request/response.
+        (log/info prelog "Client requested chzbrgr. Send out of lock-step")
+        ;; Only 3 messages are arriving at the client.
+        ;; This almost definitely means that the chzbrgr is the problem.
+        ;; Trying to send a raw byte-array here definitely does not work.
+        ;; Sending the lazy seq that range produces seems like a bad idea.
+        ;; Sending a vec like this doesn't help.
+        ;; Note that, whatever I *do* send here, the client needs to
+        ;; be updated to expect that type.
+        (let [chzbrgr (vec (range chzbrgr-length))]
+          ;; This is buffering far more bytes than expected.
+          ;; That's because it's encoding an EDN string instead of
+          ;; the raw byte-array with which I started.
+          ;; (Can't just supply a byte-array because the other
+          ;; side doesn't have a reader override to decode that.
+          ;; And it wouldn't gain anything to add it, since it would
+          ;; still be the string representation of the numbers.
+          ;; That's annoying, but it should be good enough for
+          ;; purposes of this test.
+          (buffer-response! @server-atom
+                            prelog
+                            chzbrgr
+                            "Buffered chzbrgr to child"
+                            "Giving up on sending chzbrgr"
+                            {}))))))
 
 (defn client-child-processor
   "Process the messages queued by mock-client-child"
   [client-atom client-state-atom succeeded? chzbrgr-length incoming]
   (is incoming)
   (is (or (keyword? incoming)
-          (< 0 (count incoming))))
+          (and (bytes? incoming)
+               (< 0 (count incoming))))
+      (str "Incoming: "
+           (cond
+             (keyword? incoming) incoming
+             (bytes? incoming) (str (count incoming) " bytes")
+             :else (str incoming ", a" (class incoming)))))
   (let [prelog (utils/pre-log "Handshake Client: child process trigger")
         client-state @client-state-atom]
     (log/info prelog
@@ -298,16 +302,26 @@
           result))
       (log/error prelog "No bytes decoded. Shouldn't have gotten here"))))
 
+(defn child-mocker
+  "Functionality shared between client and server"
+  [prelog arrival-msg decode-src bs]
+  (log/debug prelog
+             (if (keyword? bs)
+               (str bs)
+               (str (count bs) "-byte"))
+             arrival-msg)
+  (strm/put! decode-src bs))
+
+(defn mock-server-child
+  [decode-src bs]
+  (let [prelog (utils/pre-log "Handshake Server: child callback")]
+    (child-mocker prelog "message arrived at server's child" decode-src bs)))
+
 (defn mock-client-child
   "This is the callback for messages arriving from server"
   [decode-src bs]
   (let [prelog (utils/pre-log "Handshake Client: child callback")]
-    (log/debug prelog
-               (if (keyword? bs)
-                 (str bs)
-                 (str (count bs) "-byte"))
-               "message arrived at client's child")
-    (strm/put! decode-src bs)))
+    (child-mocker prelog "message arrived at client's child" decode-src bs)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Tests
@@ -423,12 +437,8 @@
                                        "Sending a" (class bs) "to server's parent")
                              (let [sent (strm/try-put! server->client bs time-out ::timed-out)]
                                (is (not= @sent ::timed-out))))
-          server-child-cb (partial server-mock-child
-                                   server-atom
-                                   server-state-atom
-                                   srvr-decode-src
-                                   srvr-decode-sink
-                                   chzbrgr-length)]
+          server-child-cb (partial mock-server-child
+                                   srvr-decode-src)]
       (dfrd/on-realized succeeded?
                         (fn [good]
                           (log/info "----------> Test should have passed <-----------"))
@@ -448,6 +458,12 @@
                              succeeded?
                              chzbrgr-length)
                     clnt-decode-sink)
+      (strm/consume (partial server-child-processor
+                             server-atom
+                             server-state-atom
+                             chzbrgr-length)
+                    srvr-decode-sink)
+
       (let [client-init (message/initial-state "Client" {} false)
             client-io (message/start! client-init client-parent-cb client-child-cb)
             server-init (message/initial-state "Server" {} true)
