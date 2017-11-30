@@ -502,13 +502,11 @@
         ;; It looks like the key to this is whether the pipe to the child
         ;; is still open.
         ;; Note that switching to PipedI/OStreams should have made this easier.
-        ;; Or possibly more complex.
-        ;; If I've interpreted this part correctly, it really means that
-        ;; the reference implementation is basing this part of its scheduling
-        ;; on whether the pipe to child is closed.
-        ;; Q: What are the odds that's one of the FDs on which he's polling?
-        ;; TODO: Double-check that.
-        ;; And figure out a good way to replicate that sort of thing.
+        ;; Or possibly more complex, since there isn't a (closed?) method.
+        ;; Basic point:
+        ;; If there are incoming messages, but the pipe to child is closed,
+        ;; short-circuit so we can exit.
+        ;; TODO: figure out a good way to replicate this.
         watch-to-child "FIXME: Is there a good way to test for this?"
         based-on-closed-child (if (and (not= 0 (+ (count gap-buffer)
                                                   (count ->child-buffer)))

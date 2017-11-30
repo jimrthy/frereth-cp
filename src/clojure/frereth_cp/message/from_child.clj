@@ -336,15 +336,21 @@
                                                  block)
                                          (update ::specs/strm-hwm + buf-size))]
                                  (if eof?
+                                   ;; It's tempting to update :sent-eof-processed
+                                   ;; here also.
+                                   ;; That temptation is a mistake.
+                                   ;; The reference implementation:
+                                   ;; 1. Sets up FDs for polling at the top of its main loop
+                                   ;; 2. Tries to pull data from the child
+                                   ;;    If child closed pipe, set send-eof
+                                   ;; 3. Skips everything else that's sending-related
+                                   ;;    *if* both send-eof and send-eof-processed
+                                   ;; 4. Sets send-eof-processed
+                                   ;; just before
+                                   ;; 5. Actually doing the send.
+                                   ;; This is step 2 in that sequence.
                                    (assoc result
-                                          ::specs/send-eof array-o-bytes
-                                          ;; This seems redundant, since we're
-                                          ;; setting send-eof at the same time.
-                                          ;; TODO: Just eliminate this.
-                                          ;; Anything that checks for it can
-                                          ;; just check for (not= send-eof ::specs/false)
-                                          ;; instead.
-                                          ::specs/send-eof-processed true)
+                                          ::specs/send-eof array-o-bytes)
                                    result))))]
           result)))))
 

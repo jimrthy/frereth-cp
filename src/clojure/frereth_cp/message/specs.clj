@@ -276,7 +276,13 @@
 ;; a) switch this to true
 ;; b) set a corresponding flag on that final block.
 ;; Q: Is this ever used anywhere?
-;; A: Actually, it's an important piece of the ioloop scheduling logic
+;; A: Actually, it's an important piece of the ioloop scheduling logic.
+;; And it ensures the to-parent code never enqueues anything
+;; past EOF.
+;; TODO: At least consider renaming this to something like
+;; enqueued-send-eof?
+;; TODO: Think this through more thoroughly. It's existence
+;; smells.
 (s/def ::send-eof-processed boolean?)
 ;; Once ::send-eof is set (which means that the stream from the
 ;; child is closed), we keep things running until the server

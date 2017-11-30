@@ -170,7 +170,8 @@
         :ret ::specs/state)
 (defn mark-block-sent
   "Move block from un-sent to un-acked"
-  [{{:keys [::specs/un-sent-blocks
+  [{{:keys [::specs/send-eof
+            ::specs/un-sent-blocks
             ::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
@@ -193,11 +194,18 @@
                     un-ackd-blocks
                     "\nas\n"
                     updated-block))
-    (-> state
-        ;; Since I've had issues with this, it seems worth mentioning that
-        ;; this is a sorted-set (by specs/time)
-        (update-in [::specs/outgoing ::specs/un-ackd-blocks] conj updated-block)
-        (update-in [::specs/outgoing ::specs/un-sent-blocks] pop))))
+    (let [state
+          (-> state
+              ;; Since I've had issues with this, it seems worth mentioning that
+              ;; this is a sorted-set (by specs/time)
+              (update-in [::specs/outgoing ::specs/un-ackd-blocks] conj updated-block)
+              (update-in [::specs/outgoing ::specs/un-sent-blocks] pop))]
+      (if (and send-eof
+               (empty? (get-in state [::specs/outgoing ::specs/un-sent-blocks])))
+        (assoc-in state
+                  [::specs/outgoing ::specs/send-eof-processed]
+                  true)
+        state))))
 
 (s/fdef mark-block-resent
         :args (s/cat :state ::specs/state
@@ -287,10 +295,11 @@
                               ;; than it looks at first glance.
                               ;; Really shouldn't be reusing IDs.
                               ;; Q: Does that matter?
-                              (if (> n' shared-K/max-32-uint)
-                                ;; TODO: Just roll with the negative IDs. The only
-                                ;; one that's special is 0
-                                1 n'))]
+                              (if (<= n' shared-K/max-32-int)
+                                (if (= 0 n')
+                                  1
+                                  n')
+                                (dec (- shared-K/max-32-int))))]
         ;; It's tempting to pop that message off of whichever queue is its current home.
         ;; That doesn't make sense here/yet.
         ;; Either we're resending a previous message that never got ACK'd (in which
@@ -312,12 +321,6 @@
                                   (update ::specs/transmissions inc)
                                   (assoc ::specs/time recent)
                                   (assoc ::specs/message-id current-message-id))]
-          ;; There's a 4-6 ms gap in logs between log entry message and this one.
-          ;; FIXME: Profile to see where that time went
-          ;; alt: try converting current-message to a transient before using it to
-          ;; build updated message
-          ;; cheaper alt: eliminate the call to pretty below
-          ;; Q: How much difference did that make?
           (log/debug pre-log
                      (str "Getting ready to build message block for message "
                           current-message-id
@@ -496,9 +499,7 @@
                  (if (= ::specs/false send-eof)
                    (or (< 0 un-ackd-count)
                        (< 0 (count un-sent-blocks)))
-                   ;; I think my handshake test is broken now because of this:
-                   ;; I'm setting send-eof-processed too soon.
-                   ;; The reference implementation sets that flag
+                   ;; The reference implementation sets this flag
                    ;; after checking this (line 376), just before it builds
                    ;; the message packet that it's going to send.
                    (not send-eof-processed))))]
@@ -549,31 +550,31 @@
                "Does it make sense to try to send any of our"
                block-count
                "unsent blocks?")
-    (if (< 0 block-count)
-      (if (ok-to-send-new? state)
-        ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
-        ;; Consolidating smaller blocks *would* be a good idea -- JRG
-        (let [block (first un-sent-blocks)
-              start-pos (::specs/start-pos block)
-              block-length (.readableBytes (::specs/buf block))
-              ;; There's some logic going on here, around line
-              ;; 361, that I didn't translate correctly.
-              ;; TODO: Get back to this when I can think about
-              ;; coping with EOF
-              last-buffered-block (last un-sent-blocks)  ; Q: How does that perform?
+    (if (and (< 0 block-count)
+             (ok-to-send-new? state))
+      ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
+      ;; Consolidating smaller blocks *would* be a good idea -- JRG
+      (let [block (first un-sent-blocks)
+            start-pos (::specs/start-pos block)
+            block-length (.readableBytes (::specs/buf block))
+            ;; There's some logic going on here, around line
+            ;; 361, that I didn't translate correctly.
+            ;; TODO: Get back to this when I can think about
+            ;; coping with EOF
+            last-buffered-block (last un-sent-blocks)  ; Q: How does that perform?
 
-              eof (if (= (+ (::specs/start-pos last-buffered-block)
-                            (-> last-buffered-block ::specs/buf .readableBytes))
-                         strm-hwm)
-                    send-eof
-                    false)]
-          (log/debug prelog
-                     "Conditions ripe for sending a new outgoing message")
-          (assoc-in state
-                    [::specs/outgoing ::specs/next-block-queue]
-                    ::specs/un-sent-blocks))
-        ;; Leave it as-is
-        state))))
+            eof (if (= (+ (::specs/start-pos last-buffered-block)
+                          (-> last-buffered-block ::specs/buf .readableBytes))
+                       strm-hwm)
+                  send-eof
+                  false)]
+        (log/debug prelog
+                   "Conditions ripe for sending a new outgoing message")
+        (assoc-in state
+                  [::specs/outgoing ::specs/next-block-queue]
+                  ::specs/un-sent-blocks))
+      ;; Leave it as-is
+      state)))
 
 (s/fdef pick-next-block-to-send
         :args (s/cat :state ::specs/state)
@@ -615,37 +616,20 @@
   ;; Packet as a crypto box.
 
   ;; There used to be more involved in this
-
-  ;; I have what seems to be a deadlock, in my handshake
-  ;; test, which probably stems from callin this synchronously.
-  ;; This one's different than ->child.
-  ;; I don't really care very much whether it succeeds. Half
-  ;; the point behind the entire message "package" is
-  ;; buffering up sends for when they fail.
-  ;; I've run across a couple of successful approaches
-  ;; for coping with this.
-  ;; 1) Just put the send into its own thread
-  ;; 2) Convert this part to an enqueue. Have a dedicated
-  ;; thread that runs dequeue and does the send.
-
-  ;; Approach 2) has the same problem as this, almost:
-  ;; time spent on the library client side blocks that thread.
-  ;; In particular, for the specific test failure that I
-  ;; currently see, it gets blocked by sending "too many"
-  ;; requests in a row.
-
-  ;; Honestly, I need to figure out why that's causing problems
-  ;; and solve it.
-  ;; TODO: Take the time to do that.
-
-  ;; For now:
-  ;; Try putting this inside a dfrd/future
-  ;; TODO: Compare/contrast with using a regular future
   (let [size (count send-buf)
         succeeded? (dfrd/future (->parent send-buf))
         triggerer (utils/pre-log message-loop-name)]
     (dfrd/on-realized succeeded?
                       (fn [succeeded]
+                        ;; If I'm going to set send-eof-processed,
+                        ;; this is really the first time that it
+                        ;; has made any sense to do so.
+                        ;; Which really means that I would have to convert
+                        ;; it to a deferred, and change anywhere/everywhere
+                        ;; that checks its value to check (realized?)
+                        ;; instead.
+                        ;; That destroys functional purity, so is not
+                        ;; an option.
                         (log/info (utils/pre-log message-loop-name)
                                   (str size
                                        " bytes in "

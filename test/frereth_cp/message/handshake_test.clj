@@ -214,13 +214,15 @@
   [client-atom client-state-atom succeeded? chzbrgr-length incoming]
   (is incoming)
   (is (or (keyword? incoming)
-          (and (bytes? incoming)
-               (< 0 (count incoming))))
+          ;; Implementation detail:
+          ;; incoming is deserialized EDN.
+          ;; Which means it's either a keyword for the handshake
+          ;; or the chzbrgr.
+          (seq incoming))
       (str "Incoming: "
-           (cond
-             (keyword? incoming) incoming
-             (bytes? incoming) (str (count incoming) " bytes")
-             :else (str incoming ", a" (class incoming)))))
+           (if (keyword? incoming)
+             incoming
+             (str incoming ", a" (class incoming)))))
   (let [prelog (utils/pre-log "Handshake Client: child process trigger")
         client-state @client-state-atom]
     (log/info prelog
@@ -248,15 +250,7 @@
                   ;; No response to send for this
                   nil)
               3 (do
-                  ;; This is based around an implementation
-                  ;; detail that the message stream really consists
-                  ;; of either
-                  ;; a) the same byte array sent by the other side
-                  ;; b) several of those byte arrays, if the block
-                  ;; is too big to send all at once.
-                  ;; TODO: don't rely on that.
-                  ;; It really would be more efficient for the other
-                  ;; side to batch up the ACK and this response
+                  ;; This should be the chzbrgr
                   (is (= incoming (range chzbrgr-length)))
                   ::kthxbai)
               4 (do
@@ -273,9 +267,6 @@
                       (is (not ex))))
                   nil)
               5 (do
-                  ;; Actually, this isn't correct.
-                  ;; Once the other side sends an ACK for our
-                  ;; EOF, this should be done.
                   (is (= incoming ::specs/normal))
                   (log/info "Received server EOF")
                   (dfrd/success! succeeded? ::kthxbai)))]
