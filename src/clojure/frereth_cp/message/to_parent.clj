@@ -194,18 +194,11 @@
                     un-ackd-blocks
                     "\nas\n"
                     updated-block))
-    (let [state
-          (-> state
-              ;; Since I've had issues with this, it seems worth mentioning that
-              ;; this is a sorted-set (by specs/time)
-              (update-in [::specs/outgoing ::specs/un-ackd-blocks] conj updated-block)
-              (update-in [::specs/outgoing ::specs/un-sent-blocks] pop))]
-      (if (and send-eof
-               (empty? (get-in state [::specs/outgoing ::specs/un-sent-blocks])))
-        (assoc-in state
-                  [::specs/outgoing ::specs/send-eof-processed]
-                  true)
-        state))))
+    (-> state
+        ;; Since I've had issues with this, it seems worth mentioning that
+        ;; this is a sorted-set (by specs/time)
+        (update-in [::specs/outgoing ::specs/un-ackd-blocks] conj updated-block)
+        (update-in [::specs/outgoing ::specs/un-sent-blocks] pop))))
 
 (s/fdef mark-block-resent
         :args (s/cat :state ::specs/state
@@ -448,6 +441,7 @@
                               recent))
         state))))
 
+(declare send-eof-buffered?)
 (s/fdef ok-to-send-new?
         :args (s/cat :state ::specs/state)
         :ret boolean?)
@@ -456,7 +450,6 @@
            ::specs/recent]
     {:keys [::specs/earliest-time
             ::specs/send-eof
-            ::specs/send-eof-processed
             ::specs/strm-hwm
             ::specs/un-ackd-blocks
             ::specs/un-sent-blocks
@@ -476,6 +469,7 @@
                      ::details outgoing})))
   (let [earliest-send-time (+ earliest-time n-sec-per-block)
         un-ackd-count (count un-ackd-blocks)
+        send-eof-processed (send-eof-buffered? outgoing)
         result
         (and (>= recent earliest-send-time)
              ;; If we have too many outgoing blocks being
@@ -701,8 +695,17 @@
                         ".\nThose are very distinct from the "
                         (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
                         " that is/are left in un-sent-blocks"))
-;;;      408: earliestblocktime_compute()
 
+        ;; This next concept almost fits here.
+        ;; But I keep rolling back to the point it shouldn't happen until after
+        ;; block->parent! has returned successfully.
+        ;; So just ditch the idea and add a predicate function for the logic.
+        (comment (if (and send-eof
+                          (empty? (get-in result [::specs/outgoing ::specs/un-sent-blocks])))
+                   (assoc-in result
+                             [::specs/outgoing ::specs/send-eof-processed]
+                             true)))
+;;;      408: earliestblocktime_compute()
         (-> state''
             (assoc-in [::specs/outgoing ::specs/earliest-time]
                       (help/earliest-block-time message-loop-name un-ackd-blocks))
@@ -715,3 +718,14 @@
         (log/debug prelog
                    "Nothing to send")
         state))))
+
+(s/fdef send-eof-buffered?
+        :args (s/cat :outgoing ::specs/outgoing)
+        :ret boolean?)
+(defn send-eof-buffered?
+  "Has the EOF packet been set up to send?"
+  [{:keys [::specs/send-eof
+           ::specs/un-sent-blocks]
+    :as outgoing}]
+  (and send-eof
+       (empty? un-sent-blocks)))

@@ -343,12 +343,14 @@
                                    ;; 1. Sets up FDs for polling at the top of its main loop
                                    ;; 2. Tries to pull data from the child
                                    ;;    If child closed pipe, set send-eof
+                                   ;; [We're currently here]
                                    ;; 3. Skips everything else that's sending-related
                                    ;;    *if* both send-eof and send-eof-processed
                                    ;; 4. Sets send-eof-processed
                                    ;; just before
                                    ;; 5. Actually doing the send.
-                                   ;; This is step 2 in that sequence.
+                                   ;; send-eof-processed has caused me enough
+                                   ;; pain that I've eliminated it.
                                    (assoc result
                                           ::specs/send-eof array-o-bytes)
                                    result))))]

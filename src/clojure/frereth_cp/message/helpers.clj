@@ -178,7 +178,8 @@ Based on earliestblocktime_compute, in lines 138-153
 Based [cleverly] on acknowledged(), running from lines 155-185"
   [{{:keys [::specs/un-ackd-blocks
             ::specs/send-eof
-            ::specs/send-eof-acked]} ::specs/outgoing
+            ::specs/send-eof-acked
+            ::specs/strm-hwm]} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}
    start
@@ -193,11 +194,15 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     (log/debug log-prefix
                "Setting ACK flags on blocks with addresses from"
                start "to" stop)
-    (when (< (get-in state [::specs/outgoing ::specs/strm-hwm])
-             stop)
-      ;; This is definitely a bug.
+    (when (< strm-hwm stop)
+      ;; This is pretty definitely a bug.
+      ;; Except that it's happening when the other side sends
+      ;; the ACK for our EOF message.
       ;; TODO: Figure out something more extreme to do here.
-      (log/error log-prefix "Other side ACK'd bytes we haven't sent yet"))
+      (log/error (str log-prefix
+                      "Other side ACK'd bytes we haven't sent yet."
+                      "\nOutgoing strm-hwm: " strm-hwm
+                      "\nSTOP byte: " stop)))
     (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd

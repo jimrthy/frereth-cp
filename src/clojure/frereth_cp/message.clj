@@ -326,10 +326,10 @@
               ;; into the (now defunct) agent handler.
               ;; That impulse seems wrong. Based on preliminary numbers,
               ;; any filtering I can do outside an an agent send is a win.
-              ;; TODO: As soon as the manifold version is working, revisit
+              ;; TODO: Now that the manifold version is working, revisit
               ;; that decision.
               (log/debug prelog
-                         "Message is small enough. Passing along to stream to handle")
+                         "Message is small enough. Look back here")
               ;; This is basically an iteration of the top-level
               ;; event-loop handler from main().
               ;; I can skip the pieces that only relate to reading
@@ -417,10 +417,10 @@
             ::specs/earliest-time
             ::specs/last-block-time
             ::specs/send-eof
-            ::specs/send-eof-processed
             ::specs/un-sent-blocks
             ::specs/un-ackd-blocks
-            ::specs/want-ping]} ::specs/outgoing
+            ::specs/want-ping]
+     :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name
            ::specs/recent]
     :as state}]
@@ -467,6 +467,7 @@
         ;; 3. Have we sent an un-ACK'd EOF?
         un-ackd-count (count un-ackd-blocks)
         un-sent-count(count un-sent-blocks)
+        send-eof-processed (to-parent/send-eof-buffered? outgoing)
         ;; Strange things happen once EOF gets set. This goes into
         ;; a much tighter loop, but we can't send messages that
         ;; quickly.
@@ -1008,7 +1009,6 @@
                           ::specs/send-buf-size K/send-byte-buf-size
                           ::specs/send-eof ::specs/false
                           ::specs/send-eof-acked false
-                          ::specs/send-eof-processed false
                           ::specs/strm-hwm 0
                           ::specs/total-blocks 0
                           ::specs/total-block-transmissions 0
