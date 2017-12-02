@@ -117,20 +117,21 @@
               ;; sense to copy the bytes over
               ;; (and release the buffer)
               (update ::specs/->child-buffer conj buf)
-              ;; Microbenchmarks indicate that assoc
-              ;; is significantly faster than update
+              ;; Microbenchmarks and common sense indicate that
+              ;; assoc is significantly faster than update
               (assoc ::specs/contiguous-stream-count stop)))
         (do
           (log/debug (utils/pre-log message-loop-name)
                      "Dropping previously consolidated block")
           (let [to-drop (val (first gap-buffer))]
-            (try
-              (.release to-drop)
-              (catch RuntimeException ex
-                (log/error (utils/pre-log message-loop-name)
-                           ex
-                           "Failed to release"
-                           to-drop))))
+            (when-not keyword? to-drop
+                      (try
+                        (.release to-drop)
+                        (catch RuntimeException ex
+                          (log/error (utils/pre-log message-loop-name)
+                                     ex
+                                     "Failed to release"
+                                     to-drop)))))
           (update incoming ::specs/gap-buffer pop-map-first)))
       ;; Gap starts past the end of the stream.
       (do
@@ -140,9 +141,6 @@
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn consolidate-gap-buffer
-  ;; I'm dubious that this belongs in here.
-  ;; But this namespace is looking very skimpy compared to from-parent,
-  ;; which seems like a better choice.
   [{{:keys [::specs/gap-buffer]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
@@ -183,6 +181,7 @@
         :ret (s/or :buffer bytes?
                    :eof ::specs/eof-flag))
 (defn read-bytes-from-parent!
+  "Parent wrote bytes to its outbuffer. Read them."
   [{:keys [::specs/child-in
            ::specs/message-loop-name]
     :as io-handle}
@@ -309,7 +308,7 @@
           ;; There's a major difference between this and
           ;; the equivalent in ->parent:
           ;; We don't care if that succeeds.
-                          ;; Half the point to buffering everything
+          ;; Half the point to buffering everything
           ;; in this "package" is so we can resend failures.
           ;; At this point, we've already adjusted the
           ;; buffer states and sent the ACK back to the
@@ -368,23 +367,31 @@
       (log/error ex prelog "Failed to forward message to child")
       (reduced state))))
 
+(s/fdef possibly-close-pipe!
+        :args (s/cat :io-handle ::specs/io-handle
+                     :state ::specs/state
+                     :prelog string?)
+        :ret any?)
 (defn possibly-close-pipe!
   "Maybe signal child that it won't receive anything else"
-  [{{:keys [::specs/contiguous-stream-count
+  [{:keys [::specs/from-parent
+           ::specs/to-child]
+    :as io-handle}
+   {{:keys [::specs/contiguous-stream-count
             ::specs/receive-eof
             ::specs/receive-total-bytes
             ::specs/receive-written]
      :as incoming} ::specs/incoming
     :as state}
-   prelog
-   to-child-pipe]
+   prelog]
   (log/debug prelog "Process EOF?")
   (if (= ::specs/false receive-eof)
     state
     (if (= receive-written receive-total-bytes)
       (do
         (log/info prelog "Have received everything other side will send")
-        (.close to-child-pipe))
+        (.close to-child)
+        (.close from-parent))
       (log/warn (str prelog
                      "EOF flag received.\n"
                      (select-keys incoming
@@ -453,32 +460,40 @@
                      "Parent Monitor failed unexpectedly"))))))
 
 (s/fdef forward!
-        :args (s/cat :to-child ::specs/to-child
+        :args (s/cat :io-handle ::specs/io-handle
                      :primed ::specs/state)
   :ret ::specs/state)
 (defn forward!
   "Try sending data to child:"
   ;; lines 615-632
-  [to-child
-   {:keys [::specs/incoming
-           ::specs/message-loop-name]
+  [{:keys [::specs/from-parent
+           ::specs/to-child]
+    :as io-handle}
+   {:keys [::specs/message-loop-name]
+    original-incoming ::specs/incoming
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
-    (let [consolidated (consolidate-gap-buffer state)
-          ->child-buffer (get-in consolidated [::specs/incoming ::specs/->child-buffer])
+    (let [{{:keys [::specs/receive-eof]
+            :as consolidated-incoming} ::specs/incoming
+           :as consolidated} (consolidate-gap-buffer state)
+          ->child-buffer (::specs/->child-buffer consolidated-incoming)
           block-count (count ->child-buffer)]
-      (log/debug prelog
-                 "Have"
-                 block-count
-                 "consolidated block(s) ready to go to child")
+      (log/debug (str prelog
+                      "Have "
+                      block-count
+                      " consolidated block(s) ready to go to child.\n"
+                      "receive-eof: "
+                      receive-eof))
       (if (< 0 block-count)
         (let [result (reduce (partial write-bytes-to-child-pipe!
                                       prelog
                                       to-child)
                              consolidated
                              ->child-buffer)]
-          (possibly-close-pipe! result prelog to-child))
-        consolidated)
+          (possibly-close-pipe! io-handle result prelog))
+        (do
+          (log/warn "0 bytes to forward to child")
+          consolidated))
       ;; 610-614: counters/looping
       ;; (doesn't really apply to this implementation)
       )))

@@ -74,8 +74,9 @@
                                {::problem state}))]
         (is (not problem))
         (log/error problem prelog "Failed!")
-        (when (instance? ExceptionInfo problem)
-          (log/warn prelog (str (.getData problem))))
+        (if (instance? ExceptionInfo problem)
+          (log/warn prelog (str (.getData problem)))
+          (log/warn prelog (str prelog " is difficult to debug")))
         (if (realized? succeeded?)
           (log/warn prelog "Caller already thinks we succeeded")
           (dfrd/error! succeeded? problem)))
@@ -119,6 +120,9 @@
 (comment
   ;; Inline test for test-helper.
   ;; This seems like a bad sign.
+  ;; It's tempting to expand this to its own unit test
+  ;; It seems like doing that would just formalize the complexity.
+  ;; Q: Is this incidental or inherent?
   (io/encode protocol ::test)
   (let [chzbrgr-length 182
         frames (io/encode protocol (range chzbrgr-length))

@@ -302,10 +302,18 @@
       (if (< (count ->child-buffer) max-child-buffer-size)
         ;; Q: Will ->child-buffer ever have more than one array?
         ;; It would be faster to skip the map/reduce
-        ;; TODO: Try switching to the reducers version instead
+        ;; TODO: Try switching to the reducers version instead, to
+        ;; run this in parallel
         (let [previously-buffered-message-bytes (reduce + 0
                                                         (map (fn [^bytes buf]
-                                                               (count buf))
+                                                               (try
+                                                                 (count buf)
+                                                                 (catch UnsupportedOperationException ex
+                                                                   (throw (ex-info (str prelog
+                                                                                        "Parent sent a "
+                                                                                        (class buf)
+                                                                                        " which isn't a B]")
+                                                                                   {::cause ex})))))
                                                              ->child-buffer))]
           (log/debug prelog
                      "Have"
@@ -352,7 +360,7 @@
                                      (assoc-in state
                                                [::specs/incoming ::specs/parent->buffer]
                                                message))
-                      state' (to-child/forward! to-child (or pre-processed
+                      state' (to-child/forward! io-handle (or pre-processed
                                                             state))]
                   ;; This will update recent.
                   ;; In the reference implementation, that happens immediately
