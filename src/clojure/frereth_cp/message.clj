@@ -805,6 +805,8 @@
 ;;; handling the timer. But it's tempting.
 (defn schedule-next-timeout!
   [{:keys [::specs/->parent
+           ::specs/child-output-loop
+           ::specs/child-input-loop
            ::specs/to-child
            ::specs/message-loop-name
            ::specs/stream]
@@ -825,10 +827,20 @@
                           "Top of scheduler at ~:d"
                           now))
     (if (not (strm/closed? stream))
+      ;; TODO: Reframe this logic around
+      ;; whether child-input-loop and
+      ;; child-output-loop have been realized
+      ;; instead.
       (if (and send-eof-acked
                (not= receive-eof ::specs/false)
                (= receive-written receive-total-bytes))
-        (log/warn prelog "Main ioloop is done. Exiting.")
+        (log/warn (str prelog
+                       "Main ioloop is done."
+                       "\nsend-eof-acked: " send-eof-acked
+                       "\nreceive-eof: " receive-eof
+                       "\nreceive-written: " receive-written
+                       "\nreceive-total-bytes: " receive-total-bytes
+                       "\nExiting"))
         ;; TODO: add a debugging step that stores state and the
         ;; calculated time so I can just look at exactly what I have
         ;; when everything goes sideways

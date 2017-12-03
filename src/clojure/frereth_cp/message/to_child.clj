@@ -73,14 +73,15 @@
            ::specs/contiguous-stream-count]
     :as incoming}
    k-v-pair]
-  (let [[[start stop] ^ByteBuf buf] k-v-pair]
+  (let [prelog (utils/pre-log message-loop-name)
+        [[start stop] ^ByteBuf buf] k-v-pair]
     ;; Important note re: the logic that's about to hit:
     ;; start, strm-hwm, and stop are all absolute stream
     ;; addresses.
     ;; If we've received 1 byte, the strm-hwm is at 0.
     ;; If start is 0 or 1, then we might have some overlap.
     ;; As long as stop is somewhere past strm-hwm.
-    (log/debug (utils/pre-log message-loop-name)
+    (log/debug prelog
                (str "Does " start "-" stop " close a hole in "
                     gap-buffer " after "
                     contiguous-stream-count
@@ -98,13 +99,13 @@
         (do
           (when (< start contiguous-stream-count)
             (let [bytes-to-skip (- contiguous-stream-count start)]
-              (log/info (utils/pre-log message-loop-name)
+              (log/info prelog
                         "Skipping"
                         bytes-to-skip
                         "previously received bytes in"
                         buf)
               (.skipBytes buf bytes-to-skip)))
-          (log/debug (utils/pre-log message-loop-name)
+          (log/debug prelog
                      (str "Consolidating entry 1/"
                           (count (::specs/gap-buffer
                                   incoming))))
@@ -121,14 +122,14 @@
               ;; assoc is significantly faster than update
               (assoc ::specs/contiguous-stream-count stop)))
         (do
-          (log/debug (utils/pre-log message-loop-name)
+          (log/debug prelog
                      "Dropping previously consolidated block")
           (let [to-drop (val (first gap-buffer))]
             (when-not keyword? to-drop
                       (try
                         (.release to-drop)
                         (catch RuntimeException ex
-                          (log/error (utils/pre-log message-loop-name)
+                          (log/error prelog
                                      ex
                                      "Failed to release"
                                      to-drop)))))
@@ -220,10 +221,10 @@
           (log/info prelog "Parent Monitor thread unblocked")
           (let [result
                 (cond (neg? byte1) (do
-                                     (log/warn "EOF")
+                                     (log/warn prelog "EOF")
                                      ;; Q: Do I need to .close child-in here?
-                                     ;; A: It won't hurt. But doing it here probably
-                                     ;; doesn't make a lot of sense.
+                                     ;; A: It won't hurt.
+                                     (.close child-in)
                                      ::specs/normal)
                       (keyword? byte1) byte1
                       (< 0 bytes-available)
@@ -374,8 +375,7 @@
         :ret any?)
 (defn possibly-close-pipe!
   "Maybe signal child that it won't receive anything else"
-  [{:keys [::specs/from-parent
-           ::specs/to-child]
+  [{:keys [::specs/to-child]
     :as io-handle}
    {{:keys [::specs/contiguous-stream-count
             ::specs/receive-eof
@@ -384,14 +384,15 @@
      :as incoming} ::specs/incoming
     :as state}
    prelog]
-  (log/debug prelog "Process EOF?")
+  (log/debug (str prelog "Process EOF? (receive-eof: " receive-eof ")"))
   (if (= ::specs/false receive-eof)
     state
     (if (= receive-written receive-total-bytes)
       (do
         (log/info prelog "Have received everything other side will send")
-        (.close to-child)
-        (.close from-parent))
+        (when-not to-child
+          (log/error prelog "Missing to-child, so we can't close it"))
+        (.close to-child))
       (log/warn (str prelog
                      "EOF flag received.\n"
                      (select-keys incoming
@@ -492,8 +493,8 @@
                              ->child-buffer)]
           (possibly-close-pipe! io-handle result prelog))
         (do
-          (log/warn "0 bytes to forward to child")
-          consolidated))
+          (log/warn prelog "0 bytes to forward to child")
+          (possibly-close-pipe! io-handle consolidated prelog)))
       ;; 610-614: counters/looping
       ;; (doesn't really apply to this implementation)
       )))

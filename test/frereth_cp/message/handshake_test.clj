@@ -299,13 +299,16 @@
 
 (defn child-mocker
   "Functionality shared between client and server"
-  [prelog arrival-msg decode-src bs]
+  [prelog arrival-msg decode-src bs-or-kw]
   (log/debug prelog
-             (if (keyword? bs)
-               (str bs)
-               (str (count bs) "-byte"))
+             (if (keyword? bs-or-kw)
+               (str bs-or-kw)
+               (str (count bs-or-kw) "-byte"))
              arrival-msg)
-  (strm/put! decode-src bs))
+  (if-not (keyword? bs-or-kw)
+    (strm/put! decode-src bs-or-kw)
+    (doseq [frame (io/encode protocol bs-or-kw)]
+      (strm/put! decode-src frame))))
 
 (defn mock-server-child
   [decode-src bs]
