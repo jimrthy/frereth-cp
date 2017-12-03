@@ -276,6 +276,7 @@
                            array-o-bytes
                            " baked into block description:\n"
                            block))
+    ;; TODO: Refactor this into a top-level function
     (fn [{{:keys [::specs/ackd-addr
                   ::specs/max-block-length
                   ::specs/strm-hwm
@@ -356,6 +357,58 @@
                                    result))))]
           result)))))
 
+(s/fdef try-multiple-sends
+        :args (s/cat :stream ::specs/stream
+                     :bs-or-eof ::specs/bs-or-eof
+                     :blocker dfrd/deferrable?
+                     :attempts nat-int?
+                     :timeout nat-int?)
+        :ret (s/nilable ::specs/bs-or-eof))
+(defn try-multiple-sends
+  "The parameters are weird because I refactored it out of a lexical closure"
+  [stream
+   ;; TODO: Refactor-rename this to bs-or-eof
+   array-o-bytes
+   blocker
+   prelog attempts timeout]
+  ;; message-test pretty much duplicates this in try-multiple-sends
+  ;; TODO: eliminate the duplication
+  (loop [n attempts]
+    (if-not (strm/closed? stream)
+      (do
+        (log/debug prelog
+                   "Waiting for ACK that bytes have been buffered. Attempts left:"
+                   n)
+        (let [waiting
+              (deref blocker timeout ::timed-out)]
+          (if (= waiting ::timed-out)
+            (do  ;; Timed out
+              (log/warn prelog
+                        "Timeout number"
+                        (- (inc attempts) n)
+                        "waiting to buffer bytes from child")
+              (if (< 0 n)
+                (recur (dec n))
+                ::specs/error))
+            (do  ;; Bytes buffered
+              (if (bytes? array-o-bytes)
+                (log/debug prelog
+                           (count array-o-bytes)
+                           "bytes from child processed by main i/o loop")
+                (log/warn prelog "Got some EOF signal:" array-o-bytes))
+              ;; Q: Does returning this really gain me anything?
+              ;; It seems like it would be simpler (for the sake of callers)
+              ;; to just return nil on success, or one of the ::specs/eof-flag
+              ;; set when it's time to stop.
+              ;; I was doing it that way at one point.
+              ;; Q: Why did I switch?
+              array-o-bytes))))
+      (do
+        (log/warn prelog
+                  "Destination stream closed waiting to put"
+                  array-o-bytes)
+        nil))))
+
 (s/fdef forward-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
                      :stream ::specs/stream
@@ -370,6 +423,18 @@
    array-o-bytes]
   (let [prelog (utils/pre-log message-loop-name)
         callback (build-byte-consumer message-loop-name array-o-bytes)]
+    ;; I think it looks as though I have a deadlock here.
+    ;; It seems like I need to return from this in order to get
+    ;; back to the main ioloop to pull the message that I'm
+    ;; queuing.
+    ;; Except that it works until I start shutting everything
+    ;; down.
+    ;; At the end of the handshake test:
+    ;; 1. Client sends EOF to server
+    ;; 2. Server's child receives that and sends its own EOF packet
+    ;; 3. That EOF packet gets to try-multiple-sends
+    ;; And then processing stops until the test ends.
+    (throw (RuntimeException. "What's going wrong with this?"))
     (log/debug prelog
                (str
                 "Received "
@@ -398,9 +463,10 @@
     (if-not (strm/closed? stream)
       ;; FIXME: Ditch the magic numbers
       (let [blocker (dfrd/deferred)
+            timeout 10000
             submitted (strm/try-put! stream
                                      [::specs/child-> callback blocker]
-                                     10000 ::timed-out)]
+                                     timeout ::timed-out)]
         (dfrd/on-realized submitted
                           (fn [success]
                             (log/debug
@@ -420,38 +486,8 @@
                                   failure
                                   ") from child to main i/o loop triggered from\n"
                                   prelog))))
-        ;; message-test pretty much duplicates this in try-multiple-sends
-        ;; TODO: eliminate the duplication
-        (loop [n 10]
-          (if-not (strm/closed? stream)
-            (do
-              (log/debug prelog
-                         "Waiting for ACK that bytes have been buffered. Attempts left:"
-                         n)
-              (let [waiting
-                    (deref blocker 10000 ::timed-out)]
-                (if (= waiting ::timed-out)
-                  (do  ;; Timed out
-                    (log/warn prelog "Timeout number" (- 7 n) "waiting to buffer bytes from child")
-                    (if (< 0 n)
-                      (recur (dec n))
-                      ::specs/error))
-                  (do  ;; Bytes buffered
-                    (if (bytes? array-o-bytes)
-                      (log/debug prelog
-                                 (count array-o-bytes)
-                                 "bytes from child processed by main i/o loop")
-                      (log/warn prelog "Got some EOF signal:" array-o-bytes))
-                    ;; Q: Does returning this really gain me anything?
-                    ;; It seems like it would be simpler (for the sake of callers)
-                    ;; to just return nil on success, or one of the ::specs/eof-flag
-                    ;; set when it's time to stop.
-                    ;; I was doing it that way at one point.
-                    ;; Q: Why did I switch?
-                    array-o-bytes))))
-            (log/warn prelog
-                      "Destination stream closed waiting to put"
-                      array-o-bytes))))
+        ;; TODO: Eliminate these magic numbers
+        (try-multiple-sends stream array-o-bytes blocker prelog 10 timeout))
       (do
         (log/warn prelog
                   "Destination stream closed. Discarding message\n"
@@ -532,14 +568,6 @@
                    " before calling read-next-bytes-from-child!"))
     (when (keyword? array-o-bytes)
       (log/warn prelog "EOF flag. Closing the PipedInputStream")
-      ;; It's tempting to make this a function in the top-level
-      ;; message ns, like child-close!
-      ;; But then I'd need to manage a circular dependency to
-      ;; call it from here.
-      ;; I don't like the tight coupling this creates with
-      ;; the implementation details, but it
-      ;; isn't all *that* bad. It's not like I call this from
-      ;; all over the place.
       ;; It's a little tempting to refactor this into its
       ;; own function, but that just seems silly.
       (.close child-out))

@@ -194,10 +194,14 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     (log/debug log-prefix
                "Setting ACK flags on blocks with addresses from"
                start "to" stop)
-    (when (< strm-hwm stop)
+
+    (when (< strm-hwm
+             (if (= send-eof ::specs/false)
+               stop
+               ;; Protocol is to ACK 1 past the final
+               ;; stream address for EOF
+               (inc stop)))
       ;; This is pretty definitely a bug.
-      ;; Except that it's happening when the other side sends
-      ;; the ACK for our EOF message.
       ;; TODO: Figure out something more extreme to do here.
       (log/error (str log-prefix
                       "Other side ACK'd bytes we haven't sent yet."

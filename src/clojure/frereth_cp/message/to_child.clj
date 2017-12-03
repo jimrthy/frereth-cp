@@ -221,7 +221,7 @@
           (log/info prelog "Parent Monitor thread unblocked")
           (let [result
                 (cond (neg? byte1) (do
-                                     (log/warn prelog "EOF")
+                                     (log/warn prelog "Parent monitor received EOF")
                                      ;; Q: Do I need to .close child-in here?
                                      ;; A: It won't hurt.
                                      (.close child-in)

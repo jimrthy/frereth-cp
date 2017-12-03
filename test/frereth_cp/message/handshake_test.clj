@@ -489,7 +489,10 @@
                               {})
             ;; TODO: Find a reasonable value for this timeout
             (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
-              (log/info prelog "handshake-test run through. Need to see what happened")
+              (log/info prelog
+                        "=====================================================\n"
+                        "handshake-test run through. Need to see what happened\n"
+                        "=====================================================")
               (let [client-message-state (message/get-state client-io time-out ::timed-out)]
                 (when (or (= client-message-state ::timed-out)
                           (instance? Throwable client-state)

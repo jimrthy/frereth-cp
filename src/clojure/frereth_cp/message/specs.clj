@@ -75,6 +75,9 @@
 ;; and ::send-eof-ackd
 (s/def ::send-eof ::eof-flag)
 
+(s/def ::bs-or-eof (s/or :bytes bytes?
+                         :keyword ::eof-flag))
+
 ;;; Position of a block's first byte within the stream
 ;;; Corresponds to blockpos
 (s/def ::start-pos int?)

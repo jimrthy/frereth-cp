@@ -36,6 +36,9 @@
   ;; TODO: Convert child->! to return nil
   ;; on success and the number of bytes that
   ;; *are* available on failure.
+
+  ;; TODO: Refactor to take advantage of
+  ;; from-child/try-multiple-sends
   [f  ;; Honestly, this is just child->!
    prelog
    n
