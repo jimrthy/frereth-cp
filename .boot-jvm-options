@@ -1,1 +1,1 @@
--XX:-OmitStackTraceInFastThrow
+-XX:-OmitStackTraceInFastThrow -Xmx1024m
