@@ -39,7 +39,9 @@
 ;;; Helper functions
 
 (defn consumer
-  [io-handle prelog time-out succeeded? bs]
+  [{:keys [::specs/message-loop-name]
+    :as io-handle}
+   prelog time-out succeeded? bs]
   ;; Note that, at this point, we're blocking the
   ;; I/O loop.
   ;; Whatever happens here must return control
@@ -53,34 +55,54 @@
   ;; this, to experiment with the unencrypted
   ;; networking protocol.
   (log/info prelog "Message over network")
-  ;; Checking for the server state is wasteful here.
-  ;; And very dubious...depending on implementation details,
-  ;; it wouldn't take much to shift this over to triggering
-  ;; a deadlock (since we're really running on the event loop
-  ;; thread).
-  ;; Actually, I'm a little surprised that this works at all.
-  ;; And it definitely *has* had issues.
-  ;; Q: But is it worth it for the test's sake?
-  ;; Better Q: Is this the sort of thing that will trip
-  ;; us up with surprising behavior if it doesn't work?
-  (let [state (message/get-state io-handle time-out ::timed-out)]
-    (log/debug prelog "get-state returned:" state)
-    (if (or (= ::timed-out state)
-            (instance? Throwable state)
-            (nil? state))
-      (let [problem (if (instance? Throwable state)
-                      state
-                      (ex-info "Non-exception"
-                               {::problem state}))]
-        (is (not problem))
-        (log/error problem prelog "Failed!")
-        (if (instance? ExceptionInfo problem)
-          (log/warn prelog (str (.getData problem)))
-          (log/warn prelog (str prelog " is difficult to debug")))
-        (if (realized? succeeded?)
-          (log/warn prelog "Caller already thinks we succeeded")
-          (dfrd/error! succeeded? problem)))
-      (message/parent->! io-handle bs))))
+
+  (let [consumption (dfrd/future
+                      ;; Checking for the server state is wasteful here.
+                      ;; And very dubious...depending on implementation details,
+                      ;; it wouldn't take much to shift this over to triggering
+                      ;; a deadlock (since we're really running on the event loop
+                      ;; thread).
+                      ;; Actually, I'm a little surprised that this works at all.
+                      ;; And it definitely *has* had issues.
+                      ;; Q: But is it worth it for the test's sake?
+                      ;; Better Q: Is this the sort of thing that will trip
+                      ;; us up with surprising behavior if it doesn't work?
+                      (let [state (message/get-state io-handle time-out ::timed-out)
+                            prelog' (utils/pre-log message-loop-name)]
+                        (log/debug prelog'
+                                   "get-state returned:" state
+                                   "\nScheduled from:\n" prelog)
+                        (if (or (= ::timed-out state)
+                                (instance? Throwable state)
+                                (nil? state))
+                          (let [problem (if (instance? Throwable state)
+                                          state
+                                          (ex-info "Non-exception"
+                                                   {::problem state}))]
+                            (is (not problem))
+                            (log/error problem prelog' "Failed!\nTriggered from\n" prelog)
+                            (if (instance? ExceptionInfo problem)
+                              (log/warn prelog' (str (.getData problem) "\nfrom:\n" prelog))
+                              (log/warn (str prelog' " is difficult to debug from\n" prelog)))
+                            (if (realized? succeeded?)
+                              (log/warn prelog' "Caller already thinks we succeeded from\n" prelog)
+                              (dfrd/error! succeeded? problem)))
+                          (message/parent->! io-handle bs))))]
+    (dfrd/on-realized consumption
+                      (fn [success]
+                        (let [prelog' (utils/pre-log message-loop-name)]
+                          (log/debug (str prelog'
+                                          "Message successfully consumed: "
+                                          success
+                                          "  from\n"
+                                          prelog))))
+                      (fn [failure]
+                        (let [prelog' (utils/pre-log message-loop-name)]
+                          (log/debug (str prelog'
+                                          "Failed to consume message: "
+                                          failure
+                                          "  from\n"
+                                          prelog)))))))
 
 (defn srvr->client-consumer
   "This processes bytes that are headed from the server to the client"

@@ -193,6 +193,8 @@
         bytes-available (.available child-in)
         max-n (count buffer)]
     (if (< 0 bytes-available)
+      ;; TODO: This should happen in a dfrd/future that allows
+      ;; us to yield control without actually blocking a thread.
       (let [n (.read child-in buffer 0 (min bytes-available
                                             max-n))]
         (if (<= 0 n)
@@ -222,8 +224,9 @@
           (let [result
                 (cond (neg? byte1) (do
                                      (log/warn prelog "Parent monitor received EOF")
-                                     ;; Q: Do I need to .close child-in here?
-                                     ;; A: It won't hurt.
+                                     ;; The part that writes to our paired Pipe
+                                     ;; closed its half.
+                                     ;; Do the same for sanitation.
                                      (.close child-in)
                                      ::specs/normal)
                       (keyword? byte1) byte1
@@ -372,7 +375,7 @@
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state
                      :prelog string?)
-        :ret any?)
+        :ret ::specs/state)
 (defn possibly-close-pipe!
   "Maybe signal child that it won't receive anything else"
   [{:keys [::specs/to-child]
@@ -385,14 +388,16 @@
     :as state}
    prelog]
   (log/debug (str prelog "Process EOF? (receive-eof: " receive-eof ")"))
-  (if (= ::specs/false receive-eof)
-    state
+  (when (not= ::specs/false receive-eof)
     (if (= receive-written receive-total-bytes)
       (do
         (log/info prelog "Have received everything other side will send")
         (when-not to-child
           (log/error prelog "Missing to-child, so we can't close it"))
-        (.close to-child))
+        (try
+          (.close to-child)
+          (catch RuntimeException ex
+            (log/error ex prelog "Trying to close to-child failed"))))
       (log/warn (str prelog
                      "EOF flag received.\n"
                      (select-keys incoming
@@ -429,6 +434,8 @@
                 start-time (System/nanoTime)]
             (log/debug prelog "Triggering child callback")
             (try
+              ;; The rest of this function is really just support and error
+              ;; handling for the actual point, right here
               (cb holder)
               (catch ExceptionInfo ex
                 (log/error ex
@@ -491,10 +498,12 @@
                                       to-child)
                              consolidated
                              ->child-buffer)]
-          (possibly-close-pipe! io-handle result prelog))
+          (possibly-close-pipe! io-handle result prelog)
+          result)
         (do
           (log/warn prelog "0 bytes to forward to child")
-          (possibly-close-pipe! io-handle consolidated prelog)))
+          (possibly-close-pipe! io-handle consolidated prelog)
+          consolidated))
       ;; 610-614: counters/looping
       ;; (doesn't really apply to this implementation)
       )))

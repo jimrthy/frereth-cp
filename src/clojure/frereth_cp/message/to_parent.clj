@@ -656,68 +656,74 @@
     :as io-handle}
    {:keys [::specs/message-loop-name]
     :as state}]
-  (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
-         :as state'} (pick-next-block-to-send state)
-        prelog (utils/pre-log message-loop-name)]
-    (if next-block-queue
-      (let [{{:keys [::specs/send-buf
-                     ::specs/un-ackd-blocks]} ::specs/outgoing
-             :as state''} (pre-calculate-state-after-send state')
-            n (count send-buf)]
-        (when-not (s/valid? ::specs/send-buf send-buf)
-          ;; Doing a spec test here seems worrisome from a
-          ;; performance perspective.
-          ;; But it really does need to happen (at least at dev
-          ;; time, and probably always).
-          ;; And this seems like the most obvious location.
-          (log/warn prelog
-                    "Illegal outgoing buffer\n"
-                    (s/explain-data ::specs/send-buf send-buf)))
-        (log/debug prelog
-                   "Sending"
-                   ;; Actually, calling count here tells the entire
-                   ;; story: I have either a byte-array or vector
-                   ;; rather than the ByteBuf that spec demands.
-                   ;; Actually, the spec is wrong.
-                   ;; I *want*
-                   ;; TODO: Fix the spec.
-                   ;; That probably means switching the key name.
-                   n
-                   "bytes to parent in"
-                   send-buf)
-        ;; TODO: This is one of the side-effects that I really should
-        ;; be accumulating rather than calling willy-nilly.
-        (block->parent! message-loop-name ->parent send-buf)
-        (log/debug prelog
-                   (str "Calculating earliest time among "
-                        (count un-ackd-blocks)
-                        " un-ACK'd block(s)"
-                        ".\nThose are very distinct from the "
-                        (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
-                        " that is/are left in un-sent-blocks"))
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/debug prelog "Picking next block to possibly send")
+    (when-not message-loop-name
+      (log/warn "There's something strange about state:\n" state))
+    (try
+      (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
+             :as state'} (pick-next-block-to-send state)]
+        (if next-block-queue
+          (let [{{:keys [::specs/send-buf
+                         ::specs/un-ackd-blocks]} ::specs/outgoing
+                 :as state''} (pre-calculate-state-after-send state')
+                n (count send-buf)]
+            (when-not (s/valid? ::specs/send-buf send-buf)
+              ;; Doing a spec test here seems worrisome from a
+              ;; performance perspective.
+              ;; But it really does need to happen (at least at dev
+              ;; time, and probably always).
+              ;; And this seems like the most obvious location.
+              (log/warn prelog
+                        "Illegal outgoing buffer\n"
+                        (s/explain-data ::specs/send-buf send-buf)))
+            (log/debug prelog
+                       "Sending"
+                       ;; Actually, calling count here tells the entire
+                       ;; story: I have either a byte-array or vector
+                       ;; rather than the ByteBuf that spec demands.
+                       ;; Actually, the spec is wrong.
+                       ;; I *want*
+                       ;; TODO: Fix the spec.
+                       ;; That probably means switching the key name.
+                       n
+                       "bytes to parent in"
+                       send-buf)
+            ;; TODO: This is one of the side-effects that I really should
+            ;; be accumulating rather than calling willy-nilly.
+            (block->parent! message-loop-name ->parent send-buf)
+            (log/debug prelog
+                       (str "Calculating earliest time among "
+                            (count un-ackd-blocks)
+                            " un-ACK'd block(s)"
+                            ".\nThose are very distinct from the "
+                            (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
+                            " that is/are left in un-sent-blocks"))
 
-        ;; This next concept almost fits here.
-        ;; But I keep rolling back to the point it shouldn't happen until after
-        ;; block->parent! has returned successfully.
-        ;; So just ditch the idea and add a predicate function for the logic.
-        (comment (if (and send-eof
-                          (empty? (get-in result [::specs/outgoing ::specs/un-sent-blocks])))
-                   (assoc-in result
-                             [::specs/outgoing ::specs/send-eof-processed]
-                             true)))
+            ;; This next concept almost fits here.
+            ;; But I keep rolling back to the point it shouldn't happen until after
+            ;; block->parent! has returned successfully.
+            ;; So just ditch the idea and add a predicate function for the logic.
+            (comment (if (and send-eof
+                              (empty? (get-in result [::specs/outgoing ::specs/un-sent-blocks])))
+                       (assoc-in result
+                                 [::specs/outgoing ::specs/send-eof-processed]
+                                 true)))
 ;;;      408: earliestblocktime_compute()
-        (-> state''
-            (assoc-in [::specs/outgoing ::specs/earliest-time]
-                      (help/earliest-block-time message-loop-name un-ackd-blocks))
-            (update ::specs/outgoing dissoc ::specs/next-block-queue)))
-      (do
-        ;; To aid in traffic analysis, should intermittently send meaningless
-        ;; garbage when nothing else is available.
-        ;; TODO: Lots of research to make sure I do this correctly.
-        ;; (The obvious downside is increased bandwidth)
-        (log/debug prelog
-                   "Nothing to send")
-        state))))
+            (-> state''
+                (assoc-in [::specs/outgoing ::specs/earliest-time]
+                          (help/earliest-block-time message-loop-name un-ackd-blocks))
+                (update ::specs/outgoing dissoc ::specs/next-block-queue)))
+          (do
+            ;; To aid in traffic analysis, should intermittently send meaningless
+            ;; garbage when nothing else is available.
+            ;; TODO: Lots of research to make sure I do this correctly.
+            ;; (The obvious downside is increased bandwidth)
+            (log/debug prelog
+                       "Nothing to send")
+            state)))
+      (catch Exception ex
+        (log/error ex prelog "Trying to send message block to parent")))))
 
 (s/fdef send-eof-buffered?
         :args (s/cat :outgoing ::specs/outgoing)

@@ -140,10 +140,10 @@
                      :state ::specs/state)
         :ret ::specs/state)
 (defn trigger-output
-  [{:keys [::specs/to-child
-           ::specs/message-loop-name]
+  [{:keys [::specs/to-child]
     :as io-handle}
    {{:keys [::specs/next-action]} ::specs/flow-control
+    :keys [::specs/message-loop-name]
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)]
     ;; I have at least 1 unit test that receives input
@@ -633,7 +633,7 @@
    ;; it less obviously a win.
    success]
   (let [prelog (utils/pre-log message-loop-name)  ; might be on a different thread
-        fmt (str "Interrupting event loop waiting for ~:d ms "
+        fmt (str "Awakening event loop that was sleeping for ~:d ms "
                  "after ~:d at ~:d\n"
                  "at ~:d because: ~a")
         now (System/nanoTime)

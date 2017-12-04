@@ -363,12 +363,12 @@
                      :blocker dfrd/deferrable?
                      :attempts nat-int?
                      :timeout nat-int?)
-        :ret (s/nilable ::specs/bs-or-eof))
+        :ret ::specs/bs-or-eof)
 (defn try-multiple-sends
   "The parameters are weird because I refactored it out of a lexical closure"
   [stream
    ;; TODO: Refactor-rename this to bs-or-eof
-   array-o-bytes
+   bs-or-eof
    blocker
    prelog attempts timeout]
   ;; message-test pretty much duplicates this in try-multiple-sends
@@ -391,23 +391,23 @@
                 (recur (dec n))
                 ::specs/error))
             (do  ;; Bytes buffered
-              (if (bytes? array-o-bytes)
+              (if (bytes? bs-or-eof)
                 (log/debug prelog
-                           (count array-o-bytes)
+                           (count bs-or-eof)
                            "bytes from child processed by main i/o loop")
-                (log/warn prelog "Got some EOF signal:" array-o-bytes))
+                (log/warn prelog "Got some EOF signal:" bs-or-eof))
               ;; Q: Does returning this really gain me anything?
               ;; It seems like it would be simpler (for the sake of callers)
               ;; to just return nil on success, or one of the ::specs/eof-flag
               ;; set when it's time to stop.
               ;; I was doing it that way at one point.
               ;; Q: Why did I switch?
-              array-o-bytes))))
+              bs-or-eof))))
       (do
         (log/warn prelog
                   "Destination stream closed waiting to put"
-                  array-o-bytes)
-        nil))))
+                  bs-or-eof)
+        ::specs/error))))
 
 (s/fdef forward-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
@@ -434,7 +434,7 @@
     ;; 2. Server's child receives that and sends its own EOF packet
     ;; 3. That EOF packet gets to try-multiple-sends
     ;; And then processing stops until the test ends.
-    (throw (RuntimeException. "What's going wrong with this?"))
+    (comment (throw (RuntimeException. "What's going wrong with this?")))
     (log/debug prelog
                (str
                 "Received "
