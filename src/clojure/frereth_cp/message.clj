@@ -360,6 +360,9 @@
                                      (assoc-in state
                                                [::specs/incoming ::specs/parent->buffer]
                                                message))
+                      ;; This is a prime example of something that should
+                      ;; be queued up to be called for side-effects.
+                      ;; TODO: Split those out and make that happen.
                       state' (to-child/forward! io-handle (or pre-processed
                                                             state))]
                   ;; This will update recent.
@@ -633,7 +636,7 @@
    ;; it less obviously a win.
    success]
   (let [prelog (utils/pre-log message-loop-name)  ; might be on a different thread
-        fmt (str "Awakening event loop that was sleeping for ~:d ms "
+        fmt (str "Awakening event loop that was sleeping for ~g ms "
                  "after ~:d at ~:d\n"
                  "at ~:d because: ~a")
         now (System/nanoTime)
@@ -645,14 +648,29 @@
         ;; TODO: Ask cryptographers and protocol experts whether this is
         ;; a choice I'll really regret
         state (assoc state ::specs/recent now)]
-    (log/debug prelog
-               (cl-format nil
-                          fmt
-                          delta_f
-                          scheduling-time
-                          actual-next
-                          now
-                          success))
+    (try
+      (log/debug prelog
+                 (cl-format nil
+                            fmt
+                            delta_f
+                            scheduling-time
+                            (or actual-next -1)
+                            now
+                            success))
+      (catch NullPointerException ex
+        (log/error ex (str "Error building the event loop Awakening message\n"
+                           {::delta_f delta_f
+                            ::scheduling-time scheduling-time
+                            ::actual-next actual-next
+                            ::now now
+                            ::success success})))
+      (catch NumberFormatException ex
+        (log/error ex (str "Error formatting the event loop Awakening message\n"
+                           {::delta_f delta_f
+                            ::scheduling-time scheduling-time
+                            ::actual-next actual-next
+                            ::now now
+                            ::success success}))))
     (let [tag (try (first success)
                    (catch IllegalArgumentException ex
                      (log/error ex
@@ -776,6 +794,23 @@
                                 (- end mid)))
           nil)))))
 
+(comment
+  (let [delta_f ##Inf,
+        scheduling-time 8820859844762393,
+        actual-next nil
+        now 8820859845124380
+        success [:frereth-cp.message/query-state ::whatever]
+        fmt (str "Awakening event loop that was sleeping for ~g ms "
+                 "after ~:d at ~:d\n"
+                 "at ~:d because: ~a")]
+    (cl-format nil
+               fmt
+               delta_f #_1.0
+               scheduling-time
+               (or actual-next -1)
+               now
+               success)))
+
 ;;; I really want to move schedule-next-timeout! to flow-control.
 ;;; But it has a circular dependency with trigger-from-timer.
 ;;; Which...honestly also belongs in there.
@@ -827,70 +862,89 @@
                           "Top of scheduler at ~:d"
                           now))
     (if (not (strm/closed? stream))
-      ;; TODO: Reframe this logic around
-      ;; whether child-input-loop and
-      ;; child-output-loop have been realized
-      ;; instead.
-      (if (and send-eof-acked
-               (not= receive-eof ::specs/false)
-               (= receive-written receive-total-bytes))
-        (log/warn (str prelog
-                       "Main ioloop is done."
-                       "\nsend-eof-acked: " send-eof-acked
-                       "\nreceive-eof: " receive-eof
-                       "\nreceive-written: " receive-written
-                       "\nreceive-total-bytes: " receive-total-bytes
-                       "\nExiting"))
-        ;; TODO: add a debugging step that stores state and the
-        ;; calculated time so I can just look at exactly what I have
-        ;; when everything goes sideways
-        (let [actual-next (choose-next-scheduled-time state)
-              ;; It seems like it would make more sense to have the delay happen from
-              ;; "now" instead of "recent"
-              ;; Doing that throws lots of sand into the gears.
-              ;; Stick with this approach for now, because it *does*
-              ;; match the reference implementation.
-              ;; It seems very incorrect, but it also supplies an adjustment
-              ;; for the time it took this event loop iteration to process.
-              ;; Q: Is that fair/accurate?
-              scheduled-delay (- actual-next recent)
-              ;; Make sure that at least it isn't negative
-              ;; (I keep running across bugs that have issues with this,
-              ;; and it wreaks havoc with my REPL)
-              delta-nanos (max 0 scheduled-delay)
-              delta (if (< delta-nanos 0)
-                      0
-                      (inc (utils/nanos->millis delta-nanos)))
-              ;; For printing
-              delta_f (float delta)
-              next-action (strm/try-take! stream [::drained] delta_f [::timed-out])]
-          (log/debug prelog
-                     (cl-format nil
-                                "Initially calculated scheduled delay: ~:d nanoseconds after ~:d vs. ~:d"
-                                scheduled-delay
-                                recent
-                                now))
-          (dfrd/on-realized next-action
-                            (partial action-trigger
-                                     {::actual-next actual-next
-                                      ::delta_f delta_f
-                                      ::scheduling-time now}
-                                     io-handle
-                                     state)
-                            (fn [failure]
-                              (log/error failure
-                                         prelog
-                                         (cl-format nil
-                                                    "~a: Waiting on some I/O to happen in timeout ~:d ms after ~:d"
-                                                    delta_f
-                                                    now))
-                              (strm/close! io-handle)))
-          (log/debug prelog
-                     (cl-format nil
-                                "Set timer to trigger in ~:d ms (vs ~:d scheduled) on ~a"
-                                delta_f
-                                (float (utils/nanos->millis scheduled-delay))
-                                stream))))
+      (let [actual-next
+            ;; TODO: Reframe this logic around
+            ;; whether child-input-loop and
+            ;; child-output-loop have been realized
+            ;; instead.
+            (if (and send-eof-acked
+                     (not= receive-eof ::specs/false)
+                     (= receive-written receive-total-bytes))
+              (do
+                ;; Note that we can't *really* exit until
+                ;; the caller closes the stream.
+                ;; After all, unit tests want/need to
+                ;; examine the final system state.
+                (log/warn (str prelog
+                               "Main ioloop is done."
+                               "\nsend-eof-acked: " send-eof-acked
+                               "\nreceive-eof: " receive-eof
+                               "\nreceive-written: " receive-written
+                               "\nreceive-total-bytes: " receive-total-bytes
+                               "\nExiting"))
+                nil)
+              (choose-next-scheduled-time state))
+            {:keys [::delta_f
+                    ::next-action]}
+            (if actual-next
+              ;; TODO: add an optional debugging step that stores state and the
+              ;; calculated time so I can just look at exactly what I have
+              ;; when everything goes sideways
+              (let [
+                    ;; It seems like it would make more sense to have the delay happen from
+                    ;; "now" instead of "recent"
+                    ;; Doing that throws lots of sand into the gears.
+                    ;; Stick with this approach for now, because it *does*
+                    ;; match the reference implementation.
+                    ;; It seems very incorrect, but it also supplies an adjustment
+                    ;; for the time it took this event loop iteration to process.
+                    ;; Q: Is that fair/accurate?
+                    scheduled-delay (- actual-next recent)
+                    ;; Make sure that at least it isn't negative
+                    ;; (I keep running across bugs that have issues with this,
+                    ;; and it wreaks havoc with my REPL)
+                    delta-nanos (max 0 scheduled-delay)
+                    delta (if (< delta-nanos 0)
+                            0
+                            (inc (utils/nanos->millis delta-nanos)))
+                    ;; For printing
+                    delta_f (float delta)]
+                (log/debug prelog
+                           (cl-format nil
+                                      (str "Initially calculated scheduled delay: ~:d nanoseconds after ~:d vs. ~:d"
+                                           "\nSetting timer to trigger in ~:d ms (vs ~:d scheduled) on ~a")
+                                      scheduled-delay
+                                      recent
+                                      now
+                                      delta_f
+                                      (float (utils/nanos->millis scheduled-delay))
+                                      stream))
+                {::delta_f delta_f
+                 ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])})
+              ;; The i/o portion of this loop is finished.
+              ;; But we still need to wait on the caller to close the underlying stream.
+              ;; If nothing else, it may still want/need to query state.
+              {::delta_f ##Inf
+               ::next-action (strm/take! stream [::drained])})]
+        (dfrd/on-realized next-action
+                          (partial action-trigger
+                                   {::actual-next actual-next
+                                    ::delta_f delta_f
+                                    ::scheduling-time now}
+                                   io-handle
+                                   state)
+                          (fn [failure]
+                            (log/error failure
+                                       prelog
+                                       (cl-format nil
+                                                  "~a: Waiting on some I/O to happen in timeout ~:d ms after ~:d"
+                                                  delta_f
+                                                  now))
+                            ;; We don't have any business doing this here, but the
+                            ;; alternatives don't seem appealing.
+                            ;; Well, we could recurse manually without a scheduled
+                            ;; time.
+                            (strm/close! stream))))
       (log/warn prelog "I/O Handle closed"))
     ;; Don't rely on the return value of a function called for side-effects
     nil))
@@ -1175,7 +1229,7 @@
         :ret (s/or :success ::specs/state
                    :timed-out any?)
         ;; If this timed out, should return the supplied
-        ;; time-out paremeter (or ::timed-out, if none).
+        ;; time-out parameter (or ::timed-out, if none).
         ;; Otherwise, the requested state.
         ;; TODO: Verify that this spec does what I expect.
         :fn (fn [{:keys [:args :ret]}]
