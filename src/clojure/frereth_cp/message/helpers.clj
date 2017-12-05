@@ -213,16 +213,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;                    Updates totalblocktransmissions and totalblocks
       (let [state (reduce (partial flag-acked-blocks start stop)
                           state
-                          un-ackd-blocks)
-            ;;;           177-182: Possibly set sendeofacked flag
-            state (if (and send-eof
-                           (= start 0)
-                           ;; It seems like this next check should be >=
-                           ;; But this is what the reference implementation checks.
-                           (> stop (get-in state [::specs/outgoing ::specs/strm-hwm]))
-                           (not send-eof-acked))
-                    (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
-                    state)]
+                          un-ackd-blocks)]
         (log/debug log-prefix
                    "Done w/ initial flag reduce:\n"
                    state)

@@ -552,8 +552,20 @@ Line 608"
   [{{:keys [::specs/send-eof
             ::specs/un-ackd-blocks
             ::specs/un-sent-blocks]} ::specs/outgoing
+    :keys [::specs/message-loop-name]
     :as state}]
-  (if (and (not= ::specs/normal send-eof)
+  (log/debug (str (utils/pre-log message-loop-name)
+                  "Q: Has other side ACKed the child's EOF message?"
+                  "\nsend-eof: " send-eof
+                  "\nBlocks that have not been sent/ACKed: " (+ (count un-ackd-blocks)
+                                                                (count un-sent-blocks))
+                  "\n"))
+  ;;;           177-182: Possibly set sendeofacked flag
+  ;; Note that this particular step is pretty far from where the original
+  ;; does it (our equivalent to that is under helpers, when it copes with
+  ;; ACKs)
+  (if (and (not= ::specs/false send-eof)
+           ;; It's
            (empty? un-ackd-blocks)
            (empty? un-sent-blocks))
     (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)

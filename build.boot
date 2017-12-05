@@ -92,6 +92,7 @@
   "Set up a REPL for connecting from CIDER"
   []
   ;; Just because I'm prone to forget one of the vital helper steps
+  ;; Note that this would probably make more sense under profile.boot.
   (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl)))
 
 (deftask run
