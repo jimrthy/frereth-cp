@@ -177,7 +177,7 @@
     bs))
 
 (defn server-child-processor
-  [server-atom state-atom succeeded? chzbrgr-length incoming]
+  [server-atom state-atom chzbrgr-length incoming]
   (is incoming)
   (is (or (keyword? incoming)
           (and (bytes? incoming)
@@ -207,32 +207,7 @@
                           "Giving up on forwarding to child"
                           {::response rsp
                            ::request incoming})
-        (do
-          ;; Houston, We have a problem.
-          ;; This indicates that we received the EOF from the
-          ;; Client.
-          ;; So we're following it up with "OK, fine, we're
-          ;; done too."
-          ;; Marking the test complete here can't work.
-          ;; The client told us that it's done.
-          ;; We've probably sent back the appropriate ACK,
-          ;; but it really isn't (and shouldn't!) be possible
-          ;; to know at this level.
-          ;; We still need to send back our ACK (which gets
-          ;; triggered by closing the socket in the step below).
-          (dfrd/success! succeeded? ::kthxbai)
-          ;; The test really isn't done after this.
-          ;; This message needs to
-          ;; a) get to the server's parent
-          ;; b) get to the client's parent
-          ;; c) get the client-parent's ACK to the server
-          ;; d) notify the client-child that it's all done
-          ;; No matter what, we have a race condition between
-          ;; c and d
-          ;; In a real-world scenario, d will trigger first,
-          ;; due to network latency.
-          ;; And, really it won't matter.
-          (message/child-close! @server-atom)))
+        (message/child-close! @server-atom))
       (when (= incoming ::icanhazchzbrgr?)
         ;; One of the main points is that this doesn't need to be a lock-step
         ;; request/response.
@@ -263,7 +238,7 @@
 
 (defn client-child-processor
   "Process the messages queued by mock-client-child"
-  [client-atom client-state-atom chzbrgr-length incoming]
+  [client-atom client-state-atom succeeded? chzbrgr-length incoming]
   (is incoming)
   (is (or (keyword? incoming)
           ;; Implementation detail:
@@ -321,6 +296,7 @@
               5 (do
                   (is (= incoming ::specs/normal))
                   (log/info "Received server EOF")
+                  (dfrd/success! succeeded? ::kthxbai)
                   ;; At this point, we signalled the end of the transaction.
                   ;; We closed our outbound pipe in the previous step,
                   ;; which is what closed this.
@@ -508,12 +484,12 @@
       (strm/consume (partial client-child-processor
                              client-atom
                              client-state
+                             succeeded?
                              chzbrgr-length)
                     clnt-decode-sink)
       (strm/consume (partial server-child-processor
                              server-atom
                              server-state-atom
-                             succeeded?
                              chzbrgr-length)
                     srvr-decode-sink)
 
@@ -549,6 +525,8 @@
                         "handshake-test run through. Need to see what happened\n"
                         "=====================================================")
               (let [client-message-state (message/get-state client-io time-out ::timed-out)]
+                ;; This seems inside-out.
+                ;; TODO: Check really-succeeded? first.
                 (when (or (= client-message-state ::timed-out)
                           (instance? Throwable client-state)
                           (nil? client-message-state))
@@ -562,6 +540,15 @@
                     ;; Q: Is that true? Or have I just not studied its
                     ;; docs thoroughly enough?
                     (is (not flow-control) "Client flow-control behind a timeout"))))
+              ;; FIXME: This next step is evil, but we deliberately don't have access to the
+              ;; details at this level.
+              ;; Digging in to get them would be worse.
+              ;; Add some sort of hooks (promise/deferred seems like the most
+              ;; appropriate choice) to let the io-loop broadcast when a particular
+              ;; state has finished.
+              ;; Or maybe this is already there.
+              ;; TODO: Clean this mess up.
+              (Thread/sleep 25)   ; Give the server side a chance to flush
               (let [{:keys [::specs/flow-control]
                      :as srvr-state} (message/get-state server-io time-out ::timed-out)]
                 (when (or (= srvr-state ::timed-out)
