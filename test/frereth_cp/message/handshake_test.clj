@@ -177,7 +177,7 @@
     bs))
 
 (defn server-child-processor
-  [server-atom state-atom chzbrgr-length incoming]
+  [server-atom state-atom succeeded? chzbrgr-length incoming]
   (is incoming)
   (is (or (keyword? incoming)
           (and (bytes? incoming)
@@ -199,6 +199,7 @@
                 "\nwhich triggers"
                 rsp)
       (if (not= rsp ::specs/normal)
+        ;; Happy path
         (buffer-response! @server-atom
                           prelog
                           rsp
@@ -206,7 +207,32 @@
                           "Giving up on forwarding to child"
                           {::response rsp
                            ::request incoming})
-        (message/child-close! @server-atom))
+        (do
+          ;; Houston, We have a problem.
+          ;; This indicates that we received the EOF from the
+          ;; Client.
+          ;; So we're following it up with "OK, fine, we're
+          ;; done too."
+          ;; Marking the test complete here can't work.
+          ;; The client told us that it's done.
+          ;; We've probably sent back the appropriate ACK,
+          ;; but it really isn't (and shouldn't!) be possible
+          ;; to know at this level.
+          ;; We still need to send back our ACK (which gets
+          ;; triggered by closing the socket in the step below).
+          (dfrd/success! succeeded? ::kthxbai)
+          ;; The test really isn't done after this.
+          ;; This message needs to
+          ;; a) get to the server's parent
+          ;; b) get to the client's parent
+          ;; c) get the client-parent's ACK to the server
+          ;; d) notify the client-child that it's all done
+          ;; No matter what, we have a race condition between
+          ;; c and d
+          ;; In a real-world scenario, d will trigger first,
+          ;; due to network latency.
+          ;; And, really it won't matter.
+          (message/child-close! @server-atom)))
       (when (= incoming ::icanhazchzbrgr?)
         ;; One of the main points is that this doesn't need to be a lock-step
         ;; request/response.
@@ -237,7 +263,7 @@
 
 (defn client-child-processor
   "Process the messages queued by mock-client-child"
-  [client-atom client-state-atom succeeded? chzbrgr-length incoming]
+  [client-atom client-state-atom chzbrgr-length incoming]
   (is incoming)
   (is (or (keyword? incoming)
           ;; Implementation detail:
@@ -295,7 +321,14 @@
               5 (do
                   (is (= incoming ::specs/normal))
                   (log/info "Received server EOF")
-                  (dfrd/success! succeeded? ::kthxbai)))]
+                  ;; At this point, we signalled the end of the transaction.
+                  ;; We closed our outbound pipe in the previous step,
+                  ;; which is what closed this.
+                  ;; It might be useful to deliver some sort of promise
+                  ;; here to make the test more obvious.
+                  ;; But, honestly, winding up at state
+                  ;; 6 after this pretty much says it all.
+                  nil))]
         (log/info prelog2
                   incoming
                   "from\n"
@@ -475,12 +508,12 @@
       (strm/consume (partial client-child-processor
                              client-atom
                              client-state
-                             succeeded?
                              chzbrgr-length)
                     clnt-decode-sink)
       (strm/consume (partial server-child-processor
                              server-atom
                              server-state-atom
+                             succeeded?
                              chzbrgr-length)
                     srvr-decode-sink)
 
@@ -537,7 +570,7 @@
                   (is (not srvr-state)))
                 (comment (is (not flow-control) "Server flow-control")))
               (is (= ::kthxbai really-succeeded?))
-              (is (= 5 (-> client-state
+              (is (= 6 (-> client-state
                            deref
                            ::count)))))
           (finally

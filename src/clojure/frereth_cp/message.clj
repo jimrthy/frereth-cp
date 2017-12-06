@@ -881,7 +881,7 @@
                                "\nreceive-eof: " receive-eof
                                "\nreceive-written: " receive-written
                                "\nreceive-total-bytes: " receive-total-bytes
-                               "\nExiting"))
+                               "\nIdling"))
                 nil)
               (choose-next-scheduled-time state))
             {:keys [::delta_f
