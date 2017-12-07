@@ -18,7 +18,7 @@
 
 (deftest check-mark-acked
   (let [start-state (test-helpers/build-ack-flag-message-portion)
-        acked (help/mark-acknowledged! start-state 0 56)]
+        acked (help/mark-ackd-by-addr start-state 0 56)]
     (try
       (comment (pprint acked))
       (is (= (keys start-state) (keys (dissoc acked ::help/n))))
@@ -30,11 +30,11 @@
             b1n (count b1)
             b2 (get-in acked [::specs/outgoing ::specs/un-ackd-blocks])
             b2n (count b2)]
-        (when-not (= (dec b1n) b2n)
+        (when-not (= b1n b2n)
           ;; Can't call clojure.data/diff due to the same issue with
           ;; the released ByteBuf
           #_(comment (pprint (clojure.data/diff b1 b2)))
-          (is (= (dec b1n) b2n)
+          (is (= b1n b2n)
               (str "Start-state has " b1n
                    " blocks.\nFlagged version has "
                    b2n
@@ -43,6 +43,8 @@
                                            ::specs/length]}]
                                 (> 56 (+ start-pos length)))
                               b1)]
+          ;; I'm too tired to dig into this problem tonight.
+          (throw (RuntimeException. "Just emphasizing that this is broken"))
           (is (= (apply set (map (partial disj b1) dropped))
                  b2))))
       (finally

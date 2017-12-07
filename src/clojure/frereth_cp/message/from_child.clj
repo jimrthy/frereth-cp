@@ -204,8 +204,7 @@
 (s/fdef build-byte-consumer
         ;; TODO: This is screaming for generative testing
         :args (s/cat :message-loop-name ::specs/message-loop-name
-                     :array-o-bytes (s/or :message bytes?
-                                          :eof ::specs/eof-flag))
+                     :bs-or-eof ::specs/bs-or-eof)
         :ret (s/fspec :args (s/cat :state ::specs/state)
                       :ret ::specs/state))
 (defn build-byte-consumer
@@ -218,34 +217,27 @@
   ;; this namespace is about buffering. We need to hang onto
   ;; those buffers here until they've been ACK'd.
   [message-loop-name
-   ;; TODO: This needs a better name.
-   ;; Under normal operating conditions, it *is*
-   ;; a byte-array.
-   ;; But then we hit EOF, and it gets repurposed.
-   ;; Actually, that kind of says it all.
-   ;; TODO: Add an EOF flag here so we don't have
-   ;; to do that repurposing.
-   array-o-bytes]
+   bs-or-eof]
   (let [prelog (utils/pre-log message-loop-name)
-        eof? (keyword? array-o-bytes)
+        eof? (keyword? bs-or-eof)
         buf-size (if eof?
                    0
-                   (count array-o-bytes))
+                   (count bs-or-eof))
         repr (if eof?
-               (str "EOF: " array-o-bytes)
+               (str "EOF: " bs-or-eof)
                (str buf-size "-byte array"))
         block
-        (if (keyword? array-o-bytes)
+        (if (keyword? bs-or-eof)
           (assoc
            (build-individual-block (Unpooled/wrappedBuffer (byte-array 0)))
-           ::specs/send-eof array-o-bytes)
+           ::specs/send-eof bs-or-eof)
           ;; Note that back-pressure no longer gets applied if we
           ;; already have ~124K pending because caller started
           ;; dropping packets.
           ;; (It doesn't seem like it should matter, except
           ;; as an upstream signal that there's some kind of
           ;; problem)
-          (let [^bytes actual array-o-bytes
+          (let [^bytes actual bs-or-eof
                 ;; Q: Use Pooled direct buffers instead?
                 ;; A: Direct buffers wouldn't make any sense.
                 ;; After we get done with all the slicing and
@@ -273,7 +265,7 @@
     ;; The main point to logging this is to correlate the
     ;; incoming byte-array with the outgoing ByteBuf identifiers
     (log/debug prelog (str "Prepping thunk for "
-                           array-o-bytes
+                           bs-or-eof
                            " baked into block description:\n"
                            block))
     ;; TODO: Refactor this into a top-level function
@@ -353,7 +345,7 @@
                                    ;; send-eof-processed has caused me enough
                                    ;; pain that I've eliminated it.
                                    (assoc result
-                                          ::specs/send-eof array-o-bytes)
+                                          ::specs/send-eof bs-or-eof)
                                    result))))]
           result)))))
 

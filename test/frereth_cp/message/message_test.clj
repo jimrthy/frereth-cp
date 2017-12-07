@@ -270,18 +270,21 @@
                       (is (= msg-len (::specs/contiguous-stream-count incoming)))
                       (is (= (inc (::specs/strm-hwm incoming))
                              (::specs/contiguous-stream-count incoming)))
-                      (is (= 3 (::specs/next-message-id outgoing)))
+                      (is (= 2 (::specs/next-message-id outgoing)))
                       ;; There's nothing on the other side to send back
                       ;; an ACK. But it should have been sent.
                       (is (= msg-len (from-child/buffer-size outgoing)))
-                      ;; The EOF still doesn't look like it's getting sent.
-                      ;; Although it must be for the parent to have signaled
-                      ;; that it's done.
-                      ;; TODO: Figure out what's going on.
-                      (is (= 0 (count (::specs/un-sent-blocks outgoing))))
                       ;; This includes both the packet we're echoing back
                       ;; and the EOF signal.
-                      (is (= 2 (count (::specs/un-ackd-blocks outgoing))))
+                      ;; Because of the way the initial scheduling algorithm works
+                      ;; (it wants an ACK from the first block before sending the
+                      ;; second), we're winding up with 1 message in both
+                      ;; queues. That's an implementation detail that really doesn't
+                      ;; matter for our purposes, and it might change.
+                      ;; The important point is that we still have both
+                      ;; the echo and the EOF.
+                      (is (= 2 (+ (count (::specs/un-sent-blocks outgoing))
+                                  (count (::specs/un-ackd-blocks outgoing)))))
                       (is (= ::specs/normal (::specs/send-eof outgoing)))
                       (is (= msg-len (::specs/strm-hwm outgoing)))
                       ;; Keeping around as a reminder for when the implementation changes
@@ -324,11 +327,12 @@
         ;; And verify the action with sizes that cross packet boundaries
         chzbrgr-lngth 182
         chzbrgr (byte-array (range chzbrgr-lngth))
+        consumer (from-child/build-byte-consumer message-loop-name chzbrgr)
         _ (log/info "Reading chzbrgr from child")
         ;; This is much slower than I'd like
         {:keys [::specs/outgoing
                 ::specs/recent]
-         :as state'} (time (from-child/process-next-bytes-from-child! start-state chzbrgr))]
+         :as state'} (time (consumer start-state))]
     (is (= 1 (count (::specs/un-sent-blocks outgoing))))
     (is (= chzbrgr-lngth (::specs/strm-hwm outgoing)))
     (let [current-message  (-> outgoing
@@ -625,7 +629,9 @@
           (is (not= outcome ::time-out))
           (when (not= outcome ::time-out)
             (is outgoing)
-            (is (= msg-len (::specs/ackd-addr outgoing)))
+            ;; The ACK for EOF marks 1 past the end of stream, to indicate
+            ;; that we also received the EOF.
+            (is (= (inc msg-len) (::specs/ackd-addr outgoing)))
             (is (= 0 (from-child/buffer-size outcome)))
             (is (= ::specs/normal (::specs/send-eof outgoing)))
             ;; Keeping around as a reminder for when the implementation changes

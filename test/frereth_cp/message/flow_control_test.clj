@@ -46,7 +46,7 @@
         ;; This isn't exactly proof that floats are much faster,
         ;; but it's very indicative.
         ;; And it obviously *should* be true across the board.
-        (is (< (* 500 float-delta) ratio-delta))))))
+        (is (< (* 250 float-delta) ratio-delta))))))
 
 (comment
   (r/foldcat (r/map (fn [_]

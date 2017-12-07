@@ -113,6 +113,7 @@
                       "\nTotal length: " u
                       "\nSize | Flags: " flag-size
                       "\nStart Position: " start-pos))
+      (log/debug "Made it here")
 
       ;; Q: Is this worth switching to shared/compose?
       (.writeInt send-buf next-message-id)

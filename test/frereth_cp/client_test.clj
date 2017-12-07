@@ -21,6 +21,9 @@
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         server-name (shared/encode-server-name "hypothet.i.cal")]
+    ;; This fails now, because it's missing a required
+    ;; ::clnt/server-long-term-pk
+    (throw (RuntimeException. "Get this running again"))
     (clnt/ctor {;; Aleph supplies a single bi-directional channel.
                 ;; My tests break trying to use that here.
                 ;; For now, take a step back and get them working
