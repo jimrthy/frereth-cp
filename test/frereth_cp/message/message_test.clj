@@ -65,6 +65,17 @@
 ;;; Actual tests
 
 (deftest basic-echo
+  ;; There's some ugliness baked into here for the sake of
+  ;; simplicity.
+  ;; Or maybe it was just easier to write it this way at first.
+  ;; Messages don't propagate correctly until we at least
+  ;; start getting back ACKs.
+  ;; I really don't want to fake that.
+  ;; Initial implementations worked with just a sender.
+  ;; Now that I'm getting closer to having the full protocol
+  ;; implemented, this is getting messier.
+  ;; TODO: Revisit this decision. See whether it's uglier
+  ;; with 2 sides to "communicate"
   (let [loop-name "Echo Test"
         src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
         msg-len (- K/max-msg-len K/header-length K/min-padding-length)
@@ -118,7 +129,7 @@
                             ;; What I'm getting instead is:
                             ;; 1. ACK
                             ;; 2. message being echoed
-                            ;; 3. message being echoed because I havent responded with an ACK
+                            ;; 3. message being echoed because I haven't responded with an ACK
                             ;; There may be ways around this, but none of the ones that come
                             ;; to mind just now seem worth the time/effort.
                             ;; This test pretty obviously isn't about a
@@ -214,7 +225,7 @@
                             (is (not failure) "Child echoer failed")))
         (try
           (let [state (message/get-state io-handle 500 ::timed-out)]
-            (is (not= state ::timed-out))
+            (is (not= state ::timed-out) "Querying for initial state timed out")
             (when (not= state ::timed-out)
               (reset! io-handle-atom io-handle)
               (is (not
@@ -229,12 +240,13 @@
                     ;; The time delay here is pretty crazy.
                     ;; It seems as though it should never take human-noticeable time.
                     ;; And yet I've seen this test fail on my desktop
-                    ;; because it took 1050 seconds.
-                    outcome (deref response 2000 ::timeout)]
+                    ;; because it took > 2 seconds.
+                    ;; (Most of that is because I don't have another side to send
+                    ;; an ACK
+                    outcome (deref response 5000 ::timeout)]
                 (if (= outcome ::timeout)
                   (do
-                    (log/warn "Parent didn't get complete message from child")
-                    (is (not= outcome ::timeout)))
+                    (is (not= outcome ::timeout) "Parent didn't get complete message from child"))
                   (do
                     (is (= 3 @parent-state))
                     ;; I'm getting the response message header here, which is
@@ -270,7 +282,7 @@
                       (is (= msg-len (::specs/contiguous-stream-count incoming)))
                       (is (= (inc (::specs/strm-hwm incoming))
                              (::specs/contiguous-stream-count incoming)))
-                      (is (= 2 (::specs/next-message-id outgoing)))
+                      (is (= 3 (::specs/next-message-id outgoing)))
                       ;; There's nothing on the other side to send back
                       ;; an ACK. But it should have been sent.
                       (is (= msg-len (from-child/buffer-size outgoing)))
