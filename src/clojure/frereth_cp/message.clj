@@ -417,7 +417,8 @@
   (trigger-output io-handle state))
 
 (s/fdef choose-next-scheduled-time
-        :args (s/cat :state ::specs/state)
+        :args (s/cat :state ::specs/state
+                     :to-child-done? ::specs/to-child-done?)
         :ret nat-int?)
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
@@ -434,7 +435,8 @@
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name
            ::specs/recent]
-    :as state}]
+    :as state}
+   to-child-done?]
   ;;; This amounts to lines 286-305
 
   ;; I should be able to just completely bypass this if there's
@@ -510,19 +512,21 @@
         ;; There's one last caveat, from 298-300:
         ;; It all swirls around watchtochild, which gets set up
         ;; between lines 276-279.
-        ;; It's convoluted enough that I don't want to try to dig into it tonight
-        ;; It looks like the key to this is whether the pipe to the child
-        ;; is still open.
-        ;; Note that switching to PipedI/OStreams should have made this easier.
-        ;; Or possibly more complex, since there isn't a (closed?) method.
         ;; Basic point:
         ;; If there are incoming messages, but the pipe to child is closed,
         ;; short-circuit so we can exit.
-        ;; TODO: figure out a good way to replicate this.
-        watch-to-child "FIXME: Is there a good way to test for this?"
+        ;; That seems like a fairly major error condition.
+        ;; Q: What's the justification?
+        ;; Hypothesis: It's based around the basic idea of
+        ;; being lenient about accepting garbage.
+        ;; This seems like the sort of garbage that would be
+        ;; worth capturing for future analysis.
+        ;; Then again...if extra UDP packets arrive out of order,
+        ;; it probably isn't all *that* surprising.
+        ;; Still might be worth tracking for the sake of security.
         based-on-closed-child (if (and (not= 0 (+ (count gap-buffer)
                                                   (count ->child-buffer)))
-                                       (nil? watch-to-child))
+                                       (not (realized? to-child-done?)))
                                 0
                                 next-based-on-earliest-block-time)
         ;; Lines 302-305
@@ -843,6 +847,7 @@
            ::specs/child-output-loop
            ::specs/child-input-loop
            ::specs/to-child
+           ::specs/to-child-done?
            ::specs/message-loop-name
            ::specs/stream]
     :as io-handle}
@@ -883,7 +888,7 @@
                                "\nreceive-total-bytes: " receive-total-bytes
                                "\nIdling"))
                 nil)
-              (choose-next-scheduled-time state))
+              (choose-next-scheduled-time state to-child-done?))
             {:keys [::delta_f
                     ::next-action]}
             (if actual-next
@@ -1193,6 +1198,7 @@
                      ::specs/child-out child-out
                      ::specs/pipe-from-child-size pipe-from-child-size
                      ::specs/to-child to-child
+                     ::specs/to-child-done? (dfrd/deferred)
                      ::specs/child-in child-in
                      ::specs/executor executor
                      ::specs/message-loop-name message-loop-name

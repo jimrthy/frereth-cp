@@ -195,7 +195,7 @@ So stick with this translation.
   ;; FIXME: Sort that out.
   (vec (uint64-pack! 180)))
 
-;; TODO: redo this as a macro to avoid the code
+;; TODO: redo these as a macro to avoid the code
 ;; duplication.
 (s/fdef uint16-unpack
         :args (s/cat :src bytes?)
@@ -214,7 +214,7 @@ So stick with this translation.
                               ;; This next line should be redundant
                               (bit-and 0xff)))))
            0
-           (range 2 -1 -1)))
+           (range 1 -1 -1)))
   ([^bytes src]
    (uint16-unpack src 0)))
 

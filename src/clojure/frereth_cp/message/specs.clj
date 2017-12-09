@@ -40,6 +40,7 @@
 (s/def ::child-out #(instance? InputStream %))
 ;; This is the stream that we use to write bytes to the child
 (s/def ::to-child #(instance? OutputStream %))
+(s/def ::to-child-done? #(instance? IDeref %))
 ;; This is the stream the child reads
 (s/def ::child-in #(instance? InputStream %))
 ;; These are the equivalent of the OS pipes that
@@ -433,6 +434,7 @@
                                  ::child-out
 
                                  ::to-child
+                                 ::to-child-done?
                                  ::child-in
 
                                  ::executor

@@ -378,7 +378,8 @@
         :ret ::specs/state)
 (defn possibly-close-pipe!
   "Maybe signal child that it won't receive anything else"
-  [{:keys [::specs/to-child]
+  [{:keys [::specs/to-child
+           ::specs/to-child-done?]
     :as io-handle}
    {{:keys [::specs/contiguous-stream-count
             ::specs/receive-eof
@@ -395,6 +396,7 @@
         (when-not to-child
           (log/error prelog "Missing to-child, so we can't close it"))
         (try
+          (deliver to-child-done? true)
           (.close to-child)
           (catch RuntimeException ex
             (log/error ex prelog "Trying to close to-child failed"))))
