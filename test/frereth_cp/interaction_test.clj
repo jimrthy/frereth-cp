@@ -134,11 +134,13 @@
                       ;; wrapped using the high-level approach
                       de4 (crypto/open-after crypto-text 0 (count crypto-text) nonce server-shared-nm)]
                   (if de3
-                    (let [bs (byte-array de3)]
+                    (let [bs (byte-array (.readableBytes de3))]
+                      (.readBytes de3 bs)
                       (is (b-t/bytes= bs plain-text)))
                     (is false "Failed to open the box I care about"))
                   (if de4
-                    (let [bs (byte-array de4)]
+                    (let [bs (byte-array (.readableBytes de4))]
+                      (.readBytes de4 bs)
                       (is (= 0 (bs/compare-bytes bs plain-text))))
                     (is false "Failed to open the box I care about")))))))))))
 

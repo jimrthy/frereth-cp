@@ -170,7 +170,8 @@
         :ret ::specs/state)
 (defn mark-block-sent
   "Move block from un-sent to un-acked"
-  [{{:keys [::specs/un-sent-blocks
+  [{{:keys [::specs/send-eof
+            ::specs/un-sent-blocks
             ::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
@@ -287,10 +288,11 @@
                               ;; than it looks at first glance.
                               ;; Really shouldn't be reusing IDs.
                               ;; Q: Does that matter?
-                              (if (> n' shared-K/max-32-uint)
-                                ;; TODO: Just roll with the negative IDs. The only
-                                ;; one that's special is 0
-                                1 n'))]
+                              (if (<= n' shared-K/max-32-int)
+                                (if (= 0 n')
+                                  1
+                                  n')
+                                (dec (- shared-K/max-32-int))))]
         ;; It's tempting to pop that message off of whichever queue is its current home.
         ;; That doesn't make sense here/yet.
         ;; Either we're resending a previous message that never got ACK'd (in which
@@ -312,12 +314,6 @@
                                   (update ::specs/transmissions inc)
                                   (assoc ::specs/time recent)
                                   (assoc ::specs/message-id current-message-id))]
-          ;; There's a 4-6 ms gap in logs between log entry message and this one.
-          ;; FIXME: Profile to see where that time went
-          ;; alt: try converting current-message to a transient before using it to
-          ;; build updated message
-          ;; cheaper alt: eliminate the call to pretty below
-          ;; Q: How much difference did that make?
           (log/debug pre-log
                      (str "Getting ready to build message block for message "
                           current-message-id
@@ -441,10 +437,11 @@
                               (count un-ackd-blocks)
                               earliest-time
                               n-sec-per-block
-                              (int rtt-timeout)
+                              (long rtt-timeout)
                               recent))
         state))))
 
+(declare send-eof-buffered?)
 (s/fdef ok-to-send-new?
         :args (s/cat :state ::specs/state)
         :ret boolean?)
@@ -453,7 +450,6 @@
            ::specs/recent]
     {:keys [::specs/earliest-time
             ::specs/send-eof
-            ::specs/send-eof-processed
             ::specs/strm-hwm
             ::specs/un-ackd-blocks
             ::specs/un-sent-blocks
@@ -461,14 +457,21 @@
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     :as state}]
+  ;; Centered around lines 358-361
+  ;; It seems crazy that 3 lines of C expand to this much
+  ;; code. But that's what happens when you add error
+  ;; handling and logging.
   #_{:pre [strm-hwm]}
   (when-not strm-hwm
     (throw (ex-info "Missing strm-hwm"
                     {::among (keys outgoing)
                      ::have strm-hwm
                      ::details outgoing})))
-  (let [result
-        (and (>= recent (+ earliest-time n-sec-per-block))
+  (let [earliest-send-time (+ earliest-time n-sec-per-block)
+        un-ackd-count (count un-ackd-blocks)
+        send-eof-processed (send-eof-buffered? outgoing)
+        result
+        (and (>= recent earliest-send-time)
              ;; If we have too many outgoing blocks being
              ;; tracked, don't put more in flight.
              ;; There's obviously something going wrong
@@ -479,7 +482,7 @@
              ;; would guarantee that none of them ever get sent.
              ;; So only consider the ones that have already
              ;; been put on the wire.
-             (< (count un-ackd-blocks) K/max-outgoing-blocks)
+             (< un-ackd-count K/max-outgoing-blocks)
              (or (not= ::specs/false want-ping)
                  ;; This next style clause is used several times in
                  ;; the reference implementation.
@@ -487,10 +490,13 @@
                  ;; it's really a not
                  ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
                  ;; C programmers have assured me that it translates into
-                 (if (not= ::specs/false send-eof)
-                   (not send-eof-processed)
-                   (or (< 0 (count un-ackd-blocks))
-                       (< 0 (count un-sent-blocks))))))]
+                 (if (= ::specs/false send-eof)
+                   (or (< 0 un-ackd-count)
+                       (< 0 (count un-sent-blocks)))
+                   ;; The reference implementation sets this flag
+                   ;; after checking this (line 376), just before it builds
+                   ;; the message packet that it's going to send.
+                   (not send-eof-processed))))]
     (when-not result
       (let [fmt (str "~a: Bad preconditions for sending a new block:\n"
                      "recent: ~:d <? ~:d\n"
@@ -504,7 +510,7 @@
                               fmt
                               message-loop-name
                               recent
-                              (+ earliest-time n-sec-per-block)
+                              earliest-send-time
                               (count un-sent-blocks)
                               (count un-ackd-blocks)
                               want-ping
@@ -538,31 +544,31 @@
                "Does it make sense to try to send any of our"
                block-count
                "unsent blocks?")
-    (if (< 0 block-count)
-      (if (ok-to-send-new? state)
-        ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
-        ;; Consolidating smaller blocks *would* be a good idea -- JRG
-        (let [block (first un-sent-blocks)
-              start-pos (::specs/start-pos block)
-              block-length (.readableBytes (::specs/buf block))
-              ;; There's some logic going on here, around line
-              ;; 361, that I didn't translate correctly.
-              ;; TODO: Get back to this when I can think about
-              ;; coping with EOF
-              last-buffered-block (last un-sent-blocks)  ; Q: How does that perform?
+    (if (and (< 0 block-count)
+             (ok-to-send-new? state))
+      ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
+      ;; Consolidating smaller blocks *would* be a good idea -- JRG
+      (let [block (first un-sent-blocks)
+            start-pos (::specs/start-pos block)
+            block-length (.readableBytes (::specs/buf block))
+            ;; There's some logic going on here, around line
+            ;; 361, that I didn't translate correctly.
+            ;; TODO: Get back to this when I can think about
+            ;; coping with EOF
+            last-buffered-block (last un-sent-blocks)  ; Q: How does that perform?
 
-              eof (if (= (+ (::specs/start-pos last-buffered-block)
-                            (-> last-buffered-block ::specs/buf .readableBytes))
-                         strm-hwm)
-                    send-eof
-                    false)]
-          (log/debug prelog
-                     "Conditions ripe for sending a new outgoing message")
-          (assoc-in state
-                    [::specs/outgoing ::specs/next-block-queue]
-                    ::specs/un-sent-blocks))
-        ;; Leave it as-is
-        state))))
+            eof (if (= (+ (::specs/start-pos last-buffered-block)
+                          (-> last-buffered-block ::specs/buf .readableBytes))
+                       strm-hwm)
+                  send-eof
+                  false)]
+        (log/debug prelog
+                   "Conditions ripe for sending a new outgoing message")
+        (assoc-in state
+                  [::specs/outgoing ::specs/next-block-queue]
+                  ::specs/un-sent-blocks))
+      ;; Leave it as-is
+      state)))
 
 (s/fdef pick-next-block-to-send
         :args (s/cat :state ::specs/state)
@@ -604,37 +610,20 @@
   ;; Packet as a crypto box.
 
   ;; There used to be more involved in this
-
-  ;; I have what seems to be a deadlock, in my handshake
-  ;; test, which probably stems from callin this synchronously.
-  ;; This one's different than ->child.
-  ;; I don't really care very much whether it succeeds. Half
-  ;; the point behind the entire message "package" is
-  ;; buffering up sends for when they fail.
-  ;; I've run across a couple of successful approaches
-  ;; for coping with this.
-  ;; 1) Just put the send into its own thread
-  ;; 2) Convert this part to an enqueue. Have a dedicated
-  ;; thread that runs dequeue and does the send.
-
-  ;; Approach 2) has the same problem as this, almost:
-  ;; time spent on the library client side blocks that thread.
-  ;; In particular, for the specific test failure that I
-  ;; currently see, it gets blocked by sending "too many"
-  ;; requests in a row.
-
-  ;; Honestly, I need to figure out why that's causing problems
-  ;; and solve it.
-  ;; TODO: Take the time to do that.
-
-  ;; For now:
-  ;; Try putting this inside a dfrd/future
-  ;; TODO: Compare/contrast with using a regular future
   (let [size (count send-buf)
         succeeded? (dfrd/future (->parent send-buf))
         triggerer (utils/pre-log message-loop-name)]
     (dfrd/on-realized succeeded?
                       (fn [succeeded]
+                        ;; If I'm going to set send-eof-processed,
+                        ;; this is really the first time that it
+                        ;; has made any sense to do so.
+                        ;; Which really means that I would have to convert
+                        ;; it to a deferred, and change anywhere/everywhere
+                        ;; that checks its value to check (realized?)
+                        ;; instead.
+                        ;; That destroys functional purity, so is not
+                        ;; an option.
                         (log/info (utils/pre-log message-loop-name)
                                   (str size
                                        " bytes in "
@@ -667,56 +656,82 @@
     :as io-handle}
    {:keys [::specs/message-loop-name]
     :as state}]
-  (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
-         :as state'} (pick-next-block-to-send state)
-        prelog (utils/pre-log message-loop-name)]
-    (if next-block-queue
-      (let [{{:keys [::specs/send-buf
-                     ::specs/un-ackd-blocks]} ::specs/outgoing
-             :as state''} (pre-calculate-state-after-send state')
-            n (count send-buf)]
-        (when-not (s/valid? ::specs/send-buf send-buf)
-          ;; Doing a spec test here seems worrisome from a
-          ;; performance perspective.
-          ;; But it really does need to happen (at least at dev
-          ;; time, and probably always).
-          ;; And this seems like the most obvious location.
-          (log/warn prelog
-                    "Illegal outgoing buffer\n"
-                    (s/explain-data ::specs/send-buf send-buf)))
-        (log/debug prelog
-                   "Sending"
-                   ;; Actually, calling count here tells the entire
-                   ;; story: I have either a byte-array or vector
-                   ;; rather than the ByteBuf that spec demands.
-                   ;; Actually, the spec is wrong.
-                   ;; I *want*
-                   ;; TODO: Fix the spec.
-                   ;; That probably means switching the key name.
-                   n
-                   "bytes to parent in"
-                   send-buf)
-        ;; TODO: This is one of the side-effects that I really should
-        ;; be accumulating rather than calling willy-nilly.
-        (block->parent! message-loop-name ->parent send-buf)
-        (log/debug prelog
-                   (str "Calculating earliest time among "
-                        (count un-ackd-blocks)
-                        " un-ACK'd block(s)"
-                        ".\nThose are very distinct from the "
-                        (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
-                        " that is/are left in un-sent-blocks"))
-;;;      408: earliestblocktime_compute()
+  (let [prelog (utils/pre-log message-loop-name)]
+    (log/debug prelog "Picking next block to possibly send")
+    (when-not message-loop-name
+      (log/warn "There's something strange about state:\n" state))
+    (try
+      (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
+             :as state'} (pick-next-block-to-send state)]
+        (if next-block-queue
+          (let [{{:keys [::specs/send-buf
+                         ::specs/un-ackd-blocks]} ::specs/outgoing
+                 :as state''} (pre-calculate-state-after-send state')
+                n (count send-buf)]
+            (when-not (s/valid? ::specs/send-buf send-buf)
+              ;; Doing a spec test here seems worrisome from a
+              ;; performance perspective.
+              ;; But it really does need to happen (at least at dev
+              ;; time, and probably always).
+              ;; And this seems like the most obvious location.
+              (log/warn prelog
+                        "Illegal outgoing buffer\n"
+                        (s/explain-data ::specs/send-buf send-buf)))
+            (log/debug prelog
+                       "Sending"
+                       ;; Actually, calling count here tells the entire
+                       ;; story: I have either a byte-array or vector
+                       ;; rather than the ByteBuf that spec demands.
+                       ;; Actually, the spec is wrong.
+                       ;; I *want*
+                       ;; TODO: Fix the spec.
+                       ;; That probably means switching the key name.
+                       n
+                       "bytes to parent in"
+                       send-buf)
+            ;; TODO: This is one of the side-effects that I really should
+            ;; be accumulating rather than calling willy-nilly.
+            (block->parent! message-loop-name ->parent send-buf)
+            (log/debug prelog
+                       (str "Calculating earliest time among "
+                            (count un-ackd-blocks)
+                            " un-ACK'd block(s)"
+                            ".\nThose are very distinct from the "
+                            (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
+                            " that is/are left in un-sent-blocks"))
 
-        (-> state''
-            (assoc-in [::specs/outgoing ::specs/earliest-time]
-                      (help/earliest-block-time message-loop-name un-ackd-blocks))
-            (update ::specs/outgoing dissoc ::specs/next-block-queue)))
-      (do
-        ;; To aid in traffic analysis, should intermittently send meaningless
-        ;; garbage when nothing else is available.
-        ;; TODO: Lots of research to make sure I do this correctly.
-        ;; (The obvious downside is increased bandwidth)
-        (log/debug prelog
-                   "Nothing to send")
-        state))))
+            ;; This next concept almost fits here.
+            ;; But I keep rolling back to the point it shouldn't happen until after
+            ;; block->parent! has returned successfully.
+            ;; So just ditch the idea and add a predicate function for the logic.
+            (comment (if (and send-eof
+                              (empty? (get-in result [::specs/outgoing ::specs/un-sent-blocks])))
+                       (assoc-in result
+                                 [::specs/outgoing ::specs/send-eof-processed]
+                                 true)))
+;;;      408: earliestblocktime_compute()
+            (-> state''
+                (assoc-in [::specs/outgoing ::specs/earliest-time]
+                          (help/earliest-block-time message-loop-name un-ackd-blocks))
+                (update ::specs/outgoing dissoc ::specs/next-block-queue)))
+          (do
+            ;; To aid in traffic analysis, should intermittently send meaningless
+            ;; garbage when nothing else is available.
+            ;; TODO: Lots of research to make sure I do this correctly.
+            ;; (The obvious downside is increased bandwidth)
+            (log/debug prelog
+                       "Nothing to send")
+            state)))
+      (catch Exception ex
+        (log/error ex prelog "Trying to send message block to parent")))))
+
+(s/fdef send-eof-buffered?
+        :args (s/cat :outgoing ::specs/outgoing)
+        :ret boolean?)
+(defn send-eof-buffered?
+  "Has the EOF packet been set up to send?"
+  [{:keys [::specs/send-eof
+           ::specs/un-sent-blocks]
+    :as outgoing}]
+  (and send-eof
+       (empty? un-sent-blocks)))

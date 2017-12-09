@@ -285,12 +285,13 @@
         ;; I'm fairly certain that for loop amounts to:
 
         (if (not= 0 message-id)
-          (let [current-eof (get-in state [::specs/incoming ::specs/receive-eof])]
+          (let [current-eof (get-in state [::specs/incoming ::specs/receive-eof])
+                eof-changed? (not= current-eof receive-eof)]
             (update state
                     ::specs/incoming
                     (fn [cur]
                       (cond-> cur
-                        (not= current-eof receive-eof) (assoc ::specs/receive-eof
+                        eof-changed? (assoc ::specs/receive-eof
                                                               receive-eof)
                         true (assoc ::specs/strm-hwm
                                     (min max-rcvd
@@ -300,11 +301,37 @@
                         overridden-recv-total-bytes (assoc ::specs/receive-total-bytes
                                                            overridden-recv-total-bytes)
                         true (update ::specs/gap-buffer
-                                     assoc
-                                     ;; These are the absolute stream positions
-                                     ;; of the values that are left
-                                     [(+ start-byte min-k) (+ start-byte max-k)]
-                                     incoming-buf)))))
+                                     (fn [cur]
+                                       (let [result
+                                             (assoc cur
+                                                    ;; These are the absolute stream positions
+                                                    ;; of the values that are left
+                                                    [(+ start-byte min-k) (+ start-byte max-k)]
+                                                    incoming-buf)]
+                                         (if eof-changed?
+                                           (do
+                                             ;; When the last gap's been consolidated (but not before),
+                                             ;; we need to
+                                             ;; a) write final pipes to child
+                                             ;; b) close that pipe
+                                             ;;    Except this isn't quite correct.
+                                             ;;    No, it is.
+                                             ;;    It's just that my handshake can't really
+                                             ;;    cope with it as-is.
+                                             ;;    It really needs something to happen when
+                                             ;;    this pipe closes.
+                                             ;;    Except that I think it's a stream closing.
+                                             ;;    Child can't know about those.
+                                             ;;    We need to send a ::eof signal to its callback.
+                                             ;; c) Also need to close the parent->child pipes
+                                             ;; d) And, really, need to deliver a deferred
+                                             ;;    that, in conjunction with the child->parent
+                                             ;;    parent pipes, will cause the main ioloop
+                                             ;;    to exit.
+                                             (assoc result
+                                                    [(+ start-byte max-k) (+ start-byte max-k)]
+                                                    receive-eof))
+                                           result))))))))
           (do
             ;; This seems problematic, but that's because
             ;; it's easy to tangle up the outgoing vs. incoming buffers.
@@ -525,8 +552,20 @@ Line 608"
   [{{:keys [::specs/send-eof
             ::specs/un-ackd-blocks
             ::specs/un-sent-blocks]} ::specs/outgoing
+    :keys [::specs/message-loop-name]
     :as state}]
-  (if (and (not= ::specs/normal send-eof)
+  (log/debug (str (utils/pre-log message-loop-name)
+                  "Q: Has other side ACKed the child's EOF message?"
+                  "\nsend-eof: " send-eof
+                  "\nBlocks that have not been sent/ACKed: " (+ (count un-ackd-blocks)
+                                                                (count un-sent-blocks))
+                  "\n"))
+  ;;;           177-182: Possibly set sendeofacked flag
+  ;; Note that this particular step is pretty far from where the original
+  ;; does it (our equivalent to that is under helpers, when it copes with
+  ;; ACKs)
+  (if (and (not= ::specs/false send-eof)
+           ;; It's
            (empty? un-ackd-blocks)
            (empty? un-sent-blocks))
     (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
@@ -654,6 +693,8 @@ Line 608"
                        "handle-comprehensible message/extracted:\n"
                        "\n\tincoming:\n"
                        incoming
+                       "\n\t\treceive-eof: "
+                       receive-eof
                        "\n\tflow-control:\n"
                        flow-control
                        "\n\toutgoing:\n"
@@ -666,13 +707,12 @@ Line 608"
               (or
                (let [msg-id (::specs/message-id packet)]
                  (log/debug log-prefix (str "ACK message-id " msg-id "?"))
-                 (when-not msg-id
-                   ;; Note that 0 is legal: that's a pure ACK.
-                   ;; We just have to have something.
-                   ;; (This comment is because I have to keep remembering
-                   ;; how truthiness works in C)
-                   (throw (ex-info (str log-prefix "Missing the incoming message-id")
-                                   extracted)))
+                 (assert msg-id
+                         ;; Note that 0 is legal: that's a pure ACK.
+                         ;; We just have to have something.
+                         ;; (This comment is because I have to keep remembering
+                         ;; how truthiness works in C)
+                         (str log-prefix "Missing the incoming message-id"))
                  (when-let [ack-msg (prep-send-ack extracted msg-id)]
                    (log/debug log-prefix (str "Have an ACK to send back"))
                    ;; since this is called for side-effects, ignore the

@@ -178,7 +178,8 @@ Based on earliestblocktime_compute, in lines 138-153
 Based [cleverly] on acknowledged(), running from lines 155-185"
   [{{:keys [::specs/un-ackd-blocks
             ::specs/send-eof
-            ::specs/send-eof-acked]} ::specs/outgoing
+            ::specs/send-eof-acked
+            ::specs/strm-hwm]} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}
    start
@@ -193,27 +194,26 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
     (log/debug log-prefix
                "Setting ACK flags on blocks with addresses from"
                start "to" stop)
-    (when (< (get-in state [::specs/outgoing ::specs/strm-hwm])
-             stop)
-      ;; This is definitely a bug.
+
+    (when (< strm-hwm
+             (if (= send-eof ::specs/false)
+               stop
+               ;; Protocol is to ACK 1 past the final
+               ;; stream address for EOF
+               (inc stop)))
+      ;; This is pretty definitely a bug.
       ;; TODO: Figure out something more extreme to do here.
-      (log/error log-prefix "Other side ACK'd bytes we haven't sent yet"))
+      (log/error (str log-prefix
+                      "Other side ACK'd bytes we haven't sent yet."
+                      "\nOutgoing strm-hwm: " strm-hwm
+                      "\nSTOP byte: " stop)))
     (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
 ;;;                    Updates totalblocktransmissions and totalblocks
       (let [state (reduce (partial flag-acked-blocks start stop)
                           state
-                          un-ackd-blocks)
-            ;;;           177-182: Possibly set sendeofacked flag
-            state (if (and send-eof
-                           (= start 0)
-                           ;; It seems like this next check should be >=
-                           ;; But this is what the reference implementation checks.
-                           (> stop (get-in state [::specs/outgoing ::specs/strm-hwm]))
-                           (not send-eof-acked))
-                    (assoc-in state [::specs/outgoing ::specs/send-eof-acked] true)
-                    state)]
+                          un-ackd-blocks)]
         (log/debug log-prefix
                    "Done w/ initial flag reduce:\n"
                    state)

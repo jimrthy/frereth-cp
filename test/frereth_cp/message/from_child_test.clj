@@ -1,6 +1,7 @@
 (ns frereth-cp.message.from-child-test
   (:require [clojure.test :refer (deftest is testing)]
             [clojure.tools.logging :as log]
+            [frereth-cp.message :as msg]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.from-child :as from-child]
             [frereth-cp.message.specs :as specs]
@@ -13,20 +14,31 @@
             PipedOutputStream]))
 
 (deftest child-consumption
-  (let [start-state #:frereth-cp.message.specs {:message-loop-name "Testing basic consumption from child"
+  (let [message-loop-name "Testing basic consumption from child"
+        start-state #:frereth-cp.message.specs {:message-loop-name message-loop-name
                                                 :outgoing #:frereth-cp.message.specs {:max-block-length 512
                                                                                       :ackd-addr 0
                                                                                       :strm-hwm 0
-                                                                                      :un-sent-blocks PersistentQueue/EMPTY}}
+                                                                                      :un-sent-blocks PersistentQueue/EMPTY
+                                                                                      :un-ackd-blocks (msg/build-un-ackd-blocks)}}
         bytes-to-send (byte-array (range 8193))]
-    (let [{:keys [::specs/outgoing]
-           :as result} (comment (from-child/consume-from-child start-state bytes-to-send))]
-      ;; I managed to break this during a refactoring
-      (throw (RuntimeException. "Into what did consume-from-child change?"))
+    ;; This test is now completely broken.
+    ;; And obsolete.
+    ;; The basic premise has changed out from underneath it.
+    ;; The real thing to do is to start up a messaging loop, write these bytes to
+    ;; the appropriate PipedOutputStream, and verify that they end up in the outbound
+    ;; queues.
+    ;; That seems like more trouble than it's worth, since I have bigger-picture
+    ;; tests that already cover this more thoroughly in message-test.
+    ;; I should probably just scrap this.
+    (let [consumer (from-child/build-byte-consumer message-loop-name bytes-to-send)
+          {:keys [::specs/outgoing]
+           :as result} (consumer start-state)]
       (is (= 8193 (::specs/strm-hwm outgoing)))
       (is (= 0 (::specs/ackd-addr outgoing)))
       (is (= 512 (::specs/max-block-length outgoing)))
-      (is (= 17 (count (::specs/un-sent-blocks outgoing)))))))
+      (is (= 1 (count (+ (::specs/un-sent-blocks outgoing)
+                          (::specs/un-ackd-blocks outgoing))))))))
 
 (deftest read-next-bytes
   (let [writer (PipedOutputStream.)

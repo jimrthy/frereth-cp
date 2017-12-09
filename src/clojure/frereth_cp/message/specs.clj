@@ -70,9 +70,13 @@
 (s/def ::receive-eof ::eof-flag)
 ;; In the reference implementation, this gets changed from 0 (aka ::false) when
 ;; reading from the fromchild[0] pipe returns either 0 (normal EOF) or <0 (error).
-;; A lot of logic depends on this flag, and its close relatives ::send-eof-processed
+;; A lot of logic depends on this flag, and its close relatives
+;; <s>::send-eof-processed</s> to-parent/send-eof-buffered?
 ;; and ::send-eof-ackd
 (s/def ::send-eof ::eof-flag)
+
+(s/def ::bs-or-eof (s/or :bytes bytes?
+                         :keyword ::eof-flag))
 
 ;;; Position of a block's first byte within the stream
 ;;; Corresponds to blockpos
@@ -270,14 +274,6 @@
 ;; This name just makes more sense to me.
 (s/def ::ackd-addr int?)
 
-;; When we queue up the final block to send from the child (based
-;; on the ::send-eof flag and the blocks remaining in the unsent
-;; queue), we:
-;; a) switch this to true
-;; b) set a corresponding flag on that final block.
-;; Q: Is this ever used anywhere?
-;; A: Actually, it's an important piece of the ioloop scheduling logic
-(s/def ::send-eof-processed boolean?)
 ;; Once ::send-eof is set (which means that the stream from the
 ;; child is closed), we keep things running until the server
 ;; ACKs that it has received the EOF message.
@@ -400,7 +396,6 @@
                                 ::send-buf-size
                                 ::send-eof
                                 ::send-eof-acked
-                                ::send-eof-processed
                                 ::strm-hwm
                                 ::total-blocks
                                 ::total-block-transmissions

@@ -161,6 +161,9 @@
                                     ::rtt-lowwater rtt-lowwater})]
 
     (let [rtt-delta (- rtt-average rtt)
+          ;; I'm seeing this drop below 0.
+          ;; The math that leads to that *is* plausible.
+          ;; But...does it ever make any sense?
           rtt-average (+ rtt-average (/ rtt-delta 8.0))
           rtt-delta (if (> 0 rtt-delta)
                       (- rtt-delta)

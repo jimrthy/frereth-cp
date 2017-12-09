@@ -124,7 +124,7 @@
         (build-message-block-description src K/k-2)]
     (is (= 0 start-pos))
     (is (= 512 length))
-    (is (not send-eof))
+    (is (= ::specs/false send-eof))
     (is (= 512 (.readableBytes buf)))
     (is (= 0 (.writableBytes buf)))))
 
@@ -221,21 +221,18 @@
     (let [size K/k-div2
           src (byte-array (take size (repeat 40)))
           human-name "test-start-with-gap"
-          dscr (build-message-block-description src K/k-2)
-          ^bytes pkt (to-parent/build-message-block-description human-name 3 dscr)
+          dscr (assoc (build-message-block-description src K/k-2)
+                      ::specs/message-id 3)
+          ^bytes pkt (to-parent/build-message-block-description human-name dscr)
           decoded-packet (from-parent/deserialize human-name pkt)
           state {::specs/incoming {::specs/contiguous-stream-count K/k-1
                                    ::specs/receive-written K/k-div2}}
           calculated (from-parent/calculate-start-stop-bytes state decoded-packet)]
-      ;; TODO: Make sure I've correctly replicated whatever DJB is doing
-      ;; with receivevalid. That has to be the magic secret sauce for coping
-      ;; with gaps.
-      ;; Hmm. This passes.
-      ;; But is it really what I want in this scenario?
-      (is (= #:frereth-cp.message.from-parent {:min-k size
+      (is (= #:frereth-cp.message.from-parent {:min-k 0
                                                :max-k size
-                                               :delta-k 0
+                                               :delta-k size
                                                :max-rcvd (+ K/k-128 size)
+                                               :receive-eof ::specs/false
                                                :receive-total-bytes nil}
              calculated)))))
 (comment
@@ -262,5 +259,7 @@
       (.writeShort buf 16)  ; bytes in range #5
       (.writeShort buf 24)  ; bytes between ranges 5-6
       (.writeShort buf 32)  ; bytes in range #6
-      (let [flagged (from-parent/flag-acked-others! {::specs/receive-buf buf})]
+      (let [flagged (from-parent/flag-acked-others! {::specs/message-loop-name "Check big flacked"}
+                                                    {::specs/message-id 10237
+                                                     ::specs/receive-buf buf})]
         (is (not flagged) "What should that look like?")))))

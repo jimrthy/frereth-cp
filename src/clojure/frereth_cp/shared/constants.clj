@@ -40,7 +40,10 @@
 (def ^:const max-16-uint 65535)
 ;; (dec (pow 2 32))
 (def ^:const max-32-uint 4294967295)
+;; (comment (dec (long (Math/pow 2 31))))
+(def ^:const max-32-int 2147483647)
 (def ^:const max-64-uint 18446744073709551999N)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
