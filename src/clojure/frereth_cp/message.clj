@@ -69,17 +69,24 @@
 (defn build-un-ackd-blocks
   []
   (sorted-set-by (fn [x y]
-                   (let [x-time (::specs/time x)
-                         y-time (::specs/time y)]
-                     (if (= x-time y-time)
-                       ;; Assume that we never have multiple messages with the
-                       ;; same timestamp.
-                       ;; We do hit this case when disj is trying to
-                       ;; remove an existing block.
-                       0
-                       (if (< x-time y-time)
-                         -1
-                         1))))))
+                   (try
+                     (let [x-time (::specs/time x)
+                           y-time (::specs/time y)]
+                       (if (= x-time y-time)
+                         ;; Assume that we never have multiple messages with the
+                         ;; same timestamp.
+                         ;; We do hit this case when disj is trying to
+                         ;; remove an existing block.
+                         0
+                         (if (< x-time y-time)
+                           -1
+                           1)))
+                     (catch NullPointerException ex
+                       (log/error ex (str "Comparing time between\n"
+                                          x
+                                          "\nand\n"
+                                          y))
+                       (throw ex))))))
 
 ;;;; Q: what else is in the reference implementation?
 ;;;; A: Lots. Scattered around quite a bit now

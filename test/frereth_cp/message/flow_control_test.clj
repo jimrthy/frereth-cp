@@ -45,8 +45,20 @@
             ratio-delta (- @ratio-finish-time @ratio-start-time)]
         ;; This isn't exactly proof that floats are much faster,
         ;; but it's very indicative.
-        ;; And it obviously *should* be true across the board.
-        (is (< (* 250 float-delta) ratio-delta))))))
+        ;; It obviously *should* be true across the board.
+        ;; The margin between the two seems to vary widely.
+        ;; The first time I ran it, the ratio was something
+        ;; like 5000:1.
+        ;; For this sort of test to be even vaguely meaningful, I
+        ;; need to run enough iterations in conjunction with other
+        ;; "real" code to see.
+        ;; That really wasn't the point. Reading the ratios in
+        ;; the logs was annoying. I don't need that much precision
+        ;; for the scheduling where this mattered. Floats
+        ;; generally aren't going to be significantly slower.
+        ;; So go with them for the convenience (any speed boost
+        ;; is gravy).
+        (is (< (* 100 float-delta) ratio-delta))))))
 
 (comment
   (r/foldcat (r/map (fn [_]

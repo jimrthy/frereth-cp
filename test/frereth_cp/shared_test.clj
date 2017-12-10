@@ -20,7 +20,6 @@
     (let [rhs (byte-array (assoc (vec (take 256 (repeat 0))) 255 3))]
       (is (not (b-t/bytes= lhs rhs))))))
 
-
 (deftest server-encoding
   (let [encoded (shared/encode-server-name "foo..bacon.com")]
     (is (= 256 (count encoded)))

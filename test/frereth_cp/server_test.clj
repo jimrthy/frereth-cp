@@ -106,6 +106,7 @@
                                                       K/box-zero-bytes
                                                       144)}]
     (try
+      ;; FIXME: This fails because we can't cast a ByteBuf to a B]
       (let [composed (shared/compose K/cookie-frame to-encode dst)]
         (is composed))
       (catch clojure.lang.ExceptionInfo ex

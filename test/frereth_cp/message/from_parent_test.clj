@@ -244,6 +244,8 @@
 (deftest check-big-flacked-others
   ;; This needs to be expanded to match the behavior in check-flacked-others
   ;; Once that one works.
+  ;; As it is, right now, this is busted.
+  ;; TODO: get this test working
   (testing "Values for big message streams"
     (let [^ByteBuf buf (Unpooled/buffer 48)]
       ;; We're going to have to be able to cope with big numbers

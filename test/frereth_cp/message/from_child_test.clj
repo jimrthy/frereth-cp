@@ -37,8 +37,8 @@
       (is (= 8193 (::specs/strm-hwm outgoing)))
       (is (= 0 (::specs/ackd-addr outgoing)))
       (is (= 512 (::specs/max-block-length outgoing)))
-      (is (= 1 (count (+ (::specs/un-sent-blocks outgoing)
-                          (::specs/un-ackd-blocks outgoing))))))))
+      (is (= 1 (+ (count (::specs/un-sent-blocks outgoing))
+                  (count (::specs/un-ackd-blocks outgoing))))))))
 
 (deftest read-next-bytes
   (let [writer (PipedOutputStream.)

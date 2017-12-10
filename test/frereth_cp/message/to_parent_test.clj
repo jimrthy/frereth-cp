@@ -5,23 +5,29 @@
             [frereth-cp.message.to-parent :as to-parent])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
+(defn build-buf
+  [n]
+  (let [result (Unpooled/buffer n)]
+    (.writeBytes result (byte-array (range n)))
+    result))
+
 (deftest check-padding-size
   (are [n v] (let [u (to-parent/calculate-padded-size n)]
                (println "Expected" v "got" u)
                (= u v))
-    {::specs/length 16}  192
-    {::specs/length (- 192 64 1)} 192
-    {::specs/length (- 192 64)} 192
-    {::specs/length (- 193 64)} 320
-    {::specs/length (- 320 64 1)} 320
-    {::specs/length (- 320 64)} 320
-    {::specs/length (- 321 64)} 576
-    {::specs/length (- 576 64)} 576
-    {::specs/length (- 577 64)} 1088
-    {::specs/length (- 1087 64)} 1088
-    {::specs/length (- 1088 64)} 1088)
+    {::specs/buf (build-buf 16)}  192
+    {::specs/buf (build-buf (- 192 64 1))} 192
+    {::specs/buf (build-buf (- 192 64))} 192
+    {::specs/buf (build-buf (- 193 64))} 320
+    {::specs/buf (build-buf (- 320 64 1))} 320
+    {::specs/buf (build-buf (- 320 64))} 320
+    {::specs/buf (build-buf (- 321 64))} 576
+    {::specs/buf (build-buf (- 576 64))} 576
+    {::specs/buf (build-buf (- 577 64))} 1088
+    {::specs/buf (build-buf (- 1087 64))} 1088
+    {::specs/buf (build-buf (- 1088 64))} 1088)
   (try
-    (to-parent/calculate-padded-size {::specs/length 1089})
+    (to-parent/calculate-padded-size {::specs/buf (build-buf 1089)})
     (is false "That should have failed")
     (catch AssertionError ex
       (is ex))))

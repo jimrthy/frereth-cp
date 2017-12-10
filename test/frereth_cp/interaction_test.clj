@@ -435,11 +435,11 @@
           server->client {:chan (strm/stream)}]
       (try
         (let [server (srvr/start! (assoc unstarted-server
-                                         ::srvr/client-read-chan server<-client
-                                         ::srvr/client-write-chan server->client))]
+                                         ::srvr-state/client-read-chan server<-client
+                                         ::srvr-state/client-write-chan server->client))]
           (try
-            (is (-> server ::srvr/active-clients deref))
-            (is (= 0 (-> server ::srvr/active-clients deref count)))
+            (is (-> server ::srvr-state/active-clients deref))
+            (is (= 0 (-> server ::srvr-state/active-clients deref count)))
             (is (not (srvr-state/find-client server (.getBytes "won't find this"))))
             (finally (srvr/stop! server))))
         (finally
@@ -613,10 +613,10 @@
                     (is (not= (deref eventually-started 500 ::timeout)
                               ::timeout))))
                 (catch Exception ex
+                  ;; FIXME: This is failing due to "Bad Cookie packet from Server"
                   (log/error ex
                              (str "Unhandled exception escaped!\n"
                                   "Stack Trace:\n"
-                                  ;; This goes to STDOUT.
                                   ;; TODO: Switch to util/get-stack-trace
                                   (with-out-str (.printStackTrace ex))
                                   "\nClient state:\n"

@@ -18,7 +18,9 @@
 
 (deftest check-mark-acked
   (let [start-state (test-helpers/build-ack-flag-message-portion)
-        acked (help/mark-ackd-by-addr start-state 0 56)]
+        ;; Pretend we just received an ACK
+        ackd-addr 56
+        acked (help/mark-ackd-by-addr start-state 0 ackd-addr)]
     (try
       (comment (pprint acked))
       (is (= (keys start-state) (keys (dissoc acked ::help/n))))
@@ -41,12 +43,18 @@
                    "\n")))
         (let [dropped (filter (fn [{:keys [::specs/start-pos
                                            ::specs/length]}]
-                                (> 56 (+ start-pos length)))
-                              b1)]
-          ;; I'm too tired to dig into this problem tonight.
-          (throw (RuntimeException. "Just emphasizing that this is broken"))
-          (is (= (apply set (map (partial disj b1) dropped))
-                 b2))))
+                                (> ackd-addr (+ start-pos length)))
+                              b1)
+              expected (apply set (map (partial disj b1) dropped))
+              actual (set (mapcat (fn [x]
+                                    (if (::specs/ackd? x)
+                                      nil
+                                      [x]))
+                                  b2))]
+          (println "Expected:\n" expected "\nbased on\n" b1)
+          (println "Actual:\n" actual "\nbased on\n" b2)
+          (is (= expected
+                 actual))))
       (finally
         ;; Don't do this over start-state, since 1 of its buffers has been released
         (doseq [b (::specs/blocks acked)]
