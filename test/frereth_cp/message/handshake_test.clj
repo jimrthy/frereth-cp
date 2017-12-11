@@ -413,9 +413,12 @@
          )
 
 (deftest handshake
-  (let [prelog (utils/pre-log "Handshake test")]
-    (log/info prelog
-              "Top")
+  (let [logger (log/std-out-log-factory)
+        logs {::top-level []
+              ::client []
+              ::server []}
+        prelog (utils/pre-log "Handshake test")]
+    (log/info (::top-level logs) ::top-level "Top")
     (let [client->server (strm/stream)
           server->client (strm/stream)
           succeeded? (dfrd/deferred)
@@ -424,6 +427,23 @@
                               ::prefix nil})
           client-atom (atom nil)
           time-out 500
+          ;; And here's where my functional logging scheme
+          ;; starts getting interesting.
+          ;; The obvious way to handle this is to add an atom
+          ;; that accumulates log entries.
+          ;; But then I have the entertaining issue of merging
+          ;; it with other log collections later.
+          ;; Unless I
+          ;; convert them to also use the same atom...actually,
+          ;; that just makes the merging more chaotic.
+          ;; Remember: if lots of logs happen on the same millisecond,
+          ;; we don't have a good timestamp for sorting them out.
+          ;; And using a lamport clock for this turns it into
+          ;; a single-threaded performance bottleneck (though
+          ;; using a java.til.concurrent.atomic.AtomicInteger
+          ;; should help with that)
+          ;; Actually, adding a lamport clock might help immensely.
+          ;; TODO: That.
           client-parent-cb (fn [^bytes bs]
                              (log/info (utils/pre-log "Client parent callback")
                                        "Sending a" (count bs)
@@ -497,7 +517,7 @@
 
       (let [client-init (message/initial-state "Client" {} false)
             client-io (message/start! client-init client-parent-cb client-child-cb)
-            server-init (message/initial-state "Server" {} true)
+            server-init (message/initial-state "Server" {} logger true)
             ;; It seems like this next part really shouldn't happen until the initial message arrives
             ;; from the client.
             ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So

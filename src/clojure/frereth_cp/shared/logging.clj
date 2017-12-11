@@ -1,6 +1,7 @@
 (ns frereth-cp.shared.logging
   "Functional logging mechanism"
-  (:require [clojure.spec.alpha :as s])
+  (:require [clojure.spec.alpha :as s]
+            [frereth-cp.util :as utils])
   (:import clojure.lang.ExceptionInfo
            java.io.OutputStream))
 
@@ -11,6 +12,7 @@
 (defprotocol Logger
   (log! [this msg])
   (flush! [this]))
+(s/def ::logger #(satisfies? Logger %))
 
 (def log-levels #{::trace
                   ::debug
@@ -41,21 +43,25 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
-(s/fdef log :args (s/cat :entries ::entries
-                         :level ::level
-                         :message ::message
-                         :details ::details))
+(s/fdef add-log-entry
+        :args (s/cat :entries ::entries
+                     :level ::level
+                     :label ::label
+                     :message ::message
+                     :details ::details)
+        :ret ::entries)
 (defn add-log-entry
   ([entries
     level
     label
     message
     details]
-   (conj entries {::level level
+   (conj entries {::details details
+                  ::level level
                   ::label label
                   ::time (System/currentTimeMillis)
                   ::message message
-                  ::details details}))
+                  ::current-thread (utils/get-current-thread)}))
   ([entries
     level
     label
@@ -155,3 +161,11 @@
   (doseq [message log-collection]
     (log! logger message))
   (flush! logger))
+
+(defn std-out-log-factory
+  []
+  (->StdOutLogger))
+
+(defn stream-log-factory
+  [stream]
+  (->StreamLogger stream))

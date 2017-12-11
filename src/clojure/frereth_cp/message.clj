@@ -13,7 +13,6 @@
   really the main point."
   (:require [clojure.pprint :refer (cl-format)]
             [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.from-child :as from-child]
@@ -25,6 +24,7 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
@@ -67,7 +67,8 @@
 ;;; Internal API
 
 (defn build-un-ackd-blocks
-  []
+  [{:keys [::log/entries
+           ::log/logger]}]
   (sorted-set-by (fn [x y]
                    (try
                      (let [x-time (::specs/time x)
@@ -82,10 +83,12 @@
                            -1
                            1)))
                      (catch NullPointerException ex
-                       (log/error ex (str "Comparing time between\n"
-                                          x
-                                          "\nand\n"
-                                          y))
+                       (log/flush-logs! logger (log/exception entries
+                                                              ex
+                                                              ::build-un-ackd-blocks
+                                                              "Comparing time"
+                                                              {::lhs x
+                                                               ::rhs y}))
                        (throw ex))))))
 
 ;;;; Q: what else is in the reference implementation?
@@ -1008,7 +1011,8 @@
                      ;; Q: What (if any) is the difference to spec that this
                      ;; argument is optional?
                      :want-ping ::specs/want-ping
-                     :opts ::specs/state)
+                     :opts ::specs/state
+                     :logger ::log/logger)
         :ret ::specs/state)
 (defn initial-state
   "Put together an initial state that's ready to start!"
@@ -1020,18 +1024,12 @@
      {:keys [::specs/pipe-from-child-size]
       :or {pipe-from-child-size K/k-64}
       :as outgoing} ::specs/outgoing
-     :as opts}]
-   (let [prelog (utils/pre-log human-name)]
-     (log/debug prelog
-                "Building state for initial loop based around options:\n"
-                (utils/pretty opts)
-                "Specifically, that translated into these overrides:\n"
-                (utils/pretty {::->child-size pipe-to-child-size
-                               ::child->size pipe-from-child-size})
-                "Based around\n"
-                (utils/pretty incoming)
-                "and\n"
-                (utils/pretty outgoing))
+     :as opts}
+    logger]
+   (let [prelog (utils/pre-log human-name)
+         log-entries (log/debug [] prelog "Building state for initial loop based around options"
+                                (assoc opts ::overrides {::->child-size pipe-to-child-size
+                                                         ::child->size pipe-from-child-size}))]
      (let [pending-client-response (promise)]
        (when server?
          (deliver pending-client-response ::never-waited))
@@ -1039,7 +1037,6 @@
                               ::specs/last-doubling 0
                               ::specs/last-edge 0
                               ::specs/last-speed-adjustment 0
-                              ;; Seems vital, albeit undocumented
                               ::specs/n-sec-per-block K/sec->n-sec
                               ::specs/rtt 0
                               ::specs/rtt-average 0
@@ -1098,7 +1095,8 @@
                           ::specs/strm-hwm 0
                           ::specs/total-blocks 0
                           ::specs/total-block-transmissions 0
-                          ::specs/un-ackd-blocks (build-un-ackd-blocks)
+                          ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
+                                                                        ::log/entries log-entries})
                           ::specs/un-sent-blocks PersistentQueue/EMPTY
                           ::specs/want-ping (if server?
                                               ::specs/false
@@ -1109,7 +1107,7 @@
                                               ;; trying to send the next
                                               ;; message
                                               ::specs/immediate)}
-
+        ::log/entries log-entries
         ::specs/message-loop-name human-name
         ;; In the original, this is a local in main rather than a global
         ;; Q: Is there any difference that might matter to me, other
@@ -1125,6 +1123,7 @@
 
 (s/fdef start!
         :args (s/cat :state ::specs/state
+                     :logger ::specs/logger
                      :parent-callback ::specs/->parent
                      :child-callback ::specs/->child)
         :ret ::specs/io-handle)
@@ -1137,6 +1136,7 @@
      :as incoming
      :or {pipe-to-child-size K/k-64}} ::specs/incoming
     :as state}
+   logger
    parent-cb
    ;; I'd like to provide the option to build your own
    ;; input loop.
@@ -1208,6 +1208,8 @@
                      ::specs/to-child-done? (dfrd/deferred)
                      ::specs/child-in child-in
                      ::specs/executor executor
+                     ::log/logger logger
+                     ::log/entries []
                      ::specs/message-loop-name message-loop-name
                      ::specs/stream s}]
       (start-event-loops! io-handle state)

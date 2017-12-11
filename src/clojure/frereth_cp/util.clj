@@ -17,12 +17,16 @@
   []
   (System/getProperty "java.runtime.version"))
 
+(defn get-current-thread
+  []
+  (.getName (Thread/currentThread)))
+
 (defn pre-log
   [human-name]
   (pprint/cl-format nil
                     "~a (~a):\n"
                     human-name
-                    (.getName (Thread/currentThread))))
+                    (get-current-thread)))
 
 ;; TODO: Rename this to seconds-in-millis
 (defn seconds [] 1000)  ; avoid collision w/ built-in second

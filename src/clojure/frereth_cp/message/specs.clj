@@ -3,6 +3,7 @@
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.message.constants :as K]
             [frereth-cp.shared.constants :as K-shared]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as util]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -59,6 +60,11 @@
 ;; This is defined as a long long in the reference
 ;; implementation.
 ;; Try to avoid expanding it to a BigInt.
+;; I think (still not sure) that this in the number
+;; of nanoseconds to wait between each block that goes
+;; out.
+;; It's more nuanced than that, but that's the basic
+;; point/idea
 (s/def ::n-sec-per-block int?)
 
 ;; This maps to a bitflag to send over the wire:
@@ -412,6 +418,7 @@
                              ::incoming
                              ::outgoing
 
+                             ::log/entries
                              ::message-loop-name
 
                              ;; Q: Does this make more sense anywhere else?
@@ -438,6 +445,8 @@
                                  ::child-in
 
                                  ::executor
+                                 ::log/logger
+
                                  ;; This seems redundant.
                                  ;; Q: How often will I have an io-handle
                                  ;; without state?
