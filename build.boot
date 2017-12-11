@@ -19,7 +19,7 @@
                           ;; users
                           [org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
                           [org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
-                          [org.clojure/clojure "1.9.0-RC2"]
+                          [org.clojure/clojure "1.9.0"]
                           [org.clojure/spec.alpha "0.1.143"]
                           [org.clojure/test.check "0.10.0-alpha2" :scope "test" :exclusions [org.clojure/clojure]]
                           ;; TODO: Eliminate this dependency. It's another one
