@@ -40,36 +40,53 @@
 
 (s/def ::entries (s/coll-of ::entry))
 
+(s/def ::lamport nat-int?)
+
+(s/def ::log-state (s/keys :req [::entries ::lamport]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
 (s/fdef add-log-entry
-        :args (s/cat :entries ::entries
+        :args (s/cat :log-state ::log-state
                      :level ::level
                      :label ::label
                      :message ::message
                      :details ::details)
         :ret ::entries)
 (defn add-log-entry
-  ([entries
+  ([{:keys [::lamport]
+     :as log-state}
     level
     label
     message
     details]
-   (conj entries {::details details
-                  ::level level
-                  ::label label
-                  ::time (System/currentTimeMillis)
-                  ::message message
-                  ::current-thread (utils/get-current-thread)}))
-  ([entries
+   (-> log-state
+       (update
+        ::entries
+        conj
+        {::current-thread (utils/get-current-thread)
+         ::details details
+         ::label label
+         ::lamport lamport
+         ::level level
+         ::time (System/currentTimeMillis)
+         ::message message})
+       (update ::lamport inc)))
+  ([log-state
     level
     label
     message]
-   (conj entries {::level level
-                  ::label label
-                  ::time (System/currentTimeMillis)
-                  ::message message})))
+   (->
+    (update
+     ::entries
+     conj
+     {::current-thread (utils/get-current-thread)
+      ::label label
+      ::level level
+      ::time (System/currentTimeMillis)
+      ::message message})
+    (update ::lamport inc))))
 
 (defmacro deflogger
   [level]
@@ -88,20 +105,22 @@
            message#]
           (add-log-entry entries# ~'~tag-holder label# message#)))))
   (let [tag (keyword (str *ns*) (name level))]
-    ;; The auto-gensymmed parameter names are obnoxious
+    ;; The auto-gensymmed parameter names are obnoxious.
     ;; And largely irrelevant.
     ;; This isn't the kind of macro that you nest inside
     ;; other macros.
+    ;; Then again...auto-namespacing makes eliminating them
+    ;; interesting.
     `(defn ~level
-       ([entries#
+       ([log-state#
          label#
          message#
          details#]
-        (add-log-entry entries# ~tag label# message# details#))
-       ([entries#
+        (add-log-entry log-state# ~tag label# message# details#))
+       ([log-state#
          label#
          message#]
-        (add-log-entry entries# ~tag label# message#)))))
+        (add-log-entry log-state# ~tag label# message#)))))
 
 (defrecord StreamLogger [stream]
   ;; I think this is mostly correct,
@@ -123,10 +142,11 @@
   Logger
   (log! [_ msg]
     (println (pr-str msg)))
-  (flush! [_]
-    ;; Q: Is there any point to calling .flush
-    ;; on STDOUT?
-    ))
+  ;; Q: Is there any point to calling .flush
+  ;; on STDOUT?
+  ;; A: Not according to stackoverflow.
+  ;; It flushes itself after every CR/LF
+  (flush! [_]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -138,29 +158,28 @@
 (deflogger error)
 
 (defn exception
-  ([entries ex label message]
-   (exception entries ex label message nil))
-  ([entries ex label message original-details]
+  ([log-state ex label message]
+   (exception log-state ex label message nil))
+  ([log-state ex label message original-details]
    (let [details {::original-details original-details
                   ::stack (.getStackTrace ex)
                   ::exception ex}
          details (if (instance? ExceptionInfo ex)
                    (assoc details ::data (.getData ex))
                    details)]
-     (add-log-entry entries ::exception label message details))))
+     (add-log-entry log-state ::exception label message details))))
 
 (deflogger fatal)
 
-(s/fdef flush-logs!
-        :args (s/cat :logger #(satisfies? Logger %)
-                     :logs ::entries))
-(defn flush-logs!
-  "For the side-effects to write the accumulated logs"
-  [logger
-   log-collection]
-  (doseq [message log-collection]
-    (log! logger message))
-  (flush! logger))
+(s/fdef init
+        :args (s/cat :start-time ::lamport)
+        :ret ::log-state)
+(defn init
+  ([start-clock]
+   {::entries []
+    ::lamport start-clock})
+  ([]
+   (init 0)))
 
 (defn std-out-log-factory
   []
@@ -169,3 +188,14 @@
 (defn stream-log-factory
   [stream]
   (->StreamLogger stream))
+
+(s/fdef flush-logs!
+        :args (s/cat :logger #(satisfies? Logger %)
+                     :logs ::log-state))
+(defn flush-logs!
+  "For the side-effects to write the accumulated logs"
+  [logger
+   log-state]
+  (doseq [message (::entries log-state)]
+    (log! logger message))
+  (flush! logger))

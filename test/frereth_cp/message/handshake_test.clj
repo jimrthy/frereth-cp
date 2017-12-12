@@ -414,11 +414,10 @@
 
 (deftest handshake
   (let [logger (log/std-out-log-factory)
-        logs {::top-level []
-              ::client []
-              ::server []}
+        ;; TODO: This needs to go away
+        log-state (log/init)
         prelog (utils/pre-log "Handshake test")]
-    (log/info (::top-level logs) ::top-level "Top")
+    (log/info log-state ::top-level "Top")
     (let [client->server (strm/stream)
           server->client (strm/stream)
           succeeded? (dfrd/deferred)
@@ -427,27 +426,24 @@
                               ::prefix nil})
           client-atom (atom nil)
           time-out 500
-          ;; And here's where my functional logging scheme
-          ;; starts getting interesting.
-          ;; The obvious way to handle this is to add an atom
-          ;; that accumulates log entries.
-          ;; But then I have the entertaining issue of merging
-          ;; it with other log collections later.
-          ;; Unless I
-          ;; convert them to also use the same atom...actually,
-          ;; that just makes the merging more chaotic.
-          ;; Remember: if lots of logs happen on the same millisecond,
-          ;; we don't have a good timestamp for sorting them out.
-          ;; And using a lamport clock for this turns it into
-          ;; a single-threaded performance bottleneck (though
-          ;; using a java.til.concurrent.atomic.AtomicInteger
-          ;; should help with that)
-          ;; Actually, adding a lamport clock might help immensely.
-          ;; TODO: That.
-          client-parent-cb (fn [^bytes bs]
-                             (log/info (utils/pre-log "Client parent callback")
-                                       "Sending a" (count bs)
-                                       "byte array to client's parent")
+          client-parent-cb (fn [;; FIXME: What should I supply here?
+                                ^bytes bs]
+                             (log/info log-state
+                                       ::client-parent-callback
+                                       (str
+                                        "Sending a" (count bs)
+                                        "byte array to client's parent"))
+                             ;; TODO: Need lamport interactions everywhere the
+                             ;; the streams cross.
+                             ;; Calling out here is one place.
+                             ;; But, honestly, so is the parameters into this callback.
+                             ;; At the very least, I should pass in the caller's
+                             ;; lamport clock so I could adjust an atom that
+                             ;; tracks this test's clock.
+                             ;; Alternatively, pass in the entire log-state.
+                             ;; It's tempting to forward that along when we
+                             ;; forward the message from client->server, but
+                             ;; the current protocol does not allow that.
                              (let [sent (strm/try-put! client->server bs time-out ::timed-out)]
                                (is (not= @sent ::timed-out))))
           ;; Something that spans multiple packets would be better, but

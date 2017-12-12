@@ -1027,7 +1027,9 @@
      :as opts}
     logger]
    (let [prelog (utils/pre-log human-name)
-         log-entries (log/debug [] prelog "Building state for initial loop based around options"
+         log-state (log/debug (log/init)
+                                ::initialization
+                                "Building state for initial loop based around options"
                                 (assoc opts ::overrides {::->child-size pipe-to-child-size
                                                          ::child->size pipe-from-child-size}))]
      (let [pending-client-response (promise)]
@@ -1096,7 +1098,7 @@
                           ::specs/total-blocks 0
                           ::specs/total-block-transmissions 0
                           ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
-                                                                        ::log/entries log-entries})
+                                                                        ::log/state log-state})
                           ::specs/un-sent-blocks PersistentQueue/EMPTY
                           ::specs/want-ping (if server?
                                               ::specs/false
@@ -1107,7 +1109,7 @@
                                               ;; trying to send the next
                                               ;; message
                                               ::specs/immediate)}
-        ::log/entries log-entries
+        ::log/state log-state
         ::specs/message-loop-name human-name
         ;; In the original, this is a local in main rather than a global
         ;; Q: Is there any difference that might matter to me, other

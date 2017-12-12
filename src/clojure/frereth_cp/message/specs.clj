@@ -418,7 +418,7 @@
                              ::incoming
                              ::outgoing
 
-                             ::log/entries
+                             ::log/state
                              ::message-loop-name
 
                              ;; Q: Does this make more sense anywhere else?
