@@ -6,7 +6,7 @@
            java.io.OutputStream))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;; Specs
 
 ;;;; Implement this for your side-effects
 (defprotocol Logger
@@ -40,12 +40,20 @@
 
 (s/def ::entries (s/coll-of ::entry))
 
+;;; Honestly, this doesn't belong in here.
+;;; I can't add a clock to the CurveCP protocol
+;;; without breaking it (which doesn't seem like
+;;; a terrible idea), but I can make it easily
+;;; available to implementers.
+;;; For that matter, I might be able to shove one
+;;; into the
+;;; the zero-padding bytes of each Message.
 (s/def ::lamport nat-int?)
 
 (s/def ::log-state (s/keys :req [::entries ::lamport]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal
+;;;; Internal
 
 (s/fdef add-log-entry
         :args (s/cat :log-state ::log-state
@@ -149,7 +157,7 @@
   (flush! [_]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;; Public
 
 (deflogger trace)
 (deflogger debug)
@@ -199,3 +207,34 @@
   (doseq [message (::entries log-state)]
     (log! logger message))
   (flush! logger))
+
+(s/fdef synchronize
+        :args (s/cat :lhs ::log-state
+                     :rhs ::log-state)
+        :fn (s/and #(let [{:keys [:args :ret]} %
+                          {:keys [:lhs :rhs]} args]
+                      (and (= (-> ret first (dissoc ::lamport))
+                              (dissoc lhs ::lamport))
+                           (= (-> ret second (dissoc ::lamport))
+                              (dissoc rhs ::lamport))))
+                   #(let [{:keys [:args :ret]} %
+                          {:keys [:lhs :rhs]} args]
+                      (= (::lamport lhs)
+                         (::lamport rhs)
+                         (max (ret first ::lamport)
+                              (ret second ::lamport)))))
+        :ret (s/tuple ::log-state ::log-state))
+(defn synchronize
+  "Fix 2 clocks that have probably drifted apart"
+  [{l-clock ::lamport
+    :as lhs}
+   {r-clock ::lamport
+    :as rhs}]
+  (let [synced (max l-clock r-clock)
+        lhs (if (= l-clock synced)
+              lhs
+              (assoc lhs ::lamport synced))
+        rhs (if (= r-clock synced)
+              rhs
+              (assoc rhs ::lamport synced))]
+    [lhs rhs]))

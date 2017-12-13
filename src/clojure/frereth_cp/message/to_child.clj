@@ -15,6 +15,7 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd])
   (:import clojure.lang.ExceptionInfo
@@ -179,8 +180,8 @@
 (s/fdef read-bytes-from-parent!
         :args (s/cat :io-handle ::specs/io-handle
                      :buffer bytes?)
-        :ret (s/or :buffer bytes?
-                   :eof ::specs/eof-flag))
+        :ret (s/keys :req  [::log2/state
+                            ::specs/bs-or-eof]))
 (defn read-bytes-from-parent!
   "Parent wrote bytes to its outbuffer. Read them."
   [{:keys [::specs/child-in
@@ -197,6 +198,7 @@
       ;; us to yield control without actually blocking a thread.
       (let [n (.read child-in buffer 0 (min bytes-available
                                             max-n))]
+        (throw (RuntimeException. "Need the sender's lamport clock"))
         (if (<= 0 n)
           ;; Can't just return buffer: we don't
           ;; have a good way to tell the caller
@@ -257,7 +259,8 @@
             (when (keyword? result)
               ;; We got this because the connected PipedOutputStream closed.
               (.close child-in))
-            result))))))
+            {::specs/bs-or-eof result
+             ::log2/state 'what?}))))))
 
 (defn write-bytes-to-child-pipe!
   "Forward the byte-array inside the buffer"
@@ -432,13 +435,19 @@
       (log/info prelog "Starting the loop watching for bytes the parent has sent toward the child")
       (try
         (loop []
-          (let [holder (read-bytes-from-parent! io-handle buffer)
+          (let [{:keys [::log2/state
+                        ::specs/bs-or-eof]} (read-bytes-from-parent! io-handle buffer)
                 start-time (System/nanoTime)]
             (log/debug prelog "Triggering child callback")
             (try
-              ;; The rest of this function is really just support and error
-              ;; handling for the actual point, right here
-              (cb holder)
+              (let [updated-log-state
+                    ;; The rest of this function is really just support and error
+                    ;; handling for the actual point, right here
+                    (-> state
+                        (cb bs-or-eof)
+                        (log2/error ::parent-monitor-loop
+                                    "FIXME: Need to get this synced back to main ioloop"))]
+                (throw (RuntimeException. "So. What should happen to updated-log-state?")))
               (catch ExceptionInfo ex
                 (log/error ex
                            prelog
@@ -457,7 +466,7 @@
                                  "Child callback took ~:d nanoseconds"
                                  (- end-time start-time))]
               (log/debug prelog msg))
-            (when (bytes? holder)
+            (when (bytes? bs-or-eof)
               (recur))))
         (log/warn prelog "parent-monitor loop exited")
         (catch IOException ex
