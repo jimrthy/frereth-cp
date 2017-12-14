@@ -995,7 +995,7 @@
     (let [state (assoc state
                        ::specs/recent recent)
           child-output-loop (from-child/start-child-monitor! state io-handle)
-          child-input-loop (to-child/start-parent-monitor! io-handle ->child)]
+          child-input-loop (to-child/start-parent-monitor! io-handle  ->child)]
       (log/debug (utils/pre-log message-loop-name)
                  "Child monitor thread should be running now. Scheduling next ioloop timeout")
       (schedule-next-timeout! (assoc io-handle

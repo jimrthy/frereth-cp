@@ -449,6 +449,14 @@
                                ;; the current protocol does not allow that.
                                (let [sent (strm/try-put! client->server bs time-out ::timed-out)]
                                  (is (not= @sent ::timed-out)))
+                               ;; This sort of coupling is annoying.
+                               ;; Library clients shouldn't care about my
+                               ;; logging implementation.
+                               ;; Then again, they have to have bought in
+                               ;; already, since that's the first parameter
+                               ;; to this callback.
+                               ;; From that perspective, this is a terrible
+                               ;; idea.
                                inner-log-state))
           ;; Something that spans multiple packets would be better, but
           ;; that seems like a variation on this test.

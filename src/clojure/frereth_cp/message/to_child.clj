@@ -179,6 +179,7 @@
 
 (s/fdef read-bytes-from-parent!
         :args (s/cat :io-handle ::specs/io-handle
+                     :log-state ::log2/state
                      :buffer bytes?)
         :ret (s/keys :req  [::log2/state
                             ::specs/bs-or-eof]))
@@ -187,6 +188,7 @@
   [{:keys [::specs/child-in
            ::specs/message-loop-name]
     :as io-handle}
+   my-log-state
    #^bytes buffer]
   {:pre [buffer
          child-in]}
@@ -203,14 +205,22 @@
           ;; Can't just return buffer: we don't
           ;; have a good way to tell the caller
           ;; how many bytes we just received
-          (let [holder (byte-array n)]
-            (log/debug prelog
-                       n "bytes received from parent")
+          ;; Although, since it's a mutable byte-array,
+          ;; we could just return that count
+          ;; (yuck!)
+          (let [holder (byte-array n)
+                my-log-state (log2/debug my-log-state
+                                         ::read-bytes-from-parent!
+                                         (str n
+                                              "bytes received from parent"))]
             (b-t/byte-copy! holder 0 n buffer)
             holder)
-          ::specs/normal))
-      (do
-        (log/info prelog "No bytes available for child. Blocking Parent Monitor")
+          {::log2/state my-log-state
+           ::specs/bs-or-eof ::specs/normal}))
+      (let [my-log-state
+            (log2/info my-log-state
+                       ::read-bytes-from-parent!
+                       "No bytes available for child. Blocking Parent Monitor")]
         ;; Q: Do I really need to work with this "read single byte to unblock
         ;; and then seem how many more are available" nonsense?
         ;; I think I implemented it originally because writers weren't
@@ -222,45 +232,55 @@
                            ::specs/normal))
               bytes-available (.available child-in)]
           (assert bytes-available)
-          (log/info prelog "Parent Monitor thread unblocked")
-          (let [result
-                (cond (neg? byte1) (do
-                                     (log/warn prelog "Parent monitor received EOF")
+          (let [my-log-state (log2/info my-log-state
+                                        ::read-bytes-from-parent!
+                                        "Parent Monitor thread unblocked")
+                result
+                (cond (neg? byte1) (let [my-log-state
+                                         (log2/warn my-log-state
+                                                    ::read-bytes-from-parent!
+                                                    "Parent monitor received EOF")]
                                      ;; The part that writes to our paired Pipe
                                      ;; closed its half.
                                      ;; Do the same for sanitation.
                                      (.close child-in)
-                                     ::specs/normal)
-                      (keyword? byte1) byte1
+                                     {::log2/state my-log-state
+                                      ::specs/bs-or-eof ::specs/normal})
+                      (keyword? byte1) {::log2/state my-log-state
+                                        ::specs/bs-or-eof byte1}
                       (< 0 bytes-available)
-                      (do
-                        (log/debug prelog
-                                   "Trying to read"
-                                   bytes-available
-                                   "bytes from"
-                                   child-in
-                                   "into"
-                                   (count buffer)
-                                   "bytes in"
-                                   buffer)
+                      (let [my-log-state
+                            (log2/debug my-log-state
+                                        ::read-bytes-from-parent!
+                                        (str "Trying to read"
+                                             bytes-available
+                                             "bytes from"
+                                             child-in
+                                             "into"
+                                             (count buffer)
+                                             "bytes in"
+                                             buffer))]
                         ;; Have to account for the initial unblocking byte
                         (let [n (.read child-in buffer 0 (min bytes-available
                                                               (dec max-n)))]
                           (if (<= 0 n)
-                            (let [holder (byte-array (inc n))]
-                              (log/debug prelog
-                                         (inc n)
-                                         "bytes received from parent after initial"
-                                         byte1)
+                            (let [holder (byte-array (inc n))
+                                  my-log-state (log2/debug my-log-state
+                                                           ::read-bytes-from-parent!
+                                                           (str
+                                                            (inc n)
+                                                            "bytes received from parent after initial"
+                                                            byte1))]
                               (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
                               (b-t/byte-copy! holder 1 n buffer)
-                              holder))))
+                              {::log2/state my-log-state
+                               ::specs/bs-or-eof holder}))))
                       :else (byte-array [byte1]))]
             (when (keyword? result)
               ;; We got this because the connected PipedOutputStream closed.
               (.close child-in))
             {::specs/bs-or-eof result
-             ::log2/state 'what?}))))))
+             ::log2/state my-log-state}))))))
 
 (defn write-bytes-to-child-pipe!
   "Forward the byte-array inside the buffer"
@@ -377,8 +397,9 @@
 (s/fdef possibly-close-pipe!
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state
-                     :prelog string?)
-        :ret ::specs/state)
+                     :log-state ::log2/state)
+        :ret (s/keys :req [::log2/state
+                           ::specs/state]))
 (defn possibly-close-pipe!
   "Maybe signal child that it won't receive anything else"
   [{:keys [::specs/to-child
@@ -390,26 +411,44 @@
             ::specs/receive-written]
      :as incoming} ::specs/incoming
     :as state}
-   prelog]
-  (log/debug (str prelog "Process EOF? (receive-eof: " receive-eof ")"))
-  (when (not= ::specs/false receive-eof)
-    (if (= receive-written receive-total-bytes)
-      (do
-        (log/info prelog "Have received everything other side will send")
-        (when-not to-child
-          (log/error prelog "Missing to-child, so we can't close it"))
-        (try
-          (deliver to-child-done? true)
-          (.close to-child)
-          (catch RuntimeException ex
-            (log/error ex prelog "Trying to close to-child failed"))))
-      (log/warn (str prelog
-                     "EOF flag received.\n"
-                     (select-keys incoming
-                                  [::specs/contiguous-stream-count
-                                   ::specs/receive-eof
-                                   ::specs/receive-total-bytes
-                                   ::specs/receive-written]))))))
+   log-state]
+  (let [log-state
+        (log2/debug log-state
+                    ::possibly-close-pipe!
+                    "Process EOF?"
+                    incoming)]
+    (if (not= ::specs/false receive-eof)
+      (if (= receive-written receive-total-bytes)
+        (let [log-state
+              (log2/info log-state
+                         ::possibly-close-pipe!
+                         "Have received everything other side will send")
+              log-state (if-not to-child
+                          (log2/error log-state
+                                      ::possibly-close-pipe!
+                                      "Missing to-child, so we can't close it")
+                          log-state)
+              log-state (try
+                          (deliver to-child-done? true)
+                          (.close to-child)
+                          log-state
+                          (catch RuntimeException ex
+                            (log2/exception log-state
+                                            ex
+                                            ::possibly-close-pipe!
+                                            "Trying to close to-child failed")))
+              log-state (log2/warn log-state
+                                   ::possibly-close-pipe!
+                                   "EOF flag received."
+                                   (select-keys incoming
+                                                [::specs/contiguous-stream-count
+                                                 ::specs/receive-eof
+                                                 ::specs/receive-total-bytes
+                                                 ::specs/receive-written]))]
+          {::specs/state state
+           ::log2/state log-state}))
+      {::specs/state state
+       ::log2/state log-state})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -420,63 +459,87 @@
   []
   (sorted-map))
 
+(s/fdef start-parent-monitor!
+        :args (s/cat :io-handle ::specs/io-handler
+                     :parent-log ::log2/state
+                     :callback (s/fspec :args (s/cat :log-state ::log2/state
+                                                     :message ::specs/bs-or-eof)
+                                        :ret ::log2/state))
+        :ret ::specs/child-input-loop)
 (defn start-parent-monitor!
   "This is probably a reasonable default for many/most use cases"
   ;; I *do* want to provide the option to write your own, though.
   ;; Maybe I should add an optional parameter: if you don't provide
   ;; this, it will default to calling this.
-  [{:keys [::specs/message-loop-name
+  [{:keys [::log2/logger
+           ::specs/message-loop-name
            ::specs/child-in]
     :as io-handle}
+   parent-log
    cb]
   (dfrd/future
     (let [prelog (utils/pre-log message-loop-name)
-          buffer (byte-array K/standard-max-block-length)]
-      (log/info prelog "Starting the loop watching for bytes the parent has sent toward the child")
+          my-logs (log2/init (::log2/lamport parent-log))
+          buffer (byte-array K/standard-max-block-length)
+          my-logs (log2/info my-logs
+                             ::parent-monitor-loop
+                             "Starting the loop watching for bytes the parent has sent toward the child")]
       (try
-        (loop []
+        (loop [my-logs my-logs]
           (let [{:keys [::log2/state
-                        ::specs/bs-or-eof]} (read-bytes-from-parent! io-handle buffer)
-                start-time (System/nanoTime)]
-            (log/debug prelog "Triggering child callback")
+                        ::specs/bs-or-eof]} (read-bytes-from-parent! io-handle my-logs buffer)
+                start-time (System/nanoTime)
+                my-logs (log2/debug my-logs ::parent-monitor-loop "Triggering child callback")]
             (try
-              (let [updated-log-state
+              (let [my-logs
                     ;; The rest of this function is really just support and error
                     ;; handling for the actual point, right here
-                    (-> state
+                    (-> my-logs
                         (cb bs-or-eof)
                         (log2/error ::parent-monitor-loop
                                     "FIXME: Need to get this synced back to main ioloop"))]
                 (throw (RuntimeException. "So. What should happen to updated-log-state?")))
               (catch ExceptionInfo ex
-                (log/error ex
-                           prelog
-                           (str "At least we can log something interesting with this:\n"
-                                (utils/pretty (.getData ex))))
-                (assert (not ex) (str prelog
-                                      "Child callback failed")))
+                (let [my-logs
+                      (log2/exception my-logs
+                                      ex
+                                      ::parent-monitor-loop
+                                      (str "At least we can log something interesting with this")
+                                      (.getData ex))]
+                  (log2/flush-logs! logger my-logs))
+                (assert (not ex) "Child callback failed"))
               (catch Exception ex
-                (log/error ex
-                           prelog
-                           "This is not acceptable behavior at all")
+                (let [my-logs (log2/error my-logs
+                                          ex
+                                          ::parent-monitor-loop
+                                          "This is not acceptable behavior at all")]
+                  (log2/flush-logs! logger my-logs))
                 (assert (not ex) (str prelog
                                       "Child callback failed"))))
             (let [end-time (System/nanoTime)
                   msg (cl-format nil
                                  "Child callback took ~:d nanoseconds"
-                                 (- end-time start-time))]
-              (log/debug prelog msg))
-            (when (bytes? bs-or-eof)
-              (recur))))
-        (log/warn prelog "parent-monitor loop exited")
+                                 (- end-time start-time))
+                  my-logs (log2/debug my-logs ::parent-monitor-loop msg)
+                  my-logs (log2/flush-logs! logger my-logs)]
+              (when (bytes? bs-or-eof)
+                (recur my-logs)))))
+        (let [my-logs
+              (log2/warn my-logs ::parent-monitor-loop "exited")]
+          (log2/flush-logs! logger my-logs))
         (catch IOException ex
-          (log/warn ex
-                    prelog
-                    "This should happen because the stream from parent closed"))
+          (let [my-logs
+                (log2/warn my-logs
+                           ::parent-monitor-loop
+                           "This should happen because the stream from parent closed"
+                           {::problem ex})]
+            (log2/flush-logs! logger my-logs)))
         (catch Exception ex
-          (log/error ex
-                     prelog
-                     "Parent Monitor failed unexpectedly"))))))
+          (let [my-logs
+                (log2/exception my-logs
+                                ex
+                                ::parent-monitor-loop
+                                "Parent Monitor failed unexpectedly")]))))))
 
 (s/fdef forward!
         :args (s/cat :io-handle ::specs/io-handle

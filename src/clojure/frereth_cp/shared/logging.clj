@@ -50,13 +50,13 @@
 ;;; the zero-padding bytes of each Message.
 (s/def ::lamport nat-int?)
 
-(s/def ::log-state (s/keys :req [::entries ::lamport]))
+(s/def ::state (s/keys :req [::entries ::lamport]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
 (s/fdef add-log-entry
-        :args (s/cat :log-state ::log-state
+        :args (s/cat :log-state ::state
                      :level ::level
                      :label ::label
                      :message ::message
@@ -181,7 +181,7 @@
 
 (s/fdef init
         :args (s/cat :start-time ::lamport)
-        :ret ::log-state)
+        :ret ::state)
 (defn init
   ([start-clock]
    {::entries []
@@ -199,18 +199,22 @@
 
 (s/fdef flush-logs!
         :args (s/cat :logger #(satisfies? Logger %)
-                     :logs ::log-state))
+                     :logs ::state)
+        :ret ::state)
 (defn flush-logs!
   "For the side-effects to write the accumulated logs"
   [logger
    log-state]
   (doseq [message (::entries log-state)]
     (log! logger message))
-  (flush! logger))
+  (flush! logger)
+  (-> log-state
+      (update ::lamport inc)
+      (assoc ::entries [])))
 
 (s/fdef synchronize
-        :args (s/cat :lhs ::log-state
-                     :rhs ::log-state)
+        :args (s/cat :lhs ::state
+                     :rhs ::state)
         :fn (s/and #(let [{:keys [:args :ret]} %
                           {:keys [:lhs :rhs]} args]
                       (and (= (-> ret first (dissoc ::lamport))
@@ -223,7 +227,7 @@
                          (::lamport rhs)
                          (max (ret first ::lamport)
                               (ret second ::lamport)))))
-        :ret (s/tuple ::log-state ::log-state))
+        :ret (s/tuple ::log-state ::state))
 (defn synchronize
   "Fix 2 clocks that have probably drifted apart"
   [{l-clock ::lamport
