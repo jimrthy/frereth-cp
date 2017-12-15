@@ -205,6 +205,11 @@
   "For the side-effects to write the accumulated logs"
   [logger
    log-state]
+  ;; Honestly, there should be an agent that handles this
+  ;; so we don't block the calling thread.
+  ;; The i/o costs should be quite a bit higher than
+  ;; the agent overhead...though I do know that
+  ;; a go-loop would be more efficient
   (doseq [message (::entries log-state)]
     (log! logger message))
   (flush! logger)
