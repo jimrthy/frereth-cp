@@ -26,7 +26,17 @@
 (s/def ::label keyword?)
 
 ;; Go with milliseconds since epoch
+;; Note that these next two are *totally* distinct
 (s/def ::time nat-int?)
+;;; Honestly, this doesn't belong in here.
+;;; I can't add a clock to the CurveCP protocol
+;;; without breaking it (which doesn't seem like
+;;; a terrible idea), but I can make it easily
+;;; available to implementers.
+;;; For that matter, I might be able to shove one
+;;; into the
+;;; the zero-padding bytes of each Message.
+(s/def ::lamport nat-int?)
 
 (s/def ::message string?)
 
@@ -39,16 +49,6 @@
                        :opt [::details]))
 
 (s/def ::entries (s/coll-of ::entry))
-
-;;; Honestly, this doesn't belong in here.
-;;; I can't add a clock to the CurveCP protocol
-;;; without breaking it (which doesn't seem like
-;;; a terrible idea), but I can make it easily
-;;; available to implementers.
-;;; For that matter, I might be able to shove one
-;;; into the
-;;; the zero-padding bytes of each Message.
-(s/def ::lamport nat-int?)
 
 (s/def ::state (s/keys :req [::entries ::lamport]))
 

@@ -44,6 +44,7 @@
 (s/def ::to-child-done? #(instance? IDeref %))
 ;; This is the stream the child reads
 (s/def ::child-in #(instance? InputStream %))
+(s/def ::from-parent-trigger #(strm/sink? %))
 ;; These are the equivalent of the OS pipes that
 ;; the reference implementation uses to pipe data in
 ;; and out of the child.
@@ -443,6 +444,7 @@
                                  ::to-child
                                  ::to-child-done?
                                  ::child-in
+                                 ::from-parent-trigger
 
                                  ::executor
                                  ::log/logger

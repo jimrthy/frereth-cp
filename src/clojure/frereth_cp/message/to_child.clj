@@ -17,13 +17,22 @@
             ;; TODO: Refactor-rename this to log
             [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as utils]
-            [manifold.deferred :as dfrd])
+            [manifold.deferred :as dfrd]
+            [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            [io.netty.buffer ByteBuf]
            java.io.IOException))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Magic numbers
+;;;; Specs
+
+(s/def ::callback
+  (s/fspec :args (s/cat :log-state ::log2/state
+                        :message ::specs/bs-or-eof)
+           :ret ::log2/state))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Magic numbers
 
 (def callback-threshold-warning
   "Warn if calling back to child w/ incoming message takes too long (in milliseconds)"
@@ -307,6 +316,107 @@
             {::specs/bs-or-eof result
              ::log2/state my-log-state}))))))
 
+(s/fdef from-parent-trigger
+        :args (s/cat :io-handle ::specs/io-handle
+                     :my-logs ::log2/entries
+                     :buffer bytes?
+                     :cb ::callback
+                     :trigger (s/keys :req [::log2/lamport]))
+        :ret any?)
+(defn from-parent-trigger
+  "Stream handler for coping with bytes sent by parent"
+  [{:keys [::log2/logger
+           ::specs/message-loop-name]
+    :as io-handle}
+   my-logs
+   buffer
+   cb
+   {:keys [::log2/lamport]
+    :as trigger}]
+  (try
+    (throw (RuntimeException. "This approach needs more work"))
+    ;; This next part really needs to read all the bytes it
+    ;; possibly can.
+    ;; Which really means it needs a way to know whether an
+    ;; attempted read will block.
+    ;; It's worth keeping in mind that we could very well
+    ;; get scenarios where the parent is writing faster than
+    ;; we can send to the child.
+    ;; That doesn't seem likely.
+    ;; It's also worth noting that bytes coming from the
+    ;; parent start out naturally partitioned.
+    ;; This is very different than the behavior expected in from-child,
+    ;; where we reasonably need to be able to cope with, say, a
+    ;; message block that covers an entire gig all at once.
+    ;; This is also subject to race conditions:
+    ;; we get a trigger about incoming bytes and start reading.
+    ;; While we're reading, read-bytes-from-parent! pulls more
+    ;; bytes out of the pipe.
+
+    ;; Actually, this may be much simpler than I'm trying to make it:
+    ;; Add the number of expected bytes to the trigger parameter.
+    ;; Once we've read those, wait for another trigger.
+    (let [{:keys [::log2/state
+                  ::specs/bs-or-eof]} (read-bytes-from-parent! io-handle my-logs buffer)
+          start-time (System/nanoTime)]
+      (try
+        ;; Problem with this approach:
+        ;; it discards possibly-vital log info
+        ;; FIXME: go ahead and unroll it out to the ridiculously
+        ;; verbose version to avoid that
+        (as-> (log2/debug state
+                          ::parent-monitor-loop
+                          "Triggering child callback")
+            my-logs
+          ;; The rest of this function is really just support and error
+          ;; handling for the actual point, right here
+          (cb my-logs bs-or-eof)
+          (log2/error my-logs
+                      ::parent-monitor-loop
+                      "FIXME: Need to get the time synced back to main ioloop")
+          (log2/flush-logs! logger my-logs))
+        (catch ExceptionInfo ex
+          (let [my-logs
+                (log2/exception my-logs
+                                ex
+                                ::parent-monitor-loop
+                                (str "At least we can log something interesting with this")
+                                (.getData ex))]
+            (log2/flush-logs! logger my-logs))
+          (assert (not ex) "Child callback failed"))
+        (catch Exception ex
+          (let [my-logs (log2/error my-logs
+                                    ex
+                                    ::parent-monitor-loop
+                                    "This is not acceptable behavior at all")
+                prelog (utils/pre-log message-loop-name)]
+            (log2/flush-logs! logger my-logs)
+            (assert (not ex) (str prelog
+                                  "Child callback failed")))))
+      (let [end-time (System/nanoTime)
+            msg (cl-format nil
+                           "Child callback took ~:d nanoseconds"
+                           (- end-time start-time))
+            my-logs (log2/debug my-logs ::parent-monitor-loop msg)
+            my-logs (log2/flush-logs! logger my-logs)]
+        (log2/flush-logs! logger my-logs)))
+    (let [my-logs
+          (log2/warn my-logs ::parent-monitor-loop "exited")]
+      (log2/flush-logs! logger my-logs))
+    (catch IOException ex
+      (let [my-logs
+            (log2/warn my-logs
+                       ::parent-monitor-loop
+                       "This should happen because the stream from parent closed"
+                       {::problem ex})]
+        (log2/flush-logs! logger my-logs)))
+    (catch Exception ex
+      (let [my-logs
+            (log2/exception my-logs
+                            ex
+                            ::parent-monitor-loop
+                            "Parent Monitor failed unexpectedly")]))))
+
 (s/fdef write-bytes-to-child-pipe!
         :args (s/cat :to-child ::specs/to-child
                      :state ::specs/state
@@ -329,11 +439,12 @@
     (let [bs (byte-array (.readableBytes buf))
           n (count bs)]
       (.readBytes buf bs)
-      (let [log-state (log2/info log-state
-                                 ::write-bytes-to-child-pipe!
-                                 (str "Signalling child's input loop with"
-                                      n
-                                      "bytes"))
+      (let [{:keys [::log2/lamport]
+             :as log-state} (log2/info log-state
+                                       ::write-bytes-to-child-pipe!
+                                       (str "Signalling child's input loop with"
+                                            n
+                                            "bytes"))
             log-state
             ;; This wall of comments and the associated
             ;; timing check aren't exactly rotten, but the actual
@@ -378,7 +489,11 @@
                 ;; TODO: Rearrange the logic. This part needs to
                 ;; succeed before the rest of those things happen.
                 (.write to-child bs 0 (count bs))
-                (let [end-time (System/nanoTime)
+                (let [triggered @(strm/put! from-parent-trigger
+                                            (select-keys log-state
+                                                         [::log2/lamport]))
+
+                      end-time (System/nanoTime)
                       delta (- end-time start-time)
                       msg (cl-format nil "Triggering child took ~:d ns" delta)]
                   (let [log-state
@@ -507,9 +622,7 @@
 (s/fdef start-parent-monitor!
         :args (s/cat :io-handle ::specs/io-handler
                      :parent-log ::log2/state
-                     :callback (s/fspec :args (s/cat :log-state ::log2/state
-                                                     :message ::specs/bs-or-eof)
-                                        :ret ::log2/state))
+                     :callback ::callback)
         :ret ::specs/child-input-loop)
 (defn start-parent-monitor!
   "This is probably a reasonable default for many/most use cases"
@@ -517,81 +630,31 @@
   ;; Maybe I should add an optional parameter: if you don't provide
   ;; this, it will default to calling this.
   [{:keys [::log2/logger
-           ::specs/message-loop-name
-           ::specs/child-in]
+           ::specs/child-in
+           ::specs/from-parent-trigger
+           ::specs/message-loop-name]
     :as io-handle}
    parent-log
    cb]
-  (dfrd/future
-    (let [prelog (utils/pre-log message-loop-name)
-          my-logs (log2/init (::log2/lamport parent-log))
-          buffer (byte-array K/standard-max-block-length)
-          my-logs (log2/info my-logs
-                             ::parent-monitor-loop
-                             "Starting the loop watching for bytes the parent has sent toward the child")]
-      (try
-        (loop [my-logs my-logs]
-          (let [{:keys [::log2/state
-                        ::specs/bs-or-eof]} (read-bytes-from-parent! io-handle my-logs buffer)
-                start-time (System/nanoTime)
-                my-logs (log2/debug my-logs ::parent-monitor-loop "Triggering child callback")]
-            (try
-              (let [my-logs
-                    ;; The rest of this function is really just support and error
-                    ;; handling for the actual point, right here
-                    (-> my-logs
-                        (cb bs-or-eof)
-                        (log2/error ::parent-monitor-loop
-                                    "FIXME: Need to get this synced back to main ioloop"))]
-                (throw (RuntimeException. "So. What should happen to updated-log-state?")))
-              (catch ExceptionInfo ex
-                (let [my-logs
-                      (log2/exception my-logs
-                                      ex
-                                      ::parent-monitor-loop
-                                      (str "At least we can log something interesting with this")
-                                      (.getData ex))]
-                  (log2/flush-logs! logger my-logs))
-                (assert (not ex) "Child callback failed"))
-              (catch Exception ex
-                (let [my-logs (log2/error my-logs
-                                          ex
-                                          ::parent-monitor-loop
-                                          "This is not acceptable behavior at all")]
-                  (log2/flush-logs! logger my-logs))
-                (assert (not ex) (str prelog
-                                      "Child callback failed"))))
-            (let [end-time (System/nanoTime)
-                  msg (cl-format nil
-                                 "Child callback took ~:d nanoseconds"
-                                 (- end-time start-time))
-                  my-logs (log2/debug my-logs ::parent-monitor-loop msg)
-                  my-logs (log2/flush-logs! logger my-logs)]
-              (when (bytes? bs-or-eof)
-                (recur my-logs)))))
-        (let [my-logs
-              (log2/warn my-logs ::parent-monitor-loop "exited")]
-          (log2/flush-logs! logger my-logs))
-        (catch IOException ex
-          (let [my-logs
-                (log2/warn my-logs
+  (let [my-logs (log2/init (::log2/lamport parent-log))
+        buffer (byte-array K/standard-max-block-length)
+        my-logs (log2/info my-logs
                            ::parent-monitor-loop
-                           "This should happen because the stream from parent closed"
-                           {::problem ex})]
-            (log2/flush-logs! logger my-logs)))
-        (catch Exception ex
-          (let [my-logs
-                (log2/exception my-logs
-                                ex
-                                ::parent-monitor-loop
-                                "Parent Monitor failed unexpectedly")]))))))
+                           "Starting the loop watching for bytes the parent has sent toward the child")
+        my-logs (log2/flush-logs! logger my-logs)]
+    (strm/consume (partial parent-trigger
+                           io-handle
+                           my-logs
+                           buffer
+                           cb)
+                  from-parent-trigger)))
 
 (s/fdef forward!
         :args (s/cat :io-handle ::specs/io-handle
                      :primed ::specs/state)
   :ret ::specs/state)
 (defn forward!
-  "Try sending data to child:"
+  "Trigger the parent-monitor 'loop'"
   ;; lines 615-632
   [{:keys [::specs/from-parent
            ::specs/to-child]
@@ -611,11 +674,11 @@
                               {::block-count block-count
                                ::specs/receive-eof receive-eof})]
     (if (< 0 block-count)
-      (let [result (reduce (partial write-bytes-to-child-pipe!
+      (let [preliminary (reduce (partial write-bytes-to-child-pipe!
                                     to-child)
                            (assoc consolidated ::log2/state log-state)
                            ->child-buffer)]
-        (possibly-close-pipe! io-handle result))
+        (possibly-close-pipe! io-handle preliminary))
       (let [result (update consolidated
                            ::log2/state
                            log2/warn

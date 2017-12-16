@@ -374,7 +374,7 @@
                       ;; be queued up to be called for side-effects.
                       ;; TODO: Split those out and make that happen.
                       state' (to-child/forward! io-handle (or pre-processed
-                                                            state))]
+                                                              state))]
                   ;; This will update recent.
                   ;; In the reference implementation, that happens immediately
                   ;; after trying to read from the child.
@@ -1185,9 +1185,6 @@
           ;; the message buffer. I think that's where he
           ;; stashes those.
           child-in (PipedInputStream. to-child pipe-to-child-size)
-          ;; If I go with this approach, it seems like
-          ;; I really need similar pairs for writing data
-          ;; back out.
           io-handle {::specs/->child child-cb
                      ::specs/->parent parent-cb
                      ;; This next piece really doesn't make
@@ -1209,6 +1206,7 @@
                      ::specs/to-child to-child
                      ::specs/to-child-done? (dfrd/deferred)
                      ::specs/child-in child-in
+                     ::specs/from-parent-trigger (strm/stream)
                      ::specs/executor executor
                      ::log/logger logger
                      ::log/entries []
