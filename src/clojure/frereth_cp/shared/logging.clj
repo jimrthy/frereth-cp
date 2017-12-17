@@ -222,16 +222,18 @@
                      :rhs ::state)
         :fn (s/and #(let [{:keys [:args :ret]} %
                           {:keys [:lhs :rhs]} args]
+                      ;; Only changes the lamport tick of the
+                      ;; clock states
                       (and (= (-> ret first (dissoc ::lamport))
                               (dissoc lhs ::lamport))
                            (= (-> ret second (dissoc ::lamport))
                               (dissoc rhs ::lamport))))
                    #(let [{:keys [:args :ret]} %
                           {:keys [:lhs :rhs]} args]
-                      (= (::lamport lhs)
-                         (::lamport rhs)
-                         (max (ret first ::lamport)
-                              (ret second ::lamport)))))
+                      (= (ret first ::lamport)
+                         (ret second ::lamport)
+                         (max (::lamport lhs)
+                              (::lamport rhs)))))
         :ret (s/tuple ::log-state ::state))
 (defn synchronize
   "Fix 2 clocks that have probably drifted apart"
@@ -239,11 +241,7 @@
     :as lhs}
    {r-clock ::lamport
     :as rhs}]
-  (let [synced (max l-clock r-clock)
-        lhs (if (= l-clock synced)
-              lhs
-              (assoc lhs ::lamport synced))
-        rhs (if (= r-clock synced)
-              rhs
-              (assoc rhs ::lamport synced))]
+  (let [synced (inc (max l-clock r-clock))
+        lhs (assoc lhs ::lamport synced)
+        rhs (assoc rhs ::lamport synced)]
     [lhs rhs]))

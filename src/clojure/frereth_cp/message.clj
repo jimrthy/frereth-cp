@@ -1177,14 +1177,6 @@
           ;; either in the un-ackd or un-sent queues.
           ;; Still, this is a starting point.
           child-out (PipedInputStream. from-child pipe-from-child-size)
-          to-child (PipedOutputStream.)
-          ;; This has the same caveats as the buffer size for
-          ;; child-out, except that I'm just picking a named
-          ;; constant that's in the same general vicinity as
-          ;; the size the reference implementation uses for
-          ;; the message buffer. I think that's where he
-          ;; stashes those.
-          child-in (PipedInputStream. to-child pipe-to-child-size)
           io-handle {::specs/->child child-cb
                      ::specs/->parent parent-cb
                      ;; This next piece really doesn't make
@@ -1203,9 +1195,7 @@
                      ::specs/from-child from-child
                      ::specs/child-out child-out
                      ::specs/pipe-from-child-size pipe-from-child-size
-                     ::specs/to-child to-child
                      ::specs/to-child-done? (dfrd/deferred)
-                     ::specs/child-in child-in
                      ::specs/from-parent-trigger (strm/stream)
                      ::specs/executor executor
                      ::log/logger logger

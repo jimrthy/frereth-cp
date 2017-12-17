@@ -39,11 +39,8 @@
 (s/def ::from-child #(instance? OutputStream %))
 ;; This is the pipe that we read for buffering that data
 (s/def ::child-out #(instance? InputStream %))
-;; This is the stream that we use to write bytes to the child
-(s/def ::to-child #(instance? OutputStream %))
+;; Q: What's this for?
 (s/def ::to-child-done? #(instance? IDeref %))
-;; This is the stream the child reads
-(s/def ::child-in #(instance? InputStream %))
 (s/def ::from-parent-trigger #(strm/sink? %))
 ;; These are the equivalent of the OS pipes that
 ;; the reference implementation uses to pipe data in
@@ -441,7 +438,6 @@
                                  ::from-child
                                  ::child-out
 
-                                 ::to-child
                                  ::to-child-done?
                                  ::child-in
                                  ::from-parent-trigger
