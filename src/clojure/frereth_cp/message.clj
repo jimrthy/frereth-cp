@@ -13,6 +13,7 @@
   really the main point."
   (:require [clojure.pprint :refer (cl-format)]
             [clojure.spec.alpha :as s]
+            [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.from-child :as from-child]
@@ -24,7 +25,7 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
@@ -83,12 +84,12 @@
                            -1
                            1)))
                      (catch NullPointerException ex
-                       (log/flush-logs! logger (log/exception entries
-                                                              ex
-                                                              ::build-un-ackd-blocks
-                                                              "Comparing time"
-                                                              {::lhs x
-                                                               ::rhs y}))
+                       (log2/flush-logs! logger (log2/exception entries
+                                                                ex
+                                                                ::build-un-ackd-blocks
+                                                                "Comparing time"
+                                                                {::lhs x
+                                                                 ::rhs y}))
                        (throw ex))))))
 
 ;;;; Q: what else is in the reference implementation?
@@ -255,22 +256,17 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [{:keys [::specs/to-child
+  [{:keys [::log2/logger
            ::specs/message-loop-name]
     :as io-handle}
    ^bytes message
    {{:keys [::specs/->child-buffer]} ::specs/incoming
     {:keys [::specs/client-waiting-on-response]} ::specs/flow-control
+    log-state ::log2/state
     :as state}]
-  (let [prelog (utils/pre-log message-loop-name)]
-    (when-not to-child
-      (throw (ex-info (str prelog
-                           "Missing to-child")
-                      {::detail-keys (keys io-handle)
-                       ::top-level-keys (keys state)
-                       ::details state})))
-
-    (log/debug prelog "Incoming from parent")
+  (let [log-state (log2/debug log-state
+                              ::trigger-from-parent!
+                              "Incoming from parent")]
 
     ;; This is an important side-effect that permanently converts the
     ;; "mode" of the i/o loop that's pulling bytes from the child's
@@ -288,6 +284,7 @@
       (when (= 0 incoming-size)
         ;; This is supposed to kill the entire process
         ;; TODO: Be more graceful
+        (log2/flush-logs! logger log-state)
         (throw (AssertionError. "Bad Message")))
 
       ;; Reference implementation is really reading bytes from
@@ -302,12 +299,14 @@
       ;; I'm going to take a simpler and easier approach, at least for
       ;; the first pass.
 
-      ;; trigger-from-parent is expecting to have a ::->child-buffer key
+      ;; trigger-from-parent! is expecting to have a ::->child-buffer key
       ;; that's really a vector that we can just conj onto.
       (when-not state
-        (log/warn prelog
-                  ;; They're about to get worse
-                  "nil state. Things went sideways recently"))
+        (let [logs (log2/warn (log2/init (::log2/lamport log-state))
+                              ::trigger-from-parent!
+                              ;; They're about to get worse
+                              "nil state. Things went sideways recently")]
+          (log2/flush-logs! logger logs)))
 
       (if (< (count ->child-buffer) max-child-buffer-size)
         ;; Q: Will ->child-buffer ever have more than one array?
@@ -319,18 +318,18 @@
                                                                (try
                                                                  (count buf)
                                                                  (catch UnsupportedOperationException ex
-                                                                   (throw (ex-info (str prelog
-                                                                                        "Parent sent a "
-                                                                                        (class buf)
-                                                                                        " which isn't a B]")
-                                                                                   {::cause ex})))))
-                                                             ->child-buffer))]
-          (log/debug prelog
-                     "Have"
-                     previously-buffered-message-bytes
-                     "bytes in"
-                     (count ->child-buffer)
-                     " child buffers; possibly processing")
+                                                                   (let [prelog (utils/pre-log message-loop-name)]
+                                                                     (throw (ex-info (str prelog
+                                                                                          "Parent sent a "
+                                                                                          (class buf)
+                                                                                          " which isn't a B]")
+                                                                                     {::cause ex}))))))
+                                                             ->child-buffer))
+              log-state (log2/debug log-state
+                                    ::trigger-from-parent!
+                                    "possibly processing"
+                                    {::bytes-buffered previously-buffered-message-bytes
+                                     ::buffer-count (count ->child-buffer)})]
           ;; Probably need to do something with previously-buffered-message-bytes.
           ;; Definitely need to check the number of bytes that have not
           ;; been forwarded along yet.
@@ -339,15 +338,20 @@
           ;; 64K buffer, so maybe it's already covered, and I just wasted
           ;; CPU cycles calculating it.
           (if (<= incoming-size K/max-msg-len)
-            (do
+            (let
               ;; It's tempting to move as much as possible from here
               ;; into the (now defunct) agent handler.
               ;; That impulse seems wrong. Based on preliminary numbers,
               ;; any filtering I can do outside an an agent send is a win.
               ;; TODO: Now that the manifold version is working, revisit
               ;; that decision.
-              (log/debug prelog
-                         "Message is small enough. Look back here")
+                [log-state (log2/debug log-state
+                                       ::trigger-from-parent!
+                                       "Message is small enough. Look back here")
+                 state (-> state
+                           (assoc ::log2/state log-state)
+                           (assoc-in [::specs/incoming ::specs/parent->buffer]
+                                     message))]
               ;; This is basically an iteration of the top-level
               ;; event-loop handler from main().
               ;; I can skip the pieces that only relate to reading
@@ -365,16 +369,15 @@
               ;; since whatever ACK just arrived might adjust the RTT
               ;; logic.
               (try
-                (let [pre-processed (from-parent/try-processing-message!
-                                     io-handle
-                                     (assoc-in state
-                                               [::specs/incoming ::specs/parent->buffer]
-                                               message))
-                      ;; This is a prime example of something that should
-                      ;; be queued up to be called for side-effects.
-                      ;; TODO: Split those out and make that happen.
-                      state' (to-child/forward! io-handle (or pre-processed
-                                                              state))]
+                (as-> (from-parent/try-processing-message!
+                       io-handle
+                       state) state'
+                  (or state' state)
+                  ;; This is a prime example of something that should
+                  ;; be queued up to be called for side-effects.
+                  ;; TODO: Split those out and make that happen.
+                  (to-child/forward! io-handle state')
+
                   ;; This will update recent.
                   ;; In the reference implementation, that happens immediately
                   ;; after trying to read from the child.
@@ -384,33 +387,40 @@
                   ;; functions instead?
                   (trigger-output io-handle state'))
                 (catch ExceptionInfo ex
-                  (log/error ex
-                             (str prelog
-                                  "Details:\n"
-                                  (utils/pretty (.getData ex)))))
+                  (let [log-state (log2/exception log-state
+                                                  ex
+                                                  ::trigger-from-parent!
+                                                  "Forwarding failed"
+                                                  (.getData ex))]
+                    (assoc state ::log2/state log-state)))
                 (catch RuntimeException ex
-                  (log/error ex
-                             prelog
-                             "Trying to cope with a message arriving from parent"))))
-            (do
-              ;; This is actually pretty serious.
-              ;; All sorts of things had to go wrong for us to get here.
-              ;; TODO: More extensive error handling.
-              ;; Actually, should probably add an optional client-supplied
-              ;; error handler for situations like this
-              (log/warn prelog
-                        (str "Message too large\n"
-                             "Incoming message is " incoming-size
-                             " / " K/max-msg-len)))))
-        (do
-          ;; TODO: Need a way to apply back-pressure
-          ;; to child
-          (log/warn prelog
-                    (str "Child buffer overflow\n"
-                         "Have " (count ->child-buffer)
-                         "/"
-                         max-child-buffer-size
-                         " messages buffered. Wait!")))))))
+                  (let [msg "Trying to cope with a message arriving from parent"
+                        log-state (log2/exception log-state
+                                                  ex
+                                                  ::trigger-from-parent!
+                                                  msg)])
+                  (assoc state ::log2/state log-state))))
+            ;; This is actually pretty serious.
+            ;; All sorts of things had to go wrong for us to get here.
+            ;; TODO: More extensive error handling.
+            ;; Actually, should probably add an optional client-supplied
+            ;; error handler for situations like this
+            (assoc state
+                   ::log/state
+                   (log2/warn log-state
+                              ::trigger-from-parent!
+                              "Incoming message too large"
+                              {::incoming-size incoming-size
+                               ::maximum-allowed K/max-msg-len}))))
+        ;; TODO: Need a way to apply back-pressure
+        ;; to child
+        (assoc state
+               ::log/state
+               (log2/warn log-state
+                          ::trigger-from-parent!
+                          "Child buffer overflow\nWait!"
+                          {::incoming-buffer-size (count ->child-buffer)
+                           ::max-allowed max-child-buffer-size}))))))
 
 (defn trigger-from-timer
   [io-handle
@@ -975,10 +985,12 @@
 ;;; abstraction that just don't fit.
 ;;;          205-259 fork child
 (defn start-event-loops!
-  [{:keys [::specs/->child
+  [{:keys [::log2/logger
+           ::specs/->child
            ::specs/message-loop-name]
     :as io-handle}
-   state]
+   {log-state ::log2/state
+    :as state}]
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
   ;; That checks for input on:
@@ -995,9 +1007,11 @@
     (let [state (assoc state
                        ::specs/recent recent)
           child-output-loop (from-child/start-child-monitor! state io-handle)
-          child-input-loop (to-child/start-parent-monitor! io-handle  ->child)]
-      (log/debug (utils/pre-log message-loop-name)
-                 "Child monitor thread should be running now. Scheduling next ioloop timeout")
+          child-input-loop (to-child/start-parent-monitor! io-handle log-state ->child)]
+      (let [log-state (log2/debug log-state
+                                  ::start-event-loops!
+                                  "Child monitor thread should be running now. Scheduling next ioloop timeout")]
+        (log2/flush-logs! logger log-state))
       (schedule-next-timeout! (assoc io-handle
                                      ::specs/child-output-loop child-output-loop
                                      ::specs/child-input-loop child-input-loop)
@@ -1010,9 +1024,9 @@
         :args (s/cat :human-name ::specs/message-loop-name
                      ;; Q: What (if any) is the difference to spec that this
                      ;; argument is optional?
-                     :want-ping ::specs/want-ping
+                     :server? :boolean?
                      :opts ::specs/state
-                     :logger ::log/logger)
+                     :logger ::log2/logger)
         :ret ::specs/state)
 (defn initial-state
   "Put together an initial state that's ready to start!"
@@ -1026,12 +1040,11 @@
       :as outgoing} ::specs/outgoing
      :as opts}
     logger]
-   (let [prelog (utils/pre-log human-name)
-         log-state (log/debug (log/init)
-                                ::initialization
-                                "Building state for initial loop based around options"
-                                (assoc opts ::overrides {::->child-size pipe-to-child-size
-                                                         ::child->size pipe-from-child-size}))]
+   (let [log-state (log2/debug (log2/init)
+                               ::initialization
+                               "Building state for initial loop based around options"
+                               (assoc opts ::overrides {::->child-size pipe-to-child-size
+                                                        ::child->size pipe-from-child-size}))]
      (let [pending-client-response (promise)]
        (when server?
          (deliver pending-client-response ::never-waited))
@@ -1097,8 +1110,8 @@
                           ::specs/strm-hwm 0
                           ::specs/total-blocks 0
                           ::specs/total-block-transmissions 0
-                          ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
-                                                                        ::log/state log-state})
+                          ::specs/un-ackd-blocks (build-un-ackd-blocks {::log2/logger logger
+                                                                        ::log2/state log-state})
                           ::specs/un-sent-blocks PersistentQueue/EMPTY
                           ::specs/want-ping (if server?
                                               ::specs/false
@@ -1109,7 +1122,7 @@
                                               ;; trying to send the next
                                               ;; message
                                               ::specs/immediate)}
-        ::log/state log-state
+        ::log2/state log-state
         ::specs/message-loop-name human-name
         ;; In the original, this is a local in main rather than a global
         ;; Q: Is there any difference that might matter to me, other
@@ -1198,8 +1211,8 @@
                      ::specs/to-child-done? (dfrd/deferred)
                      ::specs/from-parent-trigger (strm/stream)
                      ::specs/executor executor
-                     ::log/logger logger
-                     ::log/entries []
+                     ::log2/logger logger
+                     ::log2/entries (log2/init)
                      ::specs/message-loop-name message-loop-name
                      ::specs/stream s}]
       (start-event-loops! io-handle state)

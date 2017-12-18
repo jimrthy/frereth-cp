@@ -15,6 +15,7 @@
             [frereth-cp.message.to-child :as to-child]
             [frereth-cp.message.to-parent :as to-parent]
             [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -40,26 +41,33 @@
   ;; TODO: Refactor to take advantage of
   ;; from-child/try-multiple-sends
   [f  ;; Honestly, this is just child->!
-   prelog
+   logger
    n
    io-handle
    payload
    success-message
    failure-message
    failure-body]
-  (loop [m n]
-    (if (f io-handle payload)
-      (do
-        (log/info prelog success-message)
-        (log/debug prelog "Sending took" (- (inc n) m) "attempt(s)"))
-      (if (> 0 m)
-        (let [failure (ex-info failure-message
-                               failure-body)]
-          ;; Just make double-extra certain that
-          ;; this exception doesn't just disappear
-          (log/error prelog failure)
-          (throw failure))
-        (recur (dec m))))))
+  (let [logs (log2/init)]
+    (loop [m n]
+      (if (f io-handle payload)
+        (let [logs (log2/info logs ::try-multiple-sends success-message)
+              logs (log2/debug logs
+                               ::try-multiple-sends
+                               (str "Sending took" (- (inc n) m) "attempt(s)"))]
+          (log2/flush-logs! logger logs))
+        (if (> 0 m)
+          (let [failure (ex-info failure-message
+                                 failure-body)
+                logs (log2/exception logs
+                                     failure
+                                     ::try-multiple-sends
+                                     failure-message)]
+            (log2/flush-logs! logger logs)
+            ;; Need to make double-extra certain that
+            ;; this exception doesn't just disappear
+            (throw failure))
+          (recur (dec m)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Actual tests
@@ -77,6 +85,8 @@
   ;; TODO: Revisit this decision. See whether it's uglier
   ;; with 2 sides to "communicate"
   (let [loop-name "Echo Test"
+        logs (log2/init)
+        logger (log2/std-out-log-factory)
         src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
         msg-len (- K/max-msg-len K/header-length K/min-padding-length)
         ;; Note that this is what the child sender should be supplying
@@ -114,48 +124,52 @@
                         ;; might do.
                         (is (s/valid? bytes? buf))
                         (let [response-state @parent-state
-                              prelog (utils/pre-log "parent-cb")]
-                          (log/debug prelog
-                                     "Current response-state: "
-                                     response-state
-                                     "\nCalled from:\n"
-                                     (utils/get-stack-trace (Exception.)))
+                              prelog (utils/pre-log "parent-cb")
+                              logs (log2/debug logs
+                                               ::echo-parent-cb
+                                               "Top of callback"
+                                               {::response-state response-state
+                                                ::called-from (utils/get-stack-trace (Exception.))})]
                           (let [new-state
-                                (swap! parent-state inc)]
-                            ;; I'd like to get 3 message packets here:
-                            ;; 1. ACK
-                            ;; 2. message being echoed
-                            ;; 3. EOF
-                            ;; What I'm getting instead is:
-                            ;; 1. ACK
-                            ;; 2. message being echoed
-                            ;; 3. message being echoed because I haven't responded with an ACK
-                            ;; There may be ways around this, but none of the ones that come
-                            ;; to mind just now seem worth the time/effort.
-                            ;; This test pretty obviously isn't about a
-                            ;; realistic message exchange. It's really
-                            ;; just about verifying that I got the echo.
-                            ;; Everything else going on in here is really just
-                            ;; a distraction from that fundamental point.
-                            ;; They're good distractions, and the system's gotten
-                            ;; much more robust because of them.
-                            ;; FIXME: Revisit this soon.
-                            (when (= 3 new-state)
-                              (log/info prelog
-                                        "Echo sent. Pretending other child triggers done")
-                              ;; This seems like a good time for the parent
-                              ;; to send EOF
-                              (let [{:keys [::specs/to-child]
-                                     :as io-handle} @io-handle-atom]
-                                ;; This part of the circular dependency
-                                ;; is absolutely not realistic.
-                                ;; The real message code that receives
-                                ;; the EOF signal needs to do this.
-                                ;; It only makes sense in this test because
-                                ;; I'm totally mocking out any sort of real
-                                ;; interaction.
-                                (.close to-child))
-                              (deliver response buf)))))
+                                (swap! parent-state inc)
+                                ;; I'd like to get 3 message packets here:
+                                ;; 1. ACK
+                                ;; 2. message being echoed
+                                ;; 3. EOF
+                                ;; What I'm getting instead is:
+                                ;; 1. ACK
+                                ;; 2. message being echoed
+                                ;; 3. message being echoed because I haven't responded with an ACK
+                                ;; There may be ways around this, but none of the ones that come
+                                ;; to mind just now seem worth the time/effort.
+                                ;; This test pretty obviously isn't about a
+                                ;; realistic message exchange. It's really
+                                ;; just about verifying that I got the echo.
+                                ;; Everything else going on in here is really just
+                                ;; a distraction from that fundamental point.
+                                ;; They're good distractions, and the system's gotten
+                                ;; much more robust because of them.
+                                ;; FIXME: Revisit this soon.
+                                logs (if (= 3 new-state)
+                                       (let [logs (log2/info logs
+                                                             ::echo-parent-cb
+                                                             "Echo sent. Pretending other child triggers done")
+                                             ;; This seems like a good time for the parent
+                                             ;; to send EOF
+                                             {:keys [::specs/to-child]
+                                              :as io-handle} @io-handle-atom]
+                                           ;; This part of the circular dependency
+                                           ;; is absolutely not realistic.
+                                           ;; The real message code that receives
+                                           ;; the EOF signal needs to do this.
+                                           ;; It only makes sense in this test because
+                                           ;; I'm totally mocking out any sort of real
+                                           ;; interaction.
+                                         (.close to-child)
+                                         (deliver response buf)
+                                         logs)
+                                       logs)]
+                            (log2/flush-logs! logger logs))))
             child-message-counter (atom 0)
             strm-address (atom 0)
             child-finished (dfrd/deferred)
@@ -163,50 +177,63 @@
                        ;; TODO: Add another similar test that throws an
                        ;; exception here, for the sake of hardening the
                        ;; caller
-                       (let [prelog (utils/pre-log "child-cb")]
-                         (log/info prelog "Incoming to child:" array-o-bytes)
+                       (let [logs (log2/info logs
+                                             ::echo-child-cb
+                                             "Incoming to child"
+                                             {::rcvd array-o-bytes})]
                          (is array-o-bytes "Falsey reached callback")
-                         (if (bytes? array-o-bytes)
-                           (let [msg-len (count array-o-bytes)
-                                 locator (Exception.)]
-                             (if (not= 0 msg-len)
-                               (do
-                                 (log/debug prelog
-                                            "Echoing back an incoming message:"
-                                            msg-len
-                                            "bytes\n"
-                                            "Called from:\n"
-                                            (utils/get-stack-trace (Exception.)))
-                                 (when (not= K/k-1 msg-len)
-                                   (log/warn prelog
-                                             "Incoming message doesn't match length we sent"
-                                             {::expected K/k-1
-                                              ::actual msg-len
-                                              ::details (vec array-o-bytes)}))
-                                 ;; Just echo it directly back.
-                                 (let [io-handle @io-handle-atom]
-                                   (is io-handle)
-                                   (swap! child-message-counter inc)
-                                   (swap! strm-address + msg-len)
-                                   (try
-                                     (try-multiple-sends message/child->!
-                                                         prelog
-                                                         5
-                                                         io-handle
-                                                         array-o-bytes
-                                                         (str "Buffered bytes from child")
-                                                         "Giving up on buffering bytes from child"
-                                                         {})
-                                     (finally
-                                       (log/info "Sending EOF after the message block")
-                                       (message/child-close! @io-handle-atom)))))
-                               (log/warn prelog "Empty incoming message. Highly suspicious")))
-                           (let [{:keys [::specs/from-child]
-                                  :as io-handle} @io-handle-atom]
-                             (log/warn prelog "Child received EOF. Mark done.")
-                             (message/child-close! io-handle)
-                             (is (s/valid? ::specs/eof-flag array-o-bytes))
-                             (deliver child-finished array-o-bytes)))))
+                         (let [logs
+                               (if (bytes? array-o-bytes)
+                                 (let [msg-len (count array-o-bytes)
+                                       locator (Exception.)
+                                       logs (if (not= 0 msg-len)
+                                              (let [logs (log2/debug logs
+                                                                     ::echo-child-cb
+                                                                     "Echoing back an incoming message"
+                                                                     {::msg-len msg-len
+                                                                      ::called-from (utils/get-stack-trace (Exception.))})
+                                                    logs (if (not= K/k-1 msg-len)
+                                                           (log2/warn logs
+                                                                      ::echo-child-cb
+                                                                      "Incoming message doesn't match length we sent"
+                                                                      {::expected K/k-1
+                                                                       ::actual msg-len
+                                                                       ::details (vec array-o-bytes)})
+                                                           logs)
+                                                    ;; Just echo it directly back.
+                                                    io-handle @io-handle-atom]
+                                                (is io-handle)
+                                                (swap! child-message-counter inc)
+                                                (swap! strm-address + msg-len)
+                                                (try
+                                                  (try-multiple-sends message/child->!
+                                                                      logger
+                                                                      5
+                                                                      io-handle
+                                                                      array-o-bytes
+                                                                      (str "Buffered bytes from child")
+                                                                      "Giving up on buffering bytes from child"
+                                                                      {})
+                                                  (finally
+                                                    (message/child-close! @io-handle-atom)
+                                                    ;; This is called purely for side-effects.
+                                                    ;; The return value does not matter.
+                                                    (let [inner-logs (log2/init)
+                                                          inner-logs (log2/info inner-logs
+                                                                                ::echo-child-cb
+                                                                                "Sent EOF after the message block")]
+                                                      (log2/flush-logs! logger inner-logs))))
+                                                logs))]
+                                   (log2/warn logs :echo-child-cb "Empty incoming message. Highly suspicious"))
+                                 (let [{:keys [::specs/from-child]
+                                        :as io-handle} @io-handle-atom
+                                       logs (log2/warn logs
+                                                       ::echo-child-cb
+                                                       "Child received EOF. Mark done.")]
+                                   (message/child-close! io-handle)
+                                   (is (s/valid? ::specs/eof-flag array-o-bytes))
+                                   (deliver child-finished array-o-bytes)
+                                   logs))])))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.
@@ -215,11 +242,12 @@
             ;; message arrives.
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
-            initialized (message/initial-state loop-name {} true)
-            io-handle (message/start! initialized  parent-cb child-cb)]
+            initialized (message/initial-state loop-name true {} logger)
+            io-handle (message/start! initialized logger parent-cb child-cb)]
         (dfrd/on-realized child-finished
                           (fn [success]
-                            (log/info "Child just signalled EOF")
+                            (let [logs (log2/info "Child just signalled EOF")]
+                              (log2/flush-logs! logger logs))
                             (is (= success ::specs/normal)))
                           (fn [failure]
                             (is (not failure) "Child echoer failed")))
@@ -234,9 +262,15 @@
               ;; TODO: Add similar tests that send a variety of
               ;; gibberish messages
               (let [wrote (dfrd/future
-                            (log/debug loop-name "Writing message from parent")
-                            (message/parent->! io-handle incoming)
-                            (log/debug "Message should be headed to child"))
+                            (let [logs (log2/init)
+                                  logs (log2/debug logs
+                                                   ::echo-initial-write
+                                                   "Writing message from parent")]
+                              (message/parent->! io-handle incoming)
+                              (let [logs (log2/debug logs
+                                                     ::echo-initial-write
+                                                     "Message should be headed to child")]
+                                (log2/flush-logs! logger logs))))
                     ;; The time delay here is pretty crazy.
                     ;; It seems as though it should never take human-noticeable time.
                     ;; And yet I've seen this test fail on my desktop
@@ -259,54 +293,60 @@
                       (is (= (count message-body) (count without-header)))
                       (is (b-t/bytes= message-body without-header)))))
                 (is (realized? wrote) "Initial write from parent hasn't returned yet.")
-                (let [state (message/get-state io-handle 500 ::time-out)]
-                  (log/info "Final state query returned")
+                (let [state (message/get-state io-handle 500 ::time-out)
+                      logs (log2/info logs
+                                      ::echo-examination
+                                      "Final state query returned")]
                   (is (not= state ::timeout))
                   (when (not= state ::timeout)
                     (is (not
                          (s/explain-data ::specs/state state)))
-                    (log/info "Checking test outcome")
+                    (let [logs (log2/info logs
+                                          ::echo-examination
+                                          "Checking test outcome")]
+                      (let [child-completion (deref child-finished 500 ::child-timed-out)]
+                        (is (= ::specs/normal child-completion)))
 
-                    ;; EOF isn't reaching the child in time.
-                    ;; This seems like a strong indicator that I'm either
-                    ;; a. not signaling it in a sensible place
-                    ;; b. not forwarding it from wherever it is being signaled
-                    ;; c. all of the above
-                    (let [child-completion (deref child-finished 500 ::child-timed-out)]
-                      (is (= ::specs/normal child-completion)))
-
-                    (let [{:keys [::specs/incoming
-                                  ::specs/outgoing]} state]
-                      (is incoming)
-                      (is (= msg-len (inc (::specs/strm-hwm incoming))))
-                      (is (= msg-len (::specs/contiguous-stream-count incoming)))
-                      (is (= (inc (::specs/strm-hwm incoming))
-                             (::specs/contiguous-stream-count incoming)))
-                      (is (= 3 (::specs/next-message-id outgoing)))
-                      ;; There's nothing on the other side to send back
-                      ;; an ACK. But it should have been sent.
-                      (is (= msg-len (from-child/buffer-size outgoing)))
-                      ;; This includes both the packet we're echoing back
-                      ;; and the EOF signal.
-                      ;; Because of the way the initial scheduling algorithm works
-                      ;; (it wants an ACK from the first block before sending the
-                      ;; second), we're winding up with 1 message in both
-                      ;; queues. That's an implementation detail that really doesn't
-                      ;; matter for our purposes, and it might change.
-                      ;; The important point is that we still have both
-                      ;; the echo and the EOF.
-                      (is (= 2 (+ (count (::specs/un-sent-blocks outgoing))
-                                  (count (::specs/un-ackd-blocks outgoing)))))
-                      (is (= ::specs/normal (::specs/send-eof outgoing)))
-                      (is (= msg-len (::specs/strm-hwm outgoing)))
-                      ;; Keeping around as a reminder for when the implementation changes
-                      ;; and I need to see what's really going on again
-                      (comment (is (not outcome) "What should we have here?"))))))))
+                      (let [{:keys [::specs/incoming
+                                    ::specs/outgoing]} state]
+                        (is incoming)
+                        (is (= msg-len (inc (::specs/strm-hwm incoming))))
+                        (is (= msg-len (::specs/contiguous-stream-count incoming)))
+                        (is (= (inc (::specs/strm-hwm incoming))
+                               (::specs/contiguous-stream-count incoming)))
+                        (is (= 3 (::specs/next-message-id outgoing)))
+                        ;; There's nothing on the other side to send back
+                        ;; an ACK. But it should have been sent.
+                        (is (= msg-len (from-child/buffer-size outgoing)))
+                        ;; This includes both the packet we're echoing back
+                        ;; and the EOF signal.
+                        ;; Because of the way the initial scheduling algorithm works
+                        ;; (it wants an ACK from the first block before sending the
+                        ;; second), we're winding up with 1 message in both
+                        ;; queues. That's an implementation detail that really doesn't
+                        ;; matter for our purposes, and it might change.
+                        ;; The important point is that we still have both
+                        ;; the echo and the EOF.
+                        (is (= 2 (+ (count (::specs/un-sent-blocks outgoing))
+                                    (count (::specs/un-ackd-blocks outgoing)))))
+                        (is (= ::specs/normal (::specs/send-eof outgoing)))
+                        (is (= msg-len (::specs/strm-hwm outgoing)))
+                        ;; Keeping around as a reminder for when the implementation changes
+                        ;; and I need to see what's really going on again
+                        (comment (is (not outcome) "What should we have here?")))
+                      (log2/flush-logs! logger logs)))))))
           (catch ExceptionInfo ex
-            (log/error loop-name ex "Starting the event loop"))
+            (let [logs (log2/exception (log2/init)
+                                       ex
+                                       ::echo-failure
+                                       "Starting the event loop")]
+              (log2/flush-logs! logger logs)))
           (finally
-            (log/warn "Signalling I/O loop halt")
-            (message/halt! io-handle)))))))
+            (let [logs (log2/warn (log2/init)
+                                  ::echo-clean-up
+                                  "Signalling I/O loop halt")]
+              (log2/flush-logs! logger logs)
+              (message/halt! io-handle))))))))
 (comment (basic-echo))
 
 (deftest check-eof

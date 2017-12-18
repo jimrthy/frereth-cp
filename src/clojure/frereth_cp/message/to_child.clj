@@ -792,7 +792,7 @@
                            log2/warn
                            ::forward!
                            "0 bytes to forward to child")]
-        (possibly-close-pipe! io-handle result)))
+        (possibly-close-stream! io-handle result)))
     ;; 610-614: counters/looping
     ;; (doesn't really apply to this implementation)
     ))

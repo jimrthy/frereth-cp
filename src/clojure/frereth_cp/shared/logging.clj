@@ -81,19 +81,21 @@
          ::time (System/currentTimeMillis)
          ::message message})
        (update ::lamport inc)))
-  ([log-state
+  ([{:keys [::lamport]
+     :as log-state}
     level
     label
     message]
-   (->
-    (update
-     ::entries
-     conj
-     {::current-thread (utils/get-current-thread)
-      ::label label
-      ::level level
-      ::time (System/currentTimeMillis)
-      ::message message})
+   (-> log-state
+       (update
+        ::entries
+        conj
+        {::current-thread (utils/get-current-thread)
+         ::label label
+         ::lamport lamport
+         ::level level
+         ::time (System/currentTimeMillis)
+         ::message message})
     (update ::lamport inc))))
 
 (defmacro deflogger
