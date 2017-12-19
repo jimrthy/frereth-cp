@@ -109,38 +109,39 @@
       ;; Q: Did a previous message overwrite this message block?
       (if (> stop contiguous-stream-count)
         ;; Consolidate this message block
-        (do
-          (when (< start contiguous-stream-count)
-            (let [bytes-to-skip (- contiguous-stream-count start)
-                  log-state (log2/info log-state
-                                       ::consolidate-message-block
-                                       (str "Skipping "
-                                            bytes-to-skip
-                                            " previously received bytes in "
-                                            buf))]
-              (.skipBytes buf bytes-to-skip)
-              (let [log-state
-                    (log2/debug log-state
-                                ::consolidate-message-block
-                                (str "Consolidating entry 1/"
-                                     (count (::specs/gap-buffer
-                                             incoming))))]
-                (-> state
-                    (update ::specs/incoming
-                            (fn [cur]
-                              (-> cur
-                                  (update ::specs/gap-buffer pop-map-first)
-                                  ;; There doesn't seem to be any good reason to hang
-                                  ;; onto buf here. It's helpful for debugging,
-                                  ;; but I need byte-arrays downstream.
-                                  ;; There's an open question about where it makes
-                                  ;; sense to copy the bytes over
-                                  ;; (and release the buffer)
-                                  (update ::specs/->child-buffer conj buf)
-                                  ;; Microbenchmarks and common sense indicate that
-                                  ;; assoc is significantly faster than update
-                                  (assoc ::specs/contiguous-stream-count stop))))
-                    (assoc ::log2/state log-state))))))
+        (let [log-state
+              (if (< start contiguous-stream-count)
+                (let [bytes-to-skip (- contiguous-stream-count start)
+                      log-state (log2/info log-state
+                                           ::consolidate-message-block
+                                           (str "Skipping "
+                                                bytes-to-skip
+                                                " previously received bytes in "
+                                                buf))]
+                  (.skipBytes buf bytes-to-skip)
+                  log-state)
+                log-state)
+              log-state (log2/debug log-state
+                                    ::consolidate-message-block
+                                    (str "Consolidating entry 1/"
+                                         (count (::specs/gap-buffer
+                                                 incoming))))]
+          (-> state
+              (update ::specs/incoming
+                      (fn [cur]
+                        (-> cur
+                            (update ::specs/gap-buffer pop-map-first)
+                            ;; There doesn't seem to be any good reason to hang
+                            ;; onto buf here. It's helpful for debugging,
+                            ;; but I need byte-arrays downstream.
+                            ;; There's an open question about where it makes
+                            ;; sense to copy the bytes over
+                            ;; (and release the buffer)
+                            (update ::specs/->child-buffer conj buf)
+                            ;; Microbenchmarks and common sense indicate that
+                            ;; assoc is significantly faster than update
+                            (assoc ::specs/contiguous-stream-count stop))))
+              (assoc ::log2/state log-state)))
         (let [log-state
               (log2/debug log-state
                           ::consolidate-message-block
@@ -781,6 +782,9 @@
                               "Consolidated block(s) ready to go to child."
                               {::block-count block-count
                                ::specs/receive-eof receive-eof})]
+    (println "=======================================\n"
+             "Checking for blocks to send to child\n"
+             "=======================================")
     (if (< 0 block-count)
       (let [preliminary (reduce (partial write-bytes-to-child-stream!
                                          parent-trigger)

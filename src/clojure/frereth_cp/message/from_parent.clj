@@ -726,6 +726,11 @@ Line 608"
                            dissoc
                            ::specs/packet)))
                extracted)
+              ;; If the other side resent a packet, there's a
+              ;; good chance that the initial ACK disappeared.
+              ;; FIXME: Surely I still need to ACK this.
+              ;; TODO: Verify the way the reference implementation
+              ;; handles this
               state))))
       (do
         (if (< 0 len)

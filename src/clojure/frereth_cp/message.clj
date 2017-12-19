@@ -369,13 +369,13 @@
               ;; since whatever ACK just arrived might adjust the RTT
               ;; logic.
               (try
+                ;; This is a prime example of something that should
+                ;; be queued up to be called for side-effects.
+                ;; TODO: Split those out and make that happen.
                 (as-> (from-parent/try-processing-message!
                        io-handle
                        state) state'
                   (or state' state)
-                  ;; This is a prime example of something that should
-                  ;; be queued up to be called for side-effects.
-                  ;; TODO: Split those out and make that happen.
                   (to-child/forward! io-handle state')
 
                   ;; This will update recent.
@@ -1229,16 +1229,12 @@
   [{:keys [::specs/message-loop-name
            ::specs/stream
            ::specs/from-child
-           ::specs/child-out
-           ::specs/to-child
-           ::specs/child-in]
+           ::specs/child-out]
     :as io-handle}]
   (log/info (utils/pre-log message-loop-name) "I/O Loop Halt Requested")
   (strm/close! stream)
   (doseq [pipe [from-child
-                child-out
-                to-child
-                child-in]]
+                child-out]]
     (.close pipe)))
 
 (s/fdef get-state

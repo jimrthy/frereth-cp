@@ -439,7 +439,6 @@
                                  ::child-out
 
                                  ::to-child-done?
-                                 ::child-in
                                  ::from-parent-trigger
 
                                  ::executor

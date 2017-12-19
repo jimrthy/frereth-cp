@@ -124,52 +124,50 @@
                         ;; might do.
                         (is (s/valid? bytes? buf))
                         (let [response-state @parent-state
-                              prelog (utils/pre-log "parent-cb")
                               logs (log2/debug logs
                                                ::echo-parent-cb
                                                "Top of callback"
                                                {::response-state response-state
-                                                ::called-from (utils/get-stack-trace (Exception.))})]
-                          (let [new-state
-                                (swap! parent-state inc)
-                                ;; I'd like to get 3 message packets here:
-                                ;; 1. ACK
-                                ;; 2. message being echoed
-                                ;; 3. EOF
-                                ;; What I'm getting instead is:
-                                ;; 1. ACK
-                                ;; 2. message being echoed
-                                ;; 3. message being echoed because I haven't responded with an ACK
-                                ;; There may be ways around this, but none of the ones that come
-                                ;; to mind just now seem worth the time/effort.
-                                ;; This test pretty obviously isn't about a
-                                ;; realistic message exchange. It's really
-                                ;; just about verifying that I got the echo.
-                                ;; Everything else going on in here is really just
-                                ;; a distraction from that fundamental point.
-                                ;; They're good distractions, and the system's gotten
-                                ;; much more robust because of them.
-                                ;; FIXME: Revisit this soon.
-                                logs (if (= 3 new-state)
-                                       (let [logs (log2/info logs
-                                                             ::echo-parent-cb
-                                                             "Echo sent. Pretending other child triggers done")
-                                             ;; This seems like a good time for the parent
-                                             ;; to send EOF
-                                             {:keys [::specs/to-child]
-                                              :as io-handle} @io-handle-atom]
-                                           ;; This part of the circular dependency
-                                           ;; is absolutely not realistic.
-                                           ;; The real message code that receives
-                                           ;; the EOF signal needs to do this.
-                                           ;; It only makes sense in this test because
-                                           ;; I'm totally mocking out any sort of real
-                                           ;; interaction.
-                                         (.close to-child)
-                                         (deliver response buf)
-                                         logs)
-                                       logs)]
-                            (log2/flush-logs! logger logs))))
+                                                ::called-from (utils/get-stack-trace (Exception.))})
+                              new-state (swap! parent-state inc)
+                              ;; I'd like to get 3 message packets here:
+                              ;; 1. ACK
+                              ;; 2. message being echoed
+                              ;; 3. EOF
+                              ;; What I'm getting instead is:
+                              ;; 1. ACK
+                              ;; 2. message being echoed
+                              ;; 3. message being echoed because I haven't responded with an ACK
+                              ;; There may be ways around this, but none of the ones that come
+                              ;; to mind just now seem worth the time/effort.
+                              ;; This test pretty obviously isn't about a
+                              ;; realistic message exchange. It's really
+                              ;; just about verifying that I got the echo.
+                              ;; Everything else going on in here is really just
+                              ;; a distraction from that fundamental point.
+                              ;; They're good distractions, and the system's gotten
+                              ;; much more robust because of them.
+                              ;; FIXME: Revisit this soon.
+                              logs (if (= 3 new-state)
+                                     (let [logs (log2/info logs
+                                                           ::echo-parent-cb
+                                                           "Echo sent. Pretending other child triggers done")
+                                           ;; This seems like a good time for the parent
+                                           ;; to send EOF
+                                           {:keys [::specs/to-child]
+                                            :as io-handle} @io-handle-atom]
+                                       ;; This part of the circular dependency
+                                       ;; is absolutely not realistic.
+                                       ;; The real message code that receives
+                                       ;; the EOF signal needs to do this.
+                                       ;; It only makes sense in this test because
+                                       ;; I'm totally mocking out any sort of real
+                                       ;; interaction.
+                                       (.close to-child)
+                                       (deliver response buf)
+                                       logs)
+                                     logs)]
+                          (log2/flush-logs! logger logs)))
             child-message-counter (atom 0)
             strm-address (atom 0)
             child-finished (dfrd/deferred)
