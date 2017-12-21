@@ -327,7 +327,8 @@
         :ret any?)
 (defn from-parent-trigger
   "Stream handler for coping with bytes sent by parent"
-  [{:keys [::specs/message-loop-name]
+  [{:keys [::log2/logger
+           ::specs/message-loop-name]
     :as io-handle}
    buffer
    cb
@@ -354,47 +355,51 @@
           ;; indicate a bug that affects everyone using the
           ;; library. The sooner those can be nailed down,
           ;; the happier it will be for everyone.
-          (let [start-time (System/currentTimeMillis)]
-            (try
-              ;; Problem with this approach:
-              ;; it discards possibly-vital log info
-              ;; FIXME: go ahead and unroll it out to the ridiculously
-              ;; verbose version to avoid that
-              (as-> (log2/debug my-logs
-                                ::parent-monitor-loop
-                                "Triggering child callback")
-                  my-logs
+          (let [start-time (System/currentTimeMillis)
+                my-logs
                 (try
-                  ;; The rest of this function is really just support and error
-                  ;; handling for the actual point, right here
-                  (cb my-logs bs-or-eof)
+                  ;; Problem with this approach:
+                  ;; it discards possibly-vital log info
+                  ;; FIXME: go ahead and unroll it out to the ridiculously
+                  ;; verbose version to avoid that
+                  (as-> (log2/debug my-logs
+                                    ::parent-monitor-loop
+                                    "Triggering child callback")
+                      my-logs
+                    (try
+                      ;; The rest of this function is really just support and error
+                      ;; handling for the actual point, right here
+                      (cb my-logs bs-or-eof)
+                      (catch ExceptionInfo ex
+                        (log2/exception my-logs
+                                        ex
+                                        "Failed"
+                                        (.getData ex)))
+                      (catch Exception ex
+                        (log2/exception my-logs
+                                        ex
+                                        ::parent-monitor-loop
+                                        "Low-level failure"))))
                   (catch ExceptionInfo ex
                     (log2/exception my-logs
                                     ex
-                                    "Failed"
-                                    (.getData ex)))
+                                    ::parent-monitor-loop
+                                    (str "At least we can log something interesting with this")
+                                    (.getData ex))
+                    (log2/flush-logs! logger my-logs)
+                    (assert (not ex) "Child callback failed"))
                   (catch Exception ex
-                    (log2/exception my-logs
-                                    ex
-                                    "Low-level failure"))))
-              (catch ExceptionInfo ex
-                (log2/exception my-logs
-                                ex
-                                ::parent-monitor-loop
-                                (str "At least we can log something interesting with this")
-                                (.getData ex))
-                (assert (not ex) "Child callback failed"))
-              (catch Exception ex
-                (let [my-logs (log2/error my-logs
-                                          ex
-                                          ::parent-monitor-loop
-                                          "This is not acceptable behavior at all")
-                      prelog (utils/pre-log message-loop-name)]
-                  (assert (not ex) (str prelog
-                                        "Child callback failed")))))
-            (let [end-time (System/nanoTime)
+                    (let [my-logs (log2/error my-logs
+                                              ex
+                                              ::parent-monitor-loop
+                                              "This is not acceptable behavior at all")
+                          prelog (utils/pre-log message-loop-name)]
+                      (log2/flush-logs! logger my-logs)
+                      (assert (not ex) (str prelog
+                                            "Child callback failed")))))]
+            (let [end-time (System/currentTimeMillis)
                   msg (cl-format nil
-                                 "Child callback took ~:d nanoseconds"
+                                 "Child callback took ~:d millisecond(s)"
                                  (- end-time start-time))]
               (log2/debug my-logs ::parent-monitor-loop msg)))
           (catch Exception ex
@@ -430,9 +435,9 @@
       (let [{:keys [::log2/lamport]
              :as log-state} (log2/info log-state
                                        ::write-bytes-to-child-stream!
-                                       (str "Signalling child's input loop with"
+                                       (str "Signalling child's input loop with "
                                             n
-                                            "bytes"))
+                                            " bytes"))
             log-state
             (try
               (let [start-time (System/currentTimeMillis)]
@@ -459,7 +464,7 @@
                                             {::result-writer succeeded
                                              ::log2/state log-state
                                              ::specs/bs-or-eof bs})
-                      success @succeeded
+                      log-state @succeeded
                       end-time (System/currentTimeMillis)
                       delta (- end-time start-time)
                       msg (cl-format nil "Triggering child took ~:d ms" delta)]
@@ -520,118 +525,6 @@
                        log2/exception
                        ex
                        ::write-bytes-to-child-stream!
-                       "Failed to forward message to child")))))
-
-(s/fdef write-bytes-to-child-pipe!
-        :args (s/cat :to-child ::specs/to-child
-                     :state ::specs/state
-                     :buf ::specs/buf)
-        :ret ::specs/state)
-(defn write-bytes-to-child-pipe!
-  "Forward the byte-array inside the buffer"
-  [to-child
-   {log-state ::log2/state
-    :as state}
-   ^ByteBuf buf]
-  (throw (RuntimeException. "Deprecated"))
-  ;; This was really just refactored out of the middle of a reduce call,
-  ;; so it's a bit ugly as a stand-alone function.
-  (try
-    ;; It's tempting to special-case this to avoid the
-    ;; copy, if we have a buffer that's backed by a byte-array.
-    ;; But that winds up sending along extra data that we don't
-    ;; want, like the header and pieces that we should have
-    ;; skipped due to gap buffering
-    (let [bs (byte-array (.readableBytes buf))
-          n (count bs)]
-      (.readBytes buf bs)
-      (let [{:keys [::log2/lamport]
-             :as log-state} (log2/info log-state
-                                       ::write-bytes-to-child-pipe!
-                                       (str "Signalling child's input loop with"
-                                            n
-                                            "bytes"))
-            log-state
-            (try
-              (let [start-time (System/currentTimeMillis)]
-                ;; There's a major difference between this and
-                ;; the equivalent in ->parent:
-                ;; We don't care if that succeeds.
-                ;; Half the point to buffering everything
-                ;; in this "package" is so we can resend failures.
-                ;; At this point, we've already adjusted the
-                ;; buffer states and sent the ACK back to the
-                ;; other side. If this fails, things have broken
-                ;; badly.
-                ;; Actually, that points to a fairly ugly flaw
-                ;; in this implementation.
-                ;; TODO: Rearrange the logic. This part needs to
-                ;; succeed before the rest of those things happen.
-                (.write to-child bs 0 (count bs))
-                (let [triggered @(strm/put! from-parent-trigger
-                                            {::log2/state log-state
-                                             ::specs/buf buf})
-                      end-time (System/currentTimeMillis)
-                      delta (- end-time start-time)
-                      msg (cl-format nil "Triggering child took ~:d ms" delta)]
-                  (let [log-state
-                        (if (< (* 1000000 callback-threshold-warning) delta)
-                          (if (< (* 1000000 callback-threshold-error) delta)
-                            (log2/error log-state
-                                        ::write-bytes-to-child-pipe!
-                                        msg)
-                            (log2/warn log-state
-                                       ::write-bytes-to-child-pipe!
-                                       msg))
-                          (log2/debug log-state
-                                      ::write-bytes-to-child-pipe!
-                                      msg))])))
-              (catch RuntimeException ex
-                ;; It's very tempting to just re-raise this exception,
-                ;; especially if I'm inside an agent.
-                ;; For now, just log and swallow it.
-                (log2/exception log-state
-                                ex
-                                ::write-bytes-to-child-pipe!
-                                "Failure in child callback.")))
-            ;; And drop the consolidated blocks
-            log-state (log2/debug log-state
-                                  ::write-bytes-to-child-pipe!
-                                  "Dropping block we just finished sending to child")]
-        (.release buf)
-        (-> state
-            (update-in
-             ;; Yes, this is already a vector
-             ;; Q: Could I save any time by using a PersistentQueue
-             ;; instead?
-             [::specs/incoming ::specs/->child-buffer]
-             (comp vec rest))
-            ;; Actually, if this tracks the bytes that were
-            ;; really and truly sent to the child, this shouldn't
-            ;; update until that callback returns inside that child's
-            ;; private ioloop.
-            ;; That gets quite a bit more finicky.
-            ;; TODO: Consider my options.
-            (update-in [::specs/incoming ::specs/receive-written] + n)
-            (assoc ::log2/state log-state))))
-    (catch RuntimeException ex
-      ;; Reference implementation specifically copes with
-      ;; EINTR, EWOULDBLOCK, and EAGAIN.
-      ;; Any other failure means just closing the child pipe.
-      ;; This is the reason that ->child-buffer has to be a
-      ;; seq.
-      ;; It's very tempting to just combine the arrays and
-      ;; send them all as a single ByteBuf.
-      ;; But that tightly couples children to this implementation
-      ;; detail.
-      ;; It's more tempting to merge the byte arrays into a
-      ;; single vector of bytes, but the performance implications
-      ;; of that don't seem worth imposing.
-      (reduced (update state
-                       ::log2/state
-                       log2/exception
-                       ex
-                       ::write-bytes-to-child-pipe!
                        "Failed to forward message to child")))))
 
 (s/fdef possibly-close-stream!
@@ -766,7 +659,7 @@
   "Trigger the parent-monitor 'loop'"
   ;; lines 615-632
   [{:keys [::specs/from-parent]
-    parent-trigger ::from-parent-trigger
+    parent-trigger ::specs/from-parent-trigger
     :as io-handle}
    {:keys [::specs/message-loop-name]
     original-incoming ::specs/incoming
@@ -781,16 +674,22 @@
                               ::forward!
                               "Consolidated block(s) ready to go to child."
                               {::block-count block-count
-                               ::specs/receive-eof receive-eof})]
+                               ::specs/receive-eof receive-eof})
+        consolidated (assoc consolidated ::log2/state log-state)]
     (println "=======================================\n"
              "Checking for blocks to send to child\n"
              "=======================================")
     (if (< 0 block-count)
-      (let [preliminary (reduce (partial write-bytes-to-child-stream!
-                                         parent-trigger)
-                           (assoc consolidated ::log2/state log-state)
-                           ->child-buffer)]
-        (possibly-close-stream! io-handle preliminary))
+      (try
+        (let [preliminary (reduce (partial write-bytes-to-child-stream!
+                                           parent-trigger)
+                                  consolidated
+                                  ->child-buffer)]
+          ;; I am getting here.
+          (println block-count "block(s) forwarded to child")
+          (possibly-close-stream! io-handle preliminary))
+        (catch Exception ex
+          (println "Failed writing bytes to child-stream:\n" ex)))
       (let [result (update consolidated
                            ::log2/state
                            log2/warn

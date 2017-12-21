@@ -368,38 +368,40 @@
               ;; It seems like we probably should cancel/reschedule,
               ;; since whatever ACK just arrived might adjust the RTT
               ;; logic.
-              (try
-                ;; This is a prime example of something that should
-                ;; be queued up to be called for side-effects.
-                ;; TODO: Split those out and make that happen.
-                (as-> (from-parent/try-processing-message!
-                       io-handle
-                       state) state'
-                  (or state' state)
-                  (to-child/forward! io-handle state')
+              (let [result
+                    (try
+                      ;; This is a prime example of something that should
+                      ;; be queued up to be called for side-effects.
+                      ;; TODO: Split those out and make that happen.
+                      (as-> (from-parent/try-processing-message!
+                             io-handle
+                             state) state'
+                        (or state' state)
+                        (to-child/forward! io-handle state')
 
-                  ;; This will update recent.
-                  ;; In the reference implementation, that happens immediately
-                  ;; after trying to read from the child.
-                  ;; Q: Am I setting up any problems for myself by waiting
-                  ;; this long?
-                  ;; i.e. Is it worth doing that at the top of the trigger
-                  ;; functions instead?
-                  (trigger-output io-handle state'))
-                (catch ExceptionInfo ex
-                  (let [log-state (log2/exception log-state
-                                                  ex
-                                                  ::trigger-from-parent!
-                                                  "Forwarding failed"
-                                                  (.getData ex))]
-                    (assoc state ::log2/state log-state)))
-                (catch RuntimeException ex
-                  (let [msg "Trying to cope with a message arriving from parent"
-                        log-state (log2/exception log-state
-                                                  ex
-                                                  ::trigger-from-parent!
-                                                  msg)])
-                  (assoc state ::log2/state log-state))))
+                        ;; This will update recent.
+                        ;; In the reference implementation, that happens immediately
+                        ;; after trying to read from the child.
+                        ;; Q: Am I setting up any problems for myself by waiting
+                        ;; this long?
+                        ;; i.e. Is it worth doing that at the top of the trigger
+                        ;; functions instead?
+                        (trigger-output io-handle state'))
+                      (catch ExceptionInfo ex
+                        (let [log-state (log2/exception log-state
+                                                        ex
+                                                        ::trigger-from-parent!
+                                                        "Forwarding failed"
+                                                        (.getData ex))]
+                          (assoc state ::log2/state log-state)))
+                      (catch RuntimeException ex
+                        (let [msg "Trying to cope with a message arriving from parent"
+                              log-state (log2/exception log-state
+                                                        ex
+                                                        ::trigger-from-parent!
+                                                        msg)])
+                        (assoc state ::log2/state log-state)))]
+                (update result ::log2/state #(log2/flush-logs! logger %))))
             ;; This is actually pretty serious.
             ;; All sorts of things had to go wrong for us to get here.
             ;; TODO: More extensive error handling.

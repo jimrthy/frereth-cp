@@ -171,7 +171,12 @@
             child-message-counter (atom 0)
             strm-address (atom 0)
             child-finished (dfrd/deferred)
-            child-cb (fn [array-o-bytes]
+            ;; The actual problem with this test is the missing
+            ;; logs parameter.
+            ;; The bigger-picture problem is that the problem wasn't
+            ;; immediately obvious
+            child-cb (fn [#_logs array-o-bytes]
+                       (println "Top of child-cb")
                        ;; TODO: Add another similar test that throws an
                        ;; exception here, for the sake of hardening the
                        ;; caller
@@ -180,58 +185,66 @@
                                              "Incoming to child"
                                              {::rcvd array-o-bytes})]
                          (is array-o-bytes "Falsey reached callback")
-                         (let [logs
-                               (if (bytes? array-o-bytes)
-                                 (let [msg-len (count array-o-bytes)
-                                       locator (Exception.)
-                                       logs (if (not= 0 msg-len)
-                                              (let [logs (log2/debug logs
-                                                                     ::echo-child-cb
-                                                                     "Echoing back an incoming message"
-                                                                     {::msg-len msg-len
-                                                                      ::called-from (utils/get-stack-trace (Exception.))})
-                                                    logs (if (not= K/k-1 msg-len)
-                                                           (log2/warn logs
-                                                                      ::echo-child-cb
-                                                                      "Incoming message doesn't match length we sent"
-                                                                      {::expected K/k-1
-                                                                       ::actual msg-len
-                                                                       ::details (vec array-o-bytes)})
-                                                           logs)
-                                                    ;; Just echo it directly back.
-                                                    io-handle @io-handle-atom]
-                                                (is io-handle)
-                                                (swap! child-message-counter inc)
-                                                (swap! strm-address + msg-len)
-                                                (try
-                                                  (try-multiple-sends message/child->!
-                                                                      logger
-                                                                      5
-                                                                      io-handle
-                                                                      array-o-bytes
-                                                                      (str "Buffered bytes from child")
-                                                                      "Giving up on buffering bytes from child"
-                                                                      {})
-                                                  (finally
-                                                    (message/child-close! @io-handle-atom)
-                                                    ;; This is called purely for side-effects.
-                                                    ;; The return value does not matter.
-                                                    (let [inner-logs (log2/init)
-                                                          inner-logs (log2/info inner-logs
-                                                                                ::echo-child-cb
-                                                                                "Sent EOF after the message block")]
-                                                      (log2/flush-logs! logger inner-logs))))
-                                                logs))]
-                                   (log2/warn logs :echo-child-cb "Empty incoming message. Highly suspicious"))
-                                 (let [{:keys [::specs/from-child]
-                                        :as io-handle} @io-handle-atom
-                                       logs (log2/warn logs
-                                                       ::echo-child-cb
-                                                       "Child received EOF. Mark done.")]
-                                   (message/child-close! io-handle)
-                                   (is (s/valid? ::specs/eof-flag array-o-bytes))
-                                   (deliver child-finished array-o-bytes)
-                                   logs))])))
+                         (println "Checked for truthy incoming")
+                         (try
+                           (let [logs
+                                 (if (bytes? array-o-bytes)
+                                   (let [msg-len (count array-o-bytes)
+                                         locator (Exception.)
+                                         logs (if (not= 0 msg-len)
+                                                (let [logs (log2/debug logs
+                                                                       ::echo-child-cb
+                                                                       "Echoing back an incoming message"
+                                                                       {::msg-len msg-len
+                                                                        ::called-from (utils/get-stack-trace (Exception.))})
+                                                      logs (if (not= K/k-1 msg-len)
+                                                             (log2/warn logs
+                                                                        ::echo-child-cb
+                                                                        "Incoming message doesn't match length we sent"
+                                                                        {::expected K/k-1
+                                                                         ::actual msg-len
+                                                                         ::details (vec array-o-bytes)})
+                                                             logs)
+                                                      ;; Just echo it directly back.
+                                                      io-handle @io-handle-atom]
+                                                  (println "")
+                                                  (is io-handle)
+                                                  (swap! child-message-counter inc)
+                                                  (swap! strm-address + msg-len)
+                                                  (try
+                                                    (try-multiple-sends message/child->!
+                                                                        logger
+                                                                        5
+                                                                        io-handle
+                                                                        array-o-bytes
+                                                                        (str "Buffered bytes from child")
+                                                                        "Giving up on buffering bytes from child"
+                                                                        {})
+                                                    (finally
+                                                      (message/child-close! @io-handle-atom)
+                                                      ;; This is called purely for side-effects.
+                                                      ;; The return value does not matter.
+                                                      (let [inner-logs (log2/init (inc (::log2/lamport logs)))
+                                                            inner-logs (log2/info inner-logs
+                                                                                  ::echo-child-cb
+                                                                                  "Sent EOF after the message block")]
+                                                        (log2/flush-logs! logger inner-logs))))
+                                                  logs)
+                                                (log2/warn logs :echo-child-cb "Empty incoming message. Highly suspicious"))]
+                                     (let [{:keys [::specs/from-child]
+                                            :as io-handle} @io-handle-atom
+                                           logs (log2/warn logs
+                                                           ::echo-child-cb
+                                                           "Child received EOF. Mark done.")]
+                                       (message/child-close! io-handle)
+                                       (is (s/valid? ::specs/eof-flag array-o-bytes))
+                                       (deliver child-finished array-o-bytes)
+                                       logs)))]
+                             (log2/flush-logs! logger logs))
+                           (catch Exception ex
+                             (println "child-cb Failed:" ex)
+                             ;; Throw as much sand as possible into the gears
+                             nil))))
             ;; It's tempting to treat this test as a server.
             ;; Since that's the way it acts: request packets come in and
             ;; trigger responses.
@@ -244,9 +257,11 @@
             io-handle (message/start! initialized logger parent-cb child-cb)]
         (dfrd/on-realized child-finished
                           (fn [success]
-                            (let [logs (log2/info "Child just signalled EOF")]
+                            (let [logs (log2/info logs
+                                                  ::child-finished
+                                                  "Child just signalled EOF")]
                               (log2/flush-logs! logger logs))
-                            (is (= success ::specs/normal)))
+                            (is (= ::specs/normal success)))
                           (fn [failure]
                             (is (not failure) "Child echoer failed")))
         (try
