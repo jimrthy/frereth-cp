@@ -1,6 +1,7 @@
 (ns frereth-cp.shared.logging
   "Functional logging mechanism"
   (:require [clojure.spec.alpha :as s]
+            [clojure.stacktrace :as s-t]
             [frereth-cp.util :as utils])
   (:import clojure.lang.ExceptionInfo
            java.io.OutputStream))
@@ -158,6 +159,18 @@
   ;; It flushes itself after every CR/LF
   (flush! [_]))
 
+(defn exception-details
+  [ex]
+  (let [stack-trace (with-out-str (s-t/print-stack-trace ex))
+        base {::stack stack-trace
+              ::exception ex}
+        with-details (if (instance? ExceptionInfo ex)
+                       (assoc-in base [::data ::problem] (.getData ex))
+                       base)]
+    (if-let [cause (.getCause ex)]
+      (assoc with-details ::cause (exception-details cause))
+      with-details)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
@@ -172,11 +185,7 @@
    (exception log-state ex label message nil))
   ([log-state ex label message original-details]
    (let [details {::original-details original-details
-                  ::stack (.getStackTrace ex)
-                  ::exception ex}
-         details (if (instance? ExceptionInfo ex)
-                   (assoc details ::data (.getData ex))
-                   details)]
+                  ::problem (exception-details ex)}]
      (add-log-entry log-state ::exception label message details))))
 
 (deflogger fatal)

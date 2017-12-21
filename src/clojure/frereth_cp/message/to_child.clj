@@ -358,10 +358,6 @@
           (let [start-time (System/currentTimeMillis)
                 my-logs
                 (try
-                  ;; Problem with this approach:
-                  ;; it discards possibly-vital log info
-                  ;; FIXME: go ahead and unroll it out to the ridiculously
-                  ;; verbose version to avoid that
                   (as-> (log2/debug my-logs
                                     ::parent-monitor-loop
                                     "Triggering child callback")
