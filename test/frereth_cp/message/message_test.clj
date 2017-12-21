@@ -154,7 +154,7 @@
                                                            "Echo sent. Pretending other child triggers done")
                                            ;; This seems like a good time for the parent
                                            ;; to send EOF
-                                           {:keys [::specs/to-child]
+                                           {:keys [::specs/from-parent-trigger]
                                             :as io-handle} @io-handle-atom]
                                        ;; This part of the circular dependency
                                        ;; is absolutely not realistic.
@@ -163,7 +163,7 @@
                                        ;; It only makes sense in this test because
                                        ;; I'm totally mocking out any sort of real
                                        ;; interaction.
-                                       (.close to-child)
+                                       (strm/close! from-parent-trigger)
                                        (deliver response buf)
                                        logs)
                                      logs)]
@@ -175,7 +175,8 @@
             ;; logs parameter.
             ;; The bigger-picture problem is that the problem wasn't
             ;; immediately obvious
-            child-cb (fn [#_logs array-o-bytes]
+            ;; FIXME: Start back with the caller to fix that.
+            child-cb (fn [logs array-o-bytes]
                        (println "Top of child-cb")
                        ;; TODO: Add another similar test that throws an
                        ;; exception here, for the sake of hardening the
@@ -183,7 +184,8 @@
                        (let [logs (log2/info logs
                                              ::echo-child-cb
                                              "Incoming to child"
-                                             {::rcvd array-o-bytes})]
+                                             {::rcvd array-o-bytes
+                                              ::type (class array-o-bytes)})]
                          (is array-o-bytes "Falsey reached callback")
                          (println "Checked for truthy incoming")
                          (try
@@ -229,17 +231,17 @@
                                                                                   ::echo-child-cb
                                                                                   "Sent EOF after the message block")]
                                                         (log2/flush-logs! logger inner-logs))))
-                                                  logs)
-                                                (log2/warn logs :echo-child-cb "Empty incoming message. Highly suspicious"))]
-                                     (let [{:keys [::specs/from-child]
+                                                  logs))]
+                                     (log2/warn logs :echo-child-cb "Empty incoming message. Highly suspicious"))
+                                   (let [{:keys [::specs/from-child]
                                             :as io-handle} @io-handle-atom
                                            logs (log2/warn logs
                                                            ::echo-child-cb
-                                                           "Child received EOF. Mark done.")]
+                                                           "Child received what should be EOF. Mark done.")]
                                        (message/child-close! io-handle)
                                        (is (s/valid? ::specs/eof-flag array-o-bytes))
                                        (deliver child-finished array-o-bytes)
-                                       logs)))]
+                                       logs))]
                              (log2/flush-logs! logger logs))
                            (catch Exception ex
                              (println "child-cb Failed:" ex)
