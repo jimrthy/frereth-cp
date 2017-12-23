@@ -641,19 +641,22 @@
           finished (dfrd/deferred)]
       (-> result
           (dfrd/chain (fn [success]
-                        ;; OK, we are getting here
-                        (println "parent-monitor source exhausted")
-                        (throw (ex-info "This can't work"
-                                        {::why "Got here because trigger is closed"
-                                         ::=> "We can't write to it"
-                                         ::so "How do I want to handle this?"}))
-                        (let [my-logs (log2/warn my-logs)]
-                          (strm/put! trigger
-                                     {::result-writer finished
-                                      ::log2/state my-logs
-                                      ::specs/bs-or-eof ::specs/normal})))
+                        (let [my-logs (log2/warn my-logs
+                                                 ::parent-monitor-loop
+                                                 "parent-monitor source exhausted")]
+                          ;; Writing to the from-parent-trigger stream
+                          ;; here seems like the obvious thing to do.
+                          ;; But closing that was the signal that
+                          ;; led us here.
+                          ;; So just call the callback's caller directly.
+                          (trigger-from-parent! io-handle
+                                                buffer
+                                                cb
+                                                {::result-writer finished
+                                                 ::log2/state my-logs
+                                                 ::specs/bs-or-eof ::specs/normal})))
                       (fn [_]
-                        (println "EOF put!")
+                        (println "EOF signalled!")
                         finished)
                       (fn [logs]
                         (log2/flush-logs! logger logs)
