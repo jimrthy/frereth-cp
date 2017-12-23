@@ -318,14 +318,14 @@
             {::specs/bs-or-eof result
              ::log2/state my-log-state}))))))
 
-(s/fdef from-parent-trigger
+(s/fdef trigger-from-parent!
         :args (s/cat :io-handle ::specs/io-handle
                      :my-logs ::log2/entries
                      :buffer bytes?
                      :cb ::callback
                      :trigger (s/keys :req [::log2/lamport]))
         :ret any?)
-(defn from-parent-trigger
+(defn trigger-from-parent!
   "Stream handler for coping with bytes sent by parent"
   [{:keys [::log2/logger
            ::specs/message-loop-name]
@@ -365,7 +365,10 @@
                     (try
                       ;; The rest of this function is really just support and error
                       ;; handling for the actual point, right here
-                      (cb my-logs bs-or-eof)
+                      ;; TODO: Come up with something meaningful for the return value
+                      ;; and handle any problems gracefully.
+                      (cb bs-or-eof)
+                       my-logs
                       (catch ExceptionInfo ex
                         (log2/exception my-logs
                                         ex
@@ -523,6 +526,13 @@
                        ::write-bytes-to-child-stream!
                        "Failed to forward message to child")))))
 
+(defn close-parent-input!
+  [{:keys [::specs/from-parent-trigger
+           ::specs/to-child-done?]
+    :as io-handle}]
+  (deliver to-child-done? true)
+  (strm/close! from-parent-trigger))
+
 (s/fdef possibly-close-stream!
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state
@@ -530,8 +540,7 @@
         :ret ::specs/state)
 (defn possibly-close-stream!
   "Maybe signal child that it won't receive anything else"
-  [{:keys [::specs/to-child-done?
-           ::specs/from-parent-trigger]
+  [{:keys [::specs/from-parent-trigger]
     :as io-handle}
    {{:keys [::specs/contiguous-stream-count
             ::specs/receive-eof
@@ -554,11 +563,12 @@
               log-state (if-not from-parent-trigger
                           (log2/error log-state
                                       ::possibly-close-stream!
-                                      "Missing to-child, so we can't close it")
+                                      "Missing from-parent-trigger, so we can't close it")
                           log-state)
               log-state (try
-                          (deliver to-child-done? true)
-                          (strm/close! from-parent-trigger)
+                          ;; This actual point is easy to miss in the middle of all
+                          ;; the logging/error handling.
+                          (close-parent-input! io-handle)
                           log-state
                           (catch RuntimeException ex
                             (log2/exception log-state
@@ -623,7 +633,7 @@
                            ::parent-monitor-loop
                            "Starting the loop watching for bytes the parent has sent toward the child")
         my-logs (log2/flush-logs! logger my-logs)]
-    (let [result (strm/consume (partial from-parent-trigger
+    (let [result (strm/consume (partial trigger-from-parent!
                                         io-handle
                                         buffer
                                         cb)
@@ -631,13 +641,23 @@
           finished (dfrd/deferred)]
       (-> result
           (dfrd/chain (fn [success]
-                        (strm/put! trigger
-                                   {::result-writer finished
-                                    ::log2/state my-logs
-                                    ::specs/bs-or-eof ::specs/normal}))
-                      (fn [_] finished)
+                        ;; OK, we are getting here
+                        (println "parent-monitor source exhausted")
+                        (throw (ex-info "This can't work"
+                                        {::why "Got here because trigger is closed"
+                                         ::=> "We can't write to it"
+                                         ::so "How do I want to handle this?"}))
+                        (let [my-logs (log2/warn my-logs)]
+                          (strm/put! trigger
+                                     {::result-writer finished
+                                      ::log2/state my-logs
+                                      ::specs/bs-or-eof ::specs/normal})))
+                      (fn [_]
+                        (println "EOF put!")
+                        finished)
                       (fn [logs]
-                        (log2/flush-logs! logger logs)))
+                        (log2/flush-logs! logger logs)
+                        (log2/flush-logs! logger my-logs)))
           (dfrd/catch (fn [ex]
                         (log2/exception my-logs
                                         ex

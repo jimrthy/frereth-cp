@@ -85,7 +85,7 @@
   ;; TODO: Revisit this decision. See whether it's uglier
   ;; with 2 sides to "communicate"
   (let [loop-name "Echo Test"
-        logs (log2/init)
+        log-atom (atom (log2/init))
         logger (log2/std-out-log-factory)
         src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
         msg-len (- K/max-msg-len K/header-length K/min-padding-length)
@@ -124,7 +124,7 @@
                         ;; might do.
                         (is (s/valid? bytes? buf))
                         (let [response-state @parent-state
-                              logs (log2/debug logs
+                              logs (log2/debug @log-atom
                                                ::echo-parent-cb
                                                "Top of callback"
                                                {::response-state response-state
@@ -154,8 +154,7 @@
                                                            "Echo sent. Pretending other child triggers done")
                                            ;; This seems like a good time for the parent
                                            ;; to send EOF
-                                           {:keys [::specs/from-parent-trigger]
-                                            :as io-handle} @io-handle-atom]
+                                           io-handle @io-handle-atom]
                                        ;; This part of the circular dependency
                                        ;; is absolutely not realistic.
                                        ;; The real message code that receives
@@ -163,31 +162,26 @@
                                        ;; It only makes sense in this test because
                                        ;; I'm totally mocking out any sort of real
                                        ;; interaction.
-                                       (strm/close! from-parent-trigger)
+                                       (to-child/close-parent-input! io-handle)
                                        (deliver response buf)
                                        logs)
-                                     logs)]
-                          (log2/flush-logs! logger logs)))
+                                     logs)
+                              logs (log2/flush-logs! logger logs)]
+                          (reset! log-atom logs)))
             child-message-counter (atom 0)
             strm-address (atom 0)
             child-finished (dfrd/deferred)
-            ;; The actual problem with this test is the missing
-            ;; logs parameter.
-            ;; The bigger-picture problem is that the problem wasn't
-            ;; immediately obvious
-            ;; FIXME: Start back with the caller to fix that.
-            child-cb (fn [logs array-o-bytes]
+            child-cb (fn [array-o-bytes]
                        (println "Top of child-cb")
                        ;; TODO: Add another similar test that throws an
                        ;; exception here, for the sake of hardening the
                        ;; caller
-                       (let [logs (log2/info logs
+                       (let [logs (log2/info @log-atom
                                              ::echo-child-cb
                                              "Incoming to child"
                                              {::rcvd array-o-bytes
                                               ::type (class array-o-bytes)})]
                          (is array-o-bytes "Falsey reached callback")
-                         (println "Checked for truthy incoming")
                          (try
                            (let [logs
                                  (if (bytes? array-o-bytes)
@@ -209,7 +203,6 @@
                                                              logs)
                                                       ;; Just echo it directly back.
                                                       io-handle @io-handle-atom]
-                                                  (println "")
                                                   (is io-handle)
                                                   (swap! child-message-counter inc)
                                                   (swap! strm-address + msg-len)
@@ -241,8 +234,9 @@
                                        (message/child-close! io-handle)
                                        (is (s/valid? ::specs/eof-flag array-o-bytes))
                                        (deliver child-finished array-o-bytes)
-                                       logs))]
-                             (log2/flush-logs! logger logs))
+                                       logs))
+                                 logs (log2/flush-logs! logger logs)]
+                             (reset! log-atom logs))
                            (catch Exception ex
                              (println "child-cb Failed:" ex)
                              ;; Throw as much sand as possible into the gears
@@ -259,10 +253,11 @@
             io-handle (message/start! initialized logger parent-cb child-cb)]
         (dfrd/on-realized child-finished
                           (fn [success]
-                            (let [logs (log2/info logs
+                            (let [logs (log2/info @log-atom
                                                   ::child-finished
-                                                  "Child just signalled EOF")]
-                              (log2/flush-logs! logger logs))
+                                                  "Child just signalled EOF")
+                                  logs (log2/flush-logs! logger logs)]
+                              (reset! log-atom logs))
                             (is (= ::specs/normal success)))
                           (fn [failure]
                             (is (not failure) "Child echoer failed")))
@@ -277,15 +272,16 @@
               ;; TODO: Add similar tests that send a variety of
               ;; gibberish messages
               (let [wrote (dfrd/future
-                            (let [logs (log2/init)
+                            (let [logs @log-atom
                                   logs (log2/debug logs
                                                    ::echo-initial-write
                                                    "Writing message from parent")]
                               (message/parent->! io-handle incoming)
                               (let [logs (log2/debug logs
                                                      ::echo-initial-write
-                                                     "Message should be headed to child")]
-                                (log2/flush-logs! logger logs))))
+                                                     "Message should be headed to child")
+                                    logs (log2/flush-logs! logger logs)]
+                                (reset! log-atom logs))))
                     ;; The time delay here is pretty crazy.
                     ;; It seems as though it should never take human-noticeable time.
                     ;; And yet I've seen this test fail on my desktop
@@ -309,7 +305,7 @@
                       (is (b-t/bytes= message-body without-header)))))
                 (is (realized? wrote) "Initial write from parent hasn't returned yet.")
                 (let [state (message/get-state io-handle 500 ::time-out)
-                      logs (log2/info logs
+                      logs (log2/info @log-atom
                                       ::echo-examination
                                       "Final state query returned")]
                   (is (not= state ::timeout))
@@ -349,18 +345,21 @@
                         ;; Keeping around as a reminder for when the implementation changes
                         ;; and I need to see what's really going on again
                         (comment (is (not outcome) "What should we have here?")))
-                      (log2/flush-logs! logger logs)))))))
+                      (let [logs (log2/flush-logs! logger logs)]
+                        (reset! log-atom logs))))))))
           (catch ExceptionInfo ex
-            (let [logs (log2/exception (log2/init)
+            (let [logs (log2/exception @log-atom
                                        ex
                                        ::echo-failure
-                                       "Starting the event loop")]
-              (log2/flush-logs! logger logs)))
+                                       "Starting the event loop")
+                  logs (log2/flush-logs! logger logs)]
+              (reset! log-atom logs)))
           (finally
             (let [logs (log2/warn (log2/init)
                                   ::echo-clean-up
-                                  "Signalling I/O loop halt")]
-              (log2/flush-logs! logger logs)
+                                  "Signalling I/O loop halt")
+                  logs (log2/flush-logs! logger logs)]
+              (reset! log-atom logs)
               (message/halt! io-handle))))))))
 (comment (basic-echo))
 

@@ -303,10 +303,13 @@
 ;; these calls really *are* all about crossing system
 ;; boundaries and side-effects.
 ;; But that approach still feels very dubious.
+;; And making this completely unconstrained seems
+;; like a terrible idea.
 ;; TODO: Decide how I want to handle this (a set of
 ;; keywords seems most likely)
 (s/def ::callback (s/fspec :args (s/cat :buf bytes?)
                            :ret any?))
+(s/def ::->child ::callback)
 (s/def ::->parent ::callback)
 
 (s/def ::executor #(instance? java.util.concurrent.ExecutorService %))

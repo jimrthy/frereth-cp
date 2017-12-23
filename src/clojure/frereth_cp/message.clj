@@ -251,7 +251,7 @@
                      :specs/state ::specs/state)
         :ret ::specs/state)
 (defn trigger-from-parent
-  "Message block arrived from parent. Agent has been handed work"
+  "Message block arrived from parent. Work triggered by ioloop"
   ;; TODO: Move as much of this as possible into from-parent
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
@@ -282,9 +282,9 @@
 ;;;                    Copies bytes from incoming message buffer to message[][]
     (let [incoming-size (count message)]
       (when (= 0 incoming-size)
+        (log2/flush-logs! logger log-state)
         ;; This is supposed to kill the entire process
         ;; TODO: Be more graceful
-        (log2/flush-logs! logger log-state)
         (throw (AssertionError. "Bad Message")))
 
       ;; Reference implementation is really reading bytes from

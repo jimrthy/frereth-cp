@@ -425,16 +425,13 @@
                               ::prefix nil})
           client-atom (atom nil)
           time-out 500
-          client-parent-cb (fn [inner-log-state
-                                ^bytes bs]
-                             (let [inner-log-state
+          client-parent-cb (fn [^bytes bs]
+                             (let [log-state
                                    (log/info log-state
                                              ::client-parent-callback
                                              (str
                                               "Sending a" (count bs)
-                                              "byte array to client's parent"))
-                                   [outer-log-state inner-log-state] (log/synchronize @log-state
-                                                                                      inner-log-state)]
+                                              "byte array to client's parent"))]
                                (reset! log-state log-state)
                                ;; TODO: Need lamport interactions everywhere the
                                ;; the streams cross.
@@ -448,16 +445,7 @@
                                ;; forward the message from client->server, but
                                ;; the current protocol does not allow that.
                                (let [sent (strm/try-put! client->server bs time-out ::timed-out)]
-                                 (is (not= @sent ::timed-out)))
-                               ;; This sort of coupling is annoying.
-                               ;; Library clients shouldn't care about my
-                               ;; logging implementation.
-                               ;; Then again, they have to have bought in
-                               ;; already, since that's the first parameter
-                               ;; to this callback.
-                               ;; From that perspective, this is a terrible
-                               ;; idea.
-                               inner-log-state))
+                                 (is (not= @sent ::timed-out)))))
           ;; Something that spans multiple packets would be better, but
           ;; that seems like a variation on this test.
           ;; Although this *does* take me back to the beginning, where
