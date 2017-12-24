@@ -41,7 +41,11 @@
 (defn consumer
   [{:keys [::specs/message-loop-name]
     :as io-handle}
-   prelog time-out succeeded? bs]
+   log-atom
+   log-ctx
+   time-out
+   succeeded?
+   bs]
   ;; Note that, at this point, we're blocking the
   ;; I/O loop.
   ;; Whatever happens here must return control
@@ -54,9 +58,10 @@
   ;; Then again, you *could* do something like
   ;; this, to experiment with the unencrypted
   ;; networking protocol.
-  (log/info prelog "Message over network")
+  (swap! log-atom log/info log-ctx "Message over network")
 
-  (let [consumption (dfrd/future
+  (let [prelog (utils/pre-log message-loop-name)
+        consumption (dfrd/future
                       ;; Checking for the server state is wasteful here.
                       ;; And very dubious...depending on implementation details,
                       ;; it wouldn't take much to shift this over to triggering
@@ -67,11 +72,13 @@
                       ;; Q: But is it worth it for the test's sake?
                       ;; Better Q: Is this the sort of thing that will trip
                       ;; us up with surprising behavior if it doesn't work?
-                      (let [state (message/get-state io-handle time-out ::timed-out)
-                            prelog' (utils/pre-log message-loop-name)]
-                        (log/debug prelog'
-                                   "get-state returned:" state
-                                   "\nScheduled from:\n" prelog)
+                      (let [state (message/get-state io-handle time-out ::timed-out)]
+                        (swap! log-atom
+                               log/debug
+                               log-ctx
+                               "Got state"
+                               {::state state
+                                ::parent-context prelog})
                         (if (or (= ::timed-out state)
                                 (instance? Throwable state)
                                 (nil? state))
@@ -80,51 +87,70 @@
                                           (ex-info "Non-exception"
                                                    {::problem state}))]
                             (is (not problem))
-                            (log/error problem prelog' "Failed!\nTriggered from\n" prelog)
-                            (if (instance? ExceptionInfo problem)
-                              (log/warn prelog' (str (.getData problem) "\nfrom:\n" prelog))
-                              (log/warn (str prelog' " is difficult to debug from\n" prelog)))
+                            (swap! log-atom
+                                   log/exception
+                                   problem
+                                   log-ctx
+                                   "Failed!"
+                                   {::triggered-from prelog})
                             (if (realized? succeeded?)
-                              (log/warn prelog' "Caller already thinks we succeeded from\n" prelog)
+                              (swap! log-atom
+                                     log/warn
+                                     log-ctx
+                                     "Caller already thinks we succeeded"
+                                     {::triggered-by prelog})
                               (dfrd/error! succeeded? problem)))
                           (message/parent->! io-handle bs))))]
     (dfrd/on-realized consumption
                       (fn [success]
-                        (let [prelog' (utils/pre-log message-loop-name)]
-                          (log/debug (str prelog'
-                                          "Message successfully consumed: "
-                                          success
-                                          "  from\n"
-                                          prelog))))
+                        (swap! log-atom
+                               log-ctx
+                               "Message successfully consumed"
+                               {::outcome success
+                                ::triggered-from prelog}))
                       (fn [failure]
-                        (let [prelog' (utils/pre-log message-loop-name)]
-                          (log/debug (str prelog'
-                                          "Failed to consume message: "
-                                          failure
-                                          "  from\n"
-                                          prelog)))))))
+                        (swap! log-atom
+                               log-ctx
+                               "Failed to consume message"
+                               {::problem failure
+                                ::triggered-from prelog})))))
 
 (defn srvr->client-consumer
   "This processes bytes that are headed from the server to the client"
-  [client-io time-out succeeded? bs]
-  (let [prelog (utils/pre-log "server->client consumer")]
-    (consumer client-io prelog time-out succeeded? bs)))
+  [client-io log-atom time-out succeeded? bs]
+  (consumer client-io
+            log-atom
+            ::srvr->client-consumer
+            time-out
+            succeeded?
+            bs))
 
 (defn client->srvr-consumer
-  [server-io time-out succeeded? bs]
+  [server-io log-atom time-out succeeded? bs]
   (let [prelog (utils/pre-log "client->server consumer")]
-    (consumer server-io prelog time-out succeeded? bs)))
+    (consumer server-io
+              log-atom
+              ::client->srvr-consumer
+              time-out
+              succeeded?
+              bs)))
 
 (defn buffer-response!
   "Serialize and send a message from the child"
   [io-handle
-   prelog
+   message-loop-name
+   log-atom
    message
    success-message
    error-message
    error-details]
-  (let [frames (io/encode protocol message)]
-    (log/debug prelog "Ready to send" (count frames) "message frames")
+  (let [frames (io/encode protocol message)
+        prelog (utils/pre-log message-loop-name)]
+    (swap! log-atom
+           log/debug
+           ::buffer-response!
+           "Ready to send message frames"
+           {::frame-count (count frames)})
     (doseq [frame frames]
       (let [array (if (.hasArray frame)
                     (.array frame)
@@ -138,7 +164,11 @@
           (throw (ex-info "Sending failed"
                           {::failed-on frame
                            ::context prelog}))
-          (log/debug prelog (str (count array) "-byte frame sent")))))))
+          (swap! log-atom
+                 log/debug
+                 ::buffer-response!
+                 "frame sent"
+                 {::frame-size (count array)}))))))
 (comment
   ;; Inline test for test-helper.
   ;; This seems like a bad sign.
@@ -159,25 +189,30 @@
   (io/decode-stream src protocol))
 
 (defn decode-bytes->child
-  [decode-src decode-sink bs]
-  (comment) (log/debug (str "Trying to decode "
-                            (if-not (keyword? bs)
-                              (count bs)
-                              "")
-                            " bytes in ") bs)
+  [decode-src decode-sink log-atom bs]
+  (comment) (swap! log-atom
+                   log/debug
+                   ::decode-bytes->child
+                   "Trying to decode"
+                   (if-not (keyword? bs)
+                     {::message-size (count bs)}
+                     {::eof-flag bs}) bs)
   (if-not (keyword? bs)
     (do
       (when (= 2 (count bs))
-        (log/debug (str "This is probably a prefix expecting "
-                        (b-t/uint16-unpack bs)
-                        " bytes")))
+        (swap! log-atom
+               log/debug
+               ::decode-bytes->child
+               (str "This is probably a prefix expecting "
+                    (b-t/uint16-unpack bs)
+                    " bytes")))
       (let [decoded (strm/try-take! decode-sink ::drained 10 false)]
         (strm/put! decode-src bs)
         (deref decoded 10 false)))
     bs))
 
 (defn server-child-processor
-  [server-atom state-atom chzbrgr-length incoming]
+  [server-atom state-atom log-atom chzbrgr-length incoming]
   (is incoming)
   (is (or (keyword? incoming)
           (and (bytes? incoming)
@@ -201,7 +236,8 @@
       (if (not= rsp ::specs/normal)
         ;; Happy path
         (buffer-response! @server-atom
-                          prelog
+                          "server"
+                          log-atom
                           rsp
                           "Message buffered to child"
                           "Giving up on forwarding to child"
@@ -230,6 +266,7 @@
           ;; That's annoying, but it should be good enough for
           ;; purposes of this test.
           (buffer-response! @server-atom
+                            "client"
                             prelog
                             chzbrgr
                             "Buffered chzbrgr to child"
@@ -389,9 +426,11 @@
                                     (conj acc result)))
                                 []
                                 frames)
+          log-atom (log/init)
           decoded (map (partial decode-bytes->child
                                 decode-src
-                                decode-sink)
+                                decode-sink
+                                log-atom)
                        binary-frames)]
       (try
         (dorun decoded)
@@ -408,15 +447,16 @@
         ;; Or maybe a ByteBuf?
         (is (= msg (second decoded)))
         (finally
-          (strm/close! decode-src))))))
+          (strm/close! decode-src)
+          (let [logger (log/std-out-log-factory)]
+            (log/flush-logs! logger @log-atom)))))))
 (comment (check-decoder)
          )
 
 (deftest handshake
   (let [logger (log/std-out-log-factory)
-        log-state (atom (log/init))
-        prelog (utils/pre-log "Handshake test")]
-    (log/info log-state ::top-level "Top")
+        prelog (utils/pre-log "Handshake test")
+        log-atom (atom (log/info (log/init) ::top-level "Top"))]
     (let [client->server (strm/stream)
           server->client (strm/stream)
           succeeded? (dfrd/deferred)
@@ -426,26 +466,22 @@
           client-atom (atom nil)
           time-out 500
           client-parent-cb (fn [^bytes bs]
-                             (let [log-state
-                                   (log/info log-state
-                                             ::client-parent-callback
-                                             (str
-                                              "Sending a" (count bs)
-                                              "byte array to client's parent"))]
-                               (reset! log-state log-state)
-                               ;; TODO: Need lamport interactions everywhere the
-                               ;; the streams cross.
-                               ;; Calling out here is one place.
-                               ;; But, honestly, so is the parameters into this callback.
-                               ;; At the very least, I should pass in the caller's
-                               ;; lamport clock so I could adjust an atom that
-                               ;; tracks this test's clock.
-                               ;; Alternatively, pass in the entire log-state.
-                               ;; It's tempting to forward that along when we
-                               ;; forward the message from client->server, but
-                               ;; the current protocol does not allow that.
-                               (let [sent (strm/try-put! client->server bs time-out ::timed-out)]
-                                 (is (not= @sent ::timed-out)))))
+                             (swap! log-atom
+                                    log/info
+                                    ::client-parent-callback
+                                    (str "Sending a" (count bs)
+                                         "byte array to client's parent"))
+                             ;; With the current implementation, there is no good way
+                             ;; to coordinate our lamport clock with the ioloop's.
+                             ;; Well, we get the ioloop's when we call get-state.
+                             ;; And that clock will pretty much always be ahead
+                             ;; of ours.
+                             ;; But there's no good way [currently] to go the other
+                             ;; direction, if we want to keep everything synchronized.
+                             ;; After all, get-state will actually return a clock tick
+                             ;; that's quite a bit behind the caller's.
+                             (let [sent (strm/try-put! client->server bs time-out ::timed-out)]
+                               (is (not= @sent ::timed-out))))
           ;; Something that spans multiple packets would be better, but
           ;; that seems like a variation on this test.
           ;; Although this *does* take me back to the beginning, where
@@ -480,17 +516,26 @@
           ;; These are really hooks for sending the bytes to the encryption
           ;; layer.
           server-parent-cb (fn [bs]
-                             (log/info (utils/pre-log "Server's parent callback")
-                                       "Sending a" (class bs) "to server's parent")
+                             (swap! log-atom
+                                    log/info
+                                    ::server-parent-cb
+                                    "Sending a" (class bs) "to server's parent")
                              (let [sent (strm/try-put! server->client bs time-out ::timed-out)]
                                (is (not= @sent ::timed-out))))
           server-child-cb (partial mock-server-child
                                    srvr-decode-src)]
       (dfrd/on-realized succeeded?
                         (fn [good]
-                          (log/info "----------> Test should have passed <-----------"))
+                          (swap! log-atom
+                                 log/info
+                                 ::child-succeeded
+                                 "----------> Test should have passed <-----------"))
                         (fn [bad]
-                          (log/error bad "High-level test failure")
+                          (swap! log-atom
+                                 log/error
+                                 ::child-failed
+                                 "High-level test failure"
+                                 {::problem bad})
                           (is (not bad))))
 
       ;; If we use consume-async (which seems preferable), we risk
@@ -508,40 +553,51 @@
       (strm/consume (partial server-child-processor
                              server-atom
                              server-state-atom
+                             log-atom
                              chzbrgr-length)
                     srvr-decode-sink)
 
-      (let [client-init (message/initial-state "Client" {} false)
-            client-io (message/start! client-init client-parent-cb client-child-cb)
-            server-init (message/initial-state "Server" {} logger true)
+      (let [client-init (message/initial-state "Client" false {} logger)
+            client-io (message/start! client-init logger client-parent-cb client-child-cb)
+            server-init (message/initial-state "Server" true {} logger)
             ;; It seems like this next part really shouldn't happen until the initial message arrives
             ;; from the client.
             ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
             ;; that isn't quite true
-            server-io (message/start! server-init server-parent-cb server-child-cb)]
+            server-io (message/start! server-init logger server-parent-cb server-child-cb)]
         (reset! client-atom client-io)
         (reset! server-atom server-io)
 
         (try
-          (strm/consume (partial client->srvr-consumer server-io time-out succeeded?)
+          (strm/consume (partial client->srvr-consumer
+                                 server-io
+                                 log-atom
+                                 time-out
+                                 succeeded?)
                         client->server)
-          (strm/consume (partial srvr->client-consumer client-io time-out succeeded?)
+          (strm/consume (partial srvr->client-consumer
+                                 client-io
+                                 log-atom
+                                 time-out
+                                 succeeded?)
                         server->client)
 
           (let [initial-message (Unpooled/buffer K/k-1)]
             ;; Kick off the exchange
             (buffer-response! client-io
-                              prelog
+                              log-atom
                               ::ohai!
                               "Sequence Initiated"
                               "Handshake initiation failed"
                               {})
             ;; TODO: Find a reasonable value for this timeout
             (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
-              (log/info prelog
-                        "=====================================================\n"
-                        "handshake-test run through. Need to see what happened\n"
-                        "=====================================================")
+              (swap! log-atom
+                     log/info
+                     ::handshake-status-check
+                     (str "=====================================================\n"
+                          "handshake-test run through. Need to see what happened\n"
+                          "====================================================="))
               (let [client-message-state (message/get-state client-io time-out ::timed-out)]
                 ;; This seems inside-out.
                 ;; TODO: Check really-succeeded? first.
@@ -573,23 +629,37 @@
                           (instance? Throwable srvr-state)
                           (nil? srvr-state))
                   (is (not srvr-state)))
+                ;; Keep this around as a reminder to look carefully at it in
+                ;; case of wonkiness
                 (comment (is (not flow-control) "Server flow-control")))
               (is (= ::kthxbai really-succeeded?))
               (is (= 6 (-> client-state
                            deref
                            ::count)))))
           (finally
-            (log/info "Cleaning up")
+            (swap! log-atom
+                   log/info
+                   ::handshake-status-check
+                   "Cleaning up")
             (strm/close! clnt-decode-src)
             (strm/close! srvr-decode-src)
             (try
               (message/halt! client-io)
               (catch Exception ex
-                (log/error ex "Trying to halt client")))
+                (swap! log-atom
+                       log/exception
+                       ex
+                       ::handshake-status-check
+                       "Trying to halt client")))
             (try
               (message/halt! server-io)
               (catch Exception ex
-                (log/error ex "Trying to halt server")))))))))
+                (swap! log-atom
+                       log/exception
+                       ex
+                       ::handshake-status-check
+                       "Trying to halt server")))
+            (log/flush-logs! logger @log-atom)))))))
 (comment
   (handshake)
   (count (str ::kk))
