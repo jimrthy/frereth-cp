@@ -1135,8 +1135,8 @@
         ;; talking about incoming/outgoing buffer management or
         ;; flow control.
         ::specs/recent 0})))
-  ([human-name]
-   (initial-state human-name {} false)))
+  ([human-name logger]
+   (initial-state human-name {} false logger)))
 
 (s/fdef start!
         :args (s/cat :state ::specs/state
@@ -1233,6 +1233,9 @@
            ::specs/from-child
            ::specs/child-out]
     :as io-handle}]
+  ;; TODO: We need the log-state here, so we can append to it.
+  ;; The obvious choice seems to involve calling get-state.
+  ;; TODO: Try that out.
   (log/info (utils/pre-log message-loop-name) "I/O Loop Halt Requested")
   (strm/close! stream)
   (doseq [pipe [from-child
