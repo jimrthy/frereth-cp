@@ -695,9 +695,6 @@
                               {::block-count block-count
                                ::specs/receive-eof receive-eof})
         consolidated (assoc consolidated ::log2/state log-state)]
-    (println "=======================================\n"
-             "Checking for blocks to send to child\n"
-             "=======================================")
     (if (< 0 block-count)
       (try
         (let [preliminary (reduce (partial write-bytes-to-child-stream!

@@ -104,12 +104,14 @@
     (dfrd/on-realized consumption
                       (fn [success]
                         (swap! log-atom
+                               log/debug
                                log-ctx
                                "Message successfully consumed"
                                {::outcome success
                                 ::triggered-from prelog}))
                       (fn [failure]
                         (swap! log-atom
+                               log/error
                                log-ctx
                                "Failed to consume message"
                                {::problem failure
@@ -217,66 +219,69 @@
   (is (or (keyword? incoming)
           (and (bytes? incoming)
                (< 0 (count incoming)))))
-  (let [prelog (utils/pre-log "Handshake Server: child process trigger")
-        _ (log/debug prelog "Message arrived at server's child")]
-    (log/debug prelog
-               (str "Matching '" incoming
-                    "', a " (class incoming)))
-    (let [rsp (condp = incoming
-                ::ohai! ::orly?
-                ::yarly ::kk
-                ::icanhazchzbrgr? ::kk
-                ::kthxbai ::kk
-                ::specs/normal ::specs/normal)]
-      (log/info prelog
-                "Server received"
-                incoming
-                "\nwhich triggers"
-                rsp)
-      (if (not= rsp ::specs/normal)
-        ;; Happy path
+  (swap! log-atom
+         log/debug
+         ::server-child-processor
+         (str "Matching '" incoming
+              "', a " (class incoming))
+         {::server-state @server-atom
+          ::other-state @state-atom})
+  (let [rsp (condp = incoming
+              ::ohai! ::orly?
+              ::yarly ::kk
+              ::icanhazchzbrgr? ::kk
+              ::kthxbai ::kk
+              ::specs/normal ::specs/normal)]
+    (swap! log-atom
+           log/info
+           ::server-child-processor
+           "Incoming triggered"
+           {::incoming incoming
+            ::response rsp})
+    (if (not= rsp ::specs/normal)
+      ;; Happy path
+      (buffer-response! @server-atom
+                        "server"
+                        log-atom
+                        rsp
+                        "Message buffered to child"
+                        "Giving up on forwarding to child"
+                        {::response rsp
+                         ::request incoming})
+      (message/child-close! @server-atom))
+    (when (= incoming ::icanhazchzbrgr?)
+      ;; One of the main points is that this doesn't need to be a lock-step
+      ;; request/response.
+      (swap! log-atom log/info ::server-child-processor
+             "Client requested chzbrgr. Send out of lock-step")
+      ;; Only 3 messages are arriving at the client.
+      ;; This almost definitely means that the chzbrgr is the problem.
+      ;; Trying to send a raw byte-array here definitely does not work.
+      ;; Sending the lazy seq that range produces seems like a bad idea.
+      ;; Sending a vec like this doesn't help.
+      ;; Note that, whatever I *do* send here, the client needs to
+      ;; be updated to expect that type.
+      (let [chzbrgr (vec (range chzbrgr-length))]
+        ;; This is buffering far more bytes than expected.
+        ;; That's because it's encoding an EDN string instead of
+        ;; the raw byte-array with which I started.
+        ;; (Can't just supply a byte-array because the other
+        ;; side doesn't have a reader override to decode that.
+        ;; And it wouldn't gain anything to add it, since it would
+        ;; still be the string representation of the numbers.
+        ;; That's annoying, but it should be good enough for
+        ;; purposes of this test.
         (buffer-response! @server-atom
-                          "server"
+                          "client"
                           log-atom
-                          rsp
-                          "Message buffered to child"
-                          "Giving up on forwarding to child"
-                          {::response rsp
-                           ::request incoming})
-        (message/child-close! @server-atom))
-      (when (= incoming ::icanhazchzbrgr?)
-        ;; One of the main points is that this doesn't need to be a lock-step
-        ;; request/response.
-        (log/info prelog "Client requested chzbrgr. Send out of lock-step")
-        ;; Only 3 messages are arriving at the client.
-        ;; This almost definitely means that the chzbrgr is the problem.
-        ;; Trying to send a raw byte-array here definitely does not work.
-        ;; Sending the lazy seq that range produces seems like a bad idea.
-        ;; Sending a vec like this doesn't help.
-        ;; Note that, whatever I *do* send here, the client needs to
-        ;; be updated to expect that type.
-        (let [chzbrgr (vec (range chzbrgr-length))]
-          ;; This is buffering far more bytes than expected.
-          ;; That's because it's encoding an EDN string instead of
-          ;; the raw byte-array with which I started.
-          ;; (Can't just supply a byte-array because the other
-          ;; side doesn't have a reader override to decode that.
-          ;; And it wouldn't gain anything to add it, since it would
-          ;; still be the string representation of the numbers.
-          ;; That's annoying, but it should be good enough for
-          ;; purposes of this test.
-          (buffer-response! @server-atom
-                            "client"
-                            prelog
-                            chzbrgr
-                            "Buffered chzbrgr to child"
-                            "Giving up on sending chzbrgr"
-                            {}))))))
+                          chzbrgr
+                          "Buffered chzbrgr to child"
+                          "Giving up on sending chzbrgr"
+                          {})))))
 
 (defn client-child-processor
   "Process the messages queued by mock-client-child"
-  [client-atom client-state-atom succeeded? chzbrgr-length incoming]
-  (is incoming)
+  [client-atom client-state-atom log-atom succeeded? chzbrgr-length incoming]
   (is (or (keyword? incoming)
           ;; Implementation detail:
           ;; incoming is deserialized EDN.
@@ -287,16 +292,12 @@
            (if (keyword? incoming)
              incoming
              (str incoming ", a" (class incoming)))))
-  (let [prelog (utils/pre-log "Handshake Client: child process trigger")
-        client-state @client-state-atom]
-    (log/info prelog
-              (str "Client State: "
-                   client-state
-                   "\nreceived: "
-                   incoming ", a " (class incoming)))
+  (let [client-state @client-state-atom]
+    (swap! log-atom log/info ::client-child-processor "incoming"
+           {::client-state client-state
+            ::received incoming})
     (if incoming
-      (let [prelog2 (utils/pre-log "Handshake Client: child processor")
-            {n ::count} client-state
+      (let [{n ::count} client-state
             next-message
             (condp = n
               0 (do
@@ -319,7 +320,10 @@
                   ::kthxbai)
               4 (do
                   (is (= incoming ::kk))
-                  (log/info "Client child callback is done")
+                  (swap! log-atom
+                         log/info
+                         ::client-child-processor
+                         "Client child callback is done")
                   (try
                     (message/child-close! @client-atom)
                     (catch RuntimeException ex
@@ -332,7 +336,10 @@
                   nil)
               5 (do
                   (is (= incoming ::specs/normal))
-                  (log/info "Received server EOF")
+                  (swap! log-atom
+                         log/info
+                         ::client-child-processor
+                         "Received server EOF")
                   (dfrd/success! succeeded? ::kthxbai)
                   ;; At this point, we signalled the end of the transaction.
                   ;; We closed our outbound pipe in the previous step,
@@ -342,12 +349,15 @@
                   ;; But, honestly, winding up at state
                   ;; 6 after this pretty much says it all.
                   nil))]
-        (log/info prelog2
-                  incoming
-                  "from\n"
-                  prelog
-                  "triggered a response:"
-                  next-message)
+        (swap! log-atom
+               log/info
+               "response triggered"
+               ;; This approach hides the context that set this
+               ;; up.
+               ;; Then again, that's just the unit test, so it
+               ;; really isn't very interesting
+               {::incoming incoming
+                ::next-message next-message})
         (swap! client-state-atom update ::count inc)
         ;; Hmm...I've wound up with a circular dependency
         ;; on the io-handle again.
@@ -355,39 +365,61 @@
         ;; a testing artifact?
         (when next-message
           (buffer-response! @client-atom
-                            prelog
+                            "from-client"
+                            log-atom
                             next-message
                             "Buffered bytes from child"
                             "Giving up on sending message from child"
                             {}))
         (let [result (> 6 n)]
-          (log/debug prelog2 "returning" result)
+          (swap! log-atom log/debug ::client-child-processor "returning" result)
           result))
-      (log/error prelog "No bytes decoded. Shouldn't have gotten here"))))
+      (swap! log-atom
+             log/error
+             ::client-child-processor
+             "No bytes decoded. Shouldn't have gotten here"))))
 
 (defn child-mocker
   "Functionality shared between client and server"
-  [prelog arrival-msg decode-src bs-or-kw]
-  (log/debug prelog
-             (if (keyword? bs-or-kw)
-               (str bs-or-kw)
-               (str (count bs-or-kw) "-byte"))
-             arrival-msg)
+  [logger log-atom log-ctx arrival-msg decode-src bs-or-kw]
+  (swap! log-atom
+         log/debug
+         log-ctx
+         (if (keyword? bs-or-kw)
+           (str bs-or-kw)
+           (str (count bs-or-kw) "-byte"))
+         arrival-msg)
   (if-not (keyword? bs-or-kw)
     (strm/put! decode-src bs-or-kw)
     (doseq [frame (io/encode protocol bs-or-kw)]
-      (strm/put! decode-src frame))))
+      (strm/put! decode-src frame)))
+  (swap! log-atom
+         log/debug
+         log-ctx
+         "Messages forwarded to decoder")
+  (swap! log-atom #(log/flush-logs! logger %)))
 
 (defn mock-server-child
-  [decode-src bs]
+  "Callback for messages that arrived from client"
+  [decode-src logger log-atom bs]
   (let [prelog (utils/pre-log "Handshake Server: child callback")]
-    (child-mocker prelog "message arrived at server's child" decode-src bs)))
+    (child-mocker logger
+                  log-atom
+                  ::server-child
+                  "message arrived at server's child"
+                  decode-src
+                  bs)))
 
 (defn mock-client-child
   "This is the callback for messages arriving from server"
-  [decode-src bs]
+  [decode-src logger log-atom bs]
   (let [prelog (utils/pre-log "Handshake Client: child callback")]
-    (child-mocker prelog "message arrived at client's child" decode-src bs)))
+    (child-mocker logger
+                  log-atom
+                  ::client-child
+                  "message arrived at client's child"
+                  decode-src
+                  bs)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Tests
@@ -456,6 +488,15 @@
 (deftest handshake
   (let [logger (log/std-out-log-factory)
         prelog (utils/pre-log "Handshake test")
+        ;; Sticking the logs into an atom like this is tempting
+        ;; and convenient.
+        ;; But it really misses the point.
+        ;; I don't terribly mind doing this for something like a
+        ;; unit test. But you very definitely don't want multiple
+        ;; threads trying to update a single atom in the middle
+        ;; of a tight inner loop.
+        ;; (of course, time will tell whether it's wise to do *any*
+        ;; logging under those circumstances)
         log-atom (atom (log/info (log/init) ::top-level "Top"))]
     (let [client->server (strm/stream)
           server->client (strm/stream)
@@ -469,8 +510,8 @@
                              (swap! log-atom
                                     log/info
                                     ::client-parent-callback
-                                    (str "Sending a" (count bs)
-                                         "byte array to client's parent"))
+                                    (str "Sending a " (count bs)
+                                         " byte array to client's parent"))
                              ;; With the current implementation, there is no good way
                              ;; to coordinate our lamport clock with the ioloop's.
                              ;; Well, we get the ioloop's when we call get-state.
@@ -500,7 +541,10 @@
           ;; the callback out to around 23 ms, which is completely unacceptable)
           clnt-decode-src (strm/stream)
           clnt-decode-sink (decoder clnt-decode-src)
-          client-child-cb (partial mock-client-child clnt-decode-src)
+          client-child-cb (partial mock-client-child
+                                   clnt-decode-src
+                                   logger
+                                   log-atom)
           server-atom (atom nil)
           server-state-atom (atom {::prefix nil
                                    ::count 0})
@@ -519,11 +563,13 @@
                              (swap! log-atom
                                     log/info
                                     ::server-parent-cb
-                                    "Sending a" (class bs) "to server's parent")
+                                    (str "Sending a " (class bs) " to server's parent"))
                              (let [sent (strm/try-put! server->client bs time-out ::timed-out)]
                                (is (not= @sent ::timed-out))))
           server-child-cb (partial mock-server-child
-                                   srvr-decode-src)]
+                                   srvr-decode-src
+                                   logger
+                                   log-atom)]
       (dfrd/on-realized succeeded?
                         (fn [good]
                           (swap! log-atom
@@ -547,6 +593,7 @@
       (strm/consume (partial client-child-processor
                              client-atom
                              client-state
+                             log-atom
                              succeeded?
                              chzbrgr-length)
                     clnt-decode-sink)
@@ -585,6 +632,7 @@
           (let [initial-message (Unpooled/buffer K/k-1)]
             ;; Kick off the exchange
             (buffer-response! client-io
+                              "faux-client"
                               log-atom
                               ::ohai!
                               "Sequence Initiated"
