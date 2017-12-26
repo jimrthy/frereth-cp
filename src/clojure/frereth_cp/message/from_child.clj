@@ -68,8 +68,7 @@
                      :prefix bytes?
                      :available-bytes nat-int?
                      :max-to-read nat-int?)
-        :ret (s/or :open bytes?
-                   :eof ::specs/eof-flag))
+        :ret ::specs/bs-or-eof)
 (defn read-next-bytes-from-child!
   ([message-loop-name
     ^InputStream child-out
@@ -111,6 +110,8 @@
        (try
          ;; More often, we should spend all our time waiting.
          (log/debug prelog "Blocking until we get a byte from the child")
+         ;; Q: Could I use something like Reactive, or even Java Streams,
+         ;; to eliminate all the logic involved in managing this?
          (let [next-prefix (.read child-out)]
            ;; My echo test is never returning from that.
            ;; Which, really, should mean that the PipedInputStream never gets closed.
@@ -120,27 +121,9 @@
            (log/debug prelog (str "Read a byte from child ("
                                   next-prefix
                                   "). Q: Are there more?"))
-           (if (= next-prefix -1)
-             ;; EOF
-             (if (< 0 prefix-gap)
-               (do
-                 (log/info prelog
-                           "Reached EOF. Have"
-                           prefix-gap
-                           "bytes buffered to send first")
-                 ;; Q: Does it make sense to handle it this way?
-                 ;; It would be nice to just attach the EOF flag to
-                 ;; the bytes we're getting ready to send along.
-                 ;; That would mean having this return a data
-                 ;; structure that includes both the byte array
-                 ;; and the flag.
-                 ;; For now, if we had a prefix, just return that
-                 ;; and pretend that everything's normal.
-                 ;; We'll get the EOF signal soon enough.
-                 prefix)
-               (do
-                 (log/warn prelog "Signalling normal EOF")
-                 ::specs/normal))
+           ;; That returns an unsigned byte.
+           ;; Or -1 for EOF
+           (if (not= next-prefix -1)
              (let [bytes-remaining (.available child-out)]
                (log/info prelog bytes-remaining "more bytes waiting to be read")
                (if (< 0 bytes-remaining)
@@ -177,7 +160,26 @@
                                                 combined-prefix
                                                 bytes-remaining
                                                 (dec max-to-read)))
-                 (byte-array prefix)))))
+                 (byte-array prefix)))
+             (if (< 0 prefix-gap)  ;; EOF
+               (do
+                 (log/info prelog
+                           "Reached EOF. Have"
+                           prefix-gap
+                           "bytes buffered to send first")
+                 ;; Q: Does it make sense to handle it this way?
+                 ;; It would be nice to just attach the EOF flag to
+                 ;; the bytes we're getting ready to send along.
+                 ;; That would mean having this return a data
+                 ;; structure that includes both the byte array
+                 ;; and the flag.
+                 ;; For now, if we had a prefix, just return that
+                 ;; and pretend that everything's normal.
+                 ;; We'll get the EOF signal soon enough.
+                 prefix)
+               (do
+                 (log/warn prelog "Signalling normal EOF")
+                 ::specs/normal))))
          ;; TODO: Tighten these up. If a .read call throws an exception,
          ;; then OK.
          ;; If something else has a problem, that's really a different story.
@@ -404,17 +406,16 @@
 (s/fdef forward-bytes-from-child!
         :args (s/cat :message-loop-name ::specs/message-loop-name
                      :stream ::specs/stream
-                     :array-o-bytes (s/or :message bytes?
-                                          :eof ::specs/eof-flag))
+                     :bs-or-eof ::specs/bs-or-eof)
         :fn #(= (:ret %) (-> % :args :array-o-bytes))
         :ret (s/or :message bytes?
                    :eof ::specs/eof-flag))
 (defn forward-bytes-from-child!
   [message-loop-name
    stream
-   array-o-bytes]
+   bs-or-eof]
   (let [prelog (utils/pre-log message-loop-name)
-        callback (build-byte-consumer message-loop-name array-o-bytes)]
+        callback (build-byte-consumer message-loop-name bs-or-eof)]
     ;; I think it looks as though I have a deadlock here.
     ;; It seems like I need to return from this in order to get
     ;; back to the main ioloop to pull the message that I'm
@@ -430,12 +431,12 @@
     (log/debug prelog
                (str
                 "Received "
-                (if (bytes? array-o-bytes)
-                  (count array-o-bytes)
-                  array-o-bytes)
+                (if (bytes? bs-or-eof)
+                  (count bs-or-eof)
+                  bs-or-eof)
                 " bytes(?) from child"
-                (if (bytes? array-o-bytes)
-                  (str " in " array-o-bytes)
+                (if (bytes? bs-or-eof)
+                  (str " in " bs-or-eof)
                   "")
                 ". Trying to forward them to the main i/o loop"))
     ;; Here's an annoying detail:
@@ -463,7 +464,7 @@
                           (fn [success]
                             (log/debug
                              (utils/pre-log message-loop-name)
-                             (str array-o-bytes
+                             (str bs-or-eof
                                   " from child successfully ("
                                   success
                                   ") posted to main i/o loop triggered from\n"
@@ -473,17 +474,17 @@
                              failure
                              (utils/pre-log message-loop-name)
                              (str "Failed to add bytes "
-                                  array-o-bytes
+                                  bs-or-eof
                                   " ("
                                   failure
                                   ") from child to main i/o loop triggered from\n"
                                   prelog))))
         ;; TODO: Eliminate these magic numbers
-        (try-multiple-sends stream array-o-bytes blocker prelog 10 timeout))
+        (try-multiple-sends stream bs-or-eof blocker prelog 10 timeout))
       (do
         (log/warn prelog
                   "Destination stream closed. Discarding message\n"
-                  array-o-bytes)
+                  bs-or-eof)
         ;; Q: Is there any way to recover from this?
         ::specs/error))))
 
@@ -540,7 +541,7 @@
   (let [prelog (utils/pre-log message-loop-name)
         available-bytes (.available child-out)
         ;; note that this may also be the EOF flag
-        array-o-bytes
+        bs-or-eof
         (try
           (read-next-bytes-from-child! message-loop-name
                                        child-out
@@ -558,14 +559,14 @@
     (log/warn prelog
               (str "Need to check room-for-child-bytes?"
                    " before calling read-next-bytes-from-child!"))
-    (when (keyword? array-o-bytes)
+    (when (keyword? bs-or-eof)
       (log/warn prelog "EOF flag. Closing the PipedInputStream")
       ;; It's a little tempting to refactor this into its
       ;; own function, but that just seems silly.
       (.close child-out))
     (forward-bytes-from-child! message-loop-name
-                              stream
-                              array-o-bytes)))
+                               stream
+                               bs-or-eof)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

@@ -592,11 +592,11 @@
         log-message (str log-message
                      (cl-format nil
                                 "\nAdjusted for RTT: ~:d"
-                                next-based-on-earliest-block-time))
+                                (long next-based-on-earliest-block-time)))
         log-message (str log-message
                          (cl-format nil
                                     "\nAfter [pretending to] adjusting for closed/ignored child watcher: ~:d"
-                                    based-on-closed-child))
+                                    (long based-on-closed-child)))
         mid2-time (System/nanoTime)
         un-ackd-count (count un-ackd-blocks)
         alt (cond-> default-next
@@ -631,10 +631,10 @@
                                    "\nBuilding the messages about this took ~:d nanoseconds"
                                    "\nAlt approach took ~:d and calculated ~:d")
                           (- mid1-time now)
-                          actual-next
+                          (long actual-next)
                           (- mid2-time mid1-time)
                           (- end-time mid2-time)
-                          alt))
+                          (long alt)))
     actual-next))
 
 (declare schedule-next-timeout!)
@@ -940,7 +940,7 @@
                            (cl-format nil
                                       (str "Initially calculated scheduled delay: ~:d nanoseconds after ~:d vs. ~:d"
                                            "\nSetting timer to trigger in ~:d ms (vs ~:d scheduled) on ~a")
-                                      scheduled-delay
+                                      (long scheduled-delay)
                                       recent
                                       now
                                       delta_f

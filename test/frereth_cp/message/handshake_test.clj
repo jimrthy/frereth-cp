@@ -19,10 +19,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(s/def ::prefix (s/nilable bytes?))
 (s/def ::count nat-int?)
-(s/def ::state (s/keys :req [::count
-                             ::prefix]))
+(s/def ::state (s/keys :req [::count]))
 (s/def ::next-object any?)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -58,7 +56,7 @@
   ;; Then again, you *could* do something like
   ;; this, to experiment with the unencrypted
   ;; networking protocol.
-  (swap! log-atom log/info log-ctx "Message over network")
+  (swap! log-atom log/info log-ctx "Message over network" {::log/ctx message-loop-name})
 
   (let [prelog (utils/pre-log message-loop-name)
         consumption (dfrd/future
@@ -78,7 +76,8 @@
                                log-ctx
                                "Got state"
                                {::state state
-                                ::parent-context prelog})
+                                ::parent-context prelog
+                                ::log/ctx message-loop-name})
                         (if (or (= ::timed-out state)
                                 (instance? Throwable state)
                                 (nil? state))
@@ -92,13 +91,15 @@
                                    problem
                                    log-ctx
                                    "Failed!"
-                                   {::triggered-from prelog})
+                                   {::log/ctx message-loop-name
+                                    ::triggered-from prelog})
                             (if (realized? succeeded?)
                               (swap! log-atom
                                      log/warn
                                      log-ctx
                                      "Caller already thinks we succeeded"
-                                     {::triggered-by prelog})
+                                     {::log/ctx message-loop-name
+                                      ::triggered-by prelog})
                               (dfrd/error! succeeded? problem)))
                           (message/parent->! io-handle bs))))]
     (dfrd/on-realized consumption
@@ -107,14 +108,16 @@
                                log/debug
                                log-ctx
                                "Message successfully consumed"
-                               {::outcome success
+                               {::log/ctx message-loop-name
+                                ::outcome success
                                 ::triggered-from prelog}))
                       (fn [failure]
                         (swap! log-atom
                                log/error
                                log-ctx
                                "Failed to consume message"
-                               {::problem failure
+                               {::log/ctx message-loop-name
+                                ::problem failure
                                 ::triggered-from prelog})))))
 
 (defn srvr->client-consumer
@@ -152,7 +155,8 @@
            log/debug
            ::buffer-response!
            "Ready to send message frames"
-           {::frame-count (count frames)})
+           {::log/ctx message-loop-name
+            ::frame-count (count frames)})
     (doseq [frame frames]
       (let [array (if (.hasArray frame)
                     (.array frame)
@@ -170,7 +174,8 @@
                  log/debug
                  ::buffer-response!
                  "frame sent"
-                 {::frame-size (count array)}))))))
+                 {::log/ctx message-loop-name
+                  ::frame-size (count array)}))))))
 (comment
   ;; Inline test for test-helper.
   ;; This seems like a bad sign.
@@ -196,9 +201,12 @@
                    log/debug
                    ::decode-bytes->child
                    "Trying to decode"
-                   (if-not (keyword? bs)
-                     {::message-size (count bs)}
-                     {::eof-flag bs}) bs)
+                   (assoc
+                    (if-not (keyword? bs)
+                      {::message-size (count bs)}
+                      {::eof-flag bs})
+                    ::log/ctx "TODO: Which child?"
+                    ::specs/bs-or-eof bs))
   (if-not (keyword? bs)
     (do
       (when (= 2 (count bs))
@@ -207,13 +215,16 @@
                ::decode-bytes->child
                (str "This is probably a prefix expecting "
                     (b-t/uint16-unpack bs)
-                    " bytes")))
+                    " bytes")
+               {::log/ctx "TODO: Which child?"}))
       (let [decoded (strm/try-take! decode-sink ::drained 10 false)]
         (strm/put! decode-src bs)
         (deref decoded 10 false)))
     bs))
 
 (defn server-child-processor
+  "Need an extra layer of indirection away from the first-level child mocker"
+  ;; Because of the way gloss handles deserialization.
   [server-atom state-atom log-atom chzbrgr-length incoming]
   (is incoming)
   (is (or (keyword? incoming)
@@ -224,7 +235,8 @@
          ::server-child-processor
          (str "Matching '" incoming
               "', a " (class incoming))
-         {::server-state @server-atom
+         {::log/ctx "server"
+          ::server-state @server-atom
           ::other-state @state-atom})
   (let [rsp (condp = incoming
               ::ohai! ::orly?
@@ -236,7 +248,8 @@
            log/info
            ::server-child-processor
            "Incoming triggered"
-           {::incoming incoming
+           {::log/ctx "server"
+            ::incoming incoming
             ::response rsp})
     (if (not= rsp ::specs/normal)
       ;; Happy path
@@ -252,8 +265,11 @@
     (when (= incoming ::icanhazchzbrgr?)
       ;; One of the main points is that this doesn't need to be a lock-step
       ;; request/response.
-      (swap! log-atom log/info ::server-child-processor
-             "Client requested chzbrgr. Send out of lock-step")
+      (swap! log-atom
+             log/info
+             ::server-child-processor
+             "Client requested chzbrgr. Send out of lock-step"
+             {::log/ctx "server"})
       ;; Only 3 messages are arriving at the client.
       ;; This almost definitely means that the chzbrgr is the problem.
       ;; Trying to send a raw byte-array here definitely does not work.
@@ -294,7 +310,8 @@
              (str incoming ", a" (class incoming)))))
   (let [client-state @client-state-atom]
     (swap! log-atom log/info ::client-child-processor "incoming"
-           {::client-state client-state
+           {::log/ctx "client"
+            ::client-state client-state
             ::received incoming})
     (if incoming
       (let [{n ::count} client-state
@@ -323,7 +340,8 @@
                   (swap! log-atom
                          log/info
                          ::client-child-processor
-                         "Client child callback is done")
+                         "Client child callback is drained (but still need server's EOF)"
+                         {::log/ctx "client"})
                   (try
                     (message/child-close! @client-atom)
                     (catch RuntimeException ex
@@ -331,7 +349,12 @@
                       ;; I blame something screwy in the testing
                       ;; harness. I *do* see this error message
                       ;; and the stack trace.
-                      (log/error ex "This really shouldn't pass")
+                      (swap! log-atom
+                             log/exception
+                             ex
+                             ::client-child-processor
+                             "This really shouldn't pass"
+                             {::log/ctx "client"})
                       (is (not ex))))
                   nil)
               5 (do
@@ -339,7 +362,8 @@
                   (swap! log-atom
                          log/info
                          ::client-child-processor
-                         "Received server EOF")
+                         "Received server EOF"
+                         {::log/ctx "client"})
                   (dfrd/success! succeeded? ::kthxbai)
                   ;; At this point, we signalled the end of the transaction.
                   ;; We closed our outbound pipe in the previous step,
@@ -351,12 +375,14 @@
                   nil))]
         (swap! log-atom
                log/info
+               ::client-child-processor
                "response triggered"
                ;; This approach hides the context that set this
                ;; up.
                ;; Then again, that's just the unit test, so it
                ;; really isn't very interesting
-               {::incoming incoming
+               {::log/ctx "client"
+                ::incoming incoming
                 ::next-message next-message})
         (swap! client-state-atom update ::count inc)
         ;; Hmm...I've wound up with a circular dependency
@@ -372,7 +398,12 @@
                             "Giving up on sending message from child"
                             {}))
         (let [result (> 6 n)]
-          (swap! log-atom log/debug ::client-child-processor "returning" result)
+          (swap! log-atom
+                 log/debug
+                 ::client-child-processor
+                 "returning"
+                 (assoc result
+                        ::log/ctx "client"))
           result))
       (swap! log-atom
              log/error
@@ -402,24 +433,22 @@
 (defn mock-server-child
   "Callback for messages that arrived from client"
   [decode-src logger log-atom bs]
-  (let [prelog (utils/pre-log "Handshake Server: child callback")]
-    (child-mocker logger
-                  log-atom
-                  ::server-child
-                  "message arrived at server's child"
-                  decode-src
-                  bs)))
+  (child-mocker logger
+                log-atom
+                ::server-child
+                "message arrived at server's child"
+                decode-src
+                bs))
 
 (defn mock-client-child
   "This is the callback for messages arriving from server"
   [decode-src logger log-atom bs]
-  (let [prelog (utils/pre-log "Handshake Client: child callback")]
-    (child-mocker logger
-                  log-atom
-                  ::client-child
-                  "message arrived at client's child"
-                  decode-src
-                  bs)))
+  (child-mocker logger
+                log-atom
+                ::client-child
+                "message arrived at client's child"
+                decode-src
+                bs))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Tests
@@ -487,7 +516,6 @@
 
 (deftest handshake
   (let [logger (log/std-out-log-factory)
-        prelog (utils/pre-log "Handshake test")
         ;; Sticking the logs into an atom like this is tempting
         ;; and convenient.
         ;; But it really misses the point.
@@ -502,8 +530,7 @@
           server->client (strm/stream)
           succeeded? (dfrd/deferred)
           ;; Simulate a very stupid FSM
-          client-state (atom {::count 0
-                              ::prefix nil})
+          client-state (atom {::count 0})
           client-atom (atom nil)
           time-out 500
           client-parent-cb (fn [^bytes bs]
@@ -546,8 +573,7 @@
                                    logger
                                    log-atom)
           server-atom (atom nil)
-          server-state-atom (atom {::prefix nil
-                                   ::count 0})
+          server-state-atom (atom {::count 0})
           ;; Note that any realistic server would actually need 1
           ;; decoder per connected client.
           ;; Then again, the server really should wind up with 1 messaging
@@ -640,6 +666,22 @@
                               {})
             ;; TODO: Find a reasonable value for this timeout
             (let [really-succeeded? (deref succeeded? 10000 ::timed-out)]
+              ;; FIXME: Don't make this ad-hoc. It should be part of the
+              ;; public API.
+              ;; Just add a notification system so i/o loop creators
+              ;; can tell when
+              ;; a) their child has sent an EOF and that message has
+              ;;    been ACK'd
+              ;; b) EOF from the other side reaches our child
+              ;; Then again, neither of those seems all that useful.
+              ;; The callback handler *knows* when EOF arrives, and
+              ;; it can send out any notifications its creator cares
+              ;; about, using whichever messaging methodology the
+              ;; creator chooses.
+              ;; Q: And why do we care when the ACK to our EOF was
+              ;; received?
+              ;; A: That seems like a pretty important clean-up signal
+              (is (not= really-succeeded? ::timed-out))
               (swap! log-atom
                      log/info
                      ::handshake-status-check
