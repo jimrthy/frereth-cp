@@ -700,15 +700,6 @@
                             (count (get-in state'' [::specs/outgoing ::specs/un-sent-blocks]))
                             " that is/are left in un-sent-blocks"))
 
-            ;; This next concept almost fits here.
-            ;; But I keep rolling back to the point it shouldn't happen until after
-            ;; block->parent! has returned successfully.
-            ;; So just ditch the idea and add a predicate function for the logic.
-            (comment (if (and send-eof
-                              (empty? (get-in result [::specs/outgoing ::specs/un-sent-blocks])))
-                       (assoc-in result
-                                 [::specs/outgoing ::specs/send-eof-processed]
-                                 true)))
 ;;;      408: earliestblocktime_compute()
             (-> state''
                 (assoc-in [::specs/outgoing ::specs/earliest-time]
@@ -733,5 +724,5 @@
   [{:keys [::specs/send-eof
            ::specs/un-sent-blocks]
     :as outgoing}]
-  (and send-eof
+  (and (not= send-eof ::specs/false)
        (empty? un-sent-blocks)))

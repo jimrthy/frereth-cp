@@ -402,8 +402,8 @@
                  log/debug
                  ::client-child-processor
                  "returning"
-                 (assoc result
-                        ::log/ctx "client"))
+                 {::too-many-attempts? (not result)
+                  ::log/ctx "client"})
           result))
       (swap! log-atom
              log/error
