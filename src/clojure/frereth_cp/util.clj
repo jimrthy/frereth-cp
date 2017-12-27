@@ -38,9 +38,7 @@
   [ss]
   (* ss 1000000000))
 
-;;; TODO: Try to :require fipp
-;;; If it's available, define pretty using it instead of
-;;; pprint
+;;; TODO: Verify that this works
 (def pprint-proxy
   (try (require '[fipp.edn :refer (pprint) :rename {pprint fipp}])
        (resolve 'fipp.edn/pprint)

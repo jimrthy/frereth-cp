@@ -70,6 +70,10 @@
     label
     message
     details]
+   (when-not lamport
+     (let [ex (ex-info "Desperation warning: missing clock among" (or log-state
+                                                                      {::problem "falsey log-state"}))]
+       (s-t/print-stack-trace ex)))
    (-> log-state
        (update
         ::entries
@@ -224,9 +228,18 @@
   (doseq [message (::entries log-state)]
     (log! logger message))
   (flush! logger)
-  (-> log-state
-      (update ::lamport inc)
-      (assoc ::entries [])))
+  ;; Q: Which of these next 2 options will perform
+  ;; better?
+  ;; It seems like it should be a toss-up, since most
+  ;; of the impact will come from garbage collecting the
+  ;; old entries anyway.
+  ;; But it seems like the latter might get a minor
+  ;; win by avoiding the overhead of the update call
+  (comment
+    (-> log-state
+        (update ::lamport inc)
+        (assoc ::entries [])))
+  (init (inc (::lamport log-state))))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state

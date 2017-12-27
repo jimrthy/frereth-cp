@@ -617,12 +617,12 @@ Line 608"
           help/drop-ackd!
           cope-with-child-eof))))
 
-(s/fdef handle-comprehensible-message!
+(s/fdef possibly-ack!
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state)
         ;; TODO: This should not be nilable
         :ret (s/nilable ::specs/state))
-(defn handle-comprehensible-message!
+(defn possibly-ack!
   "handle this message if it's comprehensible: (DJB)
 
   This seems like the interesting part.
@@ -690,7 +690,7 @@ Line 608"
                   :as incoming} ::specs/incoming
                  :as extracted} (extract-message! state packet)]
             (log/debug log-prefix
-                       "handle-comprehensible message/extracted:\n"
+                       "possibly-ack!/extracted:\n"
                        "\n\tincoming:\n"
                        incoming
                        "\n\t\treceive-eof: "
@@ -701,10 +701,6 @@ Line 608"
                        outgoing
                        "\n\tFields:\n"
                        (keys extracted))
-            ;; Q: Did fresh data arrive?
-            (if (or (not= starting-hwm strm-hwm)
-                    (not= original-eof receive-eof))
-              (or
                (let [msg-id (::specs/message-id packet)]
                  (log/debug log-prefix (str "ACK message-id " msg-id "?"))
                  (assert msg-id
@@ -720,18 +716,16 @@ Line 608"
                    ;; TODO: Place this in a buffer of side-effects that should
                    ;; happen once all the purely functional stuff is done
                    (send-ack! io-handle ack-msg)
-                   (log/debug log-prefix "ACK'd")
-                   (update extracted
-                           ::specs/incoming
-                           dissoc
-                           ::specs/packet)))
-               extracted)
-              ;; If the other side resent a packet, there's a
-              ;; good chance that the initial ACK disappeared.
-              ;; FIXME: Surely I still need to ACK this.
-              ;; TODO: Verify the way the reference implementation
-              ;; handles this
+                   (log/debug log-prefix "ACK'd")))
+               ;; Q: Did fresh data arrive?
+            (if (or (not= starting-hwm strm-hwm)
+                    (not= original-eof receive-eof))
+              (update extracted
+                      ::specs/incoming
+                      dissoc
+                      ::specs/packet)
               state))))
+      ;; Returning nil is ugly.
       (do
         (if (< 0 len)
           (log/warn (utils/pre-log message-loop-name)
@@ -739,7 +733,6 @@ Line 608"
           ;; Nothing to see here. Move along.
           (log/debug (utils/pre-log message-loop-name)
                      "i/o loop iteration w/out parent interaction"))
-        ;; Be explicit about this
         nil))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -749,8 +742,8 @@ Line 608"
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state)
         ;; TODO: This should not be nilable
-        ;; (it is, due to handle-comprehensible-message.
-        ;; Which also shouldn't be)
+        ;; (it is, due to possibly-ack!
+        ;; Which also really shouldn't be)
         :ret (s/nilable ::specs/state))
 (defn try-processing-message!
   "436-613: try processing a message: --DJB"
@@ -801,7 +794,7 @@ Line 608"
         ;; It seems as though this should forward the incoming message
         ;; along to the child. But it's really just setting up the
         ;; state to do that.
-        (handle-comprehensible-message! io-handle state'))
+        (possibly-ack! io-handle state'))
       (do
         ;; Nothing to do.
         (log/debug pre-log

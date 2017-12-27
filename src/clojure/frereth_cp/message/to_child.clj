@@ -147,15 +147,16 @@
                           ::consolidate-message-block
                           "Dropping previously consolidated block")
               to-drop (val (first gap-buffer))
-              log-state (when-not keyword? to-drop
-                                  (try
-                                    (.release to-drop)
-                                    log-state
-                                    (catch RuntimeException ex
-                                      (log2/exception log-state
-                                                      ex
-                                                      "Failed to release"
-                                                      to-drop))))]
+              log-state (if-not (keyword? to-drop)
+                          (try
+                            (.release to-drop)
+                            log-state
+                            (catch RuntimeException ex
+                              (log2/exception log-state
+                                              ex
+                                              "Failed to release"
+                                              to-drop)))
+                          log-state)]
           (-> state
               (update-in [::specs/incoming ::specs/gap-buffer] pop-map-first)
               (assoc ::log2/state log-state))))
@@ -171,6 +172,7 @@
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}]
+  (println "Trying to consolidate-gap-buffer")
   (when-not gap-buffer
     (throw (ex-info "Missing gap-buffer"
                     {::incoming incoming
@@ -682,19 +684,35 @@
     :as io-handle}
    {:keys [::specs/message-loop-name]
     original-incoming ::specs/incoming
+    log-state ::log2/state
     :as state}]
-  (let [{{:keys [::specs/receive-eof]
+  {:pre [log-state]}
+  (let [log-state (log2/debug log-state
+                              ::forward!
+                              "Top of forward!")
+        {{:keys [::specs/receive-eof]
           :as consolidated-incoming} ::specs/incoming
          log-state ::log2/state
-         :as consolidated} (consolidate-gap-buffer state)
+         :as consolidated} (consolidate-gap-buffer (assoc state ::log2/state log-state))
         ->child-buffer (::specs/->child-buffer consolidated-incoming)
+        _ (println "Gap-buffer consolidated. ->child-buffer:" (pr-str ->child-buffer))
         block-count (count ->child-buffer)
-        log-state (log2/debug log-state
-                              ::forward!
-                              "Consolidated block(s) ready to go to child."
-                              {::block-count block-count
-                               ::specs/receive-eof receive-eof})
+        _ (println "Trying to update logs\n"
+                   (pr-str log-state)
+                   "\nfrom among\n"
+                   (keys consolidated)
+                   "\nin\n"
+                   consolidated)
+        log-state (try (log2/debug log-state
+                                   ::forward!
+                                   "Consolidated block(s) ready to go to child."
+                                   {::block-count block-count
+                                    ::specs/receive-eof receive-eof})
+                       (catch Exception ex
+                         (println "Log Problem:" ex)
+                         log-state))
         consolidated (assoc consolidated ::log2/state log-state)]
+    (println "Consolidation of" block-count "blocks logged")
     (if (< 0 block-count)
       (try
         (let [preliminary (reduce (partial write-bytes-to-child-stream!

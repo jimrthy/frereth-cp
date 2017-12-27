@@ -275,7 +275,7 @@
     ;; initiate packets to message packets, which effectively doubles
     ;; the signal bandwidth.
     (when-not (realized? client-waiting-on-response)
-      (deliver client-waiting-on-response true))
+      (deliver client-waiting-on-response false))
 
 ;;;           From parent (over watch8)
 ;;;           417-433: for loop from 0-bytes read
@@ -376,6 +376,10 @@
                       (as-> (from-parent/try-processing-message!
                              io-handle
                              state) state'
+                        (let [prelog (utils/pre-log message-loop-name)]
+                          (println prelog "try-processing-message! returned:\n"
+                                   (utils/pretty state'))
+                          state')
                         (or state' state)
                         (to-child/forward! io-handle state')
 
