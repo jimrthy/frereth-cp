@@ -41,11 +41,16 @@
 ;;; TODO: Try to :require fipp
 ;;; If it's available, define pretty using it instead of
 ;;; pprint
+(def pprint-proxy
+  (try (require '[fipp.edn :refer (pprint) :rename {pprint fipp}])
+       (resolve 'fipp.edn/pprint)
+       (catch java.io.FileNotFoundException _
+         pprint/pprint)))
 (defn pretty
   "Return a pretty-printed representation of xs"
   [& xs]
   (try
-    (with-out-str (apply pprint/pprint xs))
+    (with-out-str (apply pprint-proxy xs))
     (catch RuntimeException ex
       (log/error ex "Pretty printing failed (there should be a stack trace about this failure).
 Falling back to standard")
