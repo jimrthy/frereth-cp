@@ -14,8 +14,7 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
-            ;; TODO: Refactor-rename this to log
-            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -27,9 +26,9 @@
 ;;;; Specs
 
 (s/def ::callback
-  (s/fspec :args (s/cat :log-state ::log2/state
+  (s/fspec :args (s/cat :log-state ::log/state
                         :message ::specs/bs-or-eof)
-           :ret ::log2/state))
+           :ret ::log/state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic numbers
@@ -82,7 +81,7 @@
              ::specs/contiguous-stream-count]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
-    log-state ::log2/state
+    log-state ::log/state
     :as state}
    k-v-pair]
   (let [prelog (utils/pre-log message-loop-name)
@@ -93,12 +92,12 @@
         ;; If we've received 1 byte, the strm-hwm is at 0.
         ;; If start is 0 or 1, then we might have some overlap.
         ;; As long as stop is somewhere past strm-hwm.
-        log-state (log2/debug log-state
-                              ::consolidate-message-block
-                              (str "Does " start "-" stop " close a hole in "
-                                   gap-buffer " after "
-                                   contiguous-stream-count
-                                   " contiguous bytes?"))]
+        log-state (log/debug log-state
+                             ::consolidate-message-block
+                             (str "Does " start "-" stop " close a hole in "
+                                  gap-buffer " after "
+                                  contiguous-stream-count
+                                  " contiguous bytes?"))]
     ;; For now, this top-level if check is redundant.
     ;; I'd rather be safe and trust the JIT than remove it
     ;; under the assumption that callers will be correct.
@@ -112,20 +111,20 @@
         (let [log-state
               (if (< start contiguous-stream-count)
                 (let [bytes-to-skip (- contiguous-stream-count start)
-                      log-state (log2/info log-state
-                                           ::consolidate-message-block
-                                           (str "Skipping "
-                                                bytes-to-skip
-                                                " previously received bytes in "
-                                                buf))]
+                      log-state (log/info log-state
+                                          ::consolidate-message-block
+                                          (str "Skipping "
+                                               bytes-to-skip
+                                               " previously received bytes in "
+                                               buf))]
                   (.skipBytes buf bytes-to-skip)
                   log-state)
                 log-state)
-              log-state (log2/debug log-state
-                                    ::consolidate-message-block
-                                    (str "Consolidating entry 1/"
-                                         (count (::specs/gap-buffer
-                                                 incoming))))]
+              log-state (log/debug log-state
+                                   ::consolidate-message-block
+                                   (str "Consolidating entry 1/"
+                                        (count (::specs/gap-buffer
+                                                incoming))))]
           (-> state
               (update ::specs/incoming
                       (fn [cur]
@@ -141,25 +140,25 @@
                             ;; Microbenchmarks and common sense indicate that
                             ;; assoc is significantly faster than update
                             (assoc ::specs/contiguous-stream-count stop))))
-              (assoc ::log2/state log-state)))
+              (assoc ::log/state log-state)))
         (let [log-state
-              (log2/debug log-state
-                          ::consolidate-message-block
-                          "Dropping previously consolidated block")
+              (log/debug log-state
+                         ::consolidate-message-block
+                         "Dropping previously consolidated block")
               to-drop (val (first gap-buffer))
               log-state (if-not (keyword? to-drop)
                           (try
                             (.release to-drop)
                             log-state
                             (catch RuntimeException ex
-                              (log2/exception log-state
-                                              ex
-                                              "Failed to release"
-                                              to-drop)))
+                              (log/exception log-state
+                                             ex
+                                             "Failed to release"
+                                             to-drop)))
                           log-state)]
           (-> state
               (update-in [::specs/incoming ::specs/gap-buffer] pop-map-first)
-              (assoc ::log2/state log-state))))
+              (assoc ::log/state log-state))))
       ;; Gap starts past the end of the stream.
       (do
         (reduced state)))))
@@ -204,9 +203,9 @@
 
 (s/fdef read-bytes-from-parent!
         :args (s/cat :io-handle ::specs/io-handle
-                     :log-state ::log2/state
+                     :log-state ::log/state
                      :buffer bytes?)
-        :ret (s/keys :req  [::log2/state
+        :ret (s/keys :req  [::log/state
                             ::specs/bs-or-eof]))
 (defn read-bytes-from-parent!
   "Parent wrote bytes to its outbuffer. Read them."
@@ -239,7 +238,7 @@
             ;; available via io-handle.
             ;; That feels like a terrible option, but it may be
             ;; my best bet.
-            my-log-state (log2/error my-log-state
+            my-log-state (log/error my-log-state
                                      ::read-bytes-from-parent!
                                      "Need the sender's lamport clock")]
         (if (<= 0 n)
@@ -250,16 +249,16 @@
           ;; we could just return that count
           ;; (yuck!)
           (let [holder (byte-array n)
-                my-log-state (log2/debug my-log-state
+                my-log-state (log/debug my-log-state
                                          ::read-bytes-from-parent!
                                          (str n
                                               "bytes received from parent"))]
             (b-t/byte-copy! holder 0 n buffer)
             holder)
-          {::log2/state my-log-state
+          {::log/state my-log-state
            ::specs/bs-or-eof ::specs/normal}))
       (let [my-log-state
-            (log2/info my-log-state
+            (log/info my-log-state
                        ::read-bytes-from-parent!
                        "No bytes available for child. Blocking Parent Monitor")]
         ;; Q: Do I really need to work with this "read single byte to unblock
@@ -273,25 +272,25 @@
                            ::specs/normal))
               bytes-available (.available child-in)]
           (assert bytes-available)
-          (let [my-log-state (log2/info my-log-state
+          (let [my-log-state (log/info my-log-state
                                         ::read-bytes-from-parent!
                                         "Parent Monitor thread unblocked")
                 result
                 (cond (neg? byte1) (let [my-log-state
-                                         (log2/warn my-log-state
+                                         (log/warn my-log-state
                                                     ::read-bytes-from-parent!
                                                     "Parent monitor received EOF")]
                                      ;; The part that writes to our paired Pipe
                                      ;; closed its half.
                                      ;; Do the same for sanitation.
                                      (.close child-in)
-                                     {::log2/state my-log-state
+                                     {::log/state my-log-state
                                       ::specs/bs-or-eof ::specs/normal})
-                      (keyword? byte1) {::log2/state my-log-state
+                      (keyword? byte1) {::log/state my-log-state
                                         ::specs/bs-or-eof byte1}
                       (< 0 bytes-available)
                       (let [my-log-state
-                            (log2/debug my-log-state
+                            (log/debug my-log-state
                                         ::read-bytes-from-parent!
                                         "Trying to read"
                                         {::bytes-available bytes-available
@@ -303,7 +302,7 @@
                                                               (dec max-n)))]
                           (if (<= 0 n)
                             (let [holder (byte-array (inc n))
-                                  my-log-state (log2/debug my-log-state
+                                  my-log-state (log/debug my-log-state
                                                            ::read-bytes-from-parent!
                                                            (str
                                                             (inc n)
@@ -311,32 +310,32 @@
                                                             byte1))]
                               (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
                               (b-t/byte-copy! holder 1 n buffer)
-                              {::log2/state my-log-state
+                              {::log/state my-log-state
                                ::specs/bs-or-eof holder}))))
                       :else (byte-array [byte1]))]
             (when (keyword? result)
               ;; We got this because the connected PipedOutputStream closed.
               (.close child-in))
             {::specs/bs-or-eof result
-             ::log2/state my-log-state}))))))
+             ::log/state my-log-state}))))))
 
 (s/fdef trigger-from-parent!
         :args (s/cat :io-handle ::specs/io-handle
-                     :my-logs ::log2/entries
+                     :my-logs ::log/entries
                      :buffer bytes?
                      :cb ::callback
-                     :trigger (s/keys :req [::log2/lamport]))
+                     :trigger (s/keys :req [::log/lamport]))
         :ret any?)
 (defn trigger-from-parent!
   "Stream handler for coping with bytes sent by parent"
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::specs/message-loop-name]
     :as io-handle}
    buffer
    cb
    {:keys [::result-writer
            ::specs/bs-or-eof]
-    my-logs ::log2/state
+    my-logs ::log/state
     :as trigger}]
   (let [my-logs
         (try
@@ -360,9 +359,9 @@
           (let [start-time (System/currentTimeMillis)
                 my-logs
                 (try
-                  (as-> (log2/debug my-logs
-                                    ::parent-monitor-loop
-                                    "Triggering child callback")
+                  (as-> (log/debug my-logs
+                                   ::parent-monitor-loop
+                                   "Triggering child callback")
                       my-logs
                     (try
                       ;; The rest of this function is really just support and error
@@ -372,43 +371,43 @@
                       (cb bs-or-eof)
                        my-logs
                       (catch ExceptionInfo ex
-                        (log2/exception my-logs
-                                        ex
-                                        "Failed"
-                                        (.getData ex)))
+                        (log/exception my-logs
+                                       ex
+                                       "Failed"
+                                       (.getData ex)))
                       (catch Exception ex
-                        (log2/exception my-logs
-                                        ex
-                                        ::parent-monitor-loop
-                                        "Low-level failure"))))
+                        (log/exception my-logs
+                                       ex
+                                       ::parent-monitor-loop
+                                       "Low-level failure"))))
                   (catch ExceptionInfo ex
-                    (log2/exception my-logs
-                                    ex
-                                    ::parent-monitor-loop
-                                    (str "At least we can log something interesting with this")
-                                    (.getData ex))
-                    (log2/flush-logs! logger my-logs)
+                    (log/exception my-logs
+                                   ex
+                                   ::parent-monitor-loop
+                                   (str "At least we can log something interesting with this")
+                                   (.getData ex))
+                    (log/flush-logs! logger my-logs)
                     (assert (not ex) "Child callback failed"))
                   (catch Exception ex
-                    (let [my-logs (log2/error my-logs
-                                              ex
-                                              ::parent-monitor-loop
-                                              "This is not acceptable behavior at all")
+                    (let [my-logs (log/error my-logs
+                                             ex
+                                             ::parent-monitor-loop
+                                             "This is not acceptable behavior at all")
                           prelog (utils/pre-log message-loop-name)]
-                      (log2/flush-logs! logger my-logs)
+                      (log/flush-logs! logger my-logs)
                       (assert (not ex) (str prelog
                                             "Child callback failed")))))]
             (let [end-time (System/currentTimeMillis)
                   msg (cl-format nil
                                  "Child callback took ~:d millisecond(s)"
                                  (- end-time start-time))]
-              (log2/debug my-logs ::parent-monitor-loop msg)))
+              (log/debug my-logs ::parent-monitor-loop msg)))
           (catch Exception ex
             ;; This really shouldn't be possible
-            (log2/exception my-logs
-                            ex
-                            ::parent-monitor-loop
-                            "Redundant error handler")))]
+            (log/exception my-logs
+                           ex
+                           ::parent-monitor-loop
+                           "Redundant error handler")))]
     (deliver result-writer my-logs)))
 
 (s/fdef write-bytes-to-child-stream!
@@ -419,7 +418,7 @@
 (defn write-bytes-to-child-stream!
   "Forward the byte-array inside the buffer"
   [parent-trigger
-   {log-state ::log2/state
+   {log-state ::log/state
     :as state}
    ^ByteBuf buf]
   ;; This was really just refactored out of the middle of a reduce call,
@@ -433,12 +432,12 @@
     (let [bs (byte-array (.readableBytes buf))
           n (count bs)]
       (.readBytes buf bs)
-      (let [{:keys [::log2/lamport]
-             :as log-state} (log2/info log-state
-                                       ::write-bytes-to-child-stream!
-                                       (str "Signalling child's input loop with "
-                                            n
-                                            " bytes"))
+      (let [{:keys [::log/lamport]
+             :as log-state} (log/info log-state
+                                      ::write-bytes-to-child-stream!
+                                      (str "Signalling child's input loop with "
+                                           n
+                                           " bytes"))
             log-state
             (try
               (let [start-time (System/currentTimeMillis)]
@@ -463,7 +462,7 @@
                       ;; (and how tough to reach one?)
                       triggered @(strm/put! parent-trigger
                                             {::result-writer succeeded
-                                             ::log2/state log-state
+                                             ::log/state log-state
                                              ::specs/bs-or-eof bs})
                       log-state @succeeded
                       end-time (System/currentTimeMillis)
@@ -471,27 +470,27 @@
                       msg (cl-format nil "Triggering child took ~:d ms" delta)]
                   (if (< (* 1000000 callback-threshold-warning) delta)
                     (if (< (* 1000000 callback-threshold-error) delta)
-                      (log2/error log-state
-                                  ::write-bytes-to-child-stream!
-                                  msg)
-                      (log2/warn log-state
+                      (log/error log-state
                                  ::write-bytes-to-child-stream!
-                                 msg))
-                    (log2/debug log-state
+                                 msg)
+                      (log/warn log-state
                                 ::write-bytes-to-child-stream!
-                                msg))))
+                                msg))
+                    (log/debug log-state
+                               ::write-bytes-to-child-stream!
+                               msg))))
               (catch RuntimeException ex
                 ;; It's very tempting to just re-raise this exception,
                 ;; especially if I'm inside an agent.
                 ;; For now, just log and swallow it.
-                (log2/exception log-state
-                                ex
-                                ::write-bytes-to-child-stream!
-                                "Failure in child callback.")))
+                (log/exception log-state
+                               ex
+                               ::write-bytes-to-child-stream!
+                               "Failure in child callback.")))
             ;; And drop the consolidated blocks
-            log-state (log2/debug log-state
-                                  ::write-bytes-to-child-stream!
-                                  "Dropping block we just finished sending to child")]
+            log-state (log/debug log-state
+                                 ::write-bytes-to-child-stream!
+                                 "Dropping block we just finished sending to child")]
         (.release buf)
         (-> state
             (update-in
@@ -507,7 +506,7 @@
             ;; That gets quite a bit more finicky.
             ;; TODO: Consider my options.
             (update-in [::specs/incoming ::specs/receive-written] + n)
-            (assoc ::log2/state log-state))))
+            (assoc ::log/state log-state))))
     (catch RuntimeException ex
       ;; Reference implementation specifically copes with
       ;; EINTR, EWOULDBLOCK, and EAGAIN.
@@ -522,8 +521,8 @@
       ;; single vector of bytes, but the performance implications
       ;; of that don't seem worth imposing.
       (reduced (update state
-                       ::log2/state
-                       log2/exception
+                       ::log/state
+                       log/exception
                        ex
                        ::write-bytes-to-child-stream!
                        "Failed to forward message to child")))))
@@ -538,7 +537,7 @@
 (s/fdef possibly-close-stream!
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state
-                     :log-state ::log2/state)
+                     :log-state ::log/state)
         :ret ::specs/state)
 (defn possibly-close-stream!
   "Maybe signal child that it won't receive anything else"
@@ -549,23 +548,23 @@
             ::specs/receive-total-bytes
             ::specs/receive-written]
      :as incoming} ::specs/incoming
-    log-state ::log2/state
+    log-state ::log/state
     :as state}]
   (let [log-state
-        (log2/debug log-state
-                    ::possibly-close-stream!
-                    "Process EOF?"
-                    incoming)]
+        (log/debug log-state
+                   ::possibly-close-stream!
+                   "Process EOF?"
+                   incoming)]
     (if (not= ::specs/false receive-eof)
       (if (= receive-written receive-total-bytes)
         (let [log-state
-              (log2/info log-state
+              (log/info log-state
                          ::possibly-close-stream!
                          "Have received everything other side will send")
               log-state (if-not from-parent-trigger
-                          (log2/error log-state
-                                      ::possibly-close-stream!
-                                      "Missing from-parent-trigger, so we can't close it")
+                          (log/error log-state
+                                     ::possibly-close-stream!
+                                     "Missing from-parent-trigger, so we can't close it")
                           log-state)
               log-state (try
                           ;; This actual point is easy to miss in the middle of all
@@ -573,20 +572,20 @@
                           (close-parent-input! io-handle)
                           log-state
                           (catch RuntimeException ex
-                            (log2/exception log-state
-                                            ex
-                                            ::possibly-close-stream!
-                                            "Trying to close to-child failed")))
-              log-state (log2/warn log-state
-                                   ::possibly-close-stream!
-                                   "EOF flag received."
-                                   (select-keys incoming
-                                                [::specs/contiguous-stream-count
-                                                 ::specs/receive-eof
-                                                 ::specs/receive-total-bytes
-                                                 ::specs/receive-written]))]
+                            (log/exception log-state
+                                           ex
+                                           ::possibly-close-stream!
+                                           "Trying to close to-child failed")))
+              log-state (log/warn log-state
+                                  ::possibly-close-stream!
+                                  "EOF flag received."
+                                  (select-keys incoming
+                                               [::specs/contiguous-stream-count
+                                                ::specs/receive-eof
+                                                ::specs/receive-total-bytes
+                                                ::specs/receive-written]))]
           (assoc state
-                 ::log2/state log-state)))
+                 ::log/state log-state)))
       state)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -600,7 +599,7 @@
 
 (s/fdef start-parent-monitor!
         :args (s/cat :io-handle ::specs/io-handler
-                     :parent-log ::log2/state
+                     :parent-log ::log/state
                      :callback ::callback)
         :ret ::specs/child-input-loop)
 (defn start-parent-monitor!
@@ -609,7 +608,7 @@
   ;; Maybe I should add an optional parameter during startup:
   ;; if you don't provide
   ;; this, it will default to calling this.
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::specs/child-in
            ::specs/message-loop-name]
     trigger ::specs/from-parent-trigger
@@ -629,12 +628,12 @@
    ;; For that matter, I don't have any evidence that
    ;; it would improve anything.
    cb]
-  (let [my-logs (log2/init (::log2/lamport parent-log))
+  (let [my-logs (log/init (::log/lamport parent-log))
         buffer (byte-array K/standard-max-block-length)
-        my-logs (log2/info my-logs
-                           ::parent-monitor-loop
-                           "Starting the loop watching for bytes the parent has sent toward the child")
-        my-logs (log2/flush-logs! logger my-logs)]
+        my-logs (log/info my-logs
+                          ::parent-monitor-loop
+                          "Starting the loop watching for bytes the parent has sent toward the child")
+        my-logs (log/flush-logs! logger my-logs)]
     (let [result (strm/consume (partial trigger-from-parent!
                                         io-handle
                                         buffer
@@ -643,9 +642,9 @@
           finished (dfrd/deferred)]
       (-> result
           (dfrd/chain (fn [success]
-                        (let [my-logs (log2/warn my-logs
-                                                 ::parent-monitor-loop
-                                                 "parent-monitor source exhausted")]
+                        (let [my-logs (log/warn my-logs
+                                                ::parent-monitor-loop
+                                                "parent-monitor source exhausted")]
                           ;; Writing to the from-parent-trigger stream
                           ;; here seems like the obvious thing to do.
                           ;; But closing that was the signal that
@@ -655,21 +654,21 @@
                                                 buffer
                                                 cb
                                                 {::result-writer finished
-                                                 ::log2/state my-logs
+                                                 ::log/state my-logs
                                                  ::specs/bs-or-eof ::specs/normal})))
                       (fn [_]
                         (println "EOF signalled!")
                         finished)
                       (fn [logs]
-                        (log2/flush-logs! logger logs)
-                        (log2/flush-logs! logger my-logs)))
+                        (log/flush-logs! logger logs)
+                        (log/flush-logs! logger my-logs)))
           (dfrd/catch (fn [ex]
-                        (log2/exception my-logs
-                                        ex
-                                        ::parent-monitor-loop
-                                        "Error escaped")))
+                        (log/exception my-logs
+                                       ex
+                                       ::parent-monitor-loop
+                                       "Error escaped")))
           (dfrd/finally (fn [logs]
-                          (log2/flush-logs! logger logs))))
+                          (log/flush-logs! logger logs))))
       result)))
 
 (s/fdef forward!
@@ -684,16 +683,16 @@
     :as io-handle}
    {:keys [::specs/message-loop-name]
     original-incoming ::specs/incoming
-    log-state ::log2/state
+    log-state ::log/state
     :as state}]
   {:pre [log-state]}
-  (let [log-state (log2/debug log-state
-                              ::forward!
-                              "Top of forward!")
+  (let [log-state (log/debug log-state
+                             ::forward!
+                             "Top of forward!")
         {{:keys [::specs/receive-eof]
           :as consolidated-incoming} ::specs/incoming
-         log-state ::log2/state
-         :as consolidated} (consolidate-gap-buffer (assoc state ::log2/state log-state))
+         log-state ::log/state
+         :as consolidated} (consolidate-gap-buffer (assoc state ::log/state log-state))
         ->child-buffer (::specs/->child-buffer consolidated-incoming)
         _ (println "Gap-buffer consolidated. ->child-buffer:" (pr-str ->child-buffer))
         block-count (count ->child-buffer)
@@ -703,15 +702,15 @@
                    (keys consolidated)
                    "\nin\n"
                    consolidated)
-        log-state (try (log2/debug log-state
-                                   ::forward!
-                                   "Consolidated block(s) ready to go to child."
-                                   {::block-count block-count
-                                    ::specs/receive-eof receive-eof})
+        log-state (try (log/debug log-state
+                                  ::forward!
+                                  "Consolidated block(s) ready to go to child."
+                                  {::block-count block-count
+                                   ::specs/receive-eof receive-eof})
                        (catch Exception ex
                          (println "Log Problem:" ex)
                          log-state))
-        consolidated (assoc consolidated ::log2/state log-state)]
+        consolidated (assoc consolidated ::log/state log-state)]
     (println "Consolidation of" block-count "blocks logged")
     (if (< 0 block-count)
       (try
@@ -725,8 +724,8 @@
         (catch Exception ex
           (println "Failed writing bytes to child-stream:\n" ex)))
       (let [result (update consolidated
-                           ::log2/state
-                           log2/warn
+                           ::log/state
+                           log/warn
                            ::forward!
                            "0 bytes to forward to child")]
         (possibly-close-stream! io-handle result)))
