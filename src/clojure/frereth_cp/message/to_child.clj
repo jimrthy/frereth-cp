@@ -171,7 +171,6 @@
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
     :as state}]
-  (println "Trying to consolidate-gap-buffer")
   (when-not gap-buffer
     (throw (ex-info "Missing gap-buffer"
                     {::incoming incoming
@@ -657,9 +656,16 @@
                                                  ::log/state my-logs
                                                  ::specs/bs-or-eof ::specs/normal})))
                       (fn [_]
-                        (println "EOF signalled!")
+                        ;; This is really just waiting for logs from
+                        ;; trigger-from-parent!
+                        ;; Which is an obnoxious way to handle this.
                         finished)
                       (fn [logs]
+                        ;; Really want to synchronize these logs.
+                        ;; There's no good way to do that.
+                        ;; Worse: time stamps get lost, and there's no
+                        ;; good way to coordinate back to the parent.
+                        ;; TODO: This needs more hammock-time
                         (log/flush-logs! logger logs)
                         (log/flush-logs! logger my-logs)))
           (dfrd/catch (fn [ex]
@@ -694,14 +700,7 @@
          log-state ::log/state
          :as consolidated} (consolidate-gap-buffer (assoc state ::log/state log-state))
         ->child-buffer (::specs/->child-buffer consolidated-incoming)
-        _ (println "Gap-buffer consolidated. ->child-buffer:" (pr-str ->child-buffer))
         block-count (count ->child-buffer)
-        _ (println "Trying to update logs\n"
-                   (pr-str log-state)
-                   "\nfrom among\n"
-                   (keys consolidated)
-                   "\nin\n"
-                   consolidated)
         log-state (try (log/debug log-state
                                   ::forward!
                                   "Consolidated block(s) ready to go to child."
@@ -711,18 +710,12 @@
                          (println "Log Problem:" ex)
                          log-state))
         consolidated (assoc consolidated ::log/state log-state)]
-    (println "Consolidation of" block-count "blocks logged")
     (if (< 0 block-count)
-      (try
-        (let [preliminary (reduce (partial write-bytes-to-child-stream!
-                                           parent-trigger)
-                                  consolidated
-                                  ->child-buffer)]
-          ;; I am getting here.
-          (println block-count "block(s) forwarded to child")
-          (possibly-close-stream! io-handle preliminary))
-        (catch Exception ex
-          (println "Failed writing bytes to child-stream:\n" ex)))
+      (let [preliminary (reduce (partial write-bytes-to-child-stream!
+                                         parent-trigger)
+                                consolidated
+                                ->child-buffer)]
+        (possibly-close-stream! io-handle preliminary))
       (let [result (update consolidated
                            ::log/state
                            log/warn

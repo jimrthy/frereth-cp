@@ -376,10 +376,6 @@
                       (as-> (from-parent/try-processing-message!
                              io-handle
                              state) state'
-                        (let [prelog (utils/pre-log message-loop-name)]
-                          (println prelog "try-processing-message! returned:\n"
-                                   (utils/pretty state'))
-                          state')
                         (or state' state)
                         (to-child/forward! io-handle state')
 
