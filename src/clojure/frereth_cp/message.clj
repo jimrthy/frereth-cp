@@ -376,7 +376,6 @@
                       (as-> (from-parent/try-processing-message!
                              io-handle
                              state) state'
-                        (or state' state)
                         (to-child/forward! io-handle state')
 
                         ;; This will update recent.
@@ -395,12 +394,13 @@
                                                         (.getData ex))]
                           (assoc state ::log2/state log-state)))
                       (catch RuntimeException ex
-                        (let [msg "Trying to cope with a message arriving from parent"
-                              log-state (log2/exception log-state
-                                                        ex
-                                                        ::trigger-from-parent!
-                                                        msg)])
-                        (assoc state ::log2/state log-state)))]
+                        (let [msg "Trying to cope with a message arriving from parent"]
+                          (update state
+                                  ::log2/state
+                                  #(log2/exception %
+                                                   ex
+                                                   ::trigger-from-parent!
+                                                   msg)))))]
                 (update result ::log2/state #(log2/flush-logs! logger %))))
             ;; This is actually pretty serious.
             ;; All sorts of things had to go wrong for us to get here.

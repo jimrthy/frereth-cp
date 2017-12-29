@@ -8,6 +8,7 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]
            java.nio.ByteOrder))
@@ -34,13 +35,14 @@
 ;;; Internal Implementation
 
 (s/fdef deserialize
-        :args (s/cat :buf bytes?)
-        :ret ::specs/packet)
+        :args (s/cat :log-state ::log2/state
+                     :buf bytes?)
+        :ret (s/tuple ::specs/packet ::log2/state))
 (defn deserialize
   "Convert a raw message block into a message structure"
   ;; Important: there may still be overlap with previously read bytes!
   ;; (but that's a problem for downstream)
-  [message-loop-name
+  [log-state
    ^bytes incoming]
   {:pre [incoming]
    :post [%]}
@@ -62,12 +64,12 @@
         SF (bit-and D' (bit-or K/eof-normal K/eof-error))
         D (- D' SF)
         padding-count (- (.readableBytes buf)
-                         D')]
-    (log/debug (str message-loop-name
-                    ": Decomposed "
-                    (count incoming)
-                    " bytes into\n"
-                    header))
+                         D')
+        log-state (log2/debug log-state
+                              ::deserialize
+                              "Decomposed"
+                              {::buffer-size (count incoming)
+                               ::header header})]
     ;; Start by skipping the initial padding (if any)
     (when (and (nat-int? padding-count)
                (pos? padding-count))
@@ -102,31 +104,32 @@
       ;; byte-array (vector?) and avoid the overhead (?)
       ;; of adding a ByteBuf to the mix
 
-      ;; Going with easiest approach to option 2 for now
-
-    (assoc header ::specs/buf buf)))
+    ;; Going with easiest approach to option 2 for now
+    [(assoc header ::specs/buf buf)
+     log-state]))
 
 (s/fdef calculate-start-stop-bytes
         :args (s/cat :state ::specs/state
                      :packet ::specs/packet)
-        :ret (s/nilable ::start-stop-details))
+        :ret [(s/nilable ::start-stop-details) ::log2/state])
 (defn calculate-start-stop-bytes
   "Extract start/stop ACK addresses (lines 562-574)"
   [{{:keys [::specs/receive-written]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
+    log-state ::log2/state
     :as state}
    {^ByteBuf incoming-buf ::specs/buf
     D ::specs/size-and-flags
     start-byte ::specs/start-byte
     :as packet}]
-  (let [prelog (utils/pre-log message-loop-name)]
-    (assert D (str prelog "Missing ::specs/size-and-flags among\n" (keys packet)))
-    (log/debug prelog
-               "calculate-start-stop-bytes: D =="
-               D
-               "\nIncoming State:\n"
-               incoming)
+  (let [prelog (utils/pre-log message-loop-name)
+        _ (assert D (str prelog "Missing ::specs/size-and-flags among\n" (keys packet)))
+        log-state (log2/debug log-state
+                              ::calculate-start-stop-bytes
+                              "Top"
+                              {::D D
+                               ::specs/incoming incoming})]
     ;; If we're re-receiving bytes...well, the reference
     ;; implementation just discards them.
     ;; It would be safer to verify that the overlapping bits
@@ -142,42 +145,39 @@
           D' D
           SF (bit-and D (bit-or K/eof-normal K/eof-error))
           D (- D SF)
-          message-length (.readableBytes incoming-buf)]
-      (log/debug prelog
-                 (str "Setting up initial read from position "
-                      starting-point
-                      ": " D' " bytes/flags"))
+          message-length (.readableBytes incoming-buf)
+          log-state (log2/debug log-state
+                                ::calculate-start-stop-bytes
+                                "Setting up initial read"
+                                {::starting-address starting-point
+                                 ::bytes-flags D'})]
       (if (<= D K/k-1)
         ;; start-byte and stop-byte are really addresses in the
         ;; message stream
-        (let [stop-byte (+ D start-byte)]
-          (log/debug prelog
-                     "Calculating ACK gaps from"
-                     start-byte
-                     "to"
-                     ;; It looks like there's a 1-off error here.
-                     ;; If Message 1 (start-byte 0) is 1024
-                     ;; bytes long, stop-byte should be at
-                     ;; address 1023.
-                     ;; At least for purposes of the ACK.
-                     ;; Q: Right?
-                     ;; A: Wrong.
-                     ;; Lines 589-593:
-                     ;; If we receive 1 byte at address 0,
-                     ;; that increments receivebytes to 1.
-                     ;; Line 605:
-                     ;; That's what goes into the ACK block.
-                     stop-byte
-                     "\ncalculate-start-stop-bytes\nreceive-written:"
-                     receive-written
-                     "\nstop-byte:"
-                     stop-byte
-                     ;; We aren't using anything like this.
-                     ;; Big Q: Should we?
-                     ;; A: Maybe. It would save some GC.
-                     ;; "\nreceive-buf writable length:" (.writableBytes receive-buf)
-                     )
-
+        (let [stop-byte (+ D start-byte)
+              log-state (log2/debug log-state
+                                    ::calculate-start-stop-bytes
+                                    "Calculating ACK gaps"
+                                    {::start-byte start-byte
+                                     ;; It looks like there's a 1-off error here.
+                                     ;; If Message 1 (start-byte 0) is 1024
+                                     ;; bytes long, stop-byte should be at
+                                     ;; address 1023.
+                                     ;; At least for purposes of the ACK.
+                                     ;; Q: Right?
+                                     ;; A: Wrong.
+                                     ;; Lines 589-593:
+                                     ;; If we receive 1 byte at address 0,
+                                     ;; that increments receivebytes to 1.
+                                     ;; Line 605:
+                                     ;; That's what goes into the ACK block.
+                                     ::stop-byte stop-byte
+                                     ::specs/receive-written receive-written
+                                     ;; We aren't using anything like this.
+                                     ;; Big Q: Should we?
+                                     ;; A: Maybe. It would save some GC.
+                                     ;; "\nreceive-buf writable length:" (.writableBytes receive-buf)
+                                     })]
           ;; of course, flow control would avoid this case -- DJB
           ;; Q: What does that mean? --JRG
           ;; Whatever it means:
@@ -191,12 +191,14 @@
                                 0 ::specs/false
                                 K/eof-normal ::specs/normal
                                 K/eof-error ::specs/error)
-                  ;; Note that this needs to update the "global state" because
-                  ;; we've reached the end of the stream.
+                  ;; This is actually a flag that indicates the caller needs
+                  ;; to make some hefty changes to the global state:
+                  ;; we've now received the EOF flag.
+                  ;; If nothing else, this is a terrible name (though I'm
+                  ;; sure I took it from the reference implementation)
                   receive-total-bytes (when (not= ::specs/false receive-eof)
                                         stop-byte)]
               ;; 581-588: copy incoming into receivebuf
-              (comment (throw (RuntimeException. "Setting receive-written has broken this")))
               (let [gap-after-start (- receive-written start-byte)
                     min-k (if (< 0 gap-after-start)
                             0 gap-after-start)  ; drop bytes we've already written
@@ -215,24 +217,24 @@
                                    ::start-byte start-byte
                                    ::receive-written receive-written})))
 
-                {::min-k min-k
-                 ::max-k max-k
-                 ::delta-k delta-k
-                 ::max-rcvd max-rcvd
-                 ::receive-eof receive-eof
-                 ;; Yes, this might well be nil if there's no reason to "change"
-                 ;; the "global state".
-                 ;; This smells suspiciously tightly coupled.
-                 ::receive-total-bytes receive-total-bytes}))))
-        (do
-          (log/warn prelog
-                    "Message packet from parent is too long. D =="
-                    D
-                    "\nRemaining readable bytes:"
-                    message-length)
-          ;; This needs to short-circuit.
+                [{::min-k min-k
+                   ::max-k max-k
+                   ::delta-k delta-k
+                   ::max-rcvd max-rcvd
+                   ::receive-eof receive-eof
+                   ;; Yes, this might well be nil if there's no reason to "change"
+                   ;; the "global state".
+                   ;; This smells suspiciously tightly coupled.
+                  ::receive-total-bytes receive-total-bytes}
+                 log-state]))))
+        (let [log-state (log2/warn log-state
+                                   ::calculate-start-stop-bytes
+                                   "Message packet from parent is too long"
+                                   {::D D
+                                    ::readable-bytes message-length})]
+          ;; This should short-circuit to avoid wasting CPU cycles.
           ;; Q: is there a better way to accomplish that?
-          nil)))))
+          [nil log-state])))))
 
 (s/fdef extract-message!
         :args (s/cat :state ::specs/state
@@ -250,7 +252,7 @@
     :keys [::specs/message-id]
     :as packet}]
   {:pre [start-byte]}
-  (let [calculated (calculate-start-stop-bytes state packet)]
+  (let [[calculated log-state] (calculate-start-stop-bytes state packet)]
     (if calculated
       (let [{:keys [::delta-k
                     ::max-rcvd
@@ -287,12 +289,12 @@
         (if (not= 0 message-id)
           (let [current-eof (get-in state [::specs/incoming ::specs/receive-eof])
                 eof-changed? (not= current-eof receive-eof)]
-            (update state
+            (update (assoc state ::log2/state log-state)
                     ::specs/incoming
                     (fn [cur]
                       (cond-> cur
                         eof-changed? (assoc ::specs/receive-eof
-                                                              receive-eof)
+                                            receive-eof)
                         true (assoc ::specs/strm-hwm
                                     (min max-rcvd
                                          (+ strm-hwm delta-k)))
@@ -332,18 +334,20 @@
                                                     [(+ start-byte max-k) (+ start-byte max-k)]
                                                     receive-eof))
                                            result))))))))
-          (do
-            ;; This seems problematic, but that's because
-            ;; it's easy to tangle up the outgoing vs. incoming buffers.
-            ;; The ACK was for the sake of the un-ackd-blocks in
-            ;; outgoing.
-            ;; The gap-buffer that we are *not* updating is filled with
-            ;; arriving messages that might have been dropped/misordered
-            ;; due to UDP issues.
-            (log/debug (utils/pre-log message-loop-name)
-                       "Pure ACK never updates received gap-buffer")
-            state)))
-      state)))
+
+          ;; This seems problematic, but that's because
+          ;; it's easy to tangle up the outgoing vs. incoming buffers.
+          ;; The ACK was for the sake of the un-ackd-blocks in
+          ;; outgoing.
+          ;; The gap-buffer that we are *not* updating is filled with
+          ;; arriving messages that might have been dropped/misordered
+          ;; due to UDP issues.
+          (update state
+                  ::log2/state
+                  #(log2/debug %
+                               ::extract-message!
+                               "Pure ACK never updates received gap-buffer"))))
+      (assoc state ::log2/state log-state))))
 
 (s/fdef flag-acked-others!
         :args (s/cat :state ::specs/state
@@ -580,10 +584,12 @@ Line 608"
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/un-ackd-blocks]
      :as outgoing} ::specs/outgoing
+    log-state ::log2/state
     :as initial-state}
    {:keys [::specs/acked-message]
     :as packet}]
   (let [log-prefix (utils/pre-log message-loop-name)]
+    (comment (throw (RuntimeException. "Start back here")))
     (log/debug log-prefix
                (str "looking for un-acked blocks among\n"
                     un-ackd-blocks
@@ -620,8 +626,7 @@ Line 608"
 (s/fdef possibly-ack!
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state)
-        ;; TODO: This should not be nilable
-        :ret (s/nilable ::specs/state))
+        :ret ::specs/state)
 (defn possibly-ack!
   "handle this message if it's comprehensible: (DJB)
 
@@ -639,23 +644,24 @@ Line 608"
      :as outgoing} ::specs/outgoing
     :keys [::specs/flow-control
            ::specs/message-loop-name]
+    log-state ::log2/state
     :as state}]
   ;; Keep in mind that parent->buffer is an array of bytes that has
   ;; just been pulled off the wire
   (let [len (count parent->buffer)
-        log-prefix (utils/pre-log message-loop-name)]
-    (log/debug log-prefix
-               "Handling a"
-               len
-               "byte message")
+        log-state (log2/debug log-state
+                              ::possibly-ack!
+                              "incoming"
+                              {::message-length len})]
     ;; Lines 452-453
     (if (and (>= len K/min-msg-len)
              (<= len K/max-msg-len))
-      (do
-        (log/debug log-prefix
-                   (str  "Deserializing parent->buffer: "
-                        parent->buffer ", a " (class parent->buffer)
-                        " containing " (count parent->buffer) " bytes"))
+      (let [log-state (log2/debug log-state
+                                  ::possibly-ack!
+                                  "Deserializing parent->buffer"
+                                  {::specs/parent->buffer parent->buffer
+                                   ::buffer-class (class parent->buffer)
+                                   ::buffer-size (count parent->buffer)})]
 
         ;; TODO: Time this. See whether it's worth combining these calls
         ;;  using either some version of comp or as-> (or possibly
@@ -671,69 +677,81 @@ Line 608"
               ;; 1. updating the statistics and
               ;; 2. Set up the flags for sending an ACK
               ;; So it has remained mostly faithful to the original
-              packet (deserialize message-loop-name parent->buffer)
+              [{msg-id ::specs/message-id
+                :as packet}
+               log-state] (deserialize log-state parent->buffer)
               ;; Discard the raw incoming byte array
               state (update state
                             ::specs/incoming
                             dissoc
-                            ::specs/parent->buffer)]
-          (assert packet (str message-loop-name
-                              ": Unable to extract a packet from "
-                              parent->buffer))
-
-          (let [state (handle-incoming-ack state packet)
-                starting-hwm (get-in state [::specs/incoming ::specs/strm-hwm])
-                {:keys [::specs/flow-control
-                        ::specs/outgoing]
-                 {:keys [::specs/receive-eof
-                         ::specs/strm-hwm]
-                  :as incoming} ::specs/incoming
-                 :as extracted} (extract-message! state packet)]
-            (log/debug log-prefix
-                       "possibly-ack!/extracted:\n"
-                       "\n\tincoming:\n"
-                       incoming
-                       "\n\t\treceive-eof: "
-                       receive-eof
-                       "\n\tflow-control:\n"
-                       flow-control
-                       "\n\toutgoing:\n"
-                       outgoing
-                       "\n\tFields:\n"
-                       (keys extracted))
-               (let [msg-id (::specs/message-id packet)]
-                 (log/debug log-prefix (str "ACK message-id " msg-id "?"))
-                 (assert msg-id
-                         ;; Note that 0 is legal: that's a pure ACK.
-                         ;; We just have to have something.
-                         ;; (This comment is because I have to keep remembering
-                         ;; how truthiness works in C)
-                         (str log-prefix "Missing the incoming message-id"))
-                 (when-let [ack-msg (prep-send-ack extracted msg-id)]
-                   (log/debug log-prefix (str "Have an ACK to send back"))
-                   ;; since this is called for side-effects, ignore the
-                   ;; return value.
-                   ;; TODO: Place this in a buffer of side-effects that should
-                   ;; happen once all the purely functional stuff is done
-                   (send-ack! io-handle ack-msg)
-                   (log/debug log-prefix "ACK'd")))
-               ;; Q: Did fresh data arrive?
-            (if (or (not= starting-hwm strm-hwm)
-                    (not= original-eof receive-eof))
-              (update extracted
-                      ::specs/incoming
-                      dissoc
-                      ::specs/packet)
-              state))))
-      ;; Returning nil is ugly.
-      (do
-        (if (< 0 len)
-          (log/warn (utils/pre-log message-loop-name)
-                    (str "Illegal incoming message length:") len)
-          ;; Nothing to see here. Move along.
-          (log/debug (utils/pre-log message-loop-name)
-                     "i/o loop iteration w/out parent interaction"))
-        nil))))
+                            ::specs/parent->buffer)
+              _ (assert packet (str (utils/pre-log message-loop-name)
+                                    ": Unable to extract a packet from "
+                                    parent->buffer))
+              _ (assert msg-id
+                        ;; Note that 0 is legal: that's a pure ACK.
+                        ;; We just have to have something.
+                        ;; (This comment is because I have to keep remembering
+                        ;; how truthiness works in C)
+                        (str (utils/pre-log message-loop-name)
+                             "Missing the incoming message-id"))
+              _ (assert log-state)
+              state (handle-incoming-ack (assoc state
+                                                ::log2/state log-state)
+                                         packet)
+              starting-hwm (get-in state [::specs/incoming ::specs/strm-hwm])
+              {:keys [::specs/flow-control
+                      ::specs/outgoing]
+               {:keys [::specs/receive-eof
+                       ::specs/strm-hwm]
+                :as incoming} ::specs/incoming
+               log-state ::log2/state
+               :as extracted} (extract-message! state packet)
+              log-state (log2/debug log-state
+                                    ::possibly-ack!
+                                    "possibly-ack!/extracted. ACK message-id?"
+                                    {::specs/incoming incoming
+                                     ::specs/receive-eof receive-eof
+                                     ::specs/flow-control flow-control
+                                     ::specs/outgoing outgoing
+                                     ::fields (keys extracted)
+                                     ::specs/message-id msg-id})
+              log-state
+                (if-let [ack-msg (prep-send-ack extracted msg-id)]
+                  (let [log-state (log2/debug log-state
+                                              ::possibly-ack!
+                                              "Have an ACK to send back")]
+                    ;; since this is called for side-effects, ignore the
+                    ;; return value.
+                    ;; TODO: Place this in a buffer of side-effects that should
+                    ;; happen once all the purely functional stuff is done
+                    (send-ack! io-handle ack-msg)
+                    (log2/debug log-state
+                                ::possibly-ack!
+                                "ACK'd"))
+                  log-state)]
+          (assoc (if (or (not= starting-hwm strm-hwm)
+                         (not= original-eof receive-eof))
+                   ;; Fresh data arrived
+                   (update extracted
+                           ::specs/incoming
+                           dissoc
+                           ::specs/packet)
+                   state)
+                 ::log2/state log-state)))
+      ;; Illegal message arrived.
+      (update state
+              ::log2/state
+              (fn [cur]
+                (if (< 0 len)
+                  (log2/warn cur
+                             ::possibly-ack!
+                             "Illegal incoming message length"
+                             len)
+                  ;; Nothing to see here. Move along.
+                  (log2/debug cur
+                              ::possibly-ack!
+                              "i/o loop iteration w/out parent interaction")))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -741,10 +759,7 @@ Line 608"
 (s/fdef try-processing-message!
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state)
-        ;; TODO: This should not be nilable
-        ;; (it is, due to possibly-ack!
-        ;; Which also really shouldn't be)
-        :ret (s/nilable ::specs/state))
+        :ret ::specs/state)
 (defn try-processing-message!
   "436-613: try processing a message: --DJB"
   [io-handle
@@ -753,15 +768,16 @@ Line 608"
             ::specs/receive-written
             ::specs/strm-hwm]} ::specs/incoming
     :keys [::specs/message-loop-name]
+    log-state ::log2/state
     :as state}]
-  (let [pre-log (utils/pre-log message-loop-name)
-        child-buffer-count (count ->child-buffer)]
-    (log/debug pre-log
-               (str "try-processing-message"
-                    "\nchild-buffer-count: " child-buffer-count
-                    "\nparent->buffer count: " (count parent->buffer)
-                    "\nreceive-written: " receive-written
-                    "\nstrm-hwm: " strm-hwm))
+  (let [child-buffer-count (count ->child-buffer)
+        log-state (log2/debug log-state
+                              ::try-processing-message!
+                              "Top"
+                              {::child-buffer-count child-buffer-count
+                               ::parent->buffer-count (count parent->buffer)
+                               ::specs/receive-written receive-written
+                               ::specs/strm-hwm strm-hwm})]
     (if (or (< 0 (count parent->buffer))   ; new incoming message?
             ;; any previously buffered incoming messages to finish
             ;; processing?
@@ -787,16 +803,19 @@ Line 608"
       ;; That isn't true. The message handshake pieces happen at the
       ;; client layer. This part receives the decrypted message payloads
       ;; and reassembles them into the stream.
-      (let [state' (assoc-in state [::specs/outgoing ::specs/max-block-length] K/k-1)]
-        (log/debug pre-log
-                   "Handling incoming message, if it's comprehensible")
+      (let [state' (assoc-in state [::specs/outgoing ::specs/max-block-length] K/k-1)
+            log-state (log2/debug log-state
+                                  ::try-processing-message!
+                                  "Handling incoming message, if it's comprehensible")]
         ;; Move on to line 444
         ;; It seems as though this should forward the incoming message
         ;; along to the child. But it's really just setting up the
         ;; state to do that.
-        (possibly-ack! io-handle state'))
-      (do
-        ;; Nothing to do.
-        (log/debug pre-log
-                   "No pending messages from parent to send to child")
-        state))))
+        (possibly-ack! io-handle (assoc state' ::log2/state log-state)))
+      ;; Nothing to do.
+      (update state
+              ::log2/state
+              #(log2/debug
+                %
+                ::try-processing-message!
+                "No pending messages from parent to send to child")))))
