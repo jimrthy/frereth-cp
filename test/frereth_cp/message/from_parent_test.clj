@@ -7,6 +7,7 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.message.test-utilities :as test-helpers]
             [frereth-cp.message.to-parent :as to-parent]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
@@ -31,7 +32,8 @@
   ;; conditions.
   ;; (Note that this has been broken since at least July)
   ;; FIXME: Circle back around and get this fixed.
-  (let [start-state (test-helpers/build-ack-flag-message-portion)
+  (let [logger (log2/std-out-log-factory)
+        start-state (test-helpers/build-ack-flag-message-portion logger)
         raw-buffer (::test-helpers/packet start-state)
         start-state (dissoc start-state ::test-helpers/packet)
         starting-unackd (get-in start-state [::specs/outgoing ::specs/un-ackd-blocks])
@@ -47,11 +49,12 @@
                                           ;; looked at the test.
                                           (take 2)
                                           (map #(-> % ::specs/buf .readableBytes))))
-        decoded-packet (from-parent/deserialize "from-parent-test/check-flacked-others" raw-buffer)]
-    (log/debug "Calling failing flag-acked with\n"
-               (utils/pretty start-state)
-               "\nand\n"
-               (utils/pretty decoded-packet))
+        {decoded-packet ::specs/packet
+         log-state ::log2/state} (from-parent/deserialize (::log2/state start-state)
+                                                          raw-buffer)
+        log-state (log2/debug log-state ::check-flacked-others "Calling failing flag-acked"
+                              {::specs/state start-state
+                               ::specs/packet decoded-packet})]
     (let [{{:keys [::specs/blocks
                    ::specs/ackd-addr
                    ::specs/contiguous-stream-count
@@ -59,7 +62,10 @@
                    ::specs/total-blocks
                    ::specs/total-block-transmissions]
             :as outgoing} ::specs/outgoing
-           :as flagged} (from-parent/flag-acked-others! start-state decoded-packet)
+           log-state ::log2/state
+           :as flagged} (from-parent/flag-acked-others! (assoc start-state
+                                                               ::log2/state log-state)
+                                                        decoded-packet)
           ;; The ACKs specified in the incoming packet should drop the first two blocks
           expected-remaining-blocks (drop 2 (get-in start-state [::specs/outgoing ::specs/blocks]))]
       (try

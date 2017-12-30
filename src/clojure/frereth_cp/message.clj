@@ -67,9 +67,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal API
 
+(s/fdef build-un-ackd-blocks
+        :args (s/cat :log-state ::log2/state
+                     :logger ::log2/logger)
+        :ret ::specs/un-ackd-blocks)
 (defn build-un-ackd-blocks
-  [{:keys [::log/entries
-           ::log/logger]}]
+  [{:keys [::log2/logger]
+    log-state ::log2/state}]
   (sorted-set-by (fn [x y]
                    (try
                      (let [x-time (::specs/time x)
@@ -84,12 +88,13 @@
                            -1
                            1)))
                      (catch NullPointerException ex
-                       (log2/flush-logs! logger (log2/exception entries
-                                                                ex
-                                                                ::build-un-ackd-blocks
-                                                                "Comparing time"
-                                                                {::lhs x
-                                                                 ::rhs y}))
+                       (let [log-state (log2/exception log-state
+                                                       ex
+                                                       ::build-un-ackd-blocks
+                                                       "Comparing time"
+                                                       {::lhs x
+                                                        ::rhs y})]
+                         (log2/flush-logs! logger log-state))
                        (throw ex))))))
 
 ;;;; Q: what else is in the reference implementation?

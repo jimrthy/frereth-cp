@@ -135,6 +135,9 @@
 ;; Which queue contains the next block to send?
 (s/def ::next-block-queue #{::un-ackd-blocks ::un-sent-blocks})
 
+;; The ID of a message which was just ACK'd
+;; TODO: For consistency, rename this to ackd-message
+;; Or even ackd-msg-id
 (s/def ::acked-message ::message-id)
 ;; This is really an 8-byte unsigned int
 ;; So this spec might be completely broken
@@ -157,7 +160,8 @@
 (s/def ::ack-length-6 ::unsigned-short)
 (s/def ::size-and-flags ::unsigned-short)
 (s/def ::start-byte ::unsigned-long)
-;; This represents an actual message from the parent
+;; This represents an actual deserialized message
+;; from the parent
 (s/def ::packet (s/keys :req [::message-id
                               ::acked-message
                               ::ack-length-1
@@ -174,6 +178,9 @@
                               ::size-and-flags
                               ::start-byte
                               ::buf]))
+;; A byte-array that we're going to send as an ACK
+;; Q: Is this worth spec'ing more thoroughly?
+(s/def ::ack-body bytes?)
 
 ;; If nonzero: minimum of active ::time values
 ;; Corresponds to earliestblocktime in original

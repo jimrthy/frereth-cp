@@ -1,12 +1,17 @@
 (ns frereth-cp.message.test-utilities
   "Utility functions shared among different tests"
-  (:require [frereth-cp.message :as msg]
+  (:require [clojure.spec.alpha :as s]
+            [frereth-cp.message :as msg]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.bit-twiddling :as b-t])
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.logging :as log])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
+(s/fdef build-flag-ack-start-state
+        :args (s/cat :logger ::log/logger)
+        :ret ::specs/state)
 (defn build-flag-ack-start-state
-  []
+  [logger]
   (let [bytes-acked (+ 56 256 25 8 16 32)
         now #_(System/nanoTime) 1234
         ;; To be safe, any test that uses these needs
@@ -69,9 +74,11 @@
                                 ::specs/length 32
                                 ::specs/time (- now 7)
                                 ::specs/transmissions 7}]  ; block 6
+        log-state (log/init)
         start-blocks (reduce (fn [acc block]
                                (conj acc block))
-                             (msg/build-un-ackd-blocks)
+                             (msg/build-un-ackd-blocks {::log/logger logger
+                                                        ::log/state log-state})
                              unsorted-start-blocks)]
     ;; This was built for a test where I send back an ACK.
     ;; It's tempting to make it more generally applicable,
@@ -82,6 +89,7 @@
     ;; After all, this starts out as more-than-complicated enough.
     ;; OTOH...it wasn't a lot of fun to put this together once.
     {::specs/message-loop-name "Unit Testing"
+     ::log/state log-state
      ::specs/outgoing {::specs/ackd-addr 0
                        ::specs/contiguous-stream-count 0
                        ::specs/earliest-time 0
@@ -94,7 +102,7 @@
   "Set up a starting State that's primed with an
   incoming message buffer to ACK most of its pending
   sent blocks."
-  []
+  [logger]
   (let [^ByteBuf buf (.order (Unpooled/buffer 48) java.nio.ByteOrder/LITTLE_ENDIAN)
         msg-id 161053530
         ack-id 1798373271]
@@ -128,7 +136,7 @@
          ::specs/message-id msg-id
          ::acked-message ack-id
          ::ack-length-1 56}
-      (assoc (build-flag-ack-start-state)
+      (assoc (build-flag-ack-start-state logger)
              ::packet actual-array))))
 
 (defn build-packet-with-message
