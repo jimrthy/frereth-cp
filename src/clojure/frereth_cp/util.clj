@@ -9,7 +9,8 @@
             [clojure.stacktrace :as s-t]
             [clojure.string :as string]
             [clojure.tools.logging :as log])
-  (:import clojure.lang.ExceptionInfo))
+  (:import clojure.lang.ExceptionInfo
+           java.util.UUID))
 
 (set! *warn-on-reflection* true)
 
@@ -57,6 +58,16 @@ Falling back to standard")
       ;; Q: Why isn't this a RuntimeException?
       (log/error ex "Something seriously wrong w/ pretty printing? Falling back to standard:\n")
       (str xs))))
+
+(s/fdef random-uuid
+        :args nil
+        :ret uuid?)
+(defn random-uuid
+  "Generate a random UUID"
+  []
+  ;; Yes, this is cheeseball. I just get tired of looking
+  ;; it up every time I need to use it.
+  (UUID/randomUUID))
 
 (s/fdef get-stack-trace
         :args (s/cat :ex #(instance? Throwable %))

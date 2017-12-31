@@ -274,6 +274,7 @@
 ;; Note that this is really a sorted-map
 (s/def ::gap-buffer (s/map-of ::gap-buffer-key ::buf))
 
+(s/def ::monitor-id uuid?)
 ;;; These next 5 really swirld around the sendbuf array/circular queue
 ;; Need something to act as the array that backs the circular buffer.
 ;; This seems dubious, but I have to start somewhere
@@ -420,6 +421,7 @@
                                 ::un-sent-blocks
                                 ::want-ping]
                           :opt [::next-block-queue
+                                ::monitor-id
                                 ::send-buf]))
 
 (s/def ::state (s/keys :req [::flow-control

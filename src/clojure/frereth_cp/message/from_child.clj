@@ -7,6 +7,7 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K-shared]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -479,7 +480,6 @@
                                   failure
                                   ") from child to main i/o loop triggered from\n"
                                   prelog))))
-        ;; TODO: Eliminate these magic numbers
         (try-multiple-sends stream bs-or-eof blocker prelog 10 timeout))
       (do
         (log/warn prelog
@@ -595,64 +595,153 @@
 (s/fdef start-child-monitor!
         :args (s/cat :initial-state ::specs/state
                      :io-handle ::specs/io-handle)
+        ;; The monitor-id seems like it might be useful
+        ;; for the caller to know
+        ;; TODO: Go ahead and send that back
         :ret ::specs/child-output-loop)
 (defn start-child-monitor!
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/client-waiting-on-response]
      :as flow-control} ::specs/flow-control
+    log-state ::log2/state
     :as initial-state}
-   {:keys [::specs/child-out
+   {:keys [::log2/logger
+           ::specs/child-out
            ::specs/stream]
     :as io-handle}]
   {:pre [message-loop-name]}
   ;; TODO: This needs pretty hefty automated tests
-  (let [prelog (utils/pre-log message-loop-name)]
-    (log/info prelog "Starting the child-monitor thread")
+  ;; Although the bigger integration-style tests I
+  ;; do have probably exercise it well enough.
+  (let [;; This really should be based on time-stamp
+        ;; (type 1)
+        ;; Or maybe a Type 5, based on SHA
+        ;; The built-in Type 1, based on MD5, would probably
+        ;; work fine...it's not like we're trying to be
+        ;; cryptographically secure with this.
+        ;; For now, just go with what's easy.
+        monitor-id (utils/random-uuid)
+        ;; There are really 2 options for handling multiple children
+        ;; 1. Each gets its own child-monitor loop
+        ;; 2. Each gets its own PipedI/OStream pair.
+        ;; Option 1 definitely seems easier/simpler.
+        ;; And probably more resource-intensive.
+        ;; Start with that approach, but keep an eye on it.
+        ;; Then again, having multiple threads processing messages
+        ;; in parallel may work better than a single thread trying
+        ;; to handle all of them.
+        state (update initial-state
+                      ::log2/state
+                      #(log2/info %
+                                  ::start-child-monitor!
+                                  "Starting the child-monitor thread"
+                                  {::specs/monitor-id monitor-id}))
+        state (assoc-in state [::specs/outgoing ::specs/monitor-id] monitor-id)]
+    ;; TODO: This probably needs to run on an executor specifically
+    ;; dedicated to this sort of thing (probably shared with to-parent)
     (dfrd/future
       (let [prelog (utils/pre-log message-loop-name)
             eof? (atom false)]
         (try
-          (loop []
-            (log/debug prelog "Top of client-waiting-on-initial-response loop")
-            (when (not (realized? client-waiting-on-response))
-              (let [eof'?
-                    (process-next-bytes-from-child! message-loop-name
-                                                    child-out
-                                                    stream
-                                                    K/max-bytes-in-initiate-message)]
-                (if (bytes? eof'?)
-                  (recur)  ; regular message. Keep going
-                  (do
-                    (log/warn prelog
-                              "EOF signal" eof'?
-                              "before we ever heard back from serve")
-                    (swap! eof? not))))))
-          (while (not @eof?)
-            (log/debug prelog "Top of main child-read loop")
-            (let [eof'?
-                  (process-next-bytes-from-child! message-loop-name
-                                                  child-out
-                                                  stream
-                                                  K/standard-max-block-length)]
-              (when-not (bytes? eof'?)
-                (when (nil? eof'?)
-                  (throw (ex-info "What just happened?"
-                                  {::context prelog})))
-                (log/warn prelog "EOF signal received:" eof'?)
-                (swap! eof? not))))
-          (log/warn prelog "Child monitor exiting")
+          (let [state
+                (loop [state state]
+                  (let [state (update state
+                                      ::log2/state
+                                      #(log2/flush-logs! logger (log2/debug
+                                                                 %
+                                                                 ::start-child-monitor!
+                                                                 "Top of client-waiting-on-initial-response loop")))]
+                    (if (not (realized? client-waiting-on-response))
+                      (let [msg-or-eof'?
+                            ;; TODO: This also needs access to log-state
+                            ;; And it needs to return the updated log-state
+                            ;; Actually, it should also return a set of
+                            ;; side-effects to run
+                            (process-next-bytes-from-child! message-loop-name
+                                                            child-out
+                                                            stream
+                                                            K/max-bytes-in-initiate-message)
+                            state (update state
+                                          ::log2/state
+                                          #(log2/flush-logs! logger %))]
+                        (log/debug "----------------------------------------\n"
+                                   "Received something from child:"
+                                   msg-or-eof'?
+                                   "\n"
+                                   (utils/pretty state))
+                        (if (bytes? msg-or-eof'?)
+                          (recur state)  ; regular message. Keep going
+                          (let [state (update state
+                                              ::log2/state
+                                              #(log2/warn %
+                                                          ::child-monitor-loop
+                                                          "EOF signalled before we ever heard back from server"
+                                                          {::specs/eof-flag msg-or-eof'?
+                                                           ::specs/monitor-id monitor-id}))]
+                            (swap! eof? not)
+                            state)))
+                      state)))
+                state (loop [state state]
+                        (when (not @eof?)
+                          (let [state (update state
+                                              ::log2/state
+                                              #(log2/debug %
+                                                           ::child-monitor-loop
+                                                           "Top of main child-read loop"
+                                                           {::specs/monitor-id monitor-id}))
+                                eof'?
+                                (process-next-bytes-from-child! message-loop-name
+                                                                child-out
+                                                                stream
+                                                                K/standard-max-block-length)
+                                state (update state
+                                              ::log2/state
+                                              #(log2/flush-logs! logger %))]
+                            (if (bytes? eof'?)
+                              (recur state)
+                              (let [state (update state
+                                                  ::log2/state
+                                                  #(log2/warn %
+                                                              ::child-monitor-loop
+                                                              "EOF signal received"
+                                                              {::specs/eof-flag eof'?
+                                                               ::specs/monitor-id monitor-id}))]
+                                (when (nil? eof'?)
+                                  (throw (ex-info "What just happened?"
+                                                  {::specs/monitor-id monitor-id})))
+                                (swap! eof? not)
+                                state)))))
+                state (update state
+                              ::log2/state
+                              #(log2/warn %
+                                          ::child-monitor-loop
+                                          "Child monitor exiting"
+                                          {::specs/monitor-id monitor-id}))]
+            (log2/flush-logs! logger state))
           (catch IOException ex
             ;; TODO: Need to send an EOF signal to main ioloop so
             ;; it can notify the parent (or quit, as the case may be)
-            (log/error ex
-                       prelog
-                       "TODO: Not Implemented. This should only happen when child closes pipe")
+            (log2/flush-logs! logger
+                              (log2/exception (::log2/state state)
+                                              ex
+                                              ::start-child-monitor!
+                                              "TODO: Not Implemented. This should only happen when child closes pipe"))
             ;; Q: Do I need to forward along...which EOF signal would be appropriate here?
-            ;; I haven't seen this happen yet, which seems suspicious.
-            (throw (RuntimeException. ex)))
+            (throw (RuntimeException. ex "Not Implemented")))
           (catch ExceptionInfo ex
-            (log/error ex
-                       prelog
-                       (utils/pretty (.getData ex))))
+            ;; Problems with this approach:
+            ;; 1. Any logs queued before the exception was thrown got lost
+            ;;    (and they're the ones we *really* care about)
+            ;; 2. The clock's going to be totally out of whack
+            (log2/flush-logs! logger
+                              (log2/exception (::log2/state state)
+                                              ex
+                                              ::start-child-monitor!
+                                              ""
+                                              (.getData ex))))
           (catch Exception ex
-            (log/error ex "Bady unexpected exception")))))))
+            (log2/flush-logs! logger
+                              (log2/exception (::log2/state state)
+                                              ex
+                                              ::start-child-monitor!
+                                              "Badly unexpected exception"))))))))
