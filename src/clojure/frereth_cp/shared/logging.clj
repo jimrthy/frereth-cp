@@ -127,6 +127,10 @@
     ;; Then again...auto-namespacing makes eliminating them
     ;; interesting.
     `(defn ~level
+       ;; TODO: Refactor the parameter order.
+       ;; It doesn't seem like it should ever be worth it, but a
+       ;; complex function might save some code by setting up
+       ;; partial(s) using the label
        ([log-state#
          label#
          message#

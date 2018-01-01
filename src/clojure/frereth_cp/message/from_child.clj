@@ -18,12 +18,18 @@
             InputStream]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Magic Constants
+;;;; Magic Constants
 
 (set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal Helpers
+;;;; Specs
+
+(s/def callback (s/fspec :args (s/cat :state ::specs/state)
+                         :ret ::specs/state))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Internal Helpers
 
 (s/fdef build-individual-block
         :args (s/cat :buf ::specs/buf
@@ -64,69 +70,89 @@
           blocks))
 
 (s/fdef read-next-bytes-from-child!
-        :args (s/cat :message-loop-name ::specs/message-loop-name
+        :args (s/cat :monitor-id ::specs/monitor-id
+                     :log-state ::log2/state
                      :child-out ::specs/child-out
                      :prefix bytes?
                      :available-bytes nat-int?
                      :max-to-read nat-int?)
-        :ret ::specs/bs-or-eof)
+        :ret (s/keys :req [::log2/state
+                           ::specs/bs-or-eof]))
 (defn read-next-bytes-from-child!
-  ([message-loop-name
+  ([monitor-id
+    log-state
     ^InputStream child-out
     prefix
     available-bytes
     max-to-read]
-   (let [prelog (utils/pre-log message-loop-name)
-         prefix-gap (count prefix)]
-     (log/debug prelog (str
-                        "Trying to pull "
-                        available-bytes
-                        "/"
-                        max-to-read
-                        " bytes from child and append them to "
-                        (count prefix)
-                        " that we've already pulled"))
+   (let [prefix-gap (count prefix)
+         log-state (log2/debug log-state
+                               ::read-next-bytes-from-child!
+                               (str "Trying to pull bytes from child"
+                                    "and append them to any bytes"
+                                    "previously received")
+                               {::expected-available available-bytes
+                                ::max-to-read max-to-read
+                                ::already-received (count prefix)
+                                ::monitor-id monitor-id})]
      (if (not= 0 available-bytes)
        ;; Simplest scenario: we have bytes waiting to be consumed
        (let [bytes-to-read (min available-bytes max-to-read)
              bytes-read (byte-array (+ bytes-to-read prefix-gap))
-             _ (log/debug prelog "Reading" bytes-to-read " byte(s) from child. Should not block")
-             n (.read child-out bytes-read prefix-gap bytes-to-read)]
-         (log/debug prelog "Read" n "bytes")
-         (if (not= n bytes-to-read)
-           (do
-             ;; If this happens frequently, the buffer's probably too small.
-             (log/warn prelog (str "Tried to read "
-                                   bytes-to-read
-                                   " bytes from the child.\nGot "
-                                   n
-                                   " instead.\n"))
-             (let [actual-result (byte-array (+ prefix-gap n))]
-               (b-t/byte-copy! actual-result 0 prefix-gap prefix)
-               (b-t/byte-copy! actual-result prefix-gap n bytes-read)
-               actual-result))
+             log-state (log2/debug log-state
+                                   ::read-next-bytes-from-child!
+                                   "Reading byte(s) from child. Should not block"
+                                   {::bytes-to-read bytes-to-read
+                                    ::specs/monitor-id monitor-id})
+             n (.read child-out bytes-read prefix-gap bytes-to-read)
+             log-state (log2/debug log-state
+                                   ::read-next-bytes-from-child!
+                                   "Bytes read"
+                                   {::count n
+                                    ::specs/monitor-id monitor-id})]
+         (if (= n bytes-to-read)
            (do
              (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
-             bytes-read)))
+             {::log2/state log-state
+              ::specs/bs-or-eof bytes-read})
+           (do
+             ;; If this happens frequently, the buffer's probably too small.
+             (let [log-state (log2/warn log-state
+                                        ::read-next-bytes-from-child!
+                                        "Got unexpected byte count from child"
+                                        {::specs/monitor-id monitor-id
+                                         ::expected bytes-to-read
+                                         ::actual n})
+                   actual-result (byte-array (+ prefix-gap n))]
+               (b-t/byte-copy! actual-result 0 prefix-gap prefix)
+               (b-t/byte-copy! actual-result prefix-gap n bytes-read)
+               {::log2/state log-state
+                ::specs/bs-or-eof actual-result}))))
        (try
          ;; More often, we should spend all our time waiting.
-         (log/debug prelog "Blocking until we get a byte from the child")
+
          ;; Q: Could I use something like Reactive, or even Java Streams,
          ;; to eliminate all the logic involved in managing this?
-         (let [next-prefix (.read child-out)]
-           ;; My echo test is never returning from that.
-           ;; Which, really, should mean that the PipedInputStream never gets closed.
-           ;; Aside from the fact that the child is never echoing any bytes
-           ;; back.
-           ;; Actually, it never seems to receive any bytes.
-           (log/debug prelog (str "Read a byte from child ("
-                                  next-prefix
-                                  "). Q: Are there more?"))
+         (let [log-state (log2/debug log-state
+                                     ::read-next-bytes-from-child!
+                                     "Blocking until we get a byte from the child"
+                                     {::specs/monitor-id monitor-id})
+               next-prefix (.read child-out)
+               log-state (log2/debug log-state
+                                     ::read-next-bytes-from-child!
+                                     (str "Read a byte from child.\n"
+                                          "Q: Are there more?")
+                                     {::byte-read next-prefix
+                                      ::specs/monitor-id monitor-id})]
            ;; That returns an unsigned byte.
            ;; Or -1 for EOF
            (if (not= next-prefix -1)
-             (let [bytes-remaining (.available child-out)]
-               (log/info prelog bytes-remaining "more bytes waiting to be read")
+             (let [bytes-remaining (.available child-out)
+                   log-state (log2/info log-state
+                                        ::read-next-bytes-from-child!
+                                        "more bytes waiting to be read"
+                                        {::bytes-remaining bytes-remaining
+                                         ::specs/monitor-id monitor-id})]
                (if (< 0 bytes-remaining)
                  ;; Assume this means the client just sent us a sizeable
                  ;; chunk.
@@ -139,13 +165,14 @@
                  ;; At this layer, we have to assume that our child
                  ;; code (which is really the library consumer) isn't
                  ;; deliberately malicious to its own performance.
-                 (let [combined-prefix (byte-array (inc prefix-gap))]
-                   (log/debug prelog
-                              "Getting ready to copy"
-                              prefix-gap
-                              "bytes from"
-                              prefix
-                              "into a new combined-prefix byte-array")
+                 (let [combined-prefix (byte-array (inc prefix-gap))
+                       log-state (log2/debug log-state
+                                             ::read-next-bytes-from-child!
+                                             (str "Getting ready to copy bytes\n"
+                                                  "into a new combined-prefix byte-array")
+                                             {::specs/monitor-id monitor-id
+                                              ::prefix-gap-dst prefix-gap
+                                              ::prefix-src prefix})]
                    (aset-byte combined-prefix
                               prefix-gap
                               (b-t/possibly-2s-complement-8 next-prefix))
@@ -156,44 +183,51 @@
                    (b-t/byte-copy! combined-prefix 0 prefix-gap prefix)
                    ;; TODO: Ditch the try/catch so I can just switch back
                    ;; to using recur here
-                   (read-next-bytes-from-child! message-loop-name
+                   (read-next-bytes-from-child! monitor-id
+                                                log-state
                                                 child-out
                                                 combined-prefix
                                                 bytes-remaining
                                                 (dec max-to-read)))
-                 (byte-array prefix)))
+                 {::log2/state log-state
+                  ::specs/bs-or-eof (byte-array prefix)}))
              (if (< 0 prefix-gap)  ;; EOF
-               (do
-                 (log/info prelog
-                           "Reached EOF. Have"
-                           prefix-gap
-                           "bytes buffered to send first")
-                 ;; Q: Does it make sense to handle it this way?
-                 ;; It would be nice to just attach the EOF flag to
-                 ;; the bytes we're getting ready to send along.
-                 ;; That would mean having this return a data
-                 ;; structure that includes both the byte array
-                 ;; and the flag.
-                 ;; For now, if we had a prefix, just return that
-                 ;; and pretend that everything's normal.
-                 ;; We'll get the EOF signal soon enough.
-                 prefix)
-               (do
-                 (log/warn prelog "Signalling normal EOF")
-                 ::specs/normal))))
+               {::log2/state (log2/info log-state
+                                        ::read-next-bytes-from-child!
+                                        "Reached EOF. Have buffered bytes to send first"
+                                        {::prefix-gap prefix-gap
+                                         ::specs/monitor-id monitor-id})
+                ;; Q: Does it make sense to handle it this way?
+                ;; It would be nice to just attach the EOF flag to
+                ;; the bytes we're getting ready to send along.
+                ;; That would mean having this return a data
+                ;; structure that includes both the byte array
+                ;; and the flag.
+                ;; For now, if we had a prefix, just return that
+                ;; and pretend that everything's normal.
+                ;; We'll get the EOF signal soon enough.
+                ::specs/bs-or-eof prefix}
+               {::log2/state (log2/warn log-state
+                                        ::read-next-bytes-from-child!
+                                        "Signalling normal EOF"
+                                        {::specs/monitor-id monitor-id})
+                ::specs/bs-or-eof ::specs/normal})))
          ;; TODO: Tighten these up. If a .read call throws an exception,
          ;; then OK.
          ;; If something else has a problem, that's really a different story.
          (catch IOException ex
-           (log/warn ex
-                     prelog
-                     "EOF")
-           ::specs/normal)
+           {::log2/state (log2/warn log-state
+                                    ::read-next-bytes-from-child!
+                                    "EOF"
+                                    {::specs/monitor-id monitor-id})
+            ::specs/bs-or-eof ::specs/normal})
          (catch RuntimeException ex
-           (log/error ex
-                      prelog
-                      "Reading from child failed")
-           ::specs/error)))))
+           {::log2/state (log2/exception log-state
+                                         ex
+                                         ::read-next-bytes-from-child!
+                                         "Reading from child failed"
+                                         {::specs/monitor-id monitor-id})
+            ::specs/bs-or-eof ::specs/error})))))
   ([message-loop-name
     child-out
     available-bytes
@@ -206,10 +240,11 @@
 
 (s/fdef build-byte-consumer
         ;; TODO: This is screaming for generative testing
-        :args (s/cat :message-loop-name ::specs/message-loop-name
+        :args (s/cat :monitor-id ::specs/monitor-id
+                     :log-state ::log2/state
                      :bs-or-eof ::specs/bs-or-eof)
-        :ret (s/fspec :args (s/cat :state ::specs/state)
-                      :ret ::specs/state))
+        :ret (s/keys :req [::log2/state
+                           ::callback]))
 (defn build-byte-consumer
   "Accepts a byte-array from the child."
   ;; Lines 319-337
@@ -219,7 +254,8 @@
   ;; That obvious approach completely misses the point that
   ;; this namespace is about buffering. We need to hang onto
   ;; those buffers here until they've been ACK'd.
-  [message-loop-name
+  [monitor-id
+   log-state
    bs-or-eof]
   (let [prelog (utils/pre-log message-loop-name)
         eof? (keyword? bs-or-eof)
@@ -358,14 +394,15 @@
                      :blocker dfrd/deferrable?
                      :attempts nat-int?
                      :timeout nat-int?)
-        :ret ::specs/bs-or-eof)
+        :ret (s/keys :req [::log2/state
+                           ::specs/bs-or-eof]))
 (defn try-multiple-sends
   "The parameters are weird because I refactored it out of a lexical closure"
   [stream
-   ;; TODO: Refactor-rename this to bs-or-eof
    bs-or-eof
    blocker
    prelog attempts timeout]
+  (throw (RuntimeException. "Convert logging methodology"))
   ;; message-test pretty much duplicates this in try-multiple-sends
   ;; TODO: eliminate the duplication
   (loop [n attempts]
@@ -405,41 +442,29 @@
         ::specs/error))))
 
 (s/fdef forward-bytes-from-child!
-        :args (s/cat :message-loop-name ::specs/message-loop-name
+        :args (s/cat :monitor-id ::specs/monitor-id
+                     :log-state ::log2/state
                      :stream ::specs/stream
                      :bs-or-eof ::specs/bs-or-eof)
         :fn #(= (:ret %) (-> % :args :array-o-bytes))
-        :ret (s/or :message bytes?
-                   :eof ::specs/eof-flag))
+        :ret (s/keys :req [::log2/state
+                           ::specs/bs-or-eof]))
 (defn forward-bytes-from-child!
-  [message-loop-name
+  [monitor-id
+   log-state
    stream
    bs-or-eof]
-  (let [prelog (utils/pre-log message-loop-name)
-        callback (build-byte-consumer message-loop-name bs-or-eof)]
-    ;; I think it looks as though I have a deadlock here.
-    ;; It seems like I need to return from this in order to get
-    ;; back to the main ioloop to pull the message that I'm
-    ;; queuing.
-    ;; Except that it works until I start shutting everything
-    ;; down.
-    ;; At the end of the handshake test:
-    ;; 1. Client sends EOF to server
-    ;; 2. Server's child receives that and sends its own EOF packet
-    ;; 3. That EOF packet gets to try-multiple-sends
-    ;; And then processing stops until the test ends.
-    (comment (throw (RuntimeException. "What's going wrong with this?")))
-    (log/debug prelog
-               (str
-                "Received "
-                (if (bytes? bs-or-eof)
-                  (count bs-or-eof)
-                  bs-or-eof)
-                " bytes(?) from child"
-                (if (bytes? bs-or-eof)
-                  (str " in " bs-or-eof)
-                  "")
-                ". Trying to forward them to the main i/o loop"))
+  (let [{:keys [::callback]
+         log-state ::log2/state} (build-byte-consumer monitor-id log-state  bs-or-eof)
+        log-state (log2/debug log-state
+                              ::forward-bytes-from-child!
+                              (str
+                               "Something arrived from child\n"
+                               "Trying to forward them to the main i/o loop")
+                              {::byte-count (when (bytes? bs-or-eof)
+                                              (count bs-or-eof))
+                               ::specs/bs-or-eof bs-or-eof
+                               ::specs/monitor-id monitor-id})]
     ;; Here's an annoying detail:
     ;; I *do* want to block here, at least for a while.
     ;; Then we do to get these bytes added to the
@@ -463,30 +488,28 @@
                                      timeout ::timed-out)]
         (dfrd/on-realized submitted
                           (fn [success]
-                            (log/debug
-                             (utils/pre-log message-loop-name)
-                             (str bs-or-eof
-                                  " from child successfully ("
-                                  success
-                                  ") posted to main i/o loop triggered from\n"
-                                  prelog)))
+                            (let [log-state (log2/debug log-state
+                                                        ::forward-bytes-from-child!
+                                                        "Successfully posted to main i/o loop"
+                                                        {::specs/bs-or-eof bs-or-eof
+                                                         ::specs/monitor-id monitor-id
+                                                         ::success success})]
+                              (throw (RuntimeException. "Need a deferred I can deliver to flush that"))))
                           (fn [failure]
-                            (log/error
-                             failure
-                             (utils/pre-log message-loop-name)
-                             (str "Failed to add bytes "
-                                  bs-or-eof
-                                  " ("
-                                  failure
-                                  ") from child to main i/o loop triggered from\n"
-                                  prelog))))
+                            (let [log-state (log2/error log-state
+                                                        ::forward-bytes-from-child!
+                                                        "Failed to post to main io-loop"
+                                                        {::specs/bs-or-eof bs-or-eof
+                                                         ::specs/monitor-id monitor-id
+                                                         ::failure failure})]
+                              (throw (RuntimeException. "Need a deferred I can deliver to flush that")))))
         (try-multiple-sends stream bs-or-eof blocker prelog 10 timeout))
-      (do
-        (log/warn prelog
-                  "Destination stream closed. Discarding message\n"
-                  bs-or-eof)
-        ;; Q: Is there any way to recover from this?
-        ::specs/error))))
+      {::log2/state (log2/warn log-state
+                               ::forward-bytes-from-child!
+                               "Destination stream closed. Discarding message"
+                               {::discarded bs-or-eof
+                                ::specs/monitor-id monitor-id})
+       ::specs/bs-or-eof bs-or-eof})))
 
 (s/fdef room-for-child-bytes?
         :args (s/cat :state ::specs/state)
@@ -527,44 +550,70 @@
     (< (+ send-bytes K/k-4) K/send-byte-buf-size)))
 
 (s/fdef process-next-bytes-from-child!
-        :args (s/cat :message-loop-name ::specs/message-loop-name
+        :args (s/cat :monitor-id ::specs/monitor-id
+                     :log-state ::log2/state
                      :child-out ::specs/child-out
                      :stream ::specs/stream
                      :max-to-read int?)
-        :ret (s/or :message bytes?
-                   :eof ::specs/eof-flag))
+        :ret (s/keys :req [::specs/bs-or-eof
+                           ::log2/state]))
 (defn process-next-bytes-from-child!
-  [message-loop-name
+  [monitor-id
+   log-state
    ^InputStream child-out
    stream
    max-to-read]
-  (let [prelog (utils/pre-log message-loop-name)
-        available-bytes (.available child-out)
+  (let [available-bytes (.available child-out)
         ;; note that this may also be the EOF flag
-        bs-or-eof
-        (try
-          (read-next-bytes-from-child! message-loop-name
-                                       child-out
-                                       available-bytes
-                                       max-to-read)
-          (catch RuntimeException ex
-            (log/error ex prelog)
-            ::specs/error))]
-    ;; In order to do this, we have to query for state.
-    ;; Which is obnoxious.
-    ;; *And* we need to watch for buffer space to
-    ;; open up so we can proceed.
-    ;; But this really is the best place to apply
-    ;; back-pressure.
-    (log/warn prelog
-              (str "Need to check room-for-child-bytes?"
-                   " before calling read-next-bytes-from-child!"))
-    (when (keyword? bs-or-eof)
-      (log/warn prelog "EOF flag. Closing the PipedInputStream")
-      ;; It's a little tempting to refactor this into its
-      ;; own function, but that just seems silly.
-      (.close child-out))
-    (forward-bytes-from-child! message-loop-name
+        {:keys [::specs/bs-or-eof]
+         log-state ::log2/state} (try
+                                   (read-next-bytes-from-child! monitor-id
+                                                                log-state
+                                                                child-out
+                                                                available-bytes
+                                                                max-to-read)
+                                   (catch ExceptionInfo ex
+                                     (let [{{ex-log-state ::log2/state}
+                                            :as ex-data} (.getData ex)]
+                                       ;; Q: Should a problem there trigger EOF?
+                                       {::log2/state (log2/exception (if ex-log-state
+                                                                       ex-log-state
+                                                                       log-state)
+                                                                     ex
+                                                                     ::process-next-bytes-from-child!
+                                                                     ""
+                                                                     (dissoc ex-data ::log2/state))
+                                        ::specs/bs-or-eof ::specs/error}))
+                                   (catch RuntimeException ex
+                                     {::log2/state (log2/exception log-state
+                                                                   ex
+                                                                   ::process-next-bytes-from-child!
+                                                                   ""
+                                                                   {::specs/monitor-id monitor-id})
+                                      ::specs/bs-or-eof ::specs/error}))
+        ;; In order to do this, we have to query for state.
+        ;; Which is obnoxious.
+        ;; *And* we need to watch for buffer space to
+        ;; open up so we can proceed.
+        ;; But this really is the best place to apply
+        ;; back-pressure.
+        log-state (log2/warn log-state
+                             ::process-next-bytes-from-child!
+                             (str "Need to check room-for-child-bytes?"
+                                  " before calling read-next-bytes-from-child!")
+                             {::specs/monitor-id monitor-id})
+        log-state (if (keyword? bs-or-eof)
+                    (do
+                      ;; It's a little tempting to refactor this into its
+                      ;; own function, but that just seems silly.
+                      (.close child-out)
+                      (log2/warn log-state
+                                 ::process-next-bytes-from-child!
+                                 "EOF flag. Closing the PipedInputStream"
+                                 {::specs/monitor-id monitor-id}))
+                    log-state)]
+    (forward-bytes-from-child! monitor-id
+                               log-state
                                stream
                                bs-or-eof)))
 
@@ -640,8 +689,8 @@
     ;; TODO: This probably needs to run on an executor specifically
     ;; dedicated to this sort of thing (probably shared with to-parent)
     (dfrd/future
-      (let [prelog (utils/pre-log message-loop-name)
-            eof? (atom false)]
+      ;; TODO: Refactor this into its own function
+      (let [eof? (atom false)]
         (try
           (let [state
                 (loop [state state]
@@ -652,23 +701,20 @@
                                                                  ::start-child-monitor!
                                                                  "Top of client-waiting-on-initial-response loop")))]
                     (if (not (realized? client-waiting-on-response))
-                      (let [msg-or-eof'?
+                      (let [{msg-or-eof'? ::specs/bs-or-eof
+                             log-state ::log2/state}
                             ;; TODO: This also needs access to log-state
                             ;; And it needs to return the updated log-state
                             ;; Actually, it should also return a set of
                             ;; side-effects to run
-                            (process-next-bytes-from-child! message-loop-name
+                            (process-next-bytes-from-child! monitor-id
+                                                            log-state
                                                             child-out
                                                             stream
                                                             K/max-bytes-in-initiate-message)
                             state (update state
                                           ::log2/state
                                           #(log2/flush-logs! logger %))]
-                        (log/debug "----------------------------------------\n"
-                                   "Received something from child:"
-                                   msg-or-eof'?
-                                   "\n"
-                                   (utils/pretty state))
                         (if (bytes? msg-or-eof'?)
                           (recur state)  ; regular message. Keep going
                           (let [state (update state
