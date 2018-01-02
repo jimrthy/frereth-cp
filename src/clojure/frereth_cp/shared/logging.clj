@@ -202,6 +202,7 @@
         :args (s/cat :start-time ::lamport)
         :ret ::state)
 (defn init
+  ;; FIXME: Honestly, this needs a high-level context
   ([start-clock]
    {::entries []
     ::lamport start-clock})
@@ -272,4 +273,9 @@
   (let [synced (inc (max l-clock r-clock))
         lhs (assoc lhs ::lamport synced)
         rhs (assoc rhs ::lamport synced)]
-    [lhs rhs]))
+    [(update lhs #(debug %
+                         ::synchronized
+                         ""))
+     (update rhs #(debug %
+                         ::synchronized
+                         ""))]))

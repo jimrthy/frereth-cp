@@ -33,7 +33,8 @@
 
 (s/fdef build-individual-block
         :args (s/cat :buf ::specs/buf
-                     :start-pos ::specs/start-pos))
+                     :start-pos ::specs/start-pos)
+        :ret ::specs/block)
 (defn build-individual-block
   [buf]
   {::specs/ackd? false
@@ -44,6 +45,7 @@
    ::specs/send-eof ::specs/false
    ::specs/transmissions 0
    ::specs/time (System/nanoTime)})
+
 (comment
   ;; This seems to be ridiculously slow.
   ;; TODO: Check the timing. Maybe it speeds up as the JIT
@@ -238,13 +240,112 @@
                                 available-bytes
                                 max-to-read)))
 
+(s/fdef byte-consumer
+        :args (s/cat :log-state ::log2/state
+                     :block ::specs/block
+                     :eof? boolean
+                     :buf-size nat-int?
+                     :bs-or-eof ::specs/bs-or-eof
+                     :state ::specs/state)
+        :ret ::specs/state)
+(defn byte-consumer
+  [monitor-id
+   log-state
+   block
+   eof?
+   buf-size
+   bs-or-eof
+   {{:keys [::specs/ackd-addr
+            ::specs/max-block-length
+            ::specs/strm-hwm
+            ::specs/un-sent-blocks]
+     :as outgoing} ::specs/outgoing
+    :keys [::specs/message-loop-name]
+    :as state}]
+  ;; Note that the cleanest way to handle this seems to be merging
+  ;; the builder's log-state into state
+  (let [repr (if eof?
+               (str "EOF: " bs-or-eof)
+               (str buf-size "-byte array"))
+        ;; There's the possibility of using a Nagle
+        ;; algorithm later to consolidate smaller blocks,
+        ;; so maybe it doesn't make sense to mess with it here.
+        block (assoc block ::specs/start-pos strm-hwm)
+        [builder-log-state caller-log-state] (log2/synchronize log-state (::log2/state state))
+        log-state (update-in caller-log-state [::log2/state ::log2/entries] conj builder-log-state)
+        log-state (log2/debug log-state
+                              ::byte-consumer
+                              (str "Adding new message block to unsent others from a thunk")
+                              {::repr repr
+                               ::unsent-block-count (count un-sent-blocks)
+                               ::specs/monitor-id monitor-id})]
+    (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
+      ;; Want to be sure standard error handlers don't catch
+      ;; this...it needs to force a fresh handshake.
+      ;; Note that this check has major problems:
+      ;; This is the number of bytes we have buffered
+      ;; that have not yet been ACK'd.
+      ;; We really should have quit reading from the child
+      ;; long before this due to buffer overflows.
+      ;; OTOH, the spec *does* define this as the end
+      ;; of the stream.
+      ;; Actually, no it doesn't.
+      ;; This may be a bug in the reference implementation.
+      ;; Or my basic translation.
+      ;; End of stream is when the address hits stream-length-limit.
+      ;; It seems like it would make more sense to
+      ;; a) force-close the child output
+      ;; b) wait for ACK
+      ;; c) then exit
+      ;; So, when ackd-addr gets here (or possibly
+      ;; strm-hwm), we're done.
+      ;; TODO: Revisit this.
+      (throw (AssertionError. "End of stream")))
+    (let [log-state (log2/debug log-state
+                                ::byte-consumer
+                                "Updating outgoing by adding buf-size to strm-hwm"
+                                {::buf-size buf-size
+                                 ::specs/monitor-id monitor-id
+                                 ::specs/outgoing (::specs/outgoing state)
+                                 ::specs/strm-hwm strm-hwm})]
+      (-> state
+          (update
+           ::specs/outgoing
+           (fn [cur]
+             (let [result
+                   (-> cur
+                       (update ::specs/un-sent-blocks
+                               conj
+                               block)
+                       (update ::specs/strm-hwm + buf-size))]
+               (if eof?
+                 ;; It's tempting to update :sent-eof-processed
+                 ;; here also.
+                 ;; That temptation is a mistake.
+                 ;; The reference implementation:
+                 ;; 1. Sets up FDs for polling at the top of its main loop
+                 ;; 2. Tries to pull data from the child
+                 ;;    If child closed pipe, set send-eof
+                 ;; [We're currently here]
+                 ;; 3. Skips everything else that's sending-related
+                 ;;    *if* both send-eof and send-eof-processed
+                 ;; 4. Sets send-eof-processed
+                 ;; just before
+                 ;; 5. Actually doing the send.
+                 ;; send-eof-processed has caused me enough
+                 ;; pain that I've eliminated it.
+                 (assoc result
+                        ::specs/send-eof bs-or-eof)
+                 result))))
+          (assoc ::log2/state log-state)))))
+
 (s/fdef build-byte-consumer
         ;; TODO: This is screaming for generative testing
         :args (s/cat :monitor-id ::specs/monitor-id
                      :log-state ::log2/state
                      :bs-or-eof ::specs/bs-or-eof)
         :ret (s/keys :req [::log2/state
-                           ::callback]))
+                           ::consumer]))
 (defn build-byte-consumer
   "Accepts a byte-array from the child."
   ;; Lines 319-337
@@ -255,138 +356,55 @@
   ;; this namespace is about buffering. We need to hang onto
   ;; those buffers here until they've been ACK'd.
   [monitor-id
-   log-state
+   external-log-state
    bs-or-eof]
-  (let [prelog (utils/pre-log message-loop-name)
+  (let [log-state (log2/init (::log2/lampont external-log-state))
+        result (build-individual-block (Unpooled/wrappedBuffer (byte-array 0)))
         eof? (keyword? bs-or-eof)
         buf-size (if eof?
                    0
                    (count bs-or-eof))
-        repr (if eof?
-               (str "EOF: " bs-or-eof)
-               (str buf-size "-byte array"))
-        block
-        (if (keyword? bs-or-eof)
-          (assoc
-           (build-individual-block (Unpooled/wrappedBuffer (byte-array 0)))
-           ::specs/send-eof bs-or-eof)
-          ;; Note that back-pressure no longer gets applied if we
-          ;; already have ~124K pending because caller started
-          ;; dropping packets.
-          ;; (It doesn't seem like it should matter, except
-          ;; as an upstream signal that there's some kind of
-          ;; problem)
-          (let [^bytes actual bs-or-eof
-                ;; Q: Use Pooled direct buffers instead?
-                ;; A: Direct buffers wouldn't make any sense.
-                ;; After we get done with all the slicing and
-                ;; dicing that needs to happen to get the bytes
-                ;; to the parent, they still need to be translated
-                ;; back into byte arrays so they can be encrypted.
-                ;; Pooled buffers might make sense, except that
-                ;; we're starting from a byte array. So it would
-                ;; be silly to copy it.
-                buf (Unpooled/wrappedBuffer actual)]
-            ;; The writer index indicates the space that's
-            ;; available for reading.
-            ;; Needing to do this feels wrong.
-            ;; Honestly, I'm relying on functionality
-            ;; that doesn't seem to be quite documented.
-            ;; It almost seems as though I really should be
-            ;; setting up a new [pooled] buffer and reading
-            ;; array-o-bytes into it instead.
-            ;; Doing a memcpy also seems a lot more wasteful.
-            (.writerIndex buf buf-size)
-            (log/debug prelog
-                       (str buf-size
-                            "-byte Block to add"))
-            (build-individual-block buf)))]
-    ;; The main point to logging this is to correlate the
-    ;; incoming byte-array with the outgoing ByteBuf identifiers
-    (log/debug prelog (str "Prepping thunk for "
-                           bs-or-eof
-                           " baked into block description:\n"
-                           block))
-    ;; TODO: Refactor this into a top-level function
-    (fn [{{:keys [::specs/ackd-addr
-                  ::specs/max-block-length
-                  ::specs/strm-hwm
-                  ::specs/un-sent-blocks]
-           :as outgoing} ::specs/outgoing
-          :keys [::specs/message-loop-name]
-          :as state}]
-      (let [nested-prelog (utils/pre-log message-loop-name)
-            ;; There's the possibility of using a Nagle
-            ;; algorithm later to consolidate smaller blocks,
-            ;; so maybe it doesn't make sense to mess with it here.
-            block (assoc block ::specs/start-pos strm-hwm)]
-        (log/debug nested-prelog
-                   (str "Adding new message block built around "
-                        repr
-                        " to "
-                        ;; TODO: Might be worth logging the actual contents
-                        ;; when it's time to trace
-                        (count un-sent-blocks)
-                        " unsent others from a thunk built by\n"
-                        prelog))
-        (when (>= (- strm-hwm ackd-addr) K/stream-length-limit)
-          ;; Want to be sure standard error handlers don't catch
-          ;; this...it needs to force a fresh handshake.
-          ;; Note that this check has major problems:
-          ;; This is the number of bytes we have buffered
-          ;; that have not yet been ACK'd.
-          ;; We really should have quit reading from the child
-          ;; long before this due to buffer overflows.
-          ;; OTOH, the spec *does* define this as the end
-          ;; of the stream.
-          ;; Actually, no it doesn't.
-          ;; This may be a bug in the reference implementation.
-          ;; Or my basic translation.
-          ;; End of stream is when the address hits stream-length-limit.
-          ;; It seems like it would make more sense to
-          ;; a) force-close the child output
-          ;; b) wait for ACK
-          ;; c) then exit
-          ;; So, when ackd-addr gets here (or possibly
-          ;; strm-hwm), we're done.
-          ;; TODO: Revisit this.
-          (throw (AssertionError. "End of stream")))
-        (let [result (update state
-                             ::specs/outgoing
-                             (fn [cur]
-                               (log/debug (str nested-prelog
-                                               "Updating outgoing\n"
-                                               cur
-                                               "\nby addinging "
-                                               buf-size
-                                               " to "
-                                               strm-hwm))
-                               (let [result
-                                     (-> cur
-                                         (update ::specs/un-sent-blocks
-                                                 conj
-                                                 block)
-                                         (update ::specs/strm-hwm + buf-size))]
-                                 (if eof?
-                                   ;; It's tempting to update :sent-eof-processed
-                                   ;; here also.
-                                   ;; That temptation is a mistake.
-                                   ;; The reference implementation:
-                                   ;; 1. Sets up FDs for polling at the top of its main loop
-                                   ;; 2. Tries to pull data from the child
-                                   ;;    If child closed pipe, set send-eof
-                                   ;; [We're currently here]
-                                   ;; 3. Skips everything else that's sending-related
-                                   ;;    *if* both send-eof and send-eof-processed
-                                   ;; 4. Sets send-eof-processed
-                                   ;; just before
-                                   ;; 5. Actually doing the send.
-                                   ;; send-eof-processed has caused me enough
-                                   ;; pain that I've eliminated it.
-                                   (assoc result
-                                          ::specs/send-eof bs-or-eof)
-                                   result))))]
-          result)))))
+        block (if (eof?)
+                (assoc (build-individual-block (Unpooled/wrappedBuffer (byte-array 0)))
+                       ::specs/send-eof bs-or-eof)
+                ;; Note that back-pressure no longer gets applied if we
+                ;; already have ~124K pending because caller started
+                ;; dropping packets.
+                ;; It doesn't seem like it should matter, except
+                ;; as an upstream signal that there's some kind of
+                ;; problem)
+                (let [^bytes actual bs-or-eof
+                      ;; Q: Use Pooled direct buffers instead?
+                      ;; A: Direct buffers wouldn't make any sense.
+                      ;; After we get done with all the slicing and
+                      ;; dicing that needs to happen to get the bytes
+                      ;; to the parent, they still need to be translated
+                      ;; back into byte arrays so they can be encrypted.
+                      ;; Pooled buffers might make sense, except that
+                      ;; we're starting from a byte array. So it would
+                      ;; be silly to copy it.
+                      buf (Unpooled/wrappedBuffer actual)]
+                  ;; The writer index indicates the space that's
+                  ;; available for reading.
+                  ;; Needing to do this feels wrong.
+                  ;; Honestly, I'm relying on functionality
+                  ;; that doesn't seem to be quite documented.
+                  ;; It also seems as though I really should be
+                  ;; setting up a new [pooled] buffer and reading
+                  ;; bs-or-eof into it instead.
+                  ;; Doing a memcpy also seems a lot more wasteful.
+                  (.writerIndex buf buf-size)
+                  (build-individual-block buf)))
+        ;; The main point to logging this is to correlate the
+        ;; incoming byte-array with the outgoing ByteBuf identifiers
+        external-log-state (log2/debug external-log-state
+                                       ::build-byte-consumer
+                                       "Baking a block description into a thunk"
+                                       {::specs/monitor-id monitor-id
+                                        ::specs/bs-or-eof bs-or-eof
+                                        ::specs/block block})]
+    {::callback (partial byte-consumer monitor-id log-state block eof? buf-size bs-or-eof)
+     ::log2/state external-log-state}))
 
 (s/fdef try-multiple-sends
         :args (s/cat :stream ::specs/stream
@@ -445,6 +463,7 @@
         :args (s/cat :monitor-id ::specs/monitor-id
                      :log-state ::log2/state
                      :stream ::specs/stream
+                     :on-completion dfrd/deferred?
                      :bs-or-eof ::specs/bs-or-eof)
         :fn #(= (:ret %) (-> % :args :array-o-bytes))
         :ret (s/keys :req [::log2/state
@@ -453,6 +472,7 @@
   [monitor-id
    log-state
    stream
+   on-completion
    bs-or-eof]
   (let [{:keys [::callback]
          log-state ::log2/state} (build-byte-consumer monitor-id log-state  bs-or-eof)
@@ -494,7 +514,7 @@
                                                         {::specs/bs-or-eof bs-or-eof
                                                          ::specs/monitor-id monitor-id
                                                          ::success success})]
-                              (throw (RuntimeException. "Need a deferred I can deliver to flush that"))))
+                              (deliver on-completion log-state)))
                           (fn [failure]
                             (let [log-state (log2/error log-state
                                                         ::forward-bytes-from-child!
@@ -502,7 +522,7 @@
                                                         {::specs/bs-or-eof bs-or-eof
                                                          ::specs/monitor-id monitor-id
                                                          ::failure failure})]
-                              (throw (RuntimeException. "Need a deferred I can deliver to flush that")))))
+                              (deliver on-completion log-state))))
         (try-multiple-sends stream bs-or-eof blocker prelog 10 timeout))
       {::log2/state (log2/warn log-state
                                ::forward-bytes-from-child!
@@ -554,7 +574,8 @@
                      :log-state ::log2/state
                      :child-out ::specs/child-out
                      :stream ::specs/stream
-                     :max-to-read int?)
+                     :max-to-read int?
+                     :on-bytes-forwarded dfrd/deferred?)
         :ret (s/keys :req [::specs/bs-or-eof
                            ::log2/state]))
 (defn process-next-bytes-from-child!
@@ -562,7 +583,8 @@
    log-state
    ^InputStream child-out
    stream
-   max-to-read]
+   max-to-read
+   on-bytes-forwarded]
   (let [available-bytes (.available child-out)
         ;; note that this may also be the EOF flag
         {:keys [::specs/bs-or-eof]
@@ -615,6 +637,7 @@
     (forward-bytes-from-child! monitor-id
                                log-state
                                stream
+                               on-bytes-forwarded
                                bs-or-eof)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -685,7 +708,12 @@
                                   ::start-child-monitor!
                                   "Starting the child-monitor thread"
                                   {::specs/monitor-id monitor-id}))
-        state (assoc-in state [::specs/outgoing ::specs/monitor-id] monitor-id)]
+        state (assoc-in state [::specs/outgoing ::specs/monitor-id] monitor-id)
+        on-bytes-forwarded (dfrd/deferred)
+        on-bytes-forwarded-handler #(log2/flush-logs! logger %)]
+    (dfrd/on-realized on-bytes-forwarded
+                      on-bytes-forwarded-handler
+                      on-bytes-forwarded-handler)
     ;; TODO: This probably needs to run on an executor specifically
     ;; dedicated to this sort of thing (probably shared with to-parent)
     (dfrd/future
@@ -711,7 +739,8 @@
                                                             log-state
                                                             child-out
                                                             stream
-                                                            K/max-bytes-in-initiate-message)
+                                                            K/max-bytes-in-initiate-message
+                                                            on-bytes-forwarded)
                             state (update state
                                           ::log2/state
                                           #(log2/flush-logs! logger %))]
