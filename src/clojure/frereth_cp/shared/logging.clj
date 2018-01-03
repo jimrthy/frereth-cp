@@ -9,10 +9,17 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
+(s/def ::context (s/or :string string?
+                       :keyword keyword?
+                       :uuid uuid?
+                       :int int?))
+
 ;;;; Implement this for your side-effects
 (defprotocol Logger
-  (log! [this msg])
-  (flush! [this]))
+  "Extend this for logging side-effects"
+  (log! [this msg]
+    "At least queue up a log message to side-effect")
+  (flush! [this] "Some loggers need to do this at the end of a batch"))
 (s/def ::logger #(satisfies? Logger %))
 
 (def log-levels #{::trace
@@ -51,7 +58,9 @@
 
 (s/def ::entries (s/coll-of ::entry))
 
-(s/def ::state (s/keys :req [::entries ::lamport]))
+(s/def ::state (s/keys :req [::context
+                             ::entries
+                             ::lamport]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
@@ -64,7 +73,8 @@
                      :details ::details)
         :ret ::entries)
 (defn add-log-entry
-  ([{:keys [::lamport]
+  ([{:keys [::context
+            ::lamport]
      :as log-state}
     level
     label
@@ -78,7 +88,8 @@
        (update
         ::entries
         conj
-        {::current-thread (utils/get-current-thread)
+        {::context context
+         ::current-thread (utils/get-current-thread)
          ::details details
          ::label label
          ::lamport lamport
@@ -146,9 +157,9 @@
   ;; but I haven't actually tried testing it
   Logger
   (log! [{^OutputStream stream :stream
-         :as this}
-        msg]
-    (.write stream (pr-str msg)))
+          :as this}
+         msg]
+    (.write stream (prn-str msg)))
   (flush! [{^OutputStream stream :stream
             :as this}]
     (.flush stream)))
@@ -202,12 +213,32 @@
         :args (s/cat :start-time ::lamport)
         :ret ::state)
 (defn init
-  ;; FIXME: Honestly, this needs a high-level context
-  ([start-clock]
+  ([context start-clock]
    {::entries []
-    ::lamport start-clock})
+    ::lamport start-clock
+    ::context context})
+  ;; FIXME: Honestly, this needs a high-level context
+  ;; i.e. What is the purpose of this group of logs?
+  ([start-clock]
+   (init "FIXME: This arity should go away" start-clock))
   ([]
+   ;; the 1-arity version should include the context.
+   ;; *This* is the arity that should just go away
    (init 0)))
+
+(s/fdef fork
+        :args (s/cat :source ::state
+                     :child-context ::context)
+        :ret (s/tuple ::state ::state))
+(defn fork
+  [src child-context]
+  (let [src-ctx (::context src)
+        combiner (if (seq? src-ctx)
+                   conj
+                   list)
+        forked (init (combiner src-ctx child-context)
+                     (::lamport src))]
+    (synchronize src forked)))
 
 (defn std-out-log-factory
   []
@@ -218,13 +249,16 @@
   (->StreamLogger stream))
 
 (s/fdef flush-logs!
-        :args (s/cat :logger #(satisfies? Logger %)
+        :args (s/cat :logger ::logger
                      :logs ::state)
         :ret ::state)
 (defn flush-logs!
-  "For the side-effects to write the accumulated logs"
+  "For the side-effects to write the accumulated logs.
+
+Returns fresh set of log entries"
   [logger
-   log-state]
+   {:keys [::context]
+    :as log-state}]
   ;; Honestly, there should be an agent that handles this
   ;; so we don't block the calling thread.
   ;; The i/o costs should be quite a bit higher than
@@ -273,9 +307,5 @@
   (let [synced (inc (max l-clock r-clock))
         lhs (assoc lhs ::lamport synced)
         rhs (assoc rhs ::lamport synced)]
-    [(update lhs #(debug %
-                         ::synchronized
-                         ""))
-     (update rhs #(debug %
-                         ::synchronized
-                         ""))]))
+    [(debug lhs ::synchronized "")
+     (debug rhs ::synchronized "")]))

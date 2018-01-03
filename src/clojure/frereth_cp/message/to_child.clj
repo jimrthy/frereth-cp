@@ -627,10 +627,10 @@
    ;; For that matter, I don't have any evidence that
    ;; it would improve anything.
    cb]
-  (let [my-logs (log/init (::log/lamport parent-log))
+  (let [[parent-log my-logs] (log/fork parent-log ::parent-monitor)
         buffer (byte-array K/standard-max-block-length)
         my-logs (log/info my-logs
-                          ::parent-monitor-loop
+                          ::loop
                           "Starting the loop watching for bytes the parent has sent toward the child")
         my-logs (log/flush-logs! logger my-logs)]
     (let [result (strm/consume (partial trigger-from-parent!
@@ -642,7 +642,7 @@
       (-> result
           (dfrd/chain (fn [success]
                         (let [my-logs (log/warn my-logs
-                                                ::parent-monitor-loop
+                                                ::loop
                                                 "parent-monitor source exhausted")]
                           ;; Writing to the from-parent-trigger stream
                           ;; here seems like the obvious thing to do.

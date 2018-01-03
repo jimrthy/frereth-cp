@@ -1047,7 +1047,8 @@
       :as outgoing} ::specs/outgoing
      :as opts}
     logger]
-   (let [log-state (log2/debug (log2/init)
+    ;; FIXME: Really also needs an initial log-state I can fork from that instead
+   (let [log-state (log2/debug (log2/init human-name 0)
                                ::initialization
                                "Building state for initial loop based around options"
                                (assoc opts ::overrides {::->child-size pipe-to-child-size

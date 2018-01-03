@@ -525,7 +525,8 @@
         ;; of a tight inner loop.
         ;; (of course, time will tell whether it's wise to do *any*
         ;; logging under those circumstances)
-        log-atom (atom (log/info (log/init) ::top-level "Top"))]
+        client-log-atom (atom (log/info (log/init ::client 0) ::top-level "Top"))
+        server-log-atom (atom (log/info (log/init ::server 0) ::top-level "Top"))]
     (let [client->server (strm/stream)
           server->client (strm/stream)
           succeeded? (dfrd/deferred)
@@ -534,11 +535,11 @@
           client-atom (atom nil)
           time-out 500
           client-parent-cb (fn [^bytes bs]
-                             (swap! log-atom
-                                    log/info
-                                    ::client-parent-callback
-                                    (str "Sending a " (count bs)
-                                         " byte array to client's parent"))
+                             (swap! client-log-atom
+                                    #(log/info %
+                                               ::client-parent-callback
+                                               (str "Sending a " (count bs)
+                                                    " byte array to client's parent")))
                              ;; With the current implementation, there is no good way
                              ;; to coordinate our lamport clock with the ioloop's.
                              ;; Well, we get the ioloop's when we call get-state.
@@ -571,7 +572,7 @@
           client-child-cb (partial mock-client-child
                                    clnt-decode-src
                                    logger
-                                   log-atom)
+                                   client-log-atom)
           server-atom (atom nil)
           server-state-atom (atom {::count 0})
           ;; Note that any realistic server would actually need 1
@@ -586,28 +587,28 @@
           ;; These are really hooks for sending the bytes to the encryption
           ;; layer.
           server-parent-cb (fn [bs]
-                             (swap! log-atom
-                                    log/info
-                                    ::server-parent-cb
-                                    (str "Sending a " (class bs) " to server's parent"))
+                             (swap! server-log-atom
+                                    #(log/info %
+                                               ::server-parent-cb
+                                               (str "Sending a " (class bs) " to server's parent")))
                              (let [sent (strm/try-put! server->client bs time-out ::timed-out)]
                                (is (not= @sent ::timed-out))))
           server-child-cb (partial mock-server-child
                                    srvr-decode-src
                                    logger
-                                   log-atom)]
+                                   server-log-atom)]
       (dfrd/on-realized succeeded?
                         (fn [good]
-                          (swap! log-atom
-                                 log/info
-                                 ::child-succeeded
-                                 "----------> Test should have passed <-----------"))
+                          (swap! client-log-atom
+                                 #(log/info %
+                                            ::child-succeeded
+                                            "----------> Test should have passed <-----------")))
                         (fn [bad]
-                          (swap! log-atom
-                                 log/error
-                                 ::child-failed
-                                 "High-level test failure"
-                                 {::problem bad})
+                          (swap! client-log-atom
+                                 #(log/error %
+                                             ::child-failed
+                                             "High-level test failure"
+                                             {::problem bad}))
                           (is (not bad))))
 
       ;; If we use consume-async (which seems preferable), we risk
@@ -619,14 +620,14 @@
       (strm/consume (partial client-child-processor
                              client-atom
                              client-state
-                             log-atom
+                             client-log-atom
                              succeeded?
                              chzbrgr-length)
                     clnt-decode-sink)
       (strm/consume (partial server-child-processor
                              server-atom
                              server-state-atom
-                             log-atom
+                             server-log-atom
                              chzbrgr-length)
                     srvr-decode-sink)
 
@@ -644,13 +645,13 @@
         (try
           (strm/consume (partial client->srvr-consumer
                                  server-io
-                                 log-atom
+                                 client-log-atom
                                  time-out
                                  succeeded?)
                         client->server)
           (strm/consume (partial srvr->client-consumer
                                  client-io
-                                 log-atom
+                                 server-log-atom
                                  time-out
                                  succeeded?)
                         server->client)
@@ -659,7 +660,7 @@
             ;; Kick off the exchange
             (buffer-response! client-io
                               "faux-client"
-                              log-atom
+                              client-log-atom
                               ::ohai!
                               "Sequence Initiated"
                               "Handshake initiation failed"
@@ -682,7 +683,7 @@
               ;; received?
               ;; A: That seems like a pretty important clean-up signal
               (is (not= really-succeeded? ::timed-out))
-              (swap! log-atom
+              (swap! client-log-atom
                      log/info
                      ::handshake-status-check
                      (str "=====================================================\n"
@@ -727,7 +728,7 @@
                            deref
                            ::count)))))
           (finally
-            (swap! log-atom
+            (swap! client-log-atom
                    log/info
                    ::handshake-status-check
                    "Cleaning up")
@@ -736,7 +737,7 @@
             (try
               (message/halt! client-io)
               (catch Exception ex
-                (swap! log-atom
+                (swap! client-log-atom
                        log/exception
                        ex
                        ::handshake-status-check
@@ -744,12 +745,13 @@
             (try
               (message/halt! server-io)
               (catch Exception ex
-                (swap! log-atom
+                (swap! server-log-atom
                        log/exception
                        ex
                        ::handshake-status-check
                        "Trying to halt server")))
-            (log/flush-logs! logger @log-atom)))))))
+            (log/flush-logs! logger @client-log-atom)
+            (log/flush-logs! logger @server-log-atom)))))))
 (comment
   (handshake)
   (count (str ::kk))

@@ -1,6 +1,5 @@
 (ns frereth-cp.message.from-child
   (:require [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.helpers :as help]
@@ -364,7 +363,7 @@
         buf-size (if eof?
                    0
                    (count bs-or-eof))
-        block (if (eof?)
+        block (if eof?
                 (assoc (build-individual-block (Unpooled/wrappedBuffer (byte-array 0)))
                        ::specs/send-eof bs-or-eof)
                 ;; Note that back-pressure no longer gets applied if we
@@ -407,57 +406,73 @@
      ::log2/state external-log-state}))
 
 (s/fdef try-multiple-sends
-        :args (s/cat :stream ::specs/stream
+        :args (s/cat :monitor-id ::specs/monitor-id
+                     :stream ::specs/stream
                      :bs-or-eof ::specs/bs-or-eof
                      :blocker dfrd/deferrable?
+                     :log-state ::log2/state
                      :attempts nat-int?
                      :timeout nat-int?)
         :ret (s/keys :req [::log2/state
                            ::specs/bs-or-eof]))
 (defn try-multiple-sends
   "The parameters are weird because I refactored it out of a lexical closure"
-  [stream
+  [monitor-id
+   stream
    bs-or-eof
    blocker
-   prelog attempts timeout]
-  (throw (RuntimeException. "Convert logging methodology"))
+   log-state
+   attempts
+   timeout]
   ;; message-test pretty much duplicates this in try-multiple-sends
   ;; TODO: eliminate the duplication
-  (loop [n attempts]
+  (loop [n attempts
+         log-state log-state]
     (if-not (strm/closed? stream)
-      (do
-        (log/debug prelog
-                   "Waiting for ACK that bytes have been buffered. Attempts left:"
-                   n)
-        (let [waiting
-              (deref blocker timeout ::timed-out)]
+      (let [log-state (log2/debug log-state
+                                  ::try-multiple-sends
+                                  "Waiting for ACK that bytes have been buffered."
+                                  {::attempts-left n
+                                   ::specs/monitor-id monitor-id})]
+        (let [waiting (deref blocker timeout ::timed-out)]
           (if (= waiting ::timed-out)
-            (do  ;; Timed out
-              (log/warn prelog
-                        "Timeout number"
-                        (- (inc attempts) n)
-                        "waiting to buffer bytes from child")
+            ;; Timed out
+            (let [log-state (log2/warn log-state
+                                       ::try-multiple-sends
+                                       "Timeout waiting to buffer bytes from child"
+                                       {::attempts-remaining (- (inc attempts) n)
+                                        ::specs/monitor-id monitor-id})]
               (if (< 0 n)
-                (recur (dec n))
-                ::specs/error))
-            (do  ;; Bytes buffered
-              (if (bytes? bs-or-eof)
-                (log/debug prelog
-                           (count bs-or-eof)
-                           "bytes from child processed by main i/o loop")
-                (log/warn prelog "Got some EOF signal:" bs-or-eof))
+                (recur (dec n) log-state)
+                {::log2/state log-state
+                 ::specs/bs-or-eof ::specs/error}))
+            ;; Bytes buffered
+            (let [log-state (if (bytes? bs-or-eof)
+                              (log2/debug log-state
+                                          ::try-multiple-sends
+                                          "bytes from child processed by main i/o loop"
+                                          {::byte-count (count bs-or-eof)
+                                           ::specs/monitor-id monitor-id})
+                              (log2/warn log-state
+                                         ::try-multiple-sends
+                                         "Got some EOF signal"
+                                         {::specs/monitor-id monitor-id
+                                          ::specs/bs-or-eof bs-or-eof}))]
+
               ;; Q: Does returning this really gain me anything?
               ;; It seems like it would be simpler (for the sake of callers)
               ;; to just return nil on success, or one of the ::specs/eof-flag
               ;; set when it's time to stop.
               ;; I was doing it that way at one point.
               ;; Q: Why did I switch?
-              bs-or-eof))))
-      (do
-        (log/warn prelog
-                  "Destination stream closed waiting to put"
-                  bs-or-eof)
-        ::specs/error))))
+              {::log2/state log-state
+               ::specs/bs-or-eof bs-or-eof}))))
+      {::log2/state (log2/warn log-state
+                               ::try-multiple-sends
+                               "Destination stream closed waiting to put"
+                               {::specs/bs-or-eof bs-or-eof
+                                ::specs/monitor-id monitor-id})
+       ::specs/bs-or-eof ::specs/error})))
 
 (s/fdef forward-bytes-from-child!
         :args (s/cat :monitor-id ::specs/monitor-id
@@ -505,25 +520,26 @@
             timeout 10000
             submitted (strm/try-put! stream
                                      [::specs/child-> callback blocker]
-                                     timeout ::timed-out)]
+                                     timeout ::timed-out)
+            [log-state forked-log-state] (log2/fork log-state ::send!)]
         (dfrd/on-realized submitted
                           (fn [success]
-                            (let [log-state (log2/debug log-state
-                                                        ::forward-bytes-from-child!
-                                                        "Successfully posted to main i/o loop"
-                                                        {::specs/bs-or-eof bs-or-eof
-                                                         ::specs/monitor-id monitor-id
-                                                         ::success success})]
-                              (deliver on-completion log-state)))
+                            (let [forked-log-state (log2/debug forked-log-state
+                                                               ::forward-bytes-from-child!
+                                                               "Successfully posted to main i/o loop"
+                                                               {::specs/bs-or-eof bs-or-eof
+                                                                ::specs/monitor-id monitor-id
+                                                                ::success success})]
+                              (deliver on-completion forked-log-state)))
                           (fn [failure]
-                            (let [log-state (log2/error log-state
-                                                        ::forward-bytes-from-child!
-                                                        "Failed to post to main io-loop"
-                                                        {::specs/bs-or-eof bs-or-eof
-                                                         ::specs/monitor-id monitor-id
-                                                         ::failure failure})]
-                              (deliver on-completion log-state))))
-        (try-multiple-sends stream bs-or-eof blocker prelog 10 timeout))
+                            (let [forked-log-state (log2/error forked-log-state
+                                                               ::forward-bytes-from-child!
+                                                               "Failed to post to main io-loop"
+                                                               {::specs/bs-or-eof bs-or-eof
+                                                                ::specs/monitor-id monitor-id
+                                                                ::failure failure})]
+                              (deliver on-completion forked-log-state))))
+        (try-multiple-sends monitor-id stream bs-or-eof blocker log-state 10 timeout))
       {::log2/state (log2/warn log-state
                                ::forward-bytes-from-child!
                                "Destination stream closed. Discarding message"
@@ -595,7 +611,7 @@
                                                                 available-bytes
                                                                 max-to-read)
                                    (catch ExceptionInfo ex
-                                     (let [{{ex-log-state ::log2/state}
+                                     (let [{ex-log-state ::log2/state
                                             :as ex-data} (.getData ex)]
                                        ;; Q: Should a problem there trigger EOF?
                                        {::log2/state (log2/exception (if ex-log-state
