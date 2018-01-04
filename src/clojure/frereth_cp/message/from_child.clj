@@ -656,6 +656,117 @@
                                on-bytes-forwarded
                                bs-or-eof)))
 
+(s/fdef initial-child-monitor-loop
+        :args (s/cat :state ::specs/state
+                     :logger ::log2/logger
+                     :client-waiting-on-response dfrd/deferrable?
+                     :monitor-id ::specs/monitor-id
+                     :child-out ::specs/child-out
+                     :stream strm/sink?
+                     :eof?-atom any?)
+        :ret ::specs/state)
+(defn initial-child-monitor-loop
+  ;;; Q: How much common functionality can I refactor out of this and monitor-loop?
+  [logger
+   state
+   client-waiting-on-response
+   monitor-id
+   child-out
+   stream
+   eof?-atom]
+  (loop [state state]
+    (let [log-state (log2/flush-logs! logger (log2/debug
+                                              (::log2/state state)
+                                              ::initial-child-monitor-loop
+                                              "Top of client-waiting-on-initial-response loop"))]
+      ;; This is the key to the difference with the main loop.
+      ;; Until this is realized, process-next-bytes-from-child!
+      ;; is limited to K/max-bytes-in-initiate-message
+      (if (not (realized? client-waiting-on-response))
+        (let [on-bytes-forwarded (dfrd/deferred)
+              {msg-or-eof'? ::specs/bs-or-eof
+               log-state ::log2/state}
+              ;; TODO: This also needs access to log-state
+              ;; And it needs to return the updated log-state
+              ;; Actually, it should also return a set of
+              ;; side-effects to run
+              (process-next-bytes-from-child! monitor-id
+                                              log-state
+                                              child-out
+                                              stream
+                                              K/max-bytes-in-initiate-message
+                                              on-bytes-forwarded)
+              state (update state
+                            ::log2/state
+                            #(log2/flush-logs! logger %))]
+          (dfrd/on-realized on-bytes-forwarded
+                            (fn [success-logs]
+                              (log2/flush-logs! logger success-logs))
+                            (fn [err-logs]
+                              (log2/flush-logs! logger err-logs)))
+          (if (bytes? msg-or-eof'?)
+            (recur state)  ; regular message. Keep going
+            (let [state (update state
+                                ::log2/state
+                                #(log2/warn %
+                                            ::initial-child-monitor-loop
+                                            "EOF signalled before we ever heard back from server"
+                                            {::specs/eof-flag msg-or-eof'?
+                                             ::specs/monitor-id monitor-id}))]
+              (swap! eof?-atom not)
+              state)))
+        state))))
+
+(s/fdef monitor-loop
+        :args (s/cat :state ::specs/state
+                     :logger ::log2/logger
+                     :monitor-id ::specs/monitor-id
+                     :child-out ::specs/child-out
+                     :stream strm/sink?
+                     ;; Sadly, there is no direct builtin predicate for atom?
+                     :eof?-atom any?))
+(defn monitor-loop
+  [state
+   logger
+   monitor-id
+   child-out
+   stream
+   eof?-atom]
+  (loop [state state]
+    (when (not @eof?-atom)
+      (let [log-state (log2/debug (::log2/state state)
+                                  ::child-monitor-loop
+                                  "Top of main child-read loop"
+                                  {::specs/monitor-id monitor-id})
+            on-bytes-forwarded (dfrd/deferred)
+            {eof'? ::specs/bs-or-eof  ; FIXME: Rename this to bs-or-eof
+             log-state ::log2/state}
+            (process-next-bytes-from-child! monitor-id
+                                            log-state
+                                            child-out
+                                            stream
+                                            K/standard-max-block-length
+                                            on-bytes-forwarded)]
+        (dfrd/on-realized on-bytes-forwarded
+                          (fn [success-logs]
+                            (log2/flush-logs! logger success-logs))
+                          (fn [err-logs]
+                            (log2/flush-logs! logger err-logs)))
+        (if (bytes? eof'?)
+          (recur (assoc state
+                        ::log2/state
+                        #(log2/flush-logs! logger log-state)))
+          (do
+            (when (nil? eof'?)
+              (throw (ex-info "What just happened?"
+                              {::specs/monitor-id monitor-id})))
+            (swap! eof?-atom not)
+            (assoc state ::log2/state (log2/warn log-state
+                                                 ::child-monitor-loop
+                                                 "EOF signal received"
+                                                 {::specs/eof-flag eof'?
+                                                  ::specs/monitor-id monitor-id}))))))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -733,81 +844,16 @@
     ;; TODO: This probably needs to run on an executor specifically
     ;; dedicated to this sort of thing (probably shared with to-parent)
     (dfrd/future
-      ;; TODO: Refactor this into its own function
-      (let [eof? (atom false)]
+      (let [eof?-atom (atom false)]
         (try
-          (let [state
-                (loop [state state]
-                  (let [state (update state
-                                      ::log2/state
-                                      #(log2/flush-logs! logger (log2/debug
-                                                                 %
-                                                                 ::start-child-monitor!
-                                                                 "Top of client-waiting-on-initial-response loop")))]
-                    (if (not (realized? client-waiting-on-response))
-                      (let [{msg-or-eof'? ::specs/bs-or-eof
-                             log-state ::log2/state}
-                            ;; TODO: This also needs access to log-state
-                            ;; And it needs to return the updated log-state
-                            ;; Actually, it should also return a set of
-                            ;; side-effects to run
-                            (process-next-bytes-from-child! monitor-id
-                                                            log-state
-                                                            child-out
-                                                            stream
-                                                            K/max-bytes-in-initiate-message
-                                                            on-bytes-forwarded)
-                            state (update state
-                                          ::log2/state
-                                          #(log2/flush-logs! logger %))]
-                        (if (bytes? msg-or-eof'?)
-                          (recur state)  ; regular message. Keep going
-                          (let [state (update state
-                                              ::log2/state
-                                              #(log2/warn %
-                                                          ::child-monitor-loop
-                                                          "EOF signalled before we ever heard back from server"
-                                                          {::specs/eof-flag msg-or-eof'?
-                                                           ::specs/monitor-id monitor-id}))]
-                            (swap! eof? not)
-                            state)))
-                      state)))
-                state (loop [state state]
-                        (when (not @eof?)
-                          (let [state (update state
-                                              ::log2/state
-                                              #(log2/debug %
-                                                           ::child-monitor-loop
-                                                           "Top of main child-read loop"
-                                                           {::specs/monitor-id monitor-id}))
-                                eof'?
-                                (process-next-bytes-from-child! message-loop-name
-                                                                child-out
-                                                                stream
-                                                                K/standard-max-block-length)
-                                state (update state
-                                              ::log2/state
-                                              #(log2/flush-logs! logger %))]
-                            (if (bytes? eof'?)
-                              (recur state)
-                              (let [state (update state
-                                                  ::log2/state
-                                                  #(log2/warn %
-                                                              ::child-monitor-loop
-                                                              "EOF signal received"
-                                                              {::specs/eof-flag eof'?
-                                                               ::specs/monitor-id monitor-id}))]
-                                (when (nil? eof'?)
-                                  (throw (ex-info "What just happened?"
-                                                  {::specs/monitor-id monitor-id})))
-                                (swap! eof? not)
-                                state)))))
-                state (update state
-                              ::log2/state
-                              #(log2/warn %
-                                          ::child-monitor-loop
-                                          "Child monitor exiting"
-                                          {::specs/monitor-id monitor-id}))]
+          (as-> (initial-child-monitor-loop state logger client-waiting-on-response monitor-id child-out stream eof?-atom)
+              state
+            (monitor-loop state logger monitor-id child-out stream eof?-atom on-bytes-forwarded)
+            (update state ::log2/state
+                    #(log2/warn %
+                                ::start-child-monitor!
+                                "Child monitor exiting"
+                                {::specs/monitor-id monitor-id}))
             (log2/flush-logs! logger state))
           (catch IOException ex
             ;; TODO: Need to send an EOF signal to main ioloop so

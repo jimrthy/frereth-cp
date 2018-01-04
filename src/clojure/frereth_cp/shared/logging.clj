@@ -112,7 +112,7 @@
          ::level level
          ::time (System/currentTimeMillis)
          ::message message})
-    (update ::lamport inc))))
+       (update ::lamport inc))))
 
 (defmacro deflogger
   [level]
