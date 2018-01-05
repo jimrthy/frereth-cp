@@ -560,7 +560,7 @@
         actual-next (max based-on-closed-child recent)
         mid1-time (System/nanoTime)
         log-message (cl-format nil
-                               (str "Minimum send time: ~:d\n"
+                               (str "Minimum resend time: ~:d\n"
                                     "which is ~:d nanoseconds\n"
                                     "after last block time ~:d.\n"
                                     "Recent was ~:d ns in the past")
@@ -906,7 +906,8 @@
                 ;; Note that we can't *really* exit until
                 ;; the caller closes the stream.
                 ;; After all, unit tests want/need to
-                ;; examine the final system state.
+                ;; examine the final system state (which
+                ;; means calling into this loop)
                 (log/warn (str prelog
                                "Main ioloop is done."
                                "\nsend-eof-acked: " send-eof-acked
