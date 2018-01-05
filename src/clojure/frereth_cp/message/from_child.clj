@@ -71,12 +71,17 @@
           blocks))
 
 (s/fdef read-next-bytes-from-child!
-        :args (s/cat :monitor-id ::specs/monitor-id
-                     :log-state ::log2/state
-                     :child-out ::specs/child-out
-                     :prefix bytes?
-                     :available-bytes nat-int?
-                     :max-to-read nat-int?)
+        :args (s/or :recursing (s/cat :monitor-id ::specs/monitor-id
+                                      :log-state ::log2/state
+                                      :child-out ::specs/child-out
+                                      :prefix bytes?
+                                      :available-bytes nat-int?
+                                      :max-to-read nat-int?)
+                    :top-level (s/cat :monitor-id ::specs/monitor-id
+                                      :log-state ::log2/state
+                                      :child-out ::specs/child-out
+                                      :available-bytes nat-int?
+                                      :max-to-read nat-int?))
         :ret (s/keys :req [::log2/state
                            ::specs/bs-or-eof]))
 (defn read-next-bytes-from-child!
@@ -229,11 +234,13 @@
                                          "Reading from child failed"
                                          {::specs/monitor-id monitor-id})
             ::specs/bs-or-eof ::specs/error})))))
-  ([message-loop-name
+  ([monitor-id
+    log-state
     child-out
     available-bytes
     max-to-read]
-   (read-next-bytes-from-child! message-loop-name
+   (read-next-bytes-from-child! monitor-id
+                                log-state
                                 child-out
                                 []
                                 available-bytes
@@ -248,12 +255,16 @@
                      :state ::specs/state)
         :ret ::specs/state)
 (defn byte-consumer
-  [monitor-id
+  [;; These first parameters are all set up as a partial, called
+   ;; from byte-consumer-builder
+   monitor-id
    log-state
    block
    eof?
    buf-size
    bs-or-eof
+   ;; This part is supplied at call-time, when we're ready for this
+   ;; side-effect to happen
    {{:keys [::specs/ackd-addr
             ::specs/max-block-length
             ::specs/strm-hwm
@@ -261,8 +272,6 @@
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}]
-  ;; Note that the cleanest way to handle this seems to be merging
-  ;; the builder's log-state into state
   (let [repr (if eof?
                (str "EOF: " bs-or-eof)
                (str buf-size "-byte array"))
@@ -357,7 +366,7 @@
   [monitor-id
    external-log-state
    bs-or-eof]
-  (let [log-state (log2/init (::log2/lampont external-log-state))
+  (let [log-state (log2/init (::log2/lamport external-log-state))
         result (build-individual-block (Unpooled/wrappedBuffer (byte-array 0)))
         eof? (keyword? bs-or-eof)
         buf-size (if eof?
@@ -667,8 +676,8 @@
         :ret ::specs/state)
 (defn initial-child-monitor-loop
   ;;; Q: How much common functionality can I refactor out of this and monitor-loop?
-  [logger
-   state
+  [state
+   logger
    client-waiting-on-response
    monitor-id
    child-out
@@ -724,7 +733,8 @@
                      :child-out ::specs/child-out
                      :stream strm/sink?
                      ;; Sadly, there is no direct builtin predicate for atom?
-                     :eof?-atom any?))
+                     :eof?-atom any?)
+        :ret ::specs/state)
 (defn monitor-loop
   [state
    logger
@@ -733,7 +743,7 @@
    stream
    eof?-atom]
   (loop [state state]
-    (when (not @eof?-atom)
+    (if (not @eof?-atom)
       (let [log-state (log2/debug (::log2/state state)
                                   ::child-monitor-loop
                                   "Top of main child-read loop"
@@ -755,7 +765,7 @@
         (if (bytes? eof'?)
           (recur (assoc state
                         ::log2/state
-                        #(log2/flush-logs! logger log-state)))
+                        (log2/flush-logs! logger log-state)))
           (do
             (when (nil? eof'?)
               (throw (ex-info "What just happened?"
@@ -765,7 +775,8 @@
                                                  ::child-monitor-loop
                                                  "EOF signal received"
                                                  {::specs/eof-flag eof'?
-                                                  ::specs/monitor-id monitor-id}))))))))
+                                                  ::specs/monitor-id monitor-id})))))
+      state)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -848,13 +859,14 @@
         (try
           (as-> (initial-child-monitor-loop state logger client-waiting-on-response monitor-id child-out stream eof?-atom)
               state
-            (monitor-loop state logger monitor-id child-out stream eof?-atom on-bytes-forwarded)
+            (monitor-loop state logger monitor-id child-out stream eof?-atom)
             (update state ::log2/state
                     #(log2/warn %
                                 ::start-child-monitor!
                                 "Child monitor exiting"
                                 {::specs/monitor-id monitor-id}))
-            (log2/flush-logs! logger state))
+            (update state ::log2/state
+                    #(log2/flush-logs! logger %)))
           (catch IOException ex
             ;; TODO: Need to send an EOF signal to main ioloop so
             ;; it can notify the parent (or quit, as the case may be)

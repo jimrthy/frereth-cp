@@ -73,35 +73,15 @@
                      :details ::details)
         :ret ::entries)
 (defn add-log-entry
-  ([{:keys [::context
-            ::lamport]
-     :as log-state}
-    level
-    label
-    message
-    details]
-   (when-not lamport
-     (let [ex (ex-info "Desperation warning: missing clock among" (or log-state
-                                                                      {::problem "falsey log-state"}))]
-       (s-t/print-stack-trace ex)))
-   (-> log-state
-       (update
-        ::entries
-        conj
-        {::context context
-         ::current-thread (utils/get-current-thread)
-         ::details details
-         ::label label
-         ::lamport lamport
-         ::level level
-         ::time (System/currentTimeMillis)
-         ::message message})
-       (update ::lamport inc)))
-  ([{:keys [::lamport]
+    ([{:keys [::lamport]
      :as log-state}
     level
     label
     message]
+   (when-not lamport
+     (let [ex (ex-info "Desperation warning: missing clock among" (or {::problem log-state}
+                                                                      {::problem "falsey log-state"}))]
+       (s-t/print-stack-trace ex)))
    (-> log-state
        (update
         ::entries
@@ -112,7 +92,22 @@
          ::level level
          ::time (System/currentTimeMillis)
          ::message message})
-       (update ::lamport inc))))
+       (update ::lamport inc)))
+  ([{:keys [::context
+            ::lamport]
+     :as log-state}
+    level
+    label
+    message
+    details]
+   (-> log-state
+       (add-log-entry level label message)
+       (update ::entries
+               (fn [cur]
+                 (assoc-in cur
+                           [(dec (count cur))
+                            ::details]
+                           details))))))
 
 (defmacro deflogger
   [level]
@@ -304,6 +299,8 @@ Returns fresh set of log entries"
     :as lhs}
    {r-clock ::lamport
     :as rhs}]
+  {:pre [l-clock
+         r-clock]}
   (let [synced (inc (max l-clock r-clock))
         lhs (assoc lhs ::lamport synced)
         rhs (assoc rhs ::lamport synced)]
