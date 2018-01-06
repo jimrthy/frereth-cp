@@ -221,20 +221,6 @@
    ;; *This* is the arity that should just go away
    (init 0)))
 
-(s/fdef fork
-        :args (s/cat :source ::state
-                     :child-context ::context)
-        :ret (s/tuple ::state ::state))
-(defn fork
-  [src child-context]
-  (let [src-ctx (::context src)
-        combiner (if (seq? src-ctx)
-                   conj
-                   list)
-        forked (init (combiner src-ctx child-context)
-                     (::lamport src))]
-    (synchronize src forked)))
-
 (defn std-out-log-factory
   []
   (->StdOutLogger))
@@ -306,3 +292,17 @@ Returns fresh set of log entries"
         rhs (assoc rhs ::lamport synced)]
     [(debug lhs ::synchronized "")
      (debug rhs ::synchronized "")]))
+
+(s/fdef fork
+        :args (s/cat :source ::state
+                     :child-context ::context)
+        :ret (s/tuple ::state ::state))
+(defn fork
+  [src child-context]
+  (let [src-ctx (::context src)
+        combiner (if (seq? src-ctx)
+                   conj
+                   list)
+        forked (init (combiner src-ctx child-context)
+                     (::lamport src))]
+    (synchronize src forked)))
