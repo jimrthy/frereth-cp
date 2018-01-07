@@ -48,12 +48,13 @@
    success-message
    failure-message
    failure-body]
-  (let [logs (log2/init)]
+  ;; FIXME: This really should be a fork
+  (let [logs (log2/init ::try-multiple-sends 0)]
     (loop [m n]
       (if (f io-handle payload)
-        (let [logs (log2/info logs ::try-multiple-sends success-message)
+        (let [logs (log2/info logs ::succeeded success-message)
               logs (log2/debug logs
-                               ::try-multiple-sends
+                               ::succeeded
                                (str "Sending took" (- (inc n) m) "attempt(s)"))]
           (log2/flush-logs! logger logs))
         (if (> 0 m)
@@ -61,7 +62,7 @@
                                  failure-body)
                 logs (log2/exception logs
                                      failure
-                                     ::try-multiple-sends
+                                     ::failed
                                      failure-message)]
             (log2/flush-logs! logger logs)
             ;; Need to make double-extra certain that
@@ -85,7 +86,7 @@
   ;; TODO: Revisit this decision. See whether it's uglier
   ;; with 2 sides to "communicate"
   (let [loop-name "Echo Test"
-        log-atom (atom (log2/init))
+        log-atom (atom (log2/init ::basic-echo 0))
         logger (log2/std-out-log-factory)
         src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
         msg-len (- K/max-msg-len K/header-length K/min-padding-length)
@@ -219,7 +220,7 @@
                                                       (message/child-close! @io-handle-atom)
                                                       ;; This is called purely for side-effects.
                                                       ;; The return value does not matter.
-                                                      (let [inner-logs (log2/init (inc (::log2/lamport logs)))
+                                                      (let [[_ inner-logs] (log2/fork logs ::child-done)
                                                             inner-logs (log2/info inner-logs
                                                                                   ::echo-child-cb
                                                                                   "Sent EOF after the message block")]
@@ -304,13 +305,22 @@
                       (is (= (count message-body) (count without-header)))
                       (is (b-t/bytes= message-body without-header)))))
                 (is (realized? wrote) "Initial write from parent hasn't returned yet.")
+                ;; Note that state is fine here, but we're about to overwrite it
+                (is (not (s/explain-data ::specs/state state)))
                 (let [state (message/get-state io-handle 500 ::time-out)
+                      ;; FIXME: Need to merge this into state's ::log2/state
+                      ;; key.
+                      ;; But not before a bigger FIXME:
+                      ;; How/where did the state logs get messed up?
                       logs (log2/info @log-atom
                                       ::echo-examination
                                       "Final state query returned")]
                   (is (not= state ::timeout))
                   (when (not= state ::timeout)
                     (is (not
+                         ;; This fails because ::log2/state is a map that only
+                         ;; contains a ::log2/entries key.
+                         ;; The value for that key looks like the actual expected log-state
                          (s/explain-data ::specs/state state)))
                     (let [logs (log2/info logs
                                           ::echo-examination
@@ -355,9 +365,9 @@
                   logs (log2/flush-logs! logger logs)]
               (reset! log-atom logs)))
           (finally
-            (let [logs (log2/warn (log2/init)
-                                  ::echo-clean-up
-                                  "Signalling I/O loop halt")
+            (let [logs (log2/warn (second (log2/fork @log-atom ::echo-clean-up))
+                                  ::signal-halt
+                                  "")
                   logs (log2/flush-logs! logger logs)]
               (reset! log-atom logs)
               (message/halt! io-handle))))))))
@@ -516,9 +526,8 @@
   (let [test-run (gensym)
         prelog (utils/pre-log test-run)
         logger (log2/std-out-log-factory)
-        log-atom (atom (log2/info (log2/init)
-                              ::bigger-outbound
-                              "Start test writing big chunk of outbound data"))]
+        log-atom (atom (log2/info (log2/init ::bigger-outbound 0)
+                                  ::test-top))]
     ;; TODO: split this into 2 tests
     ;; 1 should stall out like the current implementation,
     ;; waiting for ACKs (maybe drop every other packet?

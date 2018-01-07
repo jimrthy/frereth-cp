@@ -270,7 +270,7 @@
     log-state ::log2/state
     :as state}]
   (let [log-state (log2/debug log-state
-                              ::trigger-from-parent!
+                              ::trigger-from-parent
                               "Incoming from parent")]
 
     ;; This is an important side-effect that permanently converts the
@@ -308,7 +308,7 @@
       ;; that's really a vector that we can just conj onto.
       (when-not state
         (let [logs (log2/warn (log2/init (::log2/lamport log-state))
-                              ::trigger-from-parent!
+                              ::trigger-from-parent
                               ;; They're about to get worse
                               "nil state. Things went sideways recently")]
           (log2/flush-logs! logger logs)))
@@ -331,7 +331,7 @@
                                                                                      {::cause ex}))))))
                                                              ->child-buffer))
               log-state (log2/debug log-state
-                                    ::trigger-from-parent!
+                                    ::trigger-from-parent
                                     "possibly processing"
                                     {::bytes-buffered previously-buffered-message-bytes
                                      ::buffer-count (count ->child-buffer)})]
@@ -351,7 +351,7 @@
               ;; TODO: Now that the manifold version is working, revisit
               ;; that decision.
                 [log-state (log2/debug log-state
-                                       ::trigger-from-parent!
+                                       ::trigger-from-parent
                                        "Message is small enough. Look back here")
                  state (-> state
                            (assoc ::log2/state log-state)
@@ -394,7 +394,7 @@
                       (catch ExceptionInfo ex
                         (let [log-state (log2/exception log-state
                                                         ex
-                                                        ::trigger-from-parent!
+                                                        ::trigger-from-parent
                                                         "Forwarding failed"
                                                         (.getData ex))]
                           (assoc state ::log2/state log-state)))
@@ -404,7 +404,7 @@
                                   ::log2/state
                                   #(log2/exception %
                                                    ex
-                                                   ::trigger-from-parent!
+                                                   ::trigger-from-parent
                                                    msg)))))]
                 (update result ::log2/state #(log2/flush-logs! logger %))))
             ;; This is actually pretty serious.
@@ -415,7 +415,7 @@
             (assoc state
                    ::log/state
                    (log2/warn log-state
-                              ::trigger-from-parent!
+                              ::trigger-from-parent
                               "Incoming message too large"
                               {::incoming-size incoming-size
                                ::maximum-allowed K/max-msg-len}))))
@@ -424,7 +424,7 @@
         (assoc state
                ::log/state
                (log2/warn log-state
-                          ::trigger-from-parent!
+                          ::trigger-from-parent
                           "Child buffer overflow\nWait!"
                           {::incoming-buffer-size (count ->child-buffer)
                            ::max-allowed max-child-buffer-size}))))))
@@ -1221,7 +1221,6 @@
                      ::specs/from-parent-trigger (strm/stream)
                      ::specs/executor executor
                      ::log2/logger logger
-                     ::log2/entries (log2/init)
                      ::specs/message-loop-name message-loop-name
                      ::specs/stream s}]
       (start-event-loops! io-handle state)

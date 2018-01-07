@@ -30,6 +30,12 @@
                         :message ::specs/bs-or-eof)
            :ret ::log/state))
 
+(s/def ::result-writer dfrd/deferrable?)
+
+(s/def ::cb-trigger (s/keys :req [::result-writer
+                                  ::log/state
+                                  ::specs/bs-or-eof]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic numbers
 
@@ -320,9 +326,9 @@
 
 (s/fdef trigger-from-parent!
         :args (s/cat :io-handle ::specs/io-handle
-                     :my-logs ::log/entries
                      :buffer bytes?
                      :cb ::callback
+                     :my-logs ::log/entries
                      :trigger (s/keys :req [::log/lamport]))
         :ret any?)
 (defn trigger-from-parent!
@@ -336,6 +342,10 @@
            ::specs/bs-or-eof]
     my-logs ::log/state
     :as trigger}]
+  (comment
+    (println (str "#!#!#!#!#!#!\n"
+                  "to-child/trigger-from-parent!\nTrigger:\n"
+                  (keys trigger))))
   (let [my-logs
         (try
           ;; Problems in the provided callback are
