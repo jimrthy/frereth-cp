@@ -280,19 +280,9 @@
         ;; so maybe it doesn't make sense to mess with it here.
         block (assoc block ::specs/start-pos strm-hwm)
         [builder-log-state caller-log-state] (log/synchronize log-state (::log/state state))
-        _ (println (str "#!#!#!#!#!#!\n"
-                        "Synchronized builder/caller clocks\n"
-                        "Builder keys:\n"
-                        (keys builder-log-state)
-                        "\nSynchronized Caller keys:\n"
-                        caller-log-state))
         log-state (update caller-log-state ::log/entries
                           (fn [cur]
                             (into [] (concat cur (::log/entries builder-log-state)))))
-        _ (println (str "After conjoining entries:\n"
-                        (::log/entries log-state)
-                        "\na: "
-                        (class (::log/entries log-state))))
         log-state (log/debug log-state
                              ::byte-consumer
                              (str "Adding new message block to unsent others from a thunk")

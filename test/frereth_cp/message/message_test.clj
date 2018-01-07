@@ -49,6 +49,8 @@
    failure-message
    failure-body]
   ;; FIXME: This really should be a fork
+  ;; (which means the caller needs to supply
+  ;; its log state)
   (let [logs (log2/init ::try-multiple-sends 0)]
     (loop [m n]
       (if (f io-handle payload)

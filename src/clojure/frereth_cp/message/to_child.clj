@@ -342,10 +342,6 @@
            ::specs/bs-or-eof]
     my-logs ::log/state
     :as trigger}]
-  (comment
-    (println (str "#!#!#!#!#!#!\n"
-                  "to-child/trigger-from-parent!\nTrigger:\n"
-                  (keys trigger))))
   (let [my-logs
         (try
           ;; Problems in the provided callback are
