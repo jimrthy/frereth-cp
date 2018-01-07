@@ -529,7 +529,8 @@
         prelog (utils/pre-log test-run)
         logger (log2/std-out-log-factory)
         log-atom (atom (log2/info (log2/init ::bigger-outbound 0)
-                                  ::test-top))]
+                                  ::test-top
+                                  ""))]
     ;; TODO: split this into 2 tests
     ;; 1 should stall out like the current implementation,
     ;; waiting for ACKs (maybe drop every other packet?
