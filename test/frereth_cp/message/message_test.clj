@@ -101,12 +101,14 @@
         message-id 1]
     (is (= msg-len K/k-1))
     (.writeBytes src message-body)
-    (let [incoming (to-parent/build-message-block-description loop-name
-                    {::specs/buf src
-                     ::specs/length msg-len
-                     ::specs/message-id message-id
-                     ::specs/send-eof ::specs/false
-                     ::specs/start-pos 0})]
+    (let [{incoming ::specs/bs-or-eof
+           log-state ::log2/state} (to-parent/build-message-block-description @log-atom
+                                                                              {::specs/buf src
+                                                                               ::specs/length msg-len
+                                                                               ::specs/message-id message-id
+                                                                               ::specs/send-eof ::specs/false
+                                                                               ::specs/start-pos 0})]
+      (reset! log-atom log-state)
       (is (= K/max-msg-len (count incoming)))
       (let [response (dfrd/deferred)
             ;; I have circular dependencies among
@@ -290,7 +292,7 @@
                     ;; And yet I've seen this test fail on my desktop
                     ;; because it took > 2 seconds.
                     ;; (Most of that is because I don't have another side to send
-                    ;; an ACK
+                    ;; an ACK)
                     outcome (deref response 5000 ::timeout)]
                 (if (= outcome ::timeout)
                   (do

@@ -1,7 +1,5 @@
 (ns frereth-cp.message.to-parent
-  (:require [clojure.pprint :refer [cl-format]]
-            [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
+  (:require [clojure.spec.alpha :as s]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
@@ -13,7 +11,12 @@
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal Helpers
+;;;; Specs
+
+(s/def ::ok-send? boolean?)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Internal Helpers
 
 (s/fdef calculate-padded-size
         :args (s/cat :block ::specs/block)
@@ -185,19 +188,17 @@
   (let [block-to-move (peek un-sent-blocks)]
     (assert block-to-move (str "Trying to move non-existent block from among\n"
                                (keys outgoing)))
-    (log/debug (utils/pre-log message-loop-name)
-               (str "Moving first unsent block\n("
-                    ;; TODO: Verify that this has a ::specs/time key and value
-                    block-to-move
-                    ")\nfrom\na queue of "
-                    (count un-sent-blocks)
-                    " unsent\nto join "
-                    (count un-ackd-blocks)
-                    " un-ACK'd blocks among\n"
-                    un-ackd-blocks
-                    "\nas\n"
-                    updated-block))
     (-> state
+        (update ::log2/state
+                #(log2/debug %
+                             ::mark-block-sent
+                             "Moving first un-sent block to un-ackd"
+                             {::specs/block block-to-move
+                              ::specs/un-sent-blocks un-sent-blocks
+                              ::un-sent-count (count un-sent-blocks)
+                              ::specs/un-ackd-blocks un-ackd-blocks
+                              ::un-ackd-count (count un-ackd-blocks)
+                              ::updated-block updated-block}))
         ;; Since I've had issues with this, it seems worth mentioning that
         ;; this is a sorted-set (by specs/time)
         (update-in [::specs/outgoing ::specs/un-ackd-blocks] conj updated-block)
@@ -213,13 +214,17 @@
     :as state}
    prev-block
    updated-block]
-  (log/debug (str message-loop-name ": Resending a block"))
   (assert (= ::specs/un-ackd-blocks
              (::specs/next-block-queue outgoing)))
-  (update-in state
-             [::specs/outgoing ::specs/un-ackd-blocks]
-             (fn [cur]
-               (conj (disj cur prev-block) updated-block))))
+  (-> state
+      (update ::log2/state
+              #(log2/debug %
+                           ::mark-block-resent
+                           "Resending a block"))
+      (update-in state
+                 [::specs/outgoing ::specs/un-ackd-blocks]
+                 (fn [cur]
+                   (conj (disj cur prev-block) updated-block)))))
 
 (s/fdef pre-calculate-state-after-send
         :args (s/cat :state ::specs/state)
@@ -391,6 +396,7 @@
     {:keys [::specs/last-edge
             ::specs/n-sec-per-block
             ::specs/rtt-timeout]} ::specs/flow-control
+    log-state ::log2/state
     :as state}]
   {:pre [n-sec-per-block
          recent
@@ -398,61 +404,59 @@
   ;; It's tempting to make adjustments in here using now vs. recent.
   ;; Q: How much impact would that really have?
   ;; (There would definitely be *some*)
-  (let [prelog (utils/pre-log message-loop-name)]
-    (assert earliest-time
-            (str prelog
-                 "Missing earliest-time among"
-                 (keys outgoing)))
-    (log/debug prelog "Checking for a block to resend")
+  (let [prelog (utils/pre-log message-loop-name)
+        _ (assert earliest-time
+                  (str prelog
+                       "Missing earliest-time among"
+                       (keys outgoing)))
+        label ::check-for-previous-block-to-resend
+        log-state (log2/debug log-state
+                              label
+                              "Checking for a block to resend")]
     (if (and (< 0 (count un-ackd-blocks))
              (>= recent (+ earliest-time n-sec-per-block))
              (>= recent (+ earliest-time rtt-timeout)))
-      (do
-        (log/debug prelog
-                   "It has been long enough to justify resending one of our"
-                   (count un-ackd-blocks)
-                   "un-ACK'd blocks")
+      (let [log-state (log2/debug log-state
+                                  label
+                                  "It has been long enough to justify resending one of our un-ACK'd blocks"
+                                  {::specs/message-loop-name message-loop-name
+                                   ::un-ackd-block-count (count un-ackd-blocks)})]
         ;; This gets us to line 344
         ;; It finds the first block that matches earliest-time
         ;; It's going to re-send that block (it *does* exist...right?)
         (let [block (first un-ackd-blocks)
               state' (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
-          ;; But first, it might adjust some of the globals.
-          (if (> recent (+ last-panic (* 4 rtt-timeout)))
-            ;; Need to update some of the related flow-control fields
-            (-> state'
-                (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
-                (assoc-in [::specs/outgoing ::specs/last-panic] recent)
-                (assoc-in [::specs/flow-control ::specs/last-edge] recent))
-            ;; We haven't had another timeout since the last-panic.
-            ;; Don't adjust those dials.
-            state')))
-      (do
-        ;; Honestly, it makes more sense to consolidate the
-        ;; gap-buffer with any ACKs in this message before
-        ;; looking for messages to resend.
-        ;; TODO: That instead.
-        (log/debug prelog
-                   (cl-format nil
-                              (str
-                               "Conditions wrong"
-                               " for resending any of our ~d previously "
-                               "sent un-ack'd blocks, based on"
-                               "\nEarliest time: ~:d"
-                               "\nnanoseconds per block: ~:d"
-                               "\nrtt-timeout: ~:d"
-                               "\nrecent: ~:d")
-                              (count un-ackd-blocks)
-                              earliest-time
-                              n-sec-per-block
-                              (long rtt-timeout)
-                              recent))
-        state))))
+          (assoc
+           ;; But first, it might adjust some of the globals.
+           (if (> recent (+ last-panic (* 4 rtt-timeout)))
+             ;; Need to update some of the related flow-control fields
+             (-> state'
+                 (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
+                 (assoc-in [::specs/outgoing ::specs/last-panic] recent)
+                 (assoc-in [::specs/flow-control ::specs/last-edge] recent))
+             ;; We haven't had another timeout since the last-panic.
+             ;; Don't adjust those dials.
+             state')
+           ::log2/state log-state)))
+      ;; Honestly, it makes more sense to consolidate the
+      ;; gap-buffer with any ACKs in this message before
+      ;; looking for messages to resend.
+      ;; TODO: That instead.
+      (update state
+              ::log2/state
+              #(log2/debug %
+                           label
+                           "Conditions wrong for resending any of our previously sent un-ack'd blocks"
+                           {::un-ackd-count (count un-ackd-blocks)
+                            ::specs/earliest-time earliest-time
+                            ::specs/n-sec-per-block n-sec-per-block
+                            ::specs/rtt-timeout (long rtt-timeout)
+                            ::specs/recent recent})))))
 
 (declare send-eof-buffered?)
 (s/fdef ok-to-send-new?
         :args (s/cat :state ::specs/state)
-        :ret boolean?)
+        :ret (s/keys :req [::ok-send? ::log2/state]))
 (defn ok-to-send-new?
   [{:keys [::specs/message-loop-name
            ::specs/recent]
@@ -464,6 +468,7 @@
             ::specs/want-ping]
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
+    log-state ::log2/state
     :as state}]
   ;; Centered around lines 358-361
   ;; It seems crazy that 3 lines of C expand to this much
@@ -505,27 +510,21 @@
                    ;; after checking this (line 376), just before it builds
                    ;; the message packet that it's going to send.
                    (not send-eof-processed))))]
-    (when-not result
-      (let [fmt (str "~a: Bad preconditions for sending a new block:\n"
-                     "recent: ~:d <? ~:d\n"
-                     "New block count: ~d"
-                     "\nPreviously sent block count: ~d"
-                     "\nwant-ping: ~d"
-                     "\nsend-eof: ~a"
-                     "\n\tsend-eof-processed: ~a"
-                     "\n\tstrm-hwm: ~:d")]
-        (log/debug (cl-format nil
-                              fmt
-                              message-loop-name
-                              recent
-                              earliest-send-time
-                              (count un-sent-blocks)
-                              (count un-ackd-blocks)
-                              want-ping
-                              send-eof
-                              send-eof-processed
-                              strm-hwm))))
-    result))
+    {::ok-send? result
+     ::log2/state
+     (if result
+       log-state
+       (log2/debug log-state
+                   ::ok-to-send-new?
+                   "Bad preconditions for sending a new block"
+                   {::specs/recent recent
+                    ::specs/earliest-send-time earliest-send-time
+                    ::un-sent-count (count un-sent-blocks)
+                    ::un-ackd-count (count un-ackd-blocks)
+                    ::specs/want-ping want-ping
+                    ::specs/send-eof send-eof
+                    ::specs/send-eof-processed send-eof-processed
+                    ::specs/strm-hwm strm-hwm}))}))
 
 (s/fdef check-for-new-block-to-send
         :args (s/cat :state ::specs/state)
@@ -543,17 +542,22 @@
             ::specs/un-sent-blocks]
      :as outgoing} ::specs/outgoing
     :as state}]
-  (let [block-count (count un-sent-blocks)
-        prelog (utils/pre-log message-loop-name)]
+  (let [label ::check-for-new-block-to-send
+        block-count (count un-sent-blocks)
+        prelog (utils/pre-log message-loop-name)
+        state (update state
+                      ::log2/state
+                      #(log2/debug %
+                                   label
+                                   "Does it make sense to try to send any of our unsent blocks?"
+                                   {::un-sent-count block-count}))
+        {:keys [::ok-send?]
+         log-state ::log2/state} (ok-to-send-new? state)]
     ;; This is one of those places where I'm getting confused
     ;; by mixing the new blocks with the ones that have already
     ;; been sent at least once.
-    (log/debug prelog
-               "Does it make sense to try to send any of our"
-               block-count
-               "unsent blocks?")
     (if (and (< 0 block-count)
-             (ok-to-send-new? state))
+             ok-send?)
       ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
       ;; Consolidating smaller blocks *would* be a good idea -- JRG
       (let [block (first un-sent-blocks)
@@ -570,11 +574,14 @@
                        strm-hwm)
                   send-eof
                   false)]
-        (log/debug prelog
-                   "Conditions ripe for sending a new outgoing message")
-        (assoc-in state
-                  [::specs/outgoing ::specs/next-block-queue]
-                  ::specs/un-sent-blocks))
+        (-> state
+            (update ::log2/state
+                    #(log2/debug %
+                                 label
+                                 "Conditions ripe for sending a new outgoing message"))
+            (assoc-in
+             [::specs/outgoing ::specs/next-block-queue]
+             ::specs/un-sent-blocks)))
       ;; Leave it as-is
       state)))
 
