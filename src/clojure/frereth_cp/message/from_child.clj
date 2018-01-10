@@ -24,8 +24,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(s/def callback (s/fspec :args (s/cat :state ::specs/state)
-                         :ret ::specs/state))
+(s/def ::callback (s/fspec :args (s/cat :state ::specs/state)
+                           :ret ::specs/state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Helpers
@@ -355,7 +355,7 @@
                      :log-state ::log/state
                      :bs-or-eof ::specs/bs-or-eof)
         :ret (s/keys :req [::log/state
-                           ::consumer]))
+                           ::callback]))
 (defn build-byte-consumer
   "Accepts a byte-array from the child."
   ;; Lines 319-337

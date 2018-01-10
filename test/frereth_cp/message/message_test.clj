@@ -404,16 +404,23 @@
                                        ::specs/strm-hwm 0
                                        ::specs/un-sent-blocks PersistentQueue/EMPTY}
                      ::specs/recent (System/nanoTime)}
+        logger (log2/std-out-log-factory)
+        log-state (log2/init ::wrap-chzbrgr-test 0)
         ;; TODO: Keep this magic number in sync
         ;; And verify the action with sizes that cross packet boundaries
         chzbrgr-lngth 182
         chzbrgr (byte-array (range chzbrgr-lngth))
-        consumer (from-child/build-byte-consumer message-loop-name chzbrgr)
-        _ (log/info "Reading chzbrgr from child")
+        {consumer ::from-child/callback
+         log-state ::log2/state} (from-child/build-byte-consumer message-loop-name log-state chzbrgr)
+        log-state (log2/info log-state
+                             ::wrap-chzbrgr
+                             "Reading chzbrgr from child")
         ;; This is much slower than I'd like
         {:keys [::specs/outgoing
                 ::specs/recent]
-         :as state'} (time (consumer start-state))]
+         log-state ::log2/state
+         :as state'} (time (consumer (assoc start-state
+                                            ::log2/state log-state)))]
     (is (= 1 (count (::specs/un-sent-blocks outgoing))))
     (is (= chzbrgr-lngth (::specs/strm-hwm outgoing)))
     (let [current-message  (-> outgoing
@@ -428,9 +435,12 @@
                                 (update ::specs/transmissions inc)
                                 (assoc ::specs/time recent)
                                 (assoc ::specs/message-id current-message-id))
-            _ (log/info "Building message block to send to parent")
-            buf (time (to-parent/build-message-block-description message-loop-name
-                                                                 updated-message))]
+            log-state (log2/info log-state
+                                 ::wrap-chzbrgr
+                                 "Building message block to send to parent")
+            {buf ::specs/bs-or-eof
+             log-state ::log2/state} (time (to-parent/build-message-block-description log-state
+                                                                                      updated-message))]
         ;;; Start with the very basics
         ;; Q: Did that return what we expected?
         (is (s/valid? bytes? buf))
@@ -479,7 +489,9 @@
                 dst (byte-array bytes-rcvd)]
             (is (= chzbrgr-lngth bytes-rcvd))
             (.readBytes buf dst)
-            (log/info "Comparing byte arrays")
+            (log2/flush-logs! logger (log2/info log-state
+                                                ::wrap-chzbrgr
+                                                "Comparing byte arrays"))
             (is (time (b-t/bytes= chzbrgr dst)))))))))
 
 (deftest overflow-from-child

@@ -274,7 +274,9 @@
 ;; Note that this is really a sorted-map
 (s/def ::gap-buffer (s/map-of ::gap-buffer-key ::buf))
 
-(s/def ::monitor-id uuid?)
+(s/def ::monitor-id (s/or :uuid uuid?
+                          :keyword keyword?
+                          :string string?))
 ;;; These next 5 really swirld around the sendbuf array/circular queue
 ;; Need something to act as the array that backs the circular buffer.
 ;; This seems dubious, but I have to start somewhere
