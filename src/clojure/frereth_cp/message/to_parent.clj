@@ -216,15 +216,18 @@
    updated-block]
   (assert (= ::specs/un-ackd-blocks
              (::specs/next-block-queue outgoing)))
-  (-> state
-      (update ::log2/state
-              #(log2/debug %
-                           ::mark-block-resent
-                           "Resending a block"))
-      (update-in state
-                 [::specs/outgoing ::specs/un-ackd-blocks]
-                 (fn [cur]
-                   (conj (disj cur prev-block) updated-block)))))
+  (println "This should fail")
+  (let [result
+        (-> state
+            (update ::log2/state
+                    #(log2/debug %
+                                 ::mark-block-resent
+                                 "Resending a block"))
+            (update-in state [::specs/outgoing ::specs/un-ackd-blocks]
+                       (fn [cur]
+                         (conj (disj cur prev-block) updated-block))))]
+    (println "Got through that OK\nNew state keys:\n" (keys result))
+    result))
 
 (s/fdef pre-calculate-state-after-send
         :args (s/cat :state ::specs/state)
@@ -702,6 +705,7 @@
                          ::specs/un-ackd-blocks]} ::specs/outgoing
                  log-state ::log2/state
                  :as state''} (pre-calculate-state-after-send state')
+                _ (println "After-send state precalculated")
                 ;; Actually, calling count here tells the entire
                 ;; story: I have either a byte-array or vector
                 ;; rather than the ByteBuf that spec demands.
@@ -755,6 +759,7 @@
                                label
                                "Nothing to send"))))
       (catch Exception ex
+        (println "OK, that failed:\n" ex)
         (update state
                 ::log2/state
                 #(log2/exception %
