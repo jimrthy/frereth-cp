@@ -824,18 +824,35 @@ Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0
             recent 1077185434836309
             now (+ recent 5913406)
             want-ping ::specs/immediate
-            un-ackd-count 0
-            un-sent-count 0
             send-eof ::specs/false
             send-eof-processed false
+            state {::specs/flow-control {::specs/n-sec-per-block n-sec-per-block
+                                         ;; Q: What was this?
+                                         ;; (it shouldn't matter, since this didn't
+                                         ;; seem to impact the calculations, but I
+                                         ;; didn't log it)
+                                         ::specs/rtt-timeout K/sec->n-sec}
+                   ::specs/incoming {::specs/->child-buffer []
+                                     ::specs/gap-buffer []}
+                   ;; FIXME: Need a real "earliest-time"
+                   ::specs/outgoing {::specs/earliest-time recent
+                                     ::specs/last-block-time last-block-time
+                                     ::specs/send-eof ::specs/false
+                                     ::specs/un-sent-blocks []
+                                     ::specs/un-ackd-blocks []
+                                     ::specs/want-ping want-ping}
+                   ::specs/message-loop-name "Fix scheduling mismatches"
+                   ::specs/recent recent}
+            to-child-done? (promise)
             ;; Based on these values, the original "mainline" approach
             ;; returned recent, which should never be correct.
             actual 1077185434836309
+            calculated-slow (message/choose-next-scheduled-time state to-child-done?)
             ;; Just based an the want-ping setting, this looks correct
             ;; Except that it's less than recent. That can't be correct.
-            faster-alt 1077185421583970]
-        ;; Assuming this approach was wrong
-        (throw (RuntimeException. "How did the 'slow' scheduler botch that?"))))
+            faster-alt 1077185421583970
+            calculated-fast (message/condensed-choose-next-scheduled-time state to-child-done?)]
+        (is (= actual calculated-slow calculated-fast))))
     "2018-01-03T22:54:36,402 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
  Top of scheduler at 1,077,185,451,123,755
 2018-01-03T22:54:36,403 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
@@ -872,16 +889,88 @@ Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0
             recent 1077185448862638
             now (+ recent 2635956)
             want-ping ::specs/immediate
-            un-ackd-count 0
-            un-sent-count 0
             send-eof ::specs/false
             send-eof-processed false
+            state {::specs/flow-control {::specs/n-sec-per-block n-sec-per-block
+                                         ;; Q: What was this?
+                                         ;; (it shouldn't matter, since this didn't
+                                         ;; seem to impact the calculations, but I
+                                         ;; didn't log it)
+                                         ::specs/rtt-timeout K/sec->n-sec}
+                   ::specs/incoming {::specs/->child-buffer []
+                                     ::specs/gap-buffer []}
+                   ;; FIXME: Need a real "earliest-time"
+                   ::specs/outgoing {::specs/earliest-time recent
+                                     ::specs/last-block-time last-block-time
+                                     ::specs/send-eof ::specs/false
+                                     ::specs/un-sent-blocks []
+                                     ::specs/un-ackd-blocks []
+                                     ::specs/want-ping want-ping}
+                   ::specs/message-loop-name "Fix scheduling mismatches: 2"
+                   ::specs/recent recent}
+            to-child-done? (promise)
             ;; This is the +1 minute
+            calculated-slow (message/choose-next-scheduled-time state to-child-done?)
             actual 1077185448862638
-            faster-alt 1077185421583970]
+            faster-alt 1077185421583970
+            calculated-fast (message/condensed-choose-next-scheduled-time state to-child-done?)]
         ;; Actually, there are a bunch of entries that look pretty much exactly
         ;; like this.
-        (throw (RuntimeException. "Ditto"))))))
+        (is (= calculated-slow actual calculated-fast))))
+    (testing "3"
+      "2018-01-10T22:38:13,629 DEBUG frereth-cp.message: Client (manifold-pool-40-1):
+ Scheduling considerations
+ Minimum resend time: 1,681,003,667,872,581
+which is 1,000,000,000 nanoseconds
+after last block time 1,681,002,667,872,581.
+Recent was 8,837,171 ns in the past
+rtt-timeout: 1,000,000,000
+Default +1 minute: 1,681,062,667,872,581 from 1,681,002,667,872,581
+Scheduling based on want-ping value :frereth-cp.message.specs/false
+Based on ping settings, adjusted next time to: 1,681,062,667,872,581
+EOF/unsent criteria:
+un-ackd-count: 1
+un-sent-count: 0
+send-eof: :frereth-cp.message.specs/false
+send-eof-processed: false
+Due to EOF status: 1,681,062,667,872,581
+Adjusted for RTT: 1,681,062,667,872,581
+After [pretending to] adjusting for closed/ignored child watcher: 1,681,062,667,872,581
+"
+      (let [min-resend-time 1681003667872581
+            last-block-time 1681002667872581
+            n-sec-per-block 1000000000
+            recent 1681002667872581
+            now (+ recent 8837171)
+            want-ping ::specs/false
+            send-eof ::specs/false
+            send-eof-processed false
+            state {::specs/flow-control {::specs/n-sec-per-block n-sec-per-block
+                                         ;; Q: What was this?
+                                         ;; (it shouldn't matter, since this didn't
+                                         ;; seem to impact the calculations, but I
+                                         ;; didn't log it)
+                                         ::specs/rtt-timeout K/sec->n-sec}
+                   ::specs/incoming {::specs/->child-buffer []
+                                     ::specs/gap-buffer []}
+                   ;; FIXME: Need a real "earliest-time"
+                   ::specs/outgoing {::specs/earliest-time recent
+                                     ::specs/last-block-time last-block-time
+                                     ::specs/send-eof ::specs/false
+                                     ::specs/un-sent-blocks []
+                                     ::specs/un-ackd-blocks [1]
+                                     ::specs/want-ping want-ping}
+                   ::specs/message-loop-name "Fix scheduling mismatches: 2"
+                   ::specs/recent recent}
+            to-child-done? (promise)
+            ;; This is the +1 minute
+            calculated-slow (message/choose-next-scheduled-time state to-child-done?)
+            actual 1681062667872581
+            faster-alt 1681003667872581
+            calculated-fast (message/condensed-choose-next-scheduled-time state to-child-done?)]
+        ;; Actually, there are a bunch of entries that look pretty much exactly
+        ;; like this.
+        (is (= calculated-slow actual calculated-fast))))))
 
 (deftest check-initial-state-override
   (let [opts {::specs/outgoing {::specs/pipe-from-child-size K/k-1}

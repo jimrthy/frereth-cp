@@ -441,6 +441,99 @@
   ;; to resend an outbound block that hasn't been ACK'd yet.
   (trigger-output io-handle state))
 
+(defn condensed-choose-next-scheduled-time
+  [{{:keys [::specs/n-sec-per-block
+            ::specs/rtt-timeout]} ::specs/flow-control
+    {:keys [::specs/->child-buffer
+            ::specs/gap-buffer]} ::specs/incoming
+    {:keys [::specs/ackd-addr
+            ::specs/earliest-time
+            ::specs/last-block-time
+            ::specs/send-eof
+            ::specs/un-sent-blocks
+            ::specs/un-ackd-blocks
+            ::specs/want-ping]
+     :as outgoing} ::specs/outgoing
+    :keys [::specs/message-loop-name
+           ::specs/recent]
+    :as state}
+   to-child-done?]
+  ;;; This amounts to lines 286-305
+
+  ;; I should be able to just completely bypass this if there's
+  ;; more new data pending.
+  ;; TODO: Figure out how to make that work
+
+  ;; Bigger issue:
+  ;; This scheduler is so aggressive at waiting for an initial
+  ;; message from the child that it takes 10 ms for the agent
+  ;; send about it to actually get through the queue
+  ;; Spinning around fast-idling while I'm doing nothing is
+  ;; stupid.
+  ;; And it winds up scheduling into the past, which leaves
+  ;; this triggering every millisecond.
+  ;; We can get pretty good turn-around time in memory,
+  ;; but this part...actually, if we could deliver a message
+  ;; and get an ACK in the past, that would be awesome.
+  ;; TODO: Be smarter about the timeout.
+  (let [now (System/nanoTime)
+        min-resend-time (+ last-block-time n-sec-per-block)
+        un-ackd-count (count un-ackd-blocks)
+        un-sent-count(count un-sent-blocks)
+        default-next (+ recent (utils/seconds->nanos 60))  ; by default, wait 1 minute
+        send-eof-processed (to-parent/send-eof-buffered? outgoing)
+        rtt-resend-time (+ earliest-time rtt-timeout)]
+    (cond-> default-next
+      ;; The first clause is weird. 1 second is always going to happen more
+      ;; quickly than the 1 minute initial default.
+      ;; Sticking with the min pattern because of the way the threading macro works
+      (= want-ping ::specs/second-1) (min (+ recent (utils/seconds->nanos 1)))
+      (= want-ping ::specs/immediate) (min min-resend-time)
+      ;; If the outgoing buffer is not full
+      ;; And:
+      ;;   If sendeof, but not sendeofprocessed
+      ;;   else (!sendeof):
+      ;;     if there are buffered bytes that have not been sent yet
+
+      ;; Lines 290-292
+      ;; Q: What is the actual point to this?
+      ;; (the logic seems really screwy, but that's almost definitely
+      ;; a lack of understanding on my part)
+      ;; A: There are at least 3 different moving parts involved here
+      ;; 1. Are there unsent blocks that need to be sent?
+      ;; 2. Do we have previously sent blocks that might need to re-send?
+      ;; 3. Have we sent an un-ACK'd EOF?
+      (and (< (+ un-ackd-count
+                 un-sent-count)
+              K/max-outgoing-blocks)
+           (if (not= ::specs/false send-eof)
+             (not send-eof-processed)
+             (< 0 un-sent-count))) (min min-resend-time)
+      ;; Lines 293-296
+      (and (not= 0 un-ackd-count)
+           (>= rtt-resend-time
+               min-resend-time)) (min rtt-resend-time)
+      ;; There's one last caveat, from 298-300:
+      ;; It all swirls around watchtochild, which gets set up
+      ;; between lines 276-279.
+      ;; Basic point:
+      ;; If there are incoming messages, but the pipe to child is closed,
+      ;; short-circuit so we can exit.
+      ;; That seems like a fairly major error condition.
+      ;; Q: What's the justification?
+      ;; Hypothesis: It's based around the basic idea of
+      ;; being lenient about accepting garbage.
+      ;; This seems like the sort of garbage that would be
+      ;; worth capturing for future analysis.
+      ;; Then again...if extra UDP packets arrive out of order,
+      ;; it probably isn't all *that* surprising.
+      ;; Still might be worth tracking for the sake of security.
+      (and (not= 0 (+ (count gap-buffer)
+                      (count ->child-buffer)))
+           (not (realized? to-child-done?))) 0
+      ;; Lines 302-305
+      true (max recent))))
+
 (s/fdef choose-next-scheduled-time
         :args (s/cat :state ::specs/state
                      :to-child-done? ::specs/to-child-done?)
@@ -450,8 +543,7 @@
             ::specs/rtt-timeout]} ::specs/flow-control
     {:keys [::specs/->child-buffer
             ::specs/gap-buffer]} ::specs/incoming
-    {:keys [::specs/ackd-addr
-            ::specs/earliest-time
+    {:keys [::specs/earliest-time
             ::specs/last-block-time
             ::specs/send-eof
             ::specs/un-sent-blocks
@@ -520,15 +612,6 @@
                             next-based-on-ping)
         ;; Lines 293-296
         rtt-resend-time (+ earliest-time rtt-timeout)
-        ;; In the reference implementation, 0 for a block's time
-        ;; means it's been ACK'd.
-        ;; => if earliest-time for all blocks is 0, they've all been
-        ;; ACK'd.
-        ;; This is another place where I'm botching that.
-        ;; I've started relying on a ::ackd? flag in each block
-        ;; instead.
-        ;; But calculating earliest-time based on that isn't working
-        ;; the way I expect/want.
         next-based-on-earliest-block-time (if (and (not= 0 un-ackd-count)
                                                    (> rtt-resend-time
                                                       min-resend-time))
@@ -552,6 +635,13 @@
         based-on-closed-child (if (and (not= 0 (+ (count gap-buffer)
                                                   (count ->child-buffer)))
                                        (not (realized? to-child-done?)))
+                                ;; This looks backward. It isn't.
+                                ;; If there are bytes to forward to the
+                                ;; child, and the pipe is still open, then
+                                ;; try to send them.
+                                ;; However, the logic *is* broken:
+                                ;; The check for gap-buffer really needs
+                                ;; to be based around closed gaps
                                 0
                                 next-based-on-earliest-block-time)
         ;; Lines 302-305
@@ -561,7 +651,9 @@
                                (str "Minimum resend time: ~:d\n"
                                     "which is ~:d nanoseconds\n"
                                     "after last block time ~:d.\n"
-                                    "Recent was ~:d ns in the past")
+                                    "Recent was ~:d ns in the past\n"
+                                    "rtt-timeout: ~:d\n"
+                                    "earliest -time: ~:d")
                                min-resend-time
                                n-sec-per-block
                                ;; I'm calculating last-block-time
@@ -571,9 +663,11 @@
                                ;; recent, set immediately after
                                ;; I send a block to parent.
                                last-block-time
-                               (- now recent))
+                               (- now recent)
+                               rtt-timeout
+                               earliest-time)
         log-message (str log-message (cl-format nil
-                                                "\nDefault +1 minute: ~:d from ~:d\nScheduling based on want-ping value ~a"
+                                                "\nDefault +1 minute: ~:d from recent: ~:d\nScheduling based on want-ping value ~a"
                                                 default-next
                                                 recent
                                                 want-ping))
@@ -601,25 +695,7 @@
                                     "\nAfter [pretending to] adjusting for closed/ignored child watcher: ~:d"
                                     (long based-on-closed-child)))
         mid2-time (System/nanoTime)
-        un-ackd-count (count un-ackd-blocks)
-        alt (cond-> default-next
-              (= want-ping ::specs/second-1) (+ recent (utils/seconds->nanos 1))
-              (= want-ping ::specs/immediate) (min min-resend-time)
-              ;; If the outgoing buffer is not full
-              ;; And:
-              ;;   If sendeof, but not sendeofprocessed
-              ;;   else (!sendeof):
-              ;;     if there are buffered bytes that have not been sent yet
-              (let [un-sent-count(count un-sent-blocks)]
-                (and (< (+ un-ackd-count
-                           un-sent-count)
-                        K/max-outgoing-blocks)
-                     (if (not= ::specs/false send-eof)
-                       (not send-eof-processed)
-                       (< 0 un-sent-count)))) (min min-resend-time)
-              (and (not= 0 un-ackd-count)
-                   (>= rtt-resend-time
-                       min-resend-time)) (min rtt-resend-time))
+        alt (condensed-choose-next-scheduled-time state to-child-done?)
         end-time (System/nanoTime)]
     (log/debug prelog "Scheduling considerations\n" log-message)
     (when-not (= actual-next alt)
