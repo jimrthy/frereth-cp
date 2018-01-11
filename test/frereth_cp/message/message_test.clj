@@ -453,22 +453,23 @@
         ;; TODO: This is another piece that's just
         ;; screaming for generative testing
         (log/info "Deserializing message from parent")
-        (let [{:keys [::specs/acked-message
-                      ::specs/ack-length-1
-                      ::specs/ack-length-2
-                      ::specs/ack-length-3
-                      ::specs/ack-length-4
-                      ::specs/ack-length-5
-                      ::specs/ack-length-6
-                      ::specs/ack-gap-1->2
-                      ::specs/ack-gap-2->3
-                      ::specs/ack-gap-3->4
-                      ::specs/ack-gap-4->5
-                      ::specs/ack-gap-5->6
-                      ::specs/buf
-                      ::specs/message-id
-                      ::specs/size-and-flags]
-               :as packet} (time (from-parent/deserialize message-loop-name buf))]
+        (let [{{:keys [::specs/acked-message
+                       ::specs/ack-length-1
+                       ::specs/ack-length-2
+                       ::specs/ack-length-3
+                       ::specs/ack-length-4
+                       ::specs/ack-length-5
+                       ::specs/ack-length-6
+                       ::specs/ack-gap-1->2
+                       ::specs/ack-gap-2->3
+                       ::specs/ack-gap-3->4
+                       ::specs/ack-gap-4->5
+                       ::specs/ack-gap-5->6
+                       ::specs/buf
+                       ::specs/message-id
+                       ::specs/size-and-flags]} ::specs/packet
+               log-state ::log2/state
+               :as packet} (time (from-parent/deserialize log-state buf))]
           (comment (is (not packet)))
           (is (= chzbrgr-lngth size-and-flags))
           (are [expected actual] (= expected actual)
