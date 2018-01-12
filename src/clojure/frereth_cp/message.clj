@@ -511,8 +511,8 @@
              (< 0 un-sent-count))) (min min-resend-time)
       ;; Lines 293-296
       (and (not= 0 un-ackd-count)
-           (>= rtt-resend-time
-               min-resend-time)) (min rtt-resend-time)
+           (> rtt-resend-time
+              min-resend-time)) (min rtt-resend-time)
       ;; There's one last caveat, from 298-300:
       ;; It all swirls around watchtochild, which gets set up
       ;; between lines 276-279.
@@ -530,6 +530,13 @@
       ;; Still might be worth tracking for the sake of security.
       (and (not= 0 (+ (count gap-buffer)
                       (count ->child-buffer)))
+           ;; This looks backward. It isn't.
+           ;; If there are bytes to forward to the
+           ;; child, and the pipe is still open, then
+           ;; try to send them.
+           ;; However, the logic *is* broken:
+           ;; The check for gap-buffer really needs
+           ;; to be based around closed gaps
            (not (realized? to-child-done?))) 0
       ;; Lines 302-305
       true (max recent))))
@@ -692,7 +699,7 @@
                                 (long next-based-on-earliest-block-time)))
         log-message (str log-message
                          (cl-format nil
-                                    "\nAfter [pretending to] adjusting for closed/ignored child watcher: ~:d"
+                                    "\nAfter adjusting for closed/ignored child watcher: ~:d"
                                     (long based-on-closed-child)))
         mid2-time (System/nanoTime)
         alt (condensed-choose-next-scheduled-time state to-child-done?)
