@@ -61,9 +61,23 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+(s/def ::action-timing-details (s/keys :req [::actual-next
+                                             ::delta_f
+                                             ::scheduling-time]))
+(s/def ::next-action-time nat-int?)
 (s/def ::source-tags #{::child-> ::parent-> ::query-state})
 (s/def ::input (s/tuple ::source-tags bytes?))
-(s/def ::next-action-time nat-int?)
+(s/def ::action-tag #{::specs/child->
+                      ::drained
+                      ::no-op
+                      ::parent->
+                      ::query-state
+                      ::timed-out})
+;; Q: How do I spec these out?
+;; Since we really have 0, 1, or 2 arguments
+;; A: s/or seems like the most likely approach.
+;; TODO: Nail this down
+(s/def ::next-action (s/tuple ::action-tag))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal API
@@ -753,8 +767,10 @@
 
 (declare schedule-next-timeout!)
 (s/fdef action-trigger
-        :args (s/cat :io-handle ::specs/io-handle
-                     :state ::specs/state)
+        :args (s/cat :timing-details ::action-timing-details
+                     :io-handle ::specs/io-handle
+                     :state ::specs/state
+                     :next-action ::next-action)
         :ret any?)
 (defn action-trigger
   [{:keys [::actual-next
@@ -780,7 +796,7 @@
    ;; So I could destructure it here as [tag & args],
    ;; then destructure args later. But that makes
    ;; it less obviously a win.
-   success]
+   next-action]
   {:pre [outgoing]}
   (let [now (System/currentTimeMillis)
         prelog (utils/pre-log message-loop-name)  ; might be on a different thread
@@ -805,7 +821,7 @@
                                  scheduling-time
                                  (or actual-next -1)
                                  now
-                                 success))
+                                 next-action))
           (catch NullPointerException ex
             (log2/exception log-state
                             ex
@@ -815,7 +831,7 @@
                              ::scheduling-time scheduling-time
                              ::actual-next actual-next
                              ::now now
-                             ::success success
+                             ::next-action next-action
                              ::trigger-details prelog}))
           (catch NumberFormatException ex
             (log2/exception log-state
@@ -826,10 +842,10 @@
                              ::scheduling-time scheduling-time
                              ::actual-next actual-next
                              ::now now
-                             ::success success
+                             ::next-action next-action
                              ::trigger-details prelog})))
         [tag
-         log-state] (try [(first success) log-state]
+         log-state] (try [(first next-action) log-state]
                          (catch IllegalArgumentException ex
                            [::no-op
                             (log2/exception log-state
@@ -842,7 +858,7 @@
         updater
         ;; Q: Is this worth switching to something like core.match or a multimethod?
         (case tag
-          ::specs/child-> (let [[_ callback ack] success]
+          ::specs/child-> (let [[_ callback ack] next-action]
                             (partial trigger-from-child io-handle callback ack))
           ::drained (fn [{log-state ::log2/state
                           :as state}]
@@ -860,10 +876,11 @@
                                           ::action-trigger
                                           "Stream closed. Surely there's more to do"
                                           {::trigger-details prelog})))
+          ::no-op identity
+          ;; Q: Shouldn't this be from the specs ns?
           ::parent-> (partial trigger-from-parent
                               io-handle
-                              (second success))
-          ::no-op identity
+                              (second next-action))
           ;; This can throw off the timer, since we're basing the delay on
           ;; the delta from recent (which doesn't change) rather than now.
           ;; But we're basing the actual delay from now, which does change.
@@ -876,7 +893,7 @@
           ;; Decrementing the delay seems like something the scheduler
           ;; should handle.
           ::query-state (fn [state]
-                          (if-let [dst (second success)]
+                          (if-let [dst (second next-action)]
                             (do
                               (deliver dst state)
                               state)
@@ -1039,6 +1056,8 @@
            ::specs/stream]
     :as io-handle}
    {:keys [::specs/recent]
+    {:keys [::specs/next-action]
+     :as flow-control} ::specs/flow-control
     {:keys [::specs/receive-eof
             ::specs/receive-total-bytes
             ::specs/receive-written]} ::specs/incoming
@@ -1049,9 +1068,7 @@
   {:pre [recent
          outgoing]}
   ;; This really keeps going with the "queue up side-effects" idea
-  (let [{{:keys [::specs/next-action]
-          :as flow-control} ::specs/flow-control} state
-        ;; Note that the caller called this shortly before.
+  (let [;; Note that the caller called this shortly before.
         ;; So calling it again this quickly seems like
         ;; a waste of ~30-ish nanoseconds.
         now (System/nanoTime)
@@ -1087,8 +1104,8 @@
                                                  log-state)
                                           to-child-done?))
             {:keys [::delta_f
-                    ::next-action
-                    ::log2/state]}
+                    ::next-action]
+             log-state ::log2/state}
             (if actual-next
               ;; TODO: add an optional debugging step that stores state and the
               ;; calculated time so I can just look at exactly what I have
@@ -1131,6 +1148,8 @@
                ::log2/state log-state})
             ;; Since this is recursive, forking logs seems like a bad idea
             [my-logs forked-logs] (log2/fork log-state ::forked)]
+        (when-not (::specs/outgoing state)
+          (throw (ex-info "Missing outgoing" state)))
         (dfrd/on-realized next-action
                           (partial action-trigger
                                    {::actual-next actual-next
@@ -1193,12 +1212,14 @@
           child-input-loop (to-child/start-parent-monitor! io-handle log-state ->child)]
       (let [log-state (log2/debug log-state
                                   ::start-event-loops!
-                                  "Child monitor thread should be running now. Scheduling next ioloop timeout")]
-        (log2/flush-logs! logger log-state))
-      (schedule-next-timeout! (assoc io-handle
-                                     ::specs/child-output-loop child-output-loop
-                                     ::specs/child-input-loop child-input-loop)
-                              state))))
+                                  "Child monitor thread should be running now. Scheduling next ioloop timeout")
+            state (update state
+                          ::log2/state
+                          #(log2/flush-logs! logger %))]
+        (schedule-next-timeout! (assoc io-handle
+                                       ::specs/child-output-loop child-output-loop
+                                       ::specs/child-input-loop child-input-loop)
+                                state)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
