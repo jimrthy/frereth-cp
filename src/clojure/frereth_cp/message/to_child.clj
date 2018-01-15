@@ -713,7 +713,11 @@
                                   {::block-count block-count
                                    ::specs/receive-eof receive-eof})
                        (catch Exception ex
-                         (println "Log Problem:" ex)
+                         ;; This should probably be fatal, with
+                         ;; gobs more details.
+                         (println "Log Problem:" ex
+                                  "\nTrying to log to\n"
+                                  log-state)
                          log-state))
         consolidated (assoc consolidated ::log/state log-state)]
     (if (< 0 block-count)

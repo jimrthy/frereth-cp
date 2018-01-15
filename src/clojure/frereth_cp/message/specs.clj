@@ -58,12 +58,12 @@
 ;; This is defined as a long long in the reference
 ;; implementation.
 ;; Try to avoid expanding it to a BigInt.
-;; I think (still not sure) that this in the number
+;; This in the number
 ;; of nanoseconds to wait between each block that goes
 ;; out.
 ;; It's more nuanced than that, but that's the basic
 ;; point/idea
-(s/def ::n-sec-per-block int?)
+(s/def ::n-sec-per-block nat-int?)
 
 ;; This maps to a bitflag to send over the wire:
 ;; 2048 for normal EOF after sendbytes
@@ -404,6 +404,7 @@
 (s/def ::outgoing (s/keys :req [::ackd-addr
                                 ::earliest-time  ; Q: Any point to this?
                                 ::last-block-time
+                                ;; FIXME: Move this to flow-control
                                 ::last-panic
                                 ::max-block-length
                                 ::next-message-id

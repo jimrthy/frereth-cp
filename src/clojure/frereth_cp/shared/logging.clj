@@ -245,6 +245,7 @@ Returns fresh set of log entries"
   ;; The i/o costs should be quite a bit higher than
   ;; the agent overhead...though I do know that
   ;; a go-loop would be more efficient
+  (log! logger (str "Flushing logs for " context))
   (doseq [message (::entries log-state)]
     (log! logger message))
   (flush! logger)
@@ -298,11 +299,13 @@ Returns fresh set of log entries"
                      :child-context ::context)
         :ret (s/tuple ::state ::state))
 (defn fork
-  [src child-context]
-  (let [src-ctx (::context src)
-        combiner (if (seq? src-ctx)
-                   conj
-                   list)
-        forked (init (combiner src-ctx child-context)
-                     (::lamport src))]
-    (synchronize src forked)))
+  ([src child-context]
+   (let [src-ctx (::context src)
+         combiner (if (seq? src-ctx)
+                    conj
+                    list)
+         forked (init (combiner src-ctx child-context)
+                      (::lamport src))]
+     (synchronize src forked)))
+  ([src]
+   (init (::context src) (::lamport src))))

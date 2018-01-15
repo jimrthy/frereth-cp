@@ -225,7 +225,6 @@
             (update-in [::specs/outgoing ::specs/un-ackd-blocks]
                        (fn [cur]
                          (conj (disj cur prev-block) updated-block))))]
-    (println "Got through that OK\nNew state keys:\n" (keys result))
     result))
 
 (s/fdef pre-calculate-state-after-send
@@ -367,7 +366,7 @@
                         (log/debug log-state
                                    label
                                    "Next block built and control state updated to"
-                                   {::log/state result}))]
+                                   {::log/state (dissoc result ::log/state)}))]
       ;; It's tempting to split this part up to avoid the conditional.
       ;; Maybe turn the call into a multimethod.
       ;; The latter would be a mistake, since there are
@@ -400,7 +399,7 @@
             ::specs/rtt-timeout]} ::specs/flow-control
     log-state ::log/state
     :as state}]
-  {:pre [n-sec-per-block
+  {:pre [(< 0 n-sec-per-block)
          recent
          rtt-timeout]}
   ;; It's tempting to make adjustments in here using now vs. recent.
@@ -428,6 +427,13 @@
         ;; It's going to re-send that block (it *does* exist...right?)
         (let [block (first un-ackd-blocks)
               state' (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
+          (println "Prepping flow-control updates on\n"
+                   (assoc
+                    (select-keys (::specs/flow-control state')
+                                 [::specs/n-sec-per-block
+                                  ::specs/last-edge])
+                    ::specs/last-panic (-> state' ::specs/outgoing ::specs/last-panic))
+                   "\nwhere n-sec-per-block is a" (class (get-in state' [::specs/flow-control ::specs/n-sec-per-block])))
           (assoc
            ;; But first, it might adjust some of the globals.
            (if (> recent (+ last-panic (* 4 rtt-timeout)))
@@ -472,16 +478,16 @@
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     log-state ::log/state
     :as state}]
-  ;; Centered around lines 358-361
-  ;; It seems crazy that 3 lines of C expand to this much
-  ;; code. But that's what happens when you add error
-  ;; handling and logging.
   #_{:pre [strm-hwm]}
   (when-not strm-hwm
     (throw (ex-info "Missing strm-hwm"
                     {::among (keys outgoing)
                      ::have strm-hwm
                      ::details outgoing})))
+  ;; Centered around lines 358-361
+  ;; It seems crazy that 3 lines of C expand to this much
+  ;; code. But that's what happens when you add error
+  ;; handling and logging.
   (let [earliest-send-time (+ earliest-time n-sec-per-block)
         un-ackd-count (count un-ackd-blocks)
         send-eof-processed (send-eof-buffered? outgoing)
@@ -684,15 +690,16 @@
     :as state}]
   {:pre [log-state]}
   (let [label ::maybe-send-block!
-        log-state (log/debug log-state
-                             label
-                             "Picking next block to possibly send")
         log-state (if message-loop-name
                     log-state
                     (log/warn log-state
                               label
-                              "There's something strange about state"
-                              {::specs/state state}))]
+                              "Missing message-loop-name"
+                              {::specs/state state}))
+        log-state (log/debug log-state
+                             label
+                             "Picking next block to possibly send"
+                             {::specs/message-loop-name message-loop-name})]
     (try
       (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
              :as state'} (pick-next-block-to-send (assoc state
@@ -725,12 +732,14 @@
                                   (log/warn log-state
                                             label
                                             "Illegal outgoing buffer"
-                                            {::problem (s/explain-data ::specs/send-buf send-buf)}))
+                                            {::problem (s/explain-data ::specs/send-buf send-buf)
+                                             ::specs/message-loop-name message-loop-name}))
                               log-state
                             (log/debug log-state
                                        label
                                        "Sending bytes to parent"
                                        {::buffer-size n
+                                        ::specs/message-loop-name message-loop-name
                                         ::specs/send-buf send-buf})
                             ;; TODO: This includes one of the side-effects that I really should
                             ;; be accumulating rather than calling willy-nilly.
@@ -741,7 +750,8 @@
                                             "\n(totally distinct from un-sent)")
                                        {::un-ackd-block-count (count un-ackd-blocks)
                                         ::un-sent-block-count (count (get-in state''
-                                                                             [::specs/outgoing ::specs/un-sent-blocks]))}))]
+                                                                             [::specs/outgoing ::specs/un-sent-blocks]))
+                                        ::specs/message-loop-name message-loop-name}))]
 ;;;      408: earliestblocktime_compute()
             (-> (assoc state'' ::log/state log-state)
                 (assoc-in [::specs/outgoing ::specs/earliest-time]
@@ -755,14 +765,16 @@
                   ::log/state
                   #(log/debug %
                               label
-                              "Nothing to send"))))
+                              "Nothing to send"
+                              (dissoc  state ::log/state)))))
       (catch Exception ex
         (update state
                 ::log/state
                 #(log/exception %
                                 ex
                                 label
-                                "Trying to send message block to parent"))))))
+                                "Trying to send message block to parent"
+                                {::specs/message-loop-name message-loop-name}))))))
 
 (s/fdef send-eof-buffered?
         :args (s/cat :outgoing ::specs/outgoing)

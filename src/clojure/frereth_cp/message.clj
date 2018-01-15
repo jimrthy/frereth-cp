@@ -799,10 +799,6 @@
    next-action]
   {:pre [outgoing]}
   (let [now (System/currentTimeMillis)
-        prelog (utils/pre-log message-loop-name)  ; might be on a different thread
-        fmt (str "Awakening event loop that was sleeping for ~g ms "
-                 "after ~:d at ~:d\n"
-                 "at ~:d because: ~a")
         ;; Line 337
         ;; Doing this now instead of after trying to receive data from the
         ;; child seems like a fairly significant change from the reference
@@ -811,50 +807,56 @@
         ;; TODO: Ask cryptographers and protocol experts whether this is
         ;; a choice I'll really regret
         state (assoc state ::specs/recent now)
-        log-state
-        (try
-          (log2/debug log-state
-                      ::action-trigger
-                      (cl-format nil
-                                 fmt
-                                 delta_f
-                                 scheduling-time
-                                 (or actual-next -1)
-                                 now
-                                 next-action))
-          (catch NullPointerException ex
-            (log2/exception log-state
-                            ex
-                            ::action-trigger
-                            "Error building the event loop Awakening message"
-                            {::delta_f delta_f
-                             ::scheduling-time scheduling-time
-                             ::actual-next actual-next
-                             ::now now
-                             ::next-action next-action
-                             ::trigger-details prelog}))
-          (catch NumberFormatException ex
-            (log2/exception log-state
-                            ex
-                            ::action-trigger
-                            "Error formatting the event loop Awakening message"
-                            {::delta_f delta_f
-                             ::scheduling-time scheduling-time
-                             ::actual-next actual-next
-                             ::now now
-                             ::next-action next-action
-                             ::trigger-details prelog})))
+        prelog (utils/pre-log message-loop-name)  ; might be on a different thread
+        fmt (str "Awakening event loop that was sleeping for ~g ms "
+                 "after ~:d at ~:d\n"
+                 "at ~:d because: ~a")
+        log-state (try
+                    (log2/debug log-state
+                                ::action-trigger
+                                (cl-format nil
+                                           fmt
+                                           delta_f
+                                           scheduling-time
+                                           (or actual-next -1)
+                                           now
+                                           next-action))
+                    (catch NullPointerException ex
+                      (log2/exception log-state
+                                      ex
+                                      ::action-trigger
+                                      "Error building the event loop Awakening message"
+                                      {::delta_f delta_f
+                                       ::scheduling-time scheduling-time
+                                       ::actual-next actual-next
+                                       ::now now
+                                       ::next-action next-action
+                                       ::trigger-details prelog}))
+                    (catch NumberFormatException ex
+                      (log2/exception log-state
+                                      ex
+                                      ::action-trigger
+                                      "Error formatting the event loop Awakening message"
+                                      {::delta_f delta_f
+                                       ::scheduling-time scheduling-time
+                                       ::actual-next actual-next
+                                       ::now now
+                                       ::next-action next-action
+                                       ::trigger-details prelog})))
         [tag
-         log-state] (try [(first next-action) log-state]
-                         (catch IllegalArgumentException ex
-                           [::no-op
-                            (log2/exception log-state
-                                            ex
-                                            ::action-trigger
-                                            "Should have been a variant"
-                                            {::trigger-details prelog})]))
-        ;; TODO: Really should add something like a transaction ID to the state
-        ;; to assist in tracing the action
+         log-state] (try
+                      [(first next-action) log-state]
+                      (catch IllegalArgumentException ex
+                        [::no-op
+                         (log2/exception log-state
+                                         ex
+                                         ::action-trigger
+                                         "Should have been a variant"
+                                         {::trigger-details prelog})]))
+        _ (log/warn "Picking updater function")
+        ;; TODO: Really should add something like an action ID to the state
+        ;; to assist in tracing the action. flow-control seems like a very
+        ;; likely place to put it.
         updater
         ;; Q: Is this worth switching to something like core.match or a multimethod?
         (case tag
@@ -917,74 +919,77 @@
                                      ::action-trigger
                                      "Processing event"
                                      {::tag tag}))
-          ;; At the end of the main ioloop in the reference
-          ;; implementation, there's a block that closes the pipe
-          ;; to the child if we're done.
-          ;; I think the point is that we'll quit polling on
-          ;; that and start short-circuiting out of the blocks
-          ;; that might do the send, once we've hit EOF
-          ;; Q: What can I do here to
-          ;; produce the same effect?
-          ;; TODO: Worry about that once the basic idea works.
+        ;; At the end of the main ioloop in the reference
+        ;; implementation, there's a block that closes the pipe
+        ;; to the child if we're done.
+        ;; I think the point is that we'll quit polling on
+        ;; that and start short-circuiting out of the blocks
+        ;; that might do the send, once we've hit EOF
+        ;; Q: What can I do here to
+        ;; produce the same effect?
+        ;; TODO: Worry about that once the basic idea works.
 
-          ;; If the child sent a big batch of data to go out
-          ;; all at once, don't waste time setting up a timeout
-          ;; scheduler. The poll in the original would have
-          ;; returned immediately anyway.
-          ;; Except that n-sec-per-block puts a hard limit on how
-          ;; fast we can send.
-          start (System/currentTimeMillis)
-          ;; TODO: Break these pieces into something
-          ;; like the interceptor-chain idea. They should
-          ;; return a value that includes a key for a
-          ;; seq of functions to run to perform the
-          ;; side-effects.
-          ;; I'd still have to call updater, get
-          ;; that updating seq, and update the state
-          ;; to recurse.
+        ;; If the child sent a big batch of data to go out
+        ;; all at once, don't waste time setting up a timeout
+        ;; scheduler. The poll in the original would have
+        ;; returned immediately anyway.
+        ;; Except that n-sec-per-block puts a hard limit on how
+        ;; fast we can send.
+        start (System/currentTimeMillis)
+        ;; TODO: Break these pieces into something
+        ;; like the interceptor-chain idea. They should
+        ;; return a value that includes a key for a
+        ;; seq of functions to run to perform the
+        ;; side-effects.
+        ;; I'd still have to call updater, get
+        ;; that updating seq, and update the state
+        ;; to recurse.
 
-          ;; I'd prefer to do these next two
-          ;; pieces in a single step.
+        ;; I'd prefer to do these next two
+        ;; pieces in a single step.
 
-          ;; TODO: Read up on Executors. I could wind up
-          ;; with really nasty interactions now that I
-          ;; don't have an agent to keep this single-
-          ;; threaded.
-          ;; Actually, it should be safe as written.
-          ;; Just be sure to keep everything synchronized
-          ;; around takes from the i/o handle. (Not
-          ;; needing to do that manually is
-          ;; a great reason to not introduce a second
-          ;; one for bytes travelling the other direction)
+        ;; TODO: Read up on Executors. I could wind up
+        ;; with really nasty interactions now that I
+        ;; don't have an agent to keep this single-
+        ;; threaded.
+        ;; Actually, it should be safe as written.
+        ;; Just be sure to keep everything synchronized
+        ;; around takes from the i/o handle. (Not
+        ;; needing to do that manually is
+        ;; a great reason to not introduce a second
+        ;; one for bytes travelling the other direction)
 
-          state' (try (updater state)
-                      (catch ExceptionInfo ex
-                        (update state
-                                ::log2/state
-                                #(log2/exception %
-                                                 ex
-                                                 ::action-trigger
-                                                 "Running updater failed"
-                                                 {::details (.getData ex)})))
-                      (catch RuntimeException ex
-                        ;; The eternal question in this scenario:
-                        ;; Fail fast, or hope we can keep limping
-                        ;; along?
-                        ;; TODO: Add prod vs. dev environment options
-                        ;; to give the caller control over what
-                        ;; should happen here.
-                        ;; (Note that, either way, it really should
-                        ;; include a callback to some
-                        ;; currently-undefined status updater
-                        (comment state)
-                        (update state
-                                ::log2/state
-                                #(log2/exception %
-                                                 ex
-                                                 ::action-trigger
-                                                 "Running updater: low-level failure"))))
+        _ (log/warn "Trying to run updater because of" tag)
+
+        state' (try (updater state)
+                    (catch ExceptionInfo ex
+                      (update state
+                              ::log2/state
+                              #(log2/exception %
+                                               ex
+                                               ::action-trigger
+                                               "Running updater failed"
+                                               {::details (.getData ex)})))
+                    (catch RuntimeException ex
+                      ;; The eternal question in this scenario:
+                      ;; Fail fast, or hope we can keep limping
+                      ;; along?
+                      ;; TODO: Add prod vs. dev environment options
+                      ;; to give the caller control over what
+                      ;; should happen here.
+                      ;; (Note that, either way, it really should
+                      ;; include a callback to some
+                      ;; currently-undefined status updater
+                      (comment state)
+                      (update state
+                              ::log2/state
+                              #(log2/exception %
+                                               ex
+                                               ::action-trigger
+                                               "Running updater: low-level failure"))))
         _ (assert (::specs/outgoing state') (str "After updating for " tag))
-        [my-logs forked-logs] (log2/fork (::log2/state state') ::schedule-next-timeout!)
+        my-logs (::log2/state state')
+        forked-logs (log2/fork my-logs)
         mid (System/currentTimeMillis)
         ;; This is taking a ludicrous amount of time.
         ;; Q: How much should I blame on logging?
@@ -1254,15 +1259,15 @@
        (when server?
          (deliver pending-client-response ::never-waited))
        {::specs/flow-control {::specs/client-waiting-on-response pending-client-response
-                              ::specs/last-doubling 0
-                              ::specs/last-edge 0
-                              ::specs/last-speed-adjustment 0
+                              ::specs/last-doubling (long 0)
+                              ::specs/last-edge (long 0)
+                              ::specs/last-speed-adjustment (long 0)
                               ::specs/n-sec-per-block K/sec->n-sec
-                              ::specs/rtt 0
-                              ::specs/rtt-average 0
-                              ::specs/rtt-deviation 0
-                              ::specs/rtt-highwater 0
-                              ::specs/rtt-lowwater 0
+                              ::specs/rtt (long 0)
+                              ::specs/rtt-average (long 0)
+                              ::specs/rtt-deviation (long 0)
+                              ::specs/rtt-highwater (long 0)
+                              ::specs/rtt-lowwater (long 0)
                               ::specs/rtt-phase false
                               ::specs/rtt-seen-older-high false
                               ::specs/rtt-seen-older-low false
@@ -1286,6 +1291,7 @@
                           ;; avoid 1-ms idle spin waiting for first
                           ;; incoming message
                           ::specs/last-block-time (System/nanoTime)
+                          ;; FIXME: Move this to flow-control
                           ::specs/last-panic 0
                           ;; Peers started as servers start out
                           ;; with standard-max-block-length instead.

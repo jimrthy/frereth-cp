@@ -38,9 +38,6 @@
   [buf]
   {::specs/ackd? false
    ::specs/buf buf
-   ;; TODO: Add a signal for marking this true
-   ;; (It probably needs to involve a close! function
-   ;; in the message ns)
    ::specs/send-eof ::specs/false
    ::specs/transmissions 0
    ::specs/time (System/nanoTime)})
