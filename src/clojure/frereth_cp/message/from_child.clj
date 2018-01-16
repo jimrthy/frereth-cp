@@ -97,7 +97,7 @@
                               {::expected-available available-bytes
                                ::max-to-read max-to-read
                                ::already-received (count prefix)
-                               ::monitor-id monitor-id})]
+                               ::specs/monitor-id monitor-id})]
      (if (not= 0 available-bytes)
        ;; Simplest scenario: we have bytes waiting to be consumed
        (let [bytes-to-read (min available-bytes max-to-read)
@@ -675,7 +675,8 @@
         :ret ::specs/state)
 (defn initial-child-monitor-loop
   ;;; Q: How much common functionality can I refactor out of this and monitor-loop?
-  [state
+  [{:keys [::specs/message-loop-name]
+    :as state}
    logger
    client-waiting-on-response
    monitor-id
@@ -685,7 +686,9 @@
   (loop [state state]
     (let [log-state (log/flush-logs! logger (log/debug (::log/state state)
                                                        ::initial-child-monitor-loop
-                                                       "Top of client-waiting-on-initial-response loop"))]
+                                                       "Top of client-waiting-on-initial-response loop"
+                                                       {::specs/message-loop-name message-loop-name
+                                                        ::specs/monitor-id monitor-id}))]
       ;; This is the key to the difference with the main loop.
       ;; Until this is realized, process-next-bytes-from-child!
       ;; is limited to K/max-bytes-in-initiate-message
@@ -719,6 +722,7 @@
                                            ::initial-child-monitor-loop
                                            "EOF signalled before we ever heard back from server"
                                            {::specs/eof-flag msg-or-eof'?
+                                            ::specs/message-loop-name message-loop-name
                                             ::specs/monitor-id monitor-id}))]
               (swap! eof?-atom not)
               state)))
@@ -734,7 +738,8 @@
                      :eof?-atom any?)
         :ret ::specs/state)
 (defn monitor-loop
-  [state
+  [{:keys [::specs/message-loop-name]
+    :as state}
    logger
    monitor-id
    child-out
@@ -745,7 +750,8 @@
       (let [log-state (log/debug (::log/state state)
                                  ::child-monitor-loop
                                  "Top of main child-read loop"
-                                 {::specs/monitor-id monitor-id})
+                                 {::specs/message-loop-name message-loop-name
+                                  ::specs/monitor-id monitor-id})
             on-bytes-forwarded (dfrd/deferred)
             {eof'? ::specs/bs-or-eof  ; FIXME: Rename this to bs-or-eof
              log-state ::log/state}
@@ -773,6 +779,7 @@
                                                ::child-monitor-loop
                                                "EOF signal received"
                                                {::specs/eof-flag eof'?
+                                                ::specs/message-loop-name message-loop-name
                                                 ::specs/monitor-id monitor-id})))))
       state)))
 
@@ -843,7 +850,8 @@
                       #(log/info %
                                  ::start-child-monitor!
                                  "Starting the child-monitor thread"
-                                 {::specs/monitor-id monitor-id}))
+                                 {::specs/message-loop-name message-loop-name
+                                  ::specs/monitor-id monitor-id}))
         state (assoc-in state [::specs/outgoing ::specs/monitor-id] monitor-id)
         on-bytes-forwarded (dfrd/deferred)
         on-bytes-forwarded-handler #(log/flush-logs! logger %)]
@@ -862,7 +870,8 @@
                     #(log/warn %
                                ::start-child-monitor!
                                "Child monitor exiting"
-                               {::specs/monitor-id monitor-id}))
+                               {::specs/message-loop-name message-loop-name
+                                ::specs/monitor-id monitor-id}))
             (update state ::log/state
                     #(log/flush-logs! logger %)))
           (catch IOException ex
@@ -872,7 +881,9 @@
                              (log/exception (::log/state state)
                                             ex
                                             ::start-child-monitor!
-                                            "TODO: Not Implemented. This should only happen when child closes pipe"))
+                                            "TODO: Not Implemented. This should only happen when child closes pipe"
+                                            {::specs/message-loop-name message-loop-name
+                                             ::specs/monitor-id monitor-id}))
             ;; Q: Do I need to forward along...which EOF signal would be appropriate here?
             (throw (RuntimeException. ex "Not Implemented")))
           (catch ExceptionInfo ex
@@ -885,10 +896,14 @@
                                             ex
                                             ::start-child-monitor!
                                             ""
-                                            (.getData ex))))
+                                            (assoc (.getData ex)
+                                                   ::caller-details {::specs/message-loop-name message-loop-name
+                                                                     ::specs/monitor-id monitor-id}))))
           (catch Exception ex
             (log/flush-logs! logger
                              (log/exception (::log/state state)
                                             ex
                                             ::start-child-monitor!
-                                            "Badly unexpected exception"))))))))
+                                            "Badly unexpected exception"
+                                            {::specs/message-loop-name message-loop-name
+                                             ::specs/monitor-id monitor-id}))))))))

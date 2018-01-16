@@ -4,7 +4,7 @@
             [clojure.stacktrace :as s-t]
             [frereth-cp.util :as utils])
   (:import clojure.lang.ExceptionInfo
-           java.io.OutputStream))
+           [java.io BufferedWriter FileWriter OutputStream OutputStreamWriter]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
@@ -147,6 +147,16 @@
          message#]
         (add-log-entry log-state# ~tag label# message#)))))
 
+(defrecord OutputWriterLogger [writer]
+  Logger
+  (log! [{writer :writer
+          :as this}
+         msg]
+    (.write writer (prn-str msg)))
+  (flush! [{^BufferedWriter writer :writer
+            :as this}]
+    (.flush writer)))
+
 (defrecord StreamLogger [stream]
   ;; I think this is mostly correct,
   ;; but I haven't actually tried testing it
@@ -220,6 +230,11 @@
    ;; the 1-arity version should include the context.
    ;; *This* is the arity that should just go away
    (init 0)))
+
+(defn file-writer-factory
+  [file-name]
+  (let [writer (BufferedWriter. (FileWriter. file-name))]
+    (->OutputWriterLogger writer)))
 
 (defn std-out-log-factory
   []
@@ -297,6 +312,8 @@ Returns fresh set of log entries"
 (s/fdef fork
         :args (s/cat :source ::state
                      :child-context ::context)
+        ;; Note that the return value really depends
+        ;; on the caller arity
         :ret (s/tuple ::state ::state))
 (defn fork
   ([src child-context]

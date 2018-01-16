@@ -86,7 +86,6 @@
                       {::specs/n-sec-per-block n-sec-per-block
                        ::adjusted-to result
                        ::u (quot n-sec-per-block K/k-128)})))
-    (throw (RuntimeException. "Start back here"))
     result))
 
 (s/fdef adjust-rtt-phase

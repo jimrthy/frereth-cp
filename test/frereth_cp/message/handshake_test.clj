@@ -1,5 +1,6 @@
 (ns frereth-cp.message.handshake-test
   (:require [clojure.edn :as edn]
+            [clojure.java.io :as jio]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (are deftest is testing)]
             [frereth-cp.message :as message]
@@ -309,10 +310,13 @@
              incoming
              (str incoming ", a" (class incoming)))))
   (let [client-state @client-state-atom]
-    (swap! log-atom log/info ::client-child-processor "incoming"
-           {::log/ctx "client"
-            ::client-state client-state
-            ::received incoming})
+    (swap! log-atom
+           #(log/info %
+                      ::client-child-processor
+                      "incoming"
+                      {::log/ctx "client"
+                       ::client-state client-state
+                       ::received incoming}))
     (if incoming
       (let [{n ::count} client-state
             next-message
@@ -338,10 +342,10 @@
               4 (do
                   (is (= incoming ::kk))
                   (swap! log-atom
-                         log/info
-                         ::client-child-processor
-                         "Client child callback is drained (but still need server's EOF)"
-                         {::log/ctx "client"})
+                         #(log/info %
+                                    ::client-child-processor
+                                    "Client child callback is drained (but still need server's EOF)"
+                                    {::log/ctx "client"}))
                   (try
                     (message/child-close! @client-atom)
                     (catch RuntimeException ex
@@ -350,20 +354,20 @@
                       ;; harness. I *do* see this error message
                       ;; and the stack trace.
                       (swap! log-atom
-                             log/exception
-                             ex
-                             ::client-child-processor
-                             "This really shouldn't pass"
-                             {::log/ctx "client"})
+                             #(log/exception %
+                                             ex
+                                             ::client-child-processor
+                                             "This really shouldn't pass"
+                                             {::log/ctx "client"}))
                       (is (not ex))))
                   nil)
               5 (do
                   (is (= incoming ::specs/normal))
                   (swap! log-atom
-                         log/info
-                         ::client-child-processor
-                         "Received server EOF"
-                         {::log/ctx "client"})
+                         #(log/info %
+                                    ::client-child-processor
+                                    "Received server EOF"
+                                    {::log/ctx "client"}))
                   (dfrd/success! succeeded? ::kthxbai)
                   ;; At this point, we signalled the end of the transaction.
                   ;; We closed our outbound pipe in the previous step,
@@ -374,16 +378,16 @@
                   ;; 6 after this pretty much says it all.
                   nil))]
         (swap! log-atom
-               log/info
-               ::client-child-processor
-               "response triggered"
-               ;; This approach hides the context that set this
-               ;; up.
-               ;; Then again, that's just the unit test, so it
-               ;; really isn't very interesting
-               {::log/ctx "client"
-                ::incoming incoming
-                ::next-message next-message})
+               #(log/info %
+                          ::client-child-processor
+                          "response triggered"
+                          ;; This approach hides the context that set this
+                          ;; up.
+                          ;; Then again, that's just the unit test, so it
+                          ;; really isn't very interesting
+                          {::log/ctx "client"
+                           ::incoming incoming
+                           ::next-message next-message}))
         (swap! client-state-atom update ::count inc)
         ;; Hmm...I've wound up with a circular dependency
         ;; on the io-handle again.
@@ -399,35 +403,35 @@
                             {}))
         (let [result (> 6 n)]
           (swap! log-atom
-                 log/debug
-                 ::client-child-processor
-                 "returning"
-                 {::too-many-attempts? (not result)
-                  ::log/ctx "client"})
+                 #(log/debug %
+                             ::client-child-processor
+                             "returning"
+                             {::too-many-attempts? (not result)
+                              ::log/ctx "client"}))
           result))
       (swap! log-atom
-             log/error
-             ::client-child-processor
-             "No bytes decoded. Shouldn't have gotten here"))))
+             #(log/error %
+                         ::client-child-processor
+                         "No bytes decoded. Shouldn't have gotten here")))))
 
 (defn child-mocker
   "Functionality shared between client and server"
   [logger log-atom log-ctx arrival-msg decode-src bs-or-kw]
   (swap! log-atom
-         log/debug
-         log-ctx
-         (if (keyword? bs-or-kw)
-           (str bs-or-kw)
-           (str (count bs-or-kw) "-byte"))
-         arrival-msg)
+         #(log/debug %
+                     log-ctx
+                     (if (keyword? bs-or-kw)
+                       (str bs-or-kw)
+                       (str (count bs-or-kw) "-byte"))
+                     {::message arrival-msg}))
   (if-not (keyword? bs-or-kw)
     (strm/put! decode-src bs-or-kw)
     (doseq [frame (io/encode protocol bs-or-kw)]
       (strm/put! decode-src frame)))
   (swap! log-atom
-         log/debug
-         log-ctx
-         "Messages forwarded to decoder")
+         #(log/debug %
+                     log-ctx
+                     "Messages forwarded to decoder"))
   (swap! log-atom #(log/flush-logs! logger %)))
 
 (defn mock-server-child
@@ -515,7 +519,10 @@
          )
 
 (deftest handshake
-  (let [logger (log/std-out-log-factory)
+  (jio/delete-file "/tmp/client.log" true)
+  (jio/delete-file "/tmp/server.log" true)
+  (let [client-logger (log/file-writer-factory "/tmp/client.log")
+        server-logger (log/file-writer-factory "/tmp/server.log")
         ;; Sticking the logs into an atom like this is tempting
         ;; and convenient.
         ;; But it really misses the point.
@@ -571,7 +578,7 @@
           clnt-decode-sink (decoder clnt-decode-src)
           client-child-cb (partial mock-client-child
                                    clnt-decode-src
-                                   logger
+                                   client-logger
                                    client-log-atom)
           server-atom (atom nil)
           server-state-atom (atom {::count 0})
@@ -595,7 +602,7 @@
                                (is (not= @sent ::timed-out))))
           server-child-cb (partial mock-server-child
                                    srvr-decode-src
-                                   logger
+                                   server-logger
                                    server-log-atom)]
       (dfrd/on-realized succeeded?
                         (fn [good]
@@ -631,14 +638,14 @@
                              chzbrgr-length)
                     srvr-decode-sink)
 
-      (let [client-init (message/initial-state "Client" false {} logger)
-            client-io (message/start! client-init logger client-parent-cb client-child-cb)
-            server-init (message/initial-state "Server" true {} logger)
+      (let [client-init (message/initial-state "Client" false {} client-logger)
+            client-io (message/start! client-init client-logger client-parent-cb client-child-cb)
+            server-init (message/initial-state "Server" true {} server-logger)
             ;; It seems like this next part really shouldn't happen until the initial message arrives
             ;; from the client.
             ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
             ;; that isn't quite true
-            server-io (message/start! server-init logger server-parent-cb server-child-cb)]
+            server-io (message/start! server-init server-logger server-parent-cb server-child-cb)]
         (reset! client-atom client-io)
         (reset! server-atom server-io)
 
@@ -750,8 +757,8 @@
                        ex
                        ::handshake-status-check
                        "Trying to halt server")))
-            (log/flush-logs! logger @client-log-atom)
-            (log/flush-logs! logger @server-log-atom)))))))
+            (log/flush-logs! client-logger @client-log-atom)
+            (log/flush-logs! server-logger @server-log-atom)))))))
 (comment
   (handshake)
   (count (str ::kk))

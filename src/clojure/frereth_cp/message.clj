@@ -329,7 +329,9 @@
       ;; trigger-from-parent! is expecting to have a ::->child-buffer key
       ;; that's really a vector that we can just conj onto.
       (when-not state
-        (let [logs (log2/warn (log2/init (::log2/lamport log-state))
+        ;; Q: Why aren't I just using log-state?
+        (let [logs (log2/warn (log2/init (::log2/context log-state)
+                                         (::log2/lamport log-state))
                               ::trigger-from-parent
                               ;; They're about to get worse
                               "nil state. Things went sideways recently")]
@@ -820,7 +822,8 @@
                                            scheduling-time
                                            (or actual-next -1)
                                            now
-                                           next-action))
+                                           next-action)
+                                {::specs/message-loop-name message-loop-name})
                     (catch NullPointerException ex
                       (log2/exception log-state
                                       ex
@@ -831,7 +834,8 @@
                                        ::actual-next actual-next
                                        ::now now
                                        ::next-action next-action
-                                       ::trigger-details prelog}))
+                                       ::trigger-details prelog
+                                       ::specs/message-loop-name message-loop-name}))
                     (catch NumberFormatException ex
                       (log2/exception log-state
                                       ex
@@ -842,7 +846,8 @@
                                        ::actual-next actual-next
                                        ::now now
                                        ::next-action next-action
-                                       ::trigger-details prelog})))
+                                       ::trigger-details prelog
+                                       ::specs/message-loop-name message-loop-name})))
         [tag
          log-state] (try
                       [(first next-action) log-state]
@@ -852,8 +857,8 @@
                                          ex
                                          ::action-trigger
                                          "Should have been a variant"
-                                         {::trigger-details prelog})]))
-        _ (log/warn "Picking updater function")
+                                         {::trigger-details prelog
+                                          ::specs/message-loop-name message-loop-name})]))
         ;; TODO: Really should add something like an action ID to the state
         ;; to assist in tracing the action. flow-control seems like a very
         ;; likely place to put it.
@@ -877,7 +882,8 @@
                               #(log2/warn %
                                           ::action-trigger
                                           "Stream closed. Surely there's more to do"
-                                          {::trigger-details prelog})))
+                                          {::trigger-details prelog
+                                           ::specs/message-loop-name message-loop-name})))
           ::no-op identity
           ;; Q: Shouldn't this be from the specs ns?
           ::parent-> (partial trigger-from-parent
@@ -904,7 +910,8 @@
                                     #(log2/warn %
                                                 ::action-trigger
                                                 "state-query request missing required deferred"
-                                                {::trigger-details prelog}))))
+                                                {::trigger-details prelog
+                                                 ::specs/message-loop-name message-loop-name}))))
           ::timed-out (fn [state]
                         (trigger-from-timer io-handle
                                             (update state
@@ -912,13 +919,15 @@
                                                     #(log2/debug %
                                                                  "Re-triggering Output due to timeot"
                                                                  (assoc timing-details
-                                                                        ::trigger-details prelog))))))
+                                                                        ::trigger-details prelog
+                                                                        ::specs/message-loop-name message-loop-name))))))
         state (update state
                         ::log2/state
                         #(log2/debug %
                                      ::action-trigger
                                      "Processing event"
-                                     {::tag tag}))
+                                     {::tag tag
+                                      ::specs/message-loop-name message-loop-name}))
         ;; At the end of the main ioloop in the reference
         ;; implementation, there's a block that closes the pipe
         ;; to the child if we're done.
@@ -959,7 +968,7 @@
         ;; a great reason to not introduce a second
         ;; one for bytes travelling the other direction)
 
-        _ (log/warn "Trying to run updater because of" tag)
+        _ (log/warn prelog "Trying to run updater because of" tag)
 
         state' (try (updater state)
                     (catch ExceptionInfo ex
@@ -969,7 +978,8 @@
                                                ex
                                                ::action-trigger
                                                "Running updater failed"
-                                               {::details (.getData ex)})))
+                                               {::details (.getData ex)
+                                                ::specs/message-loop-name message-loop-name})))
                     (catch RuntimeException ex
                       ;; The eternal question in this scenario:
                       ;; Fail fast, or hope we can keep limping
@@ -986,7 +996,9 @@
                               #(log2/exception %
                                                ex
                                                ::action-trigger
-                                               "Running updater: low-level failure"))))
+                                               "Running updater: low-level failure"
+                                               {::specs/message-loop-name message-loop-name}))))
+        _ (log/warn prelog "Updater returned" state')
         _ (assert (::specs/outgoing state') (str "After updating for " tag))
         my-logs (::log2/state state')
         forked-logs (log2/fork my-logs)
@@ -1003,7 +1015,8 @@
                                    "Handled a triggered action"
                                    {::tag tag
                                     ::handling-ms (- mid start)
-                                    ::rescheduling-ms (- end mid)})))
+                                    ::rescheduling-ms (- end mid)
+                                    ::specs/message-loop-name message-loop-name})))
   nil)
 
 (comment
@@ -1107,73 +1120,72 @@
               (choose-next-scheduled-time (assoc state
                                                  ::log2/state
                                                  log-state)
-                                          to-child-done?))
-            {:keys [::delta_f
-                    ::next-action]
-             log-state ::log2/state}
-            (if actual-next
-              ;; TODO: add an optional debugging step that stores state and the
-              ;; calculated time so I can just look at exactly what I have
-              ;; when everything goes sideways
-              (let [;; It seems like it would make more sense to have the delay happen from
-                    ;; "now" instead of "recent"
-                    ;; Doing that throws lots of sand into the gears.
-                    ;; Stick with this approach for now, because it *does*
-                    ;; match the reference implementation.
-                    ;; It seems very incorrect, but it also supplies an adjustment
-                    ;; for the time it took this event loop iteration to process.
-                    ;; Q: Is that fair/accurate?
-                    scheduled-delay (- actual-next recent)
-                    ;; Make sure that at least it isn't negative
-                    ;; (I keep running across bugs that have issues with this,
-                    ;; and it wreaks havoc with my REPL)
-                    delta-nanos (max 0 scheduled-delay)
-                    delta (if (< delta-nanos 0)
-                            0
-                            (inc (utils/nanos->millis delta-nanos)))
-                    ;; For printing
-                    delta_f (float delta)
-                    log-state (log2/debug log-state
-                                          ::schedule-next-timeout!
-                                          "Setting timer to trigger after an initially calculated scheduled delay"
-                                          {::scheduled-delay scheduled-delay  ; Q: Convert to long?
-                                           ::specs/recent recent
-                                           ::now now
-                                           ::actual-delay delta_f
-                                           ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
-                                           ::stream stream})]
-                {::delta_f delta_f
-                 ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
-                 ::log2/state log-state})
-              ;; The i/o portion of this loop is finished.
-              ;; But we still need to wait on the caller to close the underlying stream.
-              ;; If nothing else, it may still want/need to query state.
-              {::delta_f ##Inf
-               ::next-action (strm/take! stream [::drained])
-               ::log2/state log-state})
-            ;; Since this is recursive, forking logs seems like a bad idea
-            [my-logs forked-logs] (log2/fork log-state ::forked)]
-        (when-not (::specs/outgoing state)
-          (throw (ex-info "Missing outgoing" state)))
-        (dfrd/on-realized next-action
-                          (partial action-trigger
-                                   {::actual-next actual-next
-                                    ::delta_f delta_f
-                                    ::scheduling-time now}
-                                   io-handle
-                                   (assoc state ::log2/state forked-logs))
-                          (fn [failure]
-                            (log2/flush-logs! logger
-                                              (log2/error forked-logs
-                                                          ::schedule-next-timeout!
-                                                          "Waiting on some I/O to happen in timeout"
-                                                          {::actual-delay delta_f
-                                                           ::now now}))
-                            ;; We don't have any business doing this here, but the
-                            ;; alternatives don't seem appealing.
-                            ;; Well, we could recurse manually without a scheduled
-                            ;; time.
-                            (strm/close! stream))))
+                                          to-child-done?))]
+        (let [{:keys [::delta_f
+                      ::next-action]
+               log-state ::log2/state}
+              (if actual-next
+                ;; TODO: add an optional debugging step that stores state and the
+                ;; calculated time so I can just look at exactly what I have
+                ;; when everything goes sideways
+                (let [;; It seems like it would make more sense to have the delay happen from
+                      ;; "now" instead of "recent"
+                      ;; Doing that throws lots of sand into the gears.
+                      ;; Stick with this approach for now, because it *does*
+                      ;; match the reference implementation.
+                      ;; It seems very incorrect, but it also supplies an adjustment
+                      ;; for the time it took this event loop iteration to process.
+                      ;; Q: Is that fair/accurate?
+                      scheduled-delay (- actual-next recent)
+                      ;; Make sure that at least it isn't negative
+                      ;; (I keep running across bugs that have issues with this,
+                      ;; and it wreaks havoc with my REPL)
+                      delta-nanos (max 0 scheduled-delay)
+                      delta (if (< delta-nanos 0)
+                              0
+                              (inc (utils/nanos->millis delta-nanos)))
+                      ;; For printing
+                      delta_f (float delta)
+                      log-state (log2/debug log-state
+                                            ::schedule-next-timeout!
+                                            "Setting timer to trigger after an initially calculated scheduled delay"
+                                            {::scheduled-delay scheduled-delay  ; Q: Convert to long?
+                                             ::specs/recent recent
+                                             ::now now
+                                             ::actual-delay delta_f
+                                             ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
+                                             ::stream stream})]
+                  {::delta_f delta_f
+                   ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
+                   ::log2/state log-state})
+                ;; The i/o portion of this loop is finished.
+                ;; But we still need to wait on the caller to close the underlying stream.
+                ;; If nothing else, it may still want/need to query state.
+                {::delta_f ##Inf
+                 ::next-action (strm/take! stream [::drained])
+                 ::log2/state log-state})]
+          (let [forked-logs (log2/fork log-state)]
+            (when-not (::specs/outgoing state)
+              (throw (ex-info "Missing outgoing" state)))
+            (dfrd/on-realized next-action
+                              (partial action-trigger
+                                       {::actual-next actual-next
+                                        ::delta_f delta_f
+                                        ::scheduling-time now}
+                                       io-handle
+                                       (assoc state ::log2/state forked-logs))
+                              (fn [failure]
+                                (log2/flush-logs! logger
+                                                  (log2/error forked-logs
+                                                              ::schedule-next-timeout!
+                                                              "Waiting on some I/O to happen in timeout"
+                                                              {::actual-delay delta_f
+                                                               ::now now}))
+                                ;; We don't have any business doing this here, but the
+                                ;; alternatives don't seem appealing.
+                                ;; Well, we could recurse manually without a scheduled
+                                ;; time.
+                                (strm/close! stream))))))
       (log2/flush-logs! logger
                         (log2/warn log-state
                                    ::schedule-next-timeout!
