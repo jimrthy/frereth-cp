@@ -176,7 +176,7 @@
   ;; worth writing this way instead
   Logger
   (log! [_ msg]
-    (println (pr-str msg)))
+    (prn msg))
   ;; Q: Is there any point to calling .flush
   ;; on STDOUT?
   ;; A: Not according to stackoverflow.
@@ -224,11 +224,12 @@
     ::context context})
   ;; FIXME: Honestly, this needs a high-level context
   ;; i.e. What is the purpose of this group of logs?
-  ([start-clock]
-   (init "FIXME: This arity should go away" start-clock))
+  ([context]
+   (init context 0))
   ([]
    ;; the 1-arity version should include the context.
    ;; *This* is the arity that should just go away
+   (throw (RuntimeException. "Don't do this"))
    (init 0)))
 
 (defn file-writer-factory
@@ -260,7 +261,8 @@ Returns fresh set of log entries"
   ;; The i/o costs should be quite a bit higher than
   ;; the agent overhead...though I do know that
   ;; a go-loop would be more efficient
-  (log! logger (str "Flushing logs for " context))
+  (log! logger {::what "flushing"
+                ::context context})
   (doseq [message (::entries log-state)]
     (log! logger message))
   (flush! logger)
@@ -275,7 +277,7 @@ Returns fresh set of log entries"
     (-> log-state
         (update ::lamport inc)
         (assoc ::entries [])))
-  (init (inc (::lamport log-state))))
+  (init (::context log-state) (inc (::lamport log-state))))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state
