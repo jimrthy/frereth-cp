@@ -74,7 +74,7 @@
                                 ::specs/length 32
                                 ::specs/time (- now 7)
                                 ::specs/transmissions 7}]  ; block 6
-        log-state (log/init)
+        log-state (log/init ::build-flag-ack-start-state 0)
         start-blocks (reduce (fn [acc block]
                                (conj acc block))
                              (msg/build-un-ackd-blocks {::log/logger logger

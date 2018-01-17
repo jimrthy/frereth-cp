@@ -57,7 +57,8 @@
   ;; Then again, you *could* do something like
   ;; this, to experiment with the unencrypted
   ;; networking protocol.
-  (swap! log-atom log/info log-ctx "Message over network" {::log/ctx message-loop-name})
+  (swap! log-atom #(log/info % log-ctx "Message over network" {::log/ctx message-loop-name}))
+  (println "DEBUG:" message-loop-name "consumer:" log-ctx)
 
   (let [prelog (utils/pre-log message-loop-name)
         consumption (dfrd/future
@@ -73,53 +74,54 @@
                       ;; us up with surprising behavior if it doesn't work?
                       (let [state (message/get-state io-handle time-out ::timed-out)]
                         (swap! log-atom
-                               log/debug
-                               log-ctx
-                               "Got state"
-                               {::state state
-                                ::parent-context prelog
-                                ::log/ctx message-loop-name})
+                               #(log/debug %
+                                           log-ctx
+                                           "Got state"
+                                           {::state state
+                                            ::parent-context prelog
+                                            ::specs/message-loop-name message-loop-name}))
                         (if (or (= ::timed-out state)
                                 (instance? Throwable state)
                                 (nil? state))
                           (let [problem (if (instance? Throwable state)
                                           state
                                           (ex-info "Non-exception"
-                                                   {::problem state}))]
+                                                   {::problem state
+                                                    ::specs/message-loop-name message-loop-name}))]
                             (is (not problem))
                             (swap! log-atom
-                                   log/exception
-                                   problem
-                                   log-ctx
-                                   "Failed!"
-                                   {::log/ctx message-loop-name
-                                    ::triggered-from prelog})
+                                   #(log/exception %
+                                                   problem
+                                                   log-ctx
+                                                   "Failed!"
+                                                   {::triggered-from prelog
+                                                    ::specs/message-loop-name message-loop-name}))
                             (if (realized? succeeded?)
                               (swap! log-atom
-                                     log/warn
-                                     log-ctx
-                                     "Caller already thinks we succeeded"
-                                     {::log/ctx message-loop-name
-                                      ::triggered-by prelog})
+                                     #(log/warn %
+                                                log-ctx
+                                                "Caller already thinks we succeeded"
+                                                {::triggered-by prelog
+                                                 ::specs/message-loop-name message-loop-name}))
                               (dfrd/error! succeeded? problem)))
                           (message/parent->! io-handle bs))))]
     (dfrd/on-realized consumption
                       (fn [success]
                         (swap! log-atom
-                               log/debug
-                               log-ctx
-                               "Message successfully consumed"
-                               {::log/ctx message-loop-name
-                                ::outcome success
-                                ::triggered-from prelog}))
+                               #(log/debug %
+                                           log-ctx
+                                           "Message successfully consumed"
+                                           {::specs/message-loop-name message-loop-name
+                                            ::outcome success
+                                            ::triggered-from prelog})))
                       (fn [failure]
                         (swap! log-atom
-                               log/error
-                               log-ctx
-                               "Failed to consume message"
-                               {::log/ctx message-loop-name
-                                ::problem failure
-                                ::triggered-from prelog})))))
+                               #(log/error %
+                                           log-ctx
+                                           "Failed to consume message"
+                                           {::specs/message-loop-name message-loop-name
+                                            ::problem failure
+                                            ::triggered-from prelog}))))))
 
 (defn srvr->client-consumer
   "This processes bytes that are headed from the server to the client"
@@ -133,13 +135,12 @@
 
 (defn client->srvr-consumer
   [server-io log-atom time-out succeeded? bs]
-  (let [prelog (utils/pre-log "client->server consumer")]
-    (consumer server-io
-              log-atom
-              ::client->srvr-consumer
-              time-out
-              succeeded?
-              bs)))
+  (consumer server-io
+            log-atom
+            ::client->srvr-consumer
+            time-out
+            succeeded?
+            bs))
 
 (defn buffer-response!
   "Serialize and send a message from the child"
@@ -150,14 +151,15 @@
    success-message
    error-message
    error-details]
+  (println "DEBUG: Serializing and sending a message from" message-loop-name "child")
   (let [frames (io/encode protocol message)
         prelog (utils/pre-log message-loop-name)]
     (swap! log-atom
-           log/debug
-           ::buffer-response!
-           "Ready to send message frames"
-           {::log/ctx message-loop-name
-            ::frame-count (count frames)})
+           #(log/debug %
+                       ::buffer-response!
+                       "Ready to send message frames"
+                       {::log/ctx message-loop-name
+                        ::frame-count (count frames)}))
     (doseq [frame frames]
       (let [array (if (.hasArray frame)
                     (.array frame)
@@ -172,11 +174,11 @@
                           {::failed-on frame
                            ::context prelog}))
           (swap! log-atom
-                 log/debug
-                 ::buffer-response!
-                 "frame sent"
-                 {::log/ctx message-loop-name
-                  ::frame-size (count array)}))))))
+                 #(log/debug %
+                             ::buffer-response!
+                             "frame sent"
+                             {::log/ctx message-loop-name
+                              ::frame-size (count array)})))))))
 (comment
   ;; Inline test for test-helper.
   ;; This seems like a bad sign.
@@ -491,7 +493,7 @@
                                     (conj acc result)))
                                 []
                                 frames)
-          log-atom (log/init)
+          log-atom (log/init "Decoder Check" 0)
           decoded (map (partial decode-bytes->child
                                 decode-src
                                 decode-sink
@@ -519,10 +521,10 @@
          )
 
 (deftest handshake
-  (jio/delete-file "/tmp/client.log" true)
-  (jio/delete-file "/tmp/server.log" true)
-  (let [client-logger (log/file-writer-factory "/tmp/client.log")
-        server-logger (log/file-writer-factory "/tmp/server.log")
+  (jio/delete-file "/tmp/client.clj" true)
+  (jio/delete-file "/tmp/server.clj" true)
+  (let [client-logger (log/file-writer-factory "/tmp/client.clj")
+        server-logger (log/file-writer-factory "/tmp/server.clj")
         ;; Sticking the logs into an atom like this is tempting
         ;; and convenient.
         ;; But it really misses the point.
@@ -652,13 +654,13 @@
         (try
           (strm/consume (partial client->srvr-consumer
                                  server-io
-                                 client-log-atom
+                                 server-log-atom
                                  time-out
                                  succeeded?)
                         client->server)
           (strm/consume (partial srvr->client-consumer
                                  client-io
-                                 server-log-atom
+                                 client-log-atom
                                  time-out
                                  succeeded?)
                         server->client)

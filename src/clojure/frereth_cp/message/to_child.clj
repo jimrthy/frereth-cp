@@ -413,7 +413,8 @@
                            ex
                            ::parent-monitor-loop
                            "Redundant error handler")))]
-    (deliver result-writer my-logs)))
+    (when result-writer
+      (deliver result-writer my-logs))))
 
 (s/fdef write-bytes-to-child-stream!
         :args (s/cat :to-child ::specs/to-child
@@ -616,7 +617,7 @@
   [{:keys [::log/logger
            ::specs/child-in
            ::specs/message-loop-name]
-    trigger ::specs/from-parent-trigger
+    trigger-stream ::specs/from-parent-trigger
     :as io-handle}
    parent-log
    ;; FIXME: Having multiple manifold streams running consume
@@ -638,50 +639,50 @@
         my-logs (log/info my-logs
                           ::loop
                           "Starting the loop watching for bytes the parent has sent toward the child")
-        my-logs (log/flush-logs! logger my-logs)]
-    (let [result (strm/consume (partial trigger-from-parent!
-                                        io-handle
-                                        buffer
-                                        cb)
-                               trigger)
-          finished (dfrd/deferred)]
-      (-> result
-          (dfrd/chain (fn [success]
-                        (let [my-logs (log/warn my-logs
-                                                ::loop
-                                                "parent-monitor source exhausted")]
-                          ;; Writing to the from-parent-trigger stream
-                          ;; here seems like the obvious thing to do.
-                          ;; But closing that was the signal that
-                          ;; led us here.
-                          ;; So just call the callback's caller directly.
-                          (trigger-from-parent! io-handle
-                                                buffer
-                                                cb
-                                                {::result-writer finished
-                                                 ::log/state my-logs
-                                                 ::specs/bs-or-eof ::specs/normal})))
-                      (fn [_]
-                        ;; This is really just waiting for logs from
-                        ;; trigger-from-parent!
-                        ;; Which is an obnoxious way to handle this.
-                        finished)
-                      (fn [logs]
-                        ;; Really want to synchronize these logs.
-                        ;; There's no good way to do that.
-                        ;; Worse: time stamps get lost, and there's no
-                        ;; good way to coordinate back to the parent.
-                        ;; TODO: This needs more hammock-time
-                        (log/flush-logs! logger logs)
-                        (log/flush-logs! logger my-logs)))
-          (dfrd/catch (fn [ex]
-                        (log/exception my-logs
-                                       ex
-                                       ::parent-monitor-loop
-                                       "Error escaped")))
-          (dfrd/finally (fn [logs]
-                          (log/flush-logs! logger logs))))
-      result)))
+        my-logs (log/flush-logs! logger my-logs)
+        result (strm/consume (partial trigger-from-parent!
+                                      io-handle
+                                      buffer
+                                      cb)
+                             trigger-stream)
+        finished (dfrd/deferred)]
+    (-> result
+        (dfrd/chain (fn [success]
+                      (let [my-logs (log/warn my-logs
+                                              ::loop
+                                              "parent-monitor source exhausted")]
+                        ;; Writing to the from-parent-trigger stream
+                        ;; here seems like the obvious thing to do.
+                        ;; But closing that was the signal that
+                        ;; led us here.
+                        ;; So just call the callback's caller directly.
+                        (trigger-from-parent! io-handle
+                                              buffer
+                                              cb
+                                              {::result-writer finished
+                                               ::log/state my-logs
+                                               ::specs/bs-or-eof ::specs/normal})))
+                    (fn [_]
+                      ;; This is really just waiting for logs from
+                      ;; trigger-from-parent!
+                      ;; Which is an obnoxious way to handle this.
+                      finished)
+                    (fn [logs]
+                      ;; Really want to synchronize these logs.
+                      ;; There's no good way to do that.
+                      ;; Worse: time stamps get lost, and there's no
+                      ;; good way to coordinate back to the parent.
+                      ;; TODO: This needs more hammock-time
+                      (log/flush-logs! logger logs)
+                      (log/flush-logs! logger my-logs)))
+        (dfrd/catch (fn [ex]
+                      (log/exception my-logs
+                                     ex
+                                     ::parent-monitor-loop
+                                     "Error escaped")))
+        (dfrd/finally (fn [logs]
+                        (log/flush-logs! logger logs))))
+    result))
 
 (s/fdef forward!
         :args (s/cat :io-handle ::specs/io-handle

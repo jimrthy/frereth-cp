@@ -91,8 +91,8 @@
    (let [prefix-gap (count prefix)
          log-state (log/debug log-state
                               ::read-next-bytes-from-child!
-                              (str "Trying to pull bytes from child"
-                                   "and append them to any bytes"
+                              (str "Trying to pull bytes from child "
+                                   "and append them to any bytes "
                                    "previously received")
                               {::expected-available available-bytes
                                ::max-to-read max-to-read
