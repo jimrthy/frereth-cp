@@ -22,7 +22,7 @@
     :as state}
    ackd-time]
   (let [rtt (- recent ackd-time)]
-    (when (< 0 rtt)
+    (when (> 0 rtt)
       ;; I'm getting into scenarios with negative RTT, which
       ;; seems to have something to do with math overflow
       ;; warnings. That seems to be breaking things.
@@ -38,7 +38,7 @@
       ;; doesn't sound like something a library should mess
       ;; with. Although it might make sense in terms of unit
       ;; testing.
-      (throw (ex-info "ACK arrived before recent"
+      (throw (ex-info "ACK arrived after recent"
                       {::specs/recent recent
                        ::ackd-time ackd-time
                        ::delta rtt})))
