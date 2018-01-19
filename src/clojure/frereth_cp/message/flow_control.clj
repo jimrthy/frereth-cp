@@ -31,7 +31,13 @@
       ;; been set later, when the block was handed over
       ;; to the ioloop.
       ;; Note that assertions here just get swallowed
-      ;; silently.
+      ;; silently, and the thread gets returned to the pool.
+      ;; This is terrible behavior. I've been meaning
+      ;; to read a blog post that's probably about this exact
+      ;; problem, but it involves a JVM-wide setting, and it
+      ;; doesn't sound like something a library should mess
+      ;; with. Although it might make sense in terms of unit
+      ;; testing.
       (throw (ex-info "ACK arrived before recent"
                       {::specs/recent recent
                        ::ackd-time ackd-time

@@ -800,7 +800,7 @@
    ;; it less obviously a win.
    next-action]
   {:pre [outgoing]}
-  (let [now (System/currentTimeMillis)
+  (let [now (System/nanoTime)  ; It's tempting to just use millis, but that throws off recent
         ;; Line 337
         ;; Doing this now instead of after trying to receive data from the
         ;; child seems like a fairly significant change from the reference
@@ -1217,26 +1217,26 @@
   ;; tochild[1] (to child)
   ;; fromchild[0] (from child)
   ;; and a timeout (based on the messaging state).
-  (let [recent (System/nanoTime)]
-    ;; This is nowhere near as exciting as I
-    ;; expect every time I look at it
+  (let [recent (System/nanoTime)
+        ;; This is nowhere near as exciting as I
+        ;; expect every time I look at it
 
-    ;; This covers line 260
-    ;; Although it seems a bit silly to do it here
-    (let [state (assoc state
-                       ::specs/recent recent)
-          child-output-loop (from-child/start-child-monitor! state io-handle)
-          child-input-loop (to-child/start-parent-monitor! io-handle log-state ->child)]
-      (let [log-state (log2/debug log-state
-                                  ::start-event-loops!
-                                  "Child monitor thread should be running now. Scheduling next ioloop timeout")
-            state (update state
-                          ::log2/state
-                          #(log2/flush-logs! logger %))]
-        (schedule-next-timeout! (assoc io-handle
-                                       ::specs/child-output-loop child-output-loop
-                                       ::specs/child-input-loop child-input-loop)
-                                state)))))
+        ;; This covers line 260
+        ;; Although it seems a bit silly to do it here
+        state (assoc state
+                     ::specs/recent recent)
+        child-output-loop (from-child/start-child-monitor! state io-handle)
+        child-input-loop (to-child/start-parent-monitor! io-handle log-state ->child)
+        log-state (log2/debug log-state
+                              ::start-event-loops!
+                              "Child monitor thread should be running now. Scheduling next ioloop timeout")
+        state (update state
+                        ::log2/state
+                        #(log2/flush-logs! logger %))]
+    (schedule-next-timeout! (assoc io-handle
+                                   ::specs/child-output-loop child-output-loop
+                                   ::specs/child-input-loop child-input-loop)
+                            state)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
