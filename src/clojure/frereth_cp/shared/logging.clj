@@ -169,14 +169,15 @@
             :as this}]
     (.flush stream)))
 
-(defrecord StdOutLogger []
+(defrecord StdOutLogger [state-agent]
   ;; Really just a StreamLogger
   ;; where stream is STDOUT.
   ;; But it's simple/easy enough that it seemed
   ;; worth writing this way instead
   Logger
-  (log! [_ msg]
-    (prn msg))
+  (log! [{:keys [:state-agent]
+          :as this} msg]
+    (send state-agent prn msg))
   ;; Q: Is there any point to calling .flush
   ;; on STDOUT?
   ;; A: Not according to stackoverflow.
@@ -239,7 +240,7 @@
 
 (defn std-out-log-factory
   []
-  (->StdOutLogger))
+  (->StdOutLogger (agent {::flush-count 0})))
 
 (defn stream-log-factory
   [stream]

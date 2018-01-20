@@ -26,6 +26,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
@@ -772,6 +773,7 @@
         :args (s/cat :timing-details ::action-timing-details
                      :io-handle ::specs/io-handle
                      :state ::specs/state
+                     :log-state-atom ::shared-specs/atom
                      :next-action ::next-action)
         :ret any?)
 (defn action-trigger
@@ -782,8 +784,8 @@
    {:keys [::specs/message-loop-name]
     :as io-handle}
    {:keys [::specs/outgoing]
-    log-state ::log2/state
     :as state}
+   log-state-atom
    ;; This is a variant that consists of a [tag callback] pair
    ;; It's tempting to destructure this here.
    ;; That makes the code a little more concise,
@@ -809,6 +811,8 @@
         ;; TODO: Ask cryptographers and protocol experts whether this is
         ;; a choice I'll really regret
         state (assoc state ::specs/recent now)
+        log-state @log-state-atom
+        ;; This is used during exception handling
         prelog (utils/pre-log message-loop-name)  ; might be on a different thread
         fmt (str "Awakening event loop that was sleeping for ~g ms "
                  "after ~:d at ~:d\n"
@@ -862,72 +866,71 @@
         ;; TODO: Really should add something like an action ID to the state
         ;; to assist in tracing the action. flow-control seems like a very
         ;; likely place to put it.
-        updater
-        ;; Q: Is this worth switching to something like core.match or a multimethod?
-        (case tag
-          ::specs/child-> (let [[_ callback ack] next-action]
-                            (partial trigger-from-child io-handle callback ack))
-          ::drained (fn [{log-state ::log2/state
-                          :as state}]
-                      ;; Actually, this seems like a strong argument for
-                      ;; having a pair of streams. Child could still have
-                      ;; bytes to send to the parent after the latter's
-                      ;; stopped sending, or vice versa.
-                      ;; I'm pretty sure the complexity I haven't finished
-                      ;; translating stems from that case.
-                      ;; TODO: Another piece to revisit once the basics
-                      ;; work.
-                      (update state
-                              ::log2/state
-                              #(log2/warn %
-                                          ::action-trigger
-                                          "Stream closed. Surely there's more to do"
-                                          {::trigger-details prelog
-                                           ::specs/message-loop-name message-loop-name})))
-          ::no-op identity
-          ;; Q: Shouldn't this be from the specs ns?
-          ::parent-> (partial trigger-from-parent
-                              io-handle
-                              (second next-action))
-          ;; This can throw off the timer, since we're basing the delay on
-          ;; the delta from recent (which doesn't change) rather than now.
-          ;; But we're basing the actual delay from now, which does change.
-          ;; e.g. If the scheduled delay is 980 ms, and someone triggers a
-          ;; query-state that takes 20 ms after 20 ms, the new delay will
-          ;; still be 980 ms rather than the 940 that would have been
-          ;; appropriate.
-          ;; Q: What's the best way to avoid this?
-          ;; Updating recent seems obvious, but also dubious.
-          ;; Decrementing the delay seems like something the scheduler
-          ;; should handle.
-          ::query-state (fn [state]
-                          (if-let [dst (second next-action)]
-                            (do
-                              (deliver dst state)
-                              state)
-                            (update state
-                                    ::log2/state
-                                    #(log2/warn %
-                                                ::action-trigger
-                                                "state-query request missing required deferred"
-                                                {::trigger-details prelog
-                                                 ::specs/message-loop-name message-loop-name}))))
-          ::timed-out (fn [state]
-                        (trigger-from-timer io-handle
-                                            (update state
-                                                    ::log2/state
-                                                    #(log2/debug %
-                                                                 "Re-triggering Output due to timeot"
-                                                                 (assoc timing-details
-                                                                        ::trigger-details prelog
-                                                                        ::specs/message-loop-name message-loop-name))))))
-        state (update state
-                        ::log2/state
-                        #(log2/debug %
-                                     ::action-trigger
-                                     "Processing event"
-                                     {::tag tag
-                                      ::specs/message-loop-name message-loop-name}))
+        updater (case tag
+                  ;; Q: Is this worth switching to something like core.match or a multimethod?
+                  ::specs/child-> (let [[_ callback ack] next-action]
+                                    (partial trigger-from-child io-handle callback ack))
+                  ::drained (fn [{log-state ::log2/state
+                                  :as state}]
+                              ;; Actually, this seems like a strong argument for
+                              ;; having a pair of streams. Child could still have
+                              ;; bytes to send to the parent after the latter's
+                              ;; stopped sending, or vice versa.
+                              ;; I'm pretty sure the complexity I haven't finished
+                              ;; translating stems from that case.
+                              ;; TODO: Another piece to revisit once the basics
+                              ;; work.
+                              (update state
+                                      ::log2/state
+                                      #(log2/warn %
+                                                  ::action-trigger
+                                                  "Stream closed. Surely there's more to do"
+                                                  {::trigger-details prelog
+                                                   ::specs/message-loop-name message-loop-name})))
+                  ::no-op identity
+                  ;; Q: Shouldn't this be from the specs ns?
+                  ::parent-> (partial trigger-from-parent
+                                      io-handle
+                                      (second next-action))
+                  ;; This can throw off the timer, since we're basing the delay on
+                  ;; the delta from recent (which doesn't change) rather than now.
+                  ;; But we're basing the actual delay from now, which does change.
+                  ;; e.g. If the scheduled delay is 980 ms, and someone triggers a
+                  ;; query-state that takes 20 ms after 20 ms, the new delay will
+                  ;; still be 980 ms rather than the 940 that would have been
+                  ;; appropriate.
+                  ;; Q: What's the best way to avoid this?
+                  ;; Updating recent seems obvious, but also dubious.
+                  ;; Decrementing the delay seems like something the scheduler
+                  ;; should handle.
+                  ::query-state (fn [state]
+                                  (if-let [dst (second next-action)]
+                                    (do
+                                      (deliver dst state)
+                                      state)
+                                    (update state
+                                            ::log2/state
+                                            #(log2/warn %
+                                                        ::action-trigger
+                                                        "state-query request missing required deferred"
+                                                        {::trigger-details prelog
+                                                         ::specs/message-loop-name message-loop-name}))))
+                  ::timed-out (fn [state]
+                                (trigger-from-timer io-handle
+                                                    (update state
+                                                            ::log2/state
+                                                            #(log2/debug %
+                                                                         "Re-triggering Output due to timeot"
+                                                                         (assoc timing-details
+                                                                                ::trigger-details prelog
+                                                                                ::specs/message-loop-name message-loop-name))))))
+        state (assoc state
+                     ::log2/state
+                     (log2/debug log-state
+                                 ::action-trigger
+                                 "Processing event"
+                                 {::tag tag
+                                  ::specs/message-loop-name message-loop-name}))
         ;; At the end of the main ioloop in the reference
         ;; implementation, there's a block that closes the pipe
         ;; to the child if we're done.
@@ -968,7 +971,12 @@
         ;; a great reason to not introduce a second
         ;; one for bytes travelling the other direction)
 
-        _ (log/warn prelog "Trying to run updater because of" tag)
+        state (update state
+                      ::log2/state
+                      #(log2/warn %
+                                  ::action-trigger
+                                  "Trying to run updater because of"
+                                  {::tag tag}))
 
         state' (try (updater state)
                     (catch ExceptionInfo ex
@@ -998,7 +1006,12 @@
                                                ::action-trigger
                                                "Running updater: low-level failure"
                                                {::specs/message-loop-name message-loop-name}))))
-        _ (log/warn prelog "Updater returned" state')
+        state' (update state'
+                       ::log2/state
+                       #(log2/warn %
+                                   ::action-trigger
+                                   "Updater returned"
+                                   (dissoc state' ::log/state)))
         _ (assert (::specs/outgoing state') (str "After updating for " tag))
         my-logs (::log2/state state')
         forked-logs (log2/fork my-logs)
@@ -1008,15 +1021,19 @@
         _ (schedule-next-timeout! io-handle (assoc state'
                                                    ::log2/state
                                                    forked-logs))
-        end (System/currentTimeMillis)]
-    (log2/flush-logs! (::log2/logger io-handle)
-                      (log2/debug  my-logs
-                                   ::action-trigger
-                                   "Handled a triggered action"
-                                   {::tag tag
-                                    ::handling-ms (- mid start)
-                                    ::rescheduling-ms (- end mid)
-                                    ::specs/message-loop-name message-loop-name})))
+        end (System/currentTimeMillis)
+        my-logs (log2/warn my-logs
+                           ::action-trigger
+                           "Need to update the caller's log state")]
+    (reset! log-state-atom
+            (log2/flush-logs! (::log2/logger io-handle)
+                              (log2/debug  my-logs
+                                           ::action-trigger
+                                           "Handled a triggered action"
+                                           {::tag tag
+                                            ::handling-ms (- mid start)
+                                            ::rescheduling-ms (- end mid)
+                                            ::specs/message-loop-name message-loop-name}))))
   nil)
 
 (comment
@@ -1173,7 +1190,8 @@
                                         ::delta_f delta_f
                                         ::scheduling-time now}
                                        io-handle
-                                       (assoc state ::log2/state forked-logs))
+                                       (assoc state ::log2/state nil)
+                                       (atom forked-logs))
                               (fn [failure]
                                 (log2/flush-logs! logger
                                                   (log2/error forked-logs

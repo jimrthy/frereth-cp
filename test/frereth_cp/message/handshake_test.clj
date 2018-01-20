@@ -85,7 +85,7 @@
                                 (nil? state))
                           (let [problem (if (instance? Throwable state)
                                           state
-                                          (ex-info "Non-exception"
+                                          (ex-info "Non-exception querying for state"
                                                    {::problem state
                                                     ::specs/message-loop-name message-loop-name}))]
                             (is (not problem))
