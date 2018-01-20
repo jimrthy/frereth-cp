@@ -9,7 +9,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.schema :as schema]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
@@ -27,11 +26,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(s/def ::chan->child ::schema/manifold-stream)
-(s/def ::chan<-child ::schema/manifold-stream)
-(s/def ::chan->server ::schema/manifold-stream)
-(s/def ::chan<-server ::schema/manifold-stream)
-(s/def ::release->child ::schema/manifold-stream)
+(s/def ::chan->child strm/stream?)
+(s/def ::chan<-child strm/stream?)
+(s/def ::chan->server strm/stream?)
+(s/def ::chan<-server strm/stream?)
+(s/def ::release->child strm/stream?)
 
 (s/def ::recent nat-int?)
 ;; Periodically pull the client extension from...wherever it comes from.

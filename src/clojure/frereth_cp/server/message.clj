@@ -1,6 +1,5 @@
 (ns frereth-cp.server.message
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.schema :as specs]
             [frereth-cp.server.state :as state]
             [manifold.stream :as strm]))
 
@@ -36,7 +35,7 @@
 (s/fdef add-listener!
         :args (s/cat :state ::state/state
                      :child ::state/child-interaction)
-        :ret ::specs/manifold-stream)
+        :ret strm/stream?)
 (defn add-listener!
   [state
    {:keys [::state/client-ip

@@ -13,14 +13,12 @@
 
   But that makes it much more difficult to test."
   (:require [byte-streams :as b-s]
-            #_[clojure.core.async :as async]
             [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.client.cookie :as cookie]
             [frereth-cp.client.hello :as hello]
             [frereth-cp.client.state :as state]
-            [frereth-cp.schema :as schema]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]

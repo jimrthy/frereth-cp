@@ -3,7 +3,6 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.server.helpers :as helpers]
-            [frereth-cp.schema :as specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
@@ -44,7 +43,7 @@
 ;; OK, now life starts getting interesting.
 ;; What, exactly, do we need to do here?
 (s/def ::child-id int?)
-(s/def ::write->child ::specs/manifold-stream)
+(s/def ::write->child strm/stream?)
 ;; Note that the frereth-cp.server ns also has one of
 ;; these. That seems like a mistake.
 (s/def ::child-interaction (s/keys :req [::child-id
