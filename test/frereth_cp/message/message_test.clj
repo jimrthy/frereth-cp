@@ -255,7 +255,7 @@
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
             initialized (message/initial-state loop-name true {} logger)
-            io-handle (message/start! initialized logger parent-cb child-cb)]
+            {:keys [::specs/io-handle]} (message/start! initialized logger parent-cb child-cb)]
         (dfrd/on-realized child-finished
                           (fn [success]
                             (let [logs (log2/info @log-atom
@@ -509,10 +509,10 @@
         child-cb (fn [in]
                    (log/info "child-cb received" in)
                    (swap! rcvd conj in))
-        event-loop (message/start! start-state
-                                   logger
-                                   parent-cb
-                                   child-cb)]
+        {event-loop ::specs/io-handle} (message/start! start-state
+                                                       logger
+                                                       parent-cb
+                                                       child-cb)]
     (is (= K/k-1 (get-in start-state [::specs/outgoing ::specs/pipe-from-child-size])))
     (is (= K/k-1 (::specs/pipe-from-child-size event-loop)))
     (is (= 0 (.available (::specs/child-out event-loop))))
@@ -658,7 +658,7 @@
                                                   true
                                                   {}
                                                   logger)
-          srvr-io-handle (message/start! srvr-initialized logger server-parent-cb server-child-cb)
+          {srvr-io-handle ::specs/io-handle} (message/start! srvr-initialized logger server-parent-cb server-child-cb)
 
           parent-cb (fn [bs]
                       (swap! log-atom
@@ -699,7 +699,7 @@
                                                     false
                                                     {}
                                                     logger)
-          client-io-handle (message/start! client-initialized logger parent-cb child-cb)]
+          {client-io-handle ::specs/io-handle} (message/start! client-initialized logger parent-cb child-cb)]
       (reset! srvr-io-atom srvr-io-handle)
       (reset! client-io-atom client-io-handle)
 

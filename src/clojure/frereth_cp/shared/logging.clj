@@ -149,6 +149,10 @@
 
 (defrecord OutputWriterLogger [writer]
   Logger
+  ;; According to stackoverflow (and the java source
+  ;; code that was provided as evidence), BufferedWriter
+  ;; .write and .flush are both synchronized and thus
+  ;; safe to use from multiple threads at once.
   (log! [{writer :writer
           :as this}
          msg]
@@ -160,6 +164,9 @@
 (defrecord StreamLogger [stream]
   ;; I think this is mostly correct,
   ;; but I haven't actually tried testing it
+  ;; And, realistically, contrasted with
+  ;; OutputWriterLogger, this should probably
+  ;; never be used.
   Logger
   (log! [{^OutputStream stream :stream
           :as this}
@@ -253,7 +260,10 @@
 (defn flush-logs!
   "For the side-effects to write the accumulated logs.
 
-Returns fresh set of log entries"
+  Returns fresh set of log entries"
+  ;; TODO: Reverse these parameters.
+  ;; So I can thread-first log-state through
+  ;; log calls into this
   [logger
    {:keys [::context]
     :as log-state}]
@@ -317,7 +327,8 @@ Returns fresh set of log entries"
                      :child-context ::context)
         ;; Note that the return value really depends
         ;; on the caller arity
-        :ret (s/tuple ::state ::state))
+        :ret (s/or :with-nested-context (s/tuple ::state ::state)
+                   :keep-parent-context ::state))
 (defn fork
   ([src child-context]
    (let [src-ctx (::context src)

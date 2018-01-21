@@ -641,13 +641,13 @@
                     srvr-decode-sink)
 
       (let [client-init (message/initial-state "Client" false {} client-logger)
-            client-io (message/start! client-init client-logger client-parent-cb client-child-cb)
+            {client-io ::specs/io-handle}  (message/start! client-init client-logger client-parent-cb client-child-cb)
             server-init (message/initial-state "Server" true {} server-logger)
             ;; It seems like this next part really shouldn't happen until the initial message arrives
             ;; from the client.
             ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
             ;; that isn't quite true
-            server-io (message/start! server-init server-logger server-parent-cb server-child-cb)]
+            {server-io ::specs/io-handle} (message/start! server-init server-logger server-parent-cb server-child-cb)]
         (reset! client-atom client-io)
         (reset! server-atom server-io)
 

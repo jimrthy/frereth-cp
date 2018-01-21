@@ -1248,9 +1248,9 @@
         log-state (log2/debug log-state
                               ::start-event-loops!
                               "Child monitor thread should be running now. Scheduling next ioloop timeout")
-        state (update state
+        state (assoc state
                         ::log2/state
-                        #(log2/flush-logs! logger %))]
+                        (log2/flush-logs! logger log-state))]
     (schedule-next-timeout! (assoc io-handle
                                    ::specs/child-output-loop child-output-loop
                                    ::specs/child-input-loop child-input-loop)
@@ -1382,7 +1382,8 @@
                      :logger ::specs/logger
                      :parent-callback ::specs/->parent
                      :child-callback ::specs/->child)
-        :ret ::specs/io-handle)
+        :ret (s/keys :req [::log2/state
+                           ::specs/io-handle]))
 (defn start!
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/pipe-from-child-size]
@@ -1402,83 +1403,113 @@
    ;; It wouldn't be bad to write, but it doesn't seem worthwhile
    ;; just now.
    child-cb]
-  (let [prelog (utils/pre-log message-loop-name)]
-    (log/debug prelog
-               "Starting an I/O loop.\nSize of pipe from child:"
-               pipe-from-child-size
-               "\nSize of pipe to child:"
-               pipe-to-child-size)
-    (let [;; TODO: Need to tune and monitor this execution pool
-          ;; c.f. ztellman's dirigiste
-          ;; For starters, I probably at least want the option to
-          ;; use an instrumented executor.
-          ;; Actually, that should probably be the default.
-          executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
-          s (strm/stream)
-          s (strm/onto executor s)
-          ;; Q: Is there any meaningful difference between
-          ;; using PipedIn-/Out-putStream pairs vs ByteArrayIn-/Out-putStreams?
-          from-child (PipedOutputStream.)
-          ;; Note that this really doesn't match up with reference
-          ;; implementation.
-          ;; This is more like the size of the buffer in the pipe
-          ;; from the child to this buffering process.
-          ;; Which is something that's baked into the operating
-          ;; system...it seems like it's somewhere in the vicinity
-          ;; of 16K.
-          ;; This is *totally* distinct from our send-buf-size,
-          ;; which is really all about the outgoing bytes we have pending,
-          ;; either in the un-ackd or un-sent queues.
-          ;; Still, this is a starting point.
-          child-out (PipedInputStream. from-child pipe-from-child-size)
-          io-handle {::specs/->child child-cb
-                     ::specs/->parent parent-cb
-                     ;; This next piece really doesn't make
-                     ;; any sense, at this stage of the game.
-                     ;; For the first pass, the child should
-                     ;; read from child-in as fast as possible.
-                     ;; I can add a higher-level wrapper around
-                     ;; that later with this kind of callback
-                     ;; interface.
-                     ;; On one hand, having a higher level
-                     ;; abstraction like this hides an implementation
-                     ;; detail and seems a little nicer to not need
-                     ;; to implement yourself.
-                     ;; On the other, how many people would prefer
-                     ;; to just use the raw stream directly?
-                     ::specs/from-child from-child
-                     ::specs/child-out child-out
-                     ::specs/pipe-from-child-size pipe-from-child-size
-                     ::specs/to-child-done? (dfrd/deferred)
-                     ::specs/from-parent-trigger (strm/stream)
-                     ::specs/executor executor
-                     ::log2/logger logger
-                     ::specs/message-loop-name message-loop-name
-                     ::specs/stream s}]
-      (start-event-loops! io-handle state)
-      (log/info prelog
-                (cl-format nil
-                           "Started an event loop:\n~a"
-                           s))
-      io-handle)))
+  (let [state (update state
+                      ::log2/state
+                      #(log2/debug %
+                                   ::start!
+                                   "Starting an I/O loop"
+                                   {::specs/message-loop-name message-loop-name
+                                    ::specs/pipe-from-child-size pipe-from-child-size
+                                    ::specs/pipe-to-child-size pipe-to-child-size}))
+        ;; TODO: Need to tune and monitor this execution pool
+        ;; c.f. ztellman's dirigiste
+        ;; For starters, I probably at least want the option to
+        ;; use an instrumented executor.
+        ;; Actually, that should probably be the default.
+        executor (exec/utilization-executor 0.9 (utils/get-cpu-count))
+        s (strm/stream)
+        s (strm/onto executor s)
+        ;; Q: Is there any meaningful difference between
+        ;; using PipedIn-/Out-putStream pairs vs ByteArrayIn-/Out-putStreams?
+        ;; A: Absolutely!
+        ;; BAOS writes to a single byte array. You can get that array, but
+        ;; there doesn't seem to be a good way to reset it.
+        ;; The Piped stream pairs handle coordination so the reader gets
+        ;; a stream of bytes.
+        from-child (PipedOutputStream.)
+        ;; Note that this really doesn't match up with reference
+        ;; implementation.
+        ;; This is more like the size of the buffer in the pipe
+        ;; from the child to this buffering process.
+        ;; Which is something that's baked into the operating
+        ;; system...it seems like it's somewhere in the vicinity
+        ;; of 16K.
+        ;; This is *totally* distinct from our send-buf-size,
+        ;; which is really all about the outgoing bytes we have pending,
+        ;; either in the un-ackd or un-sent queues.
+        ;; Still, this is a starting point.
+        child-out (PipedInputStream. from-child pipe-from-child-size)
+        io-handle {::specs/->child child-cb
+                   ::specs/->parent parent-cb
+                   ;; This next piece really doesn't make
+                   ;; any sense, at this stage of the game.
+                   ;; For the first pass, the child should
+                   ;; read from child-in as fast as possible.
+                   ;; I can add a higher-level wrapper around
+                   ;; that later with this kind of callback
+                   ;; interface.
+                   ;; On one hand, having a higher level
+                   ;; abstraction like this hides an implementation
+                   ;; detail and seems a little nicer to not need
+                   ;; to implement yourself.
+                   ;; On the other, how many people would prefer
+                   ;; to just use the raw stream directly?
+                   ::specs/from-child from-child
+                   ::specs/child-out child-out
+                   ::specs/pipe-from-child-size pipe-from-child-size
+                   ::specs/to-child-done? (dfrd/deferred)
+                   ::specs/from-parent-trigger (strm/stream)
+                   ::specs/executor executor
+                   ::log2/logger logger
+                   ::specs/message-loop-name message-loop-name
+                   ::specs/stream s}
+        {log-state ::log2/state} state
+        [log-state child-state] (log2/fork log-state message-loop-name)]
+    (start-event-loops! io-handle (assoc state
+                                         ::log2/state
+                                         child-state))
+    {::specs/io-handle io-handle
+     ::log2/state (log2/flush-logs! logger
+                                    (log2/info log-state
+                                               ::start!
+                                               "Started an event loop"
+                                               {::specs/message-loop-name message-loop-name
+                                                ::specs/stream s}))}))
 
 (s/fdef halt!
         :args (s/cat :io-handle ::specs/io-handle)
         :ret any?)
 (defn halt!
-  [{:keys [::specs/message-loop-name
+  [{:keys [::log2/logger
+           ::specs/message-loop-name
            ::specs/stream
            ::specs/from-child
            ::specs/child-out]
     :as io-handle}]
   ;; TODO: We need the log-state here, so we can append to it.
   ;; The obvious choice seems to involve calling get-state.
-  ;; TODO: Try that out.
-  (log/info (utils/pre-log message-loop-name) "I/O Loop Halt Requested")
-  (strm/close! stream)
-  (doseq [pipe [from-child
-                child-out]]
-    (.close pipe)))
+  (let [{log-state ::log2/state} (get-state io-handle)
+        my-logs (log2/fork log-state)
+        my-logs (log2/info my-logs
+                           ::halt!
+                           "I/O Loop Halt Requested"
+                           {::specs/message-loop-name message-loop-name})
+        my-logs (try
+                  (strm/close! stream)
+                  (doseq [pipe [from-child
+                                child-out]]
+                    (.close pipe))
+                  (log2/info my-logs
+                             ::halt!
+                             "Halt initiated"
+                             {::specs/message-loop-name message-loop-name})
+                  (catch RuntimeException ex
+                    (log2/exception my-logs
+                                    ex
+                                    ::halt!
+                                    "Signalling halt failed"
+                                    {::specs/message-loop-name message-loop-name})))]
+    (log2/flush-logs! logger my-logs)))
 
 (s/fdef get-state
         :args (s/cat :io-handle ::specs/io-handle
@@ -1495,27 +1526,35 @@
                 (:success ret))))
 (defn get-state
   "Synchronous equivalent to deref"
-  ([{:keys [::specs/message-loop-name
+  ;; This really involves side-effects
+  ;; Q: Rename to get-state!
+  ([{:keys [::log2/logger
+            ::specs/message-loop-name
             ::specs/stream]}
     timeout
     failure-signal]
-   (log/debug
-    (utils/pre-log message-loop-name)
-    "Submitting get-state query to"
-    stream)
-   (let [state-holder (dfrd/deferred)
-         req (strm/try-put! stream [::query-state state-holder] timeout)]
-     (dfrd/on-realized req
-                       (fn [success]
-                         (log/debug
-                          (utils/pre-log message-loop-name)
-                          "Submitted get-state query:" success))
-                       (fn [failure]
-                         (log/error failure
-                                    (utils/pre-log message-loop-name)
-                                    "Submitting state query")
-                         (deliver state-holder failure)))
-     (deref state-holder timeout failure-signal)))
+   (let [local-logs (log2/init ::get-state)
+         local-logs (log2/debug local-logs
+                                ::querying
+                                "Submitting get-state query"
+                                {::specs/message-loop-name message-loop-name
+                                 ::specs/stream stream})]
+     (let [state-holder (dfrd/deferred)
+           req (strm/try-put! stream [::query-state state-holder] timeout)]
+       (dfrd/on-realized req
+                         (fn [success]
+                           (log/debug
+                            (utils/pre-log message-loop-name)
+                            "Submitted get-state query:" success))
+                         (fn [failure]
+                           (log/error failure
+                                      (utils/pre-log message-loop-name)
+                                      "Submitting state query")
+                           (deliver state-holder failure)))
+       (let [{log-state ::log2/state
+              :as result} (deref state-holder timeout failure-signal)]
+         (throw (RuntimeException. "Start back here"))
+         result))))
   ([stream-holder]
    (get-state stream-holder 500 ::timed-out)))
 
