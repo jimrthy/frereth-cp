@@ -1011,7 +1011,7 @@
                        #(log2/warn %
                                    ::action-trigger
                                    "Updater returned"
-                                   (dissoc state' ::log/state)))
+                                   (dissoc state' ::log2/state)))
         _ (assert (::specs/outgoing state') (str "After updating for " tag))
         my-logs (::log2/state state')
         forked-logs (log2/fork my-logs)
@@ -1541,18 +1541,32 @@
                                  ::specs/stream stream})]
      (let [state-holder (dfrd/deferred)
            req (strm/try-put! stream [::query-state state-holder] timeout)]
+       ;; FIXME: Switch to using dfrd/chain instead
        (dfrd/on-realized req
                          (fn [success]
-                           (log/debug
-                            (utils/pre-log message-loop-name)
-                            "Submitted get-state query:" success))
+                           (log2/flush-logs! logger
+                                             (log2/debug local-logs
+                                                         ::succeeded
+                                                         "get-state query submitted"
+                                                         {::result success
+                                                          ::specs/message-loop-name message-loop-name})))
                          (fn [failure]
-                           (log/error failure
-                                      (utils/pre-log message-loop-name)
-                                      "Submitting state query")
+                           (log2/flush-logs! logger
+                                             (if (instance? Throwable failure)
+                                               (log2/exception local-logs
+                                                               failure
+                                                               ::exceptional-failure
+                                                               "Submitting get-state query failed"
+                                                               {::specs/message-loop-name message-loop-name})
+                                               (log2/error local-logs
+                                                           ::non-exceptional-failure
+                                                           "Submitting get-state failed mysteriously"
+                                                           {::result failure
+                                                            ::specs/message-loop-name message-loop-name})))
                            (deliver state-holder failure)))
        (let [{log-state ::log2/state
               :as result} (deref state-holder timeout failure-signal)]
+         ;; Need to sync log-state with local-logs
          (throw (RuntimeException. "Start back here"))
          result))))
   ([stream-holder]
@@ -1602,6 +1616,20 @@
     :as io-handle}
    array-o-bytes]
   (let [prelog (utils/pre-log message-loop-name)]
+    ;; Q: What on Earth can I do about logging this?
+    ;; I could just create a new set of log entries each
+    ;; time.
+    ;; Starting over from 0 seems idiotic.
+    ;; I could wrap the function definition in an atom/agent that
+    ;; tracks the log state over the course of each call.
+    ;; That seems really dumb, since it creates a single-threaded
+    ;; pipeline bottleneck from each child thread.
+    ;; That probably isn't a big deal for clients, but it seems like
+    ;; a mistake for servers.
+    ;; Servers will wind up with their own bottlenecks, but this
+    ;; should not be one of them.
+    ;; It's a conundrum.
+    ;; TODO: Unravel it.
     (log/debug prelog
                "Top of child->!")
     (when-not from-child
@@ -1673,6 +1701,13 @@
   ;; needs to happen first.
   (let [prelog (utils/pre-log message-loop-name)]
     (try
+      ;; This has the same problem as child->
+      ;; Where am I supposed to send the logs?
+      ;; It's tempting to create a child-specific
+      ;; instance of both functions when the ioloop
+      ;; gets created.
+      ;; That doesn't seem like a terrible idea.
+      ;; Q: Does it hold water under the light of day?
       (log/info prelog
                 "Top of parent->!")
       (let [success
@@ -1711,5 +1746,5 @@
 
   ;; The child-monitor loop should handle this
   ;; detail
-  (comment (child-> io-handle ::specs/normal))
+  #_(comment (child-> io-handle ::specs/normal))
   (.close from-child))
