@@ -13,7 +13,6 @@
   really the main point."
   (:require [clojure.pprint :refer (cl-format)]
             [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.from-child :as from-child]
@@ -1439,6 +1438,7 @@
         ;; either in the un-ackd or un-sent queues.
         ;; Still, this is a starting point.
         child-out (PipedInputStream. from-child pipe-from-child-size)
+        [main-log-state io-log-state] (log2/fork (::log2/state state) ::io-handle)
         io-handle {::specs/->child child-cb
                    ::specs/->parent parent-cb
                    ;; This next piece really doesn't make
@@ -1462,15 +1462,17 @@
                    ::specs/executor executor
                    ::log2/logger logger
                    ::specs/message-loop-name message-loop-name
+                   ::log2/state-atom (atom io-log-state)
                    ::specs/stream s}
-        {log-state ::log2/state} state
-        [log-state child-state] (log2/fork log-state message-loop-name)]
+        [main-log-state child-log-state] (log2/fork main-log-state message-loop-name)]
+    ;; We really can't rely on what this returns.
+    ;; Aside from the fact that we shouldn't, since it's called for side effects
     (start-event-loops! io-handle (assoc state
                                          ::log2/state
-                                         child-state))
+                                         child-log-state))
     {::specs/io-handle io-handle
      ::log2/state (log2/flush-logs! logger
-                                    (log2/info log-state
+                                    (log2/info main-log-state
                                                ::start!
                                                "Started an event loop"
                                                {::specs/message-loop-name message-loop-name
@@ -1530,45 +1532,57 @@
   ;; Q: Rename to get-state!
   ([{:keys [::log2/logger
             ::specs/message-loop-name
-            ::specs/stream]}
+            ::specs/stream]
+     log-state-atom ::log2/state-atom}
     timeout
     failure-signal]
-   (let [local-logs (log2/init ::get-state)
-         local-logs (log2/debug local-logs
-                                ::querying
-                                "Submitting get-state query"
-                                {::specs/message-loop-name message-loop-name
-                                 ::specs/stream stream})]
-     (let [state-holder (dfrd/deferred)
-           req (strm/try-put! stream [::query-state state-holder] timeout)]
-       ;; FIXME: Switch to using dfrd/chain instead
-       (dfrd/on-realized req
-                         (fn [success]
-                           (log2/flush-logs! logger
-                                             (log2/debug local-logs
-                                                         ::succeeded
-                                                         "get-state query submitted"
-                                                         {::result success
-                                                          ::specs/message-loop-name message-loop-name})))
-                         (fn [failure]
-                           (log2/flush-logs! logger
-                                             (if (instance? Throwable failure)
-                                               (log2/exception local-logs
-                                                               failure
-                                                               ::exceptional-failure
-                                                               "Submitting get-state query failed"
-                                                               {::specs/message-loop-name message-loop-name})
-                                               (log2/error local-logs
-                                                           ::non-exceptional-failure
-                                                           "Submitting get-state failed mysteriously"
-                                                           {::result failure
-                                                            ::specs/message-loop-name message-loop-name})))
-                           (deliver state-holder failure)))
-       (let [{log-state ::log2/state
-              :as result} (deref state-holder timeout failure-signal)]
-         ;; Need to sync log-state with local-logs
-         (throw (RuntimeException. "Start back here"))
-         result))))
+   (swap! log-state-atom
+          #(log2/debug %
+                       ::querying
+                       "Submitting get-state query"
+                       {::specs/message-loop-name message-loop-name
+                        ::specs/stream stream}))
+   (let [state-holder (dfrd/deferred)
+         req (strm/try-put! stream [::query-state state-holder] timeout)]
+     ;; FIXME: Switch to using dfrd/chain instead
+     (dfrd/on-realized req
+                       (fn [success]
+                         (swap! log-state-atom
+                                ;; Doing this inside a swap! seems risky,
+                                ;; since it isn't purely functional, or even
+                                ;; idempotent.
+                                ;; The alternatives seem worse.
+                                #(log2/flush-logs! logger
+                                                   (log2/debug %
+                                                               ::succeeded
+                                                               "get-state query submitted"
+                                                               {::result success
+                                                                ::specs/message-loop-name message-loop-name}))))
+                       (fn [failure]
+                         (swap! log-state-atom
+                                #(log2/flush-logs! logger
+                                                   (if (instance? Throwable failure)
+                                                     (log2/exception %
+                                                                     failure
+                                                                     ::exceptional-failure
+                                                                     "Submitting get-state query failed"
+                                                                     {::specs/message-loop-name message-loop-name})
+                                                     (log2/error %
+                                                                 ::non-exceptional-failure
+                                                                 "Submitting get-state failed mysteriously"
+                                                                 {::result failure
+                                                                  ::specs/message-loop-name message-loop-name}))))
+                         (deliver state-holder failure)))
+     ;; Need to sync log-state with local-logs.
+     ;; This really should be less complex, but a better approach isn't coming to mind.
+     (let [{log-state ::log2/state
+            :as result} (deref state-holder timeout failure-signal)
+           main-log-state-atom (atom log-state)]
+       (swap! log-state-atom (fn [io-log-state]
+                               (let [[main-log-state io-log-state] (log2/synchronize log-state io-log-state)]
+                                 (reset! main-log-state-atom main-log-state)
+                                 io-log-state)))
+       (assoc result ::log2/state @main-log-state-atom))))
   ([stream-holder]
    (get-state stream-holder 500 ::timed-out)))
 
@@ -1609,68 +1623,65 @@
   ;; the streaming.
 
 ;;;  319-336: Maybe read bytes from child
-  [{:keys [::specs/child-out
+  [{:keys [::log2/logger
+           ::specs/child-out
            ::specs/from-child
            ::specs/message-loop-name
            ::specs/pipe-from-child-size]
+    log-state-atom ::log2/state-atom
     :as io-handle}
    array-o-bytes]
-  (let [prelog (utils/pre-log message-loop-name)]
-    ;; Q: What on Earth can I do about logging this?
-    ;; I could just create a new set of log entries each
-    ;; time.
-    ;; Starting over from 0 seems idiotic.
-    ;; I could wrap the function definition in an atom/agent that
-    ;; tracks the log state over the course of each call.
-    ;; That seems really dumb, since it creates a single-threaded
-    ;; pipeline bottleneck from each child thread.
-    ;; That probably isn't a big deal for clients, but it seems like
-    ;; a mistake for servers.
-    ;; Servers will wind up with their own bottlenecks, but this
-    ;; should not be one of them.
-    ;; It's a conundrum.
-    ;; TODO: Unravel it.
-    (log/debug prelog
-               "Top of child->!")
-    (when-not from-child
+  (swap! log-state-atom
+         #(log2/debug % ::child-> "Top" {::specs/message-loop-name message-loop-name}))
+  (when-not from-child
+    (let [prelog (utils/pre-log message-loop-name)]
       (throw (ex-info (str prelog "Missing PipedOutStream from child inside io-handle")
-                      {::io-handle io-handle})))
-    (let [buffer-space (- pipe-from-child-size (.available child-out))
-          n (count array-o-bytes)]
-      ;; It seems like it would be nice to be able to block here, based
-      ;; on how many bytes we really have buffered internally.
-      ;; At this point, we're really in the equivalent of the
-      ;; reference implementation's "real" child process.
-      ;; All it has is a pipe that we promise to never block.
-      ;; Although we might send back "try again later"
-      ;; responses.
-      (log/debug prelog
-                 "Trying to send"
-                 n
-                 "bytes from child; have buffer space for"
-                 buffer-space)
-      (if (< buffer-space n)
-        (do
-          (log/warn "Tried to write"
-                    n
-                    "bytes, but only have room for"
-                    buffer-space
-                    "\nRefusing to block")
-          ;; TODO: Add an optional parameter to allow blocking.
-          ;; TODO: Adjust the meaning of this return value.
-          ;; Anything numeric should be the buffer space available
-          ;; (indicating failure).
-          ;; Which means falsey really should indicate success,
-          ;; which is ugly.
-          nil)
-        (do
-          (.write from-child array-o-bytes 0 n)
-          ;; Note that avoiding this flush is potentially a good
-          ;; reason to avoid this wrapper function.
-          ;; It probably makes sense usually, but it won't always.
-          (.flush from-child)
-          (log/debug prelog "child-> buffered" n "bytes")
-          true)))))
+                      {::io-handle io-handle}))))
+  (let [buffer-space (- pipe-from-child-size (.available child-out))
+        n (count array-o-bytes)]
+    ;; It seems like it would be nice to be able to block here, based
+    ;; on how many bytes we really have buffered internally.
+    ;; At this point, we're really in the equivalent of the
+    ;; reference implementation's "real" child process.
+    ;; All it has is a pipe that we promise to never block.
+    ;; Although we might send back "try again later"
+    ;; responses.
+    (swap! log-state-atom
+           #(log2/debug %
+                        ::child->
+                        "Trying to send bytes from child"
+                        {::message-size n
+                         ::buffer-space-available buffer-space
+                         ::specs/message-loop-name message-loop-name}))
+    (let [result
+          (if (< buffer-space n)
+            (do
+              (swap! log-state-atom
+                     #(log2/warn %
+                                 ::child->
+                                 "Not enough room to write.\nRefusing to block"))
+              ;; TODO: Add an optional parameter to allow blocking.
+              ;; TODO: Adjust the meaning of this return value.
+              ;; Anything numeric should be the buffer space available
+              ;; (indicating failure).
+              ;; Which means falsey really should indicate success,
+              ;; which is ugly.
+              nil)
+            (do
+              (.write from-child array-o-bytes 0 n)
+              ;; Note that avoiding this flush is potentially a good
+              ;; reason to avoid this wrapper function.
+              ;; It probably makes sense usually, but it won't always.
+              (.flush from-child)
+              (swap! log-state-atom
+                     #(log2/debug %
+                                  ::child->
+                                  "Buffered"
+                                  {::specs/message-loop-name message-loop-name
+                                   ::message-size n}))
+              true))]
+      (swap! log-state-atom
+             #(log2/flush-logs! logger %)))))
 
 (s/fdef parent->!
         :args (s/cat :io-handle ::specs/io-handle
@@ -1688,8 +1699,10 @@
   It's replacing one of the polling triggers that
   set off the main() event loop. Need to account for
   that fundamental strategic change"
-  [{:keys [::specs/message-loop-name
+  [{:keys [::log2/logger
+           ::specs/message-loop-name
            ::specs/stream]
+    log-state-atom ::log2/state-atom
     :as io-handle}
    ^bytes array-o-bytes]
   ;; Note that it doesn't make sense to use the
@@ -1700,34 +1713,49 @@
   ;; to forward along to the child, but a lot of processing
   ;; needs to happen first.
   (let [prelog (utils/pre-log message-loop-name)]
+    (swap! log-state-atom
+           #(log2/info %
+                       ::parent->
+                       "Top"
+                       {::specs/message-loop-name message-loop-name}))
     (try
-      ;; This has the same problem as child->
-      ;; Where am I supposed to send the logs?
-      ;; It's tempting to create a child-specific
-      ;; instance of both functions when the ioloop
-      ;; gets created.
-      ;; That doesn't seem like a terrible idea.
-      ;; Q: Does it hold water under the light of day?
-      (log/info prelog
-                "Top of parent->!")
-      (let [success
-            (strm/put! stream [::parent-> array-o-bytes])]
-        (log/debug prelog "Parent put!. Setting up on-realized handler")
+      (let [success (strm/put! stream [::parent-> array-o-bytes])]
+        (swap! log-state-atom
+               #(log2/debug %
+                            ::parent->
+                            "Parent put!. Setting up on-realized handler"
+                            {::specs/message-loop-name message-loop-name}))
         (dfrd/on-realized success
                           (fn [x]
-                            ;; Note that reusing prelog here would be a mistake,
-                            ;; since this really should happen on a different thread
-                            (log/debug (utils/pre-log message-loop-name)
-                                       "Buffered bytes from parent, triggered from\n"
-                                       prelog))
+                            (swap! log-state-atom
+                                   #(log2/flush-logs! logger (log2/debug %
+                                                                         ::parent->
+                                                                         "Buffered bytes from parent"
+                                                                         ;; Note that this probably should run on a
+                                                                         ;; totally different thread than the outer function
+                                                                         {::triggered-from prelog
+                                                                          ::specs/message-loop-name message-loop-name}))))
                           (fn [x]
-                            (log/warn (utils/pre-log message-loop-name)
-                                      "Failed to buffer bytes from parent, triggered from\n"
-                                      prelog)))
-        (log/debug prelog "returning from parent->")
+                            (swap! log-state-atom
+                                   #(log2/flush-logs! logger (log2/warn %
+                                                                        ::parent->
+                                                                        "Failed to buffer bytes from parent"
+                                                                        {::triggered-from prelog
+                                                                         ::specs/message-loop-name message-loop-name})))))
+        (swap! log-state-atom
+               #(log2/debug %
+                            ::parent->
+                            "bottom"
+                            {::specs/message-loop-name message-loop-name}))
         nil)
       (catch Exception ex
-        (log/error ex prelog "Sending message to parent failed")))))
+        (swap! log-state-atom
+               #(log2/flush-logs! logger
+                                  (log2/exception %
+                                                  ex
+                                                  ::parent->
+                                                  "Sending message to parent failed"
+                                                  {::specs/message-loop-name message-loop-name})))))))
 
 (s/fdef child-close!
         :args (s/cat :io-handle ::io-handle)

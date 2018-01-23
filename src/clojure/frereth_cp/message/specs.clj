@@ -472,7 +472,20 @@
                                  ;; old, outdated, immutable version of it.
                                  ;; Maybe do this for something that's
                                  ;; internal to the message ns (et al)
-                                 ::message-loop-name]
+                                 ::message-loop-name
+                                 ;; This really doesn't belong in here,
+                                 ;; but there are at least a couple of places
+                                 ;; where I don't have a choice: I need to
+                                 ;; log things in places where I do not have
+                                 ;; access to ::state.
+                                 ;; This is really only useful for the outer
+                                 ;; fringe portions that are interacting
+                                 ;; with the outside world.
+                                 ;; Which actually fits perfectly, since
+                                 ;; that's exactly what the io-handle is
+                                 ;; supposed to be for.
+                                 ;; Just use with extreme caution.
+                                 ::log/state-atom]
                            :opt [::child-input-loop
                                  ::child-output-loop
                                  ::pipe-from-child-size]))

@@ -2,6 +2,7 @@
   "Functional logging mechanism"
   (:require [clojure.spec.alpha :as s]
             [clojure.stacktrace :as s-t]
+            [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as utils])
   (:import clojure.lang.ExceptionInfo
            [java.io BufferedWriter FileWriter OutputStream OutputStreamWriter]))
@@ -61,6 +62,9 @@
 (s/def ::state (s/keys :req [::context
                              ::entries
                              ::lamport]))
+
+(s/def ::state-atom (s/and ::specs/atom
+                           #(s/valid? ::state (deref %))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
