@@ -1,11 +1,10 @@
 (ns frereth-cp.message.flow-control
   "Cope with flow-control algorithms"
   (:require [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -260,9 +259,6 @@
     :as state}
    {acked-time ::specs/time
     :as acked-block}]
-  (log/debug (utils/pre-log message-loop-name)
-             "Updating flow-control stats due to "
-             acked-block)
   ;; The base-rtt-average calculation really only needs to
   ;; happen the first time around, when the rtt-average
   ;; is 0.
@@ -274,19 +270,26 @@
   ;; of jacobson's-retransmission-timeout.
   ;; Which is just wasteful duplication.
   (try
-    (let [state (calculate-base-rtt-averages state acked-time)
+    (let [state (update state
+                        ::log/state
+                        #(log/debug %
+                                    ::update-statistics
+                                    "Updating flow-control stats"
+                                    {::ackd-block acked-block
+                                     ::specs/message-loop-name message-loop-name}))
+          state (calculate-base-rtt-averages state acked-time)
           state (update state
-                        ::log2/state
-                        #(log2/debug %
+                        ::log/state
+                        #(log/debug %
                                      ::update-statistics
                                      "Recalculating retransmission timeout"
                                      {::specs/message-loop-name message-loop-name}))]
       (jacobson's-retransmission-timeout state acked-block))
     (catch RuntimeException ex
       (update state
-              ::log2/state
-              #(log2/exception %
-                               ex
-                               ::update-statistics
-                               "Updating statistics failed"
-                               (dissoc state ::log2/state))))))
+              ::log/state
+              #(log/exception %
+                              ex
+                              ::update-statistics
+                              "Updating statistics failed"
+                              (dissoc state ::log/state))))))
