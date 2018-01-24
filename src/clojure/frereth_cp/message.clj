@@ -24,7 +24,7 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
@@ -83,12 +83,12 @@
 ;;; Internal API
 
 (s/fdef build-un-ackd-blocks
-        :args (s/cat :log-state ::log2/state
-                     :logger ::log2/logger)
+        :args (s/cat :log-state ::log/state
+                     :logger ::log/logger)
         :ret ::specs/un-ackd-blocks)
 (defn build-un-ackd-blocks
-  [{:keys [::log2/logger]
-    log-state ::log2/state}]
+  [{:keys [::log/logger]
+    log-state ::log/state}]
   (sorted-set-by (fn [x y]
                    (try
                      (let [x-time (::specs/time x)
@@ -103,13 +103,13 @@
                            -1
                            1)))
                      (catch NullPointerException ex
-                       (let [log-state (log2/exception log-state
+                       (let [log-state (log/exception log-state
                                                        ex
                                                        ::build-un-ackd-blocks
                                                        "Comparing time"
                                                        {::lhs x
                                                         ::rhs y})]
-                         (log2/flush-logs! logger log-state))
+                         (log/flush-logs! logger log-state))
                        (throw ex))))))
 
 ;;;; Q: what else is in the reference implementation?
@@ -177,11 +177,11 @@
     :keys [::specs/message-loop-name]
     :as state}]
   (let [state (update state
-                      ::log2/state
-                      #(log2/debug %
-                                   ::trigger-output
-                                   "Possibly sending message to parent"
-                                   {::specs/message-loop-name message-loop-name}))]
+                      ::log/state
+                      #(log/debug %
+                                  ::trigger-output
+                                  "Possibly sending message to parent"
+                                  {::specs/message-loop-name message-loop-name}))]
     ;; I have at least 1 unit test that receives input
     ;; from parent, forwards that to child, then
     ;; echoes it back.
@@ -258,12 +258,12 @@
     :as state}]
   {:pre [callback]}
   (let [state (update state
-                      ::log2/state
-                      #(log2/info %
-                                  ::trigger-from-child
-                                  "Sent stream address"
-                                  {::specs/strm-hwm strm-hwm
-                                   ::specs/message-loop-name message-loop-name}))]
+                      ::log/state
+                      #(log/info %
+                                 ::trigger-from-child
+                                 "Sent stream address"
+                                 {::specs/strm-hwm strm-hwm
+                                  ::specs/message-loop-name message-loop-name}))]
     (deliver accepted? true)
     (let [state' (callback state)]
       (assert (::specs/outgoing state') "Callback threw away outgoing")
@@ -283,17 +283,17 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::specs/message-loop-name]
     :as io-handle}
    ^bytes message
    {{:keys [::specs/->child-buffer]} ::specs/incoming
     {:keys [::specs/client-waiting-on-response]} ::specs/flow-control
-    log-state ::log2/state
+    log-state ::log/state
     :as state}]
-  (let [log-state (log2/debug log-state
-                              ::trigger-from-parent
-                              "Incoming from parent")]
+  (let [log-state (log/debug log-state
+                             ::trigger-from-parent
+                             "Incoming from parent")]
 
     ;; This is an important side-effect that permanently converts the
     ;; "mode" of the i/o loop that's pulling bytes from the child's
@@ -309,7 +309,7 @@
 ;;;                    Copies bytes from incoming message buffer to message[][]
     (let [incoming-size (count message)]
       (when (= 0 incoming-size)
-        (log2/flush-logs! logger log-state)
+        (log/flush-logs! logger log-state)
         ;; This is supposed to kill the entire process
         ;; TODO: Be more graceful
         (throw (AssertionError. "Bad Message")))
@@ -330,12 +330,12 @@
       ;; that's really a vector that we can just conj onto.
       (when-not state
         ;; Q: Why aren't I just using log-state?
-        (let [logs (log2/warn (log2/init (::log2/context log-state)
-                                         (::log2/lamport log-state))
+        (let [logs (log/warn (log/init (::log/context log-state)
+                                       (::log/lamport log-state))
                               ::trigger-from-parent
                               ;; They're about to get worse
                               "nil state. Things went sideways recently")]
-          (log2/flush-logs! logger logs)))
+          (log/flush-logs! logger logs)))
 
       (if (< (count ->child-buffer) max-child-buffer-size)
         ;; Q: Will ->child-buffer ever have more than one array?
@@ -354,11 +354,11 @@
                                                                                           " which isn't a B]")
                                                                                      {::cause ex}))))))
                                                              ->child-buffer))
-              log-state (log2/debug log-state
-                                    ::trigger-from-parent
-                                    "possibly processing"
-                                    {::bytes-buffered previously-buffered-message-bytes
-                                     ::buffer-count (count ->child-buffer)})]
+              log-state (log/debug log-state
+                                   ::trigger-from-parent
+                                   "possibly processing"
+                                   {::bytes-buffered previously-buffered-message-bytes
+                                    ::buffer-count (count ->child-buffer)})]
           ;; Probably need to do something with previously-buffered-message-bytes.
           ;; Definitely need to check the number of bytes that have not
           ;; been forwarded along yet.
@@ -374,11 +374,11 @@
               ;; any filtering I can do outside an an agent send is a win.
               ;; TODO: Now that the manifold version is working, revisit
               ;; that decision.
-                [log-state (log2/debug log-state
-                                       ::trigger-from-parent
-                                       "Message is small enough. Look back here")
+                [log-state (log/debug log-state
+                                      ::trigger-from-parent
+                                      "Message is small enough. Look back here")
                  state (-> state
-                           (assoc ::log2/state log-state)
+                           (assoc ::log/state log-state)
                            (assoc-in [::specs/incoming ::specs/parent->buffer]
                                      message))]
               ;; This is basically an iteration of the top-level
@@ -415,41 +415,41 @@
                   ;; functions instead?
                   (trigger-output io-handle state'))
                 (catch ExceptionInfo ex
-                  (let [log-state (log2/exception log-state
-                                                  ex
-                                                  ::trigger-from-parent
-                                                  "Forwarding failed"
-                                                  (.getData ex))]
-                    (assoc state ::log2/state log-state)))
+                  (let [log-state (log/exception log-state
+                                                 ex
+                                                 ::trigger-from-parent
+                                                 "Forwarding failed"
+                                                 (.getData ex))]
+                    (assoc state ::log/state log-state)))
                 (catch RuntimeException ex
                   (let [msg "Trying to cope with a message arriving from parent"]
                     (update state
-                            ::log2/state
-                            #(log2/exception %
-                                             ex
-                                             ::trigger-from-parent
-                                             msg))))))
+                            ::log/state
+                            #(log/exception %
+                                            ex
+                                            ::trigger-from-parent
+                                            msg))))))
             ;; This is actually pretty serious.
             ;; All sorts of things had to go wrong for us to get here.
             ;; TODO: More extensive error handling.
             ;; Actually, should probably add an optional client-supplied
             ;; error handler for situations like this
             (assoc state
-                   ::log2/state
-                   (log2/warn log-state
-                              ::trigger-from-parent
-                              "Incoming message too large"
-                              {::incoming-size incoming-size
-                               ::maximum-allowed K/max-msg-len}))))
+                   ::log/state
+                   (log/warn log-state
+                             ::trigger-from-parent
+                             "Incoming message too large"
+                             {::incoming-size incoming-size
+                              ::maximum-allowed K/max-msg-len}))))
         ;; TODO: Need a way to apply back-pressure
         ;; to child
         (assoc state
-               ::log2/state
-               (log2/warn log-state
-                          ::trigger-from-parent
-                          "Child buffer overflow\nWait!"
-                          {::incoming-buffer-size (count ->child-buffer)
-                           ::max-allowed max-child-buffer-size}))))))
+               ::log/state
+               (log/warn log-state
+                         ::trigger-from-parent
+                         "Child buffer overflow\nWait!"
+                         {::incoming-buffer-size (count ->child-buffer)
+                          ::max-allowed max-child-buffer-size}))))))
 
 (defn trigger-from-timer
   [io-handle
@@ -464,11 +464,11 @@
   ;; the child, but the main point to this logic branch is
   ;; to resend an outbound block that hasn't been ACK'd yet.
   (trigger-output io-handle (update state
-                                    ::log2/state
-                                    #(log2/debug %
-                                                 ::trigger-from-timer
-                                                 "I/O triggered by timer"
-                                                 {::specs/message-loop-name message-loop-name}))))
+                                    ::log/state
+                                    #(log/debug %
+                                                ::trigger-from-timer
+                                                "I/O triggered by timer"
+                                                {::specs/message-loop-name message-loop-name}))))
 
 (defn condensed-choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
@@ -574,7 +574,7 @@
         :args (s/cat :state ::specs/state
                      :to-child-done? ::specs/to-child-done?)
         :ret (s/keys :req [::next-action-time
-                           ::log2/state]))
+                           ::log/state]))
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
             ::specs/rtt-timeout]
@@ -590,7 +590,7 @@
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name
            ::specs/recent]
-    log-state ::log2/state
+    log-state ::log/state
     :as state}
    to-child-done?]
   {:pre [state
@@ -741,31 +741,31 @@
         mid2-time (System/nanoTime)
         alt (condensed-choose-next-scheduled-time state to-child-done?)
         end-time (System/nanoTime)
-        log-state (log2/debug log-state
-                              ::choose-next-scheduled-time
-                              (str "Scheduling considerations\n"
-                                   log-message))
+        log-state (log/debug log-state
+                             ::choose-next-scheduled-time
+                             (str "Scheduling considerations\n"
+                                  log-message))
         log-state (if (= actual-next alt)
                     log-state
-                    (log2/warn log-state
-                               ::choose-next-scheduled-time
-                               "Scheduling Mismatch!"))
-        log-state (log2/debug log-state
+                    (log/warn log-state
                               ::choose-next-scheduled-time
-                              ;; alt approach seems ~4 orders of magnitude
-                              ;; faster.
-                              ;; Q: Is that due to reduced logging?
-                              (cl-format nil (str "Calculating next scheduled time took"
-                                                  " ~:d nanoseconds and calculated ~:d."
-                                                  "\nBuilding the messages about this took ~:d nanoseconds"
-                                                  "\nAlt approach took ~:d and calculated ~:d")
-                                         (- mid1-time now)
-                                         (long actual-next)
-                                         (- mid2-time mid1-time)
-                                         (- end-time mid2-time)
-                                         (long alt)))]
+                              "Scheduling Mismatch!"))
+        log-state (log/debug log-state
+                             ::choose-next-scheduled-time
+                             ;; alt approach seems ~4 orders of magnitude
+                             ;; faster.
+                             ;; Q: Is that due to reduced logging?
+                             (cl-format nil (str "Calculating next scheduled time took"
+                                                 " ~:d nanoseconds and calculated ~:d."
+                                                 "\nBuilding the messages about this took ~:d nanoseconds"
+                                                 "\nAlt approach took ~:d and calculated ~:d")
+                                        (- mid1-time now)
+                                        (long actual-next)
+                                        (- mid2-time mid1-time)
+                                        (- end-time mid2-time)
+                                        (long alt)))]
     {::next-action-time actual-next
-     ::log2/state log-state}))
+     ::log/state log-state}))
 
 (declare schedule-next-timeout!)
 (s/fdef action-trigger
@@ -817,51 +817,51 @@
                  "after ~:d at ~:d\n"
                  "at ~:d because: ~a")
         log-state (try
-                    (log2/debug log-state
-                                ::action-trigger
-                                (cl-format nil
-                                           fmt
-                                           delta_f
-                                           scheduling-time
-                                           (or actual-next -1)
-                                           now
-                                           next-action)
-                                {::specs/message-loop-name message-loop-name})
+                    (log/debug log-state
+                               ::action-trigger
+                               (cl-format nil
+                                          fmt
+                                          delta_f
+                                          scheduling-time
+                                          (or actual-next -1)
+                                          now
+                                          next-action)
+                               {::specs/message-loop-name message-loop-name})
                     (catch NullPointerException ex
-                      (log2/exception log-state
-                                      ex
-                                      ::action-trigger
-                                      "Error building the event loop Awakening message"
-                                      {::delta_f delta_f
-                                       ::scheduling-time scheduling-time
-                                       ::actual-next actual-next
-                                       ::now now
-                                       ::next-action next-action
-                                       ::trigger-details prelog
-                                       ::specs/message-loop-name message-loop-name}))
+                      (log/exception log-state
+                                     ex
+                                     ::action-trigger
+                                     "Error building the event loop Awakening message"
+                                     {::delta_f delta_f
+                                      ::scheduling-time scheduling-time
+                                      ::actual-next actual-next
+                                      ::now now
+                                      ::next-action next-action
+                                      ::trigger-details prelog
+                                      ::specs/message-loop-name message-loop-name}))
                     (catch NumberFormatException ex
-                      (log2/exception log-state
-                                      ex
-                                      ::action-trigger
-                                      "Error formatting the event loop Awakening message"
-                                      {::delta_f delta_f
-                                       ::scheduling-time scheduling-time
-                                       ::actual-next actual-next
-                                       ::now now
-                                       ::next-action next-action
-                                       ::trigger-details prelog
-                                       ::specs/message-loop-name message-loop-name})))
+                      (log/exception log-state
+                                     ex
+                                     ::action-trigger
+                                     "Error formatting the event loop Awakening message"
+                                     {::delta_f delta_f
+                                      ::scheduling-time scheduling-time
+                                      ::actual-next actual-next
+                                      ::now now
+                                      ::next-action next-action
+                                      ::trigger-details prelog
+                                      ::specs/message-loop-name message-loop-name})))
         [tag
          log-state] (try
                       [(first next-action) log-state]
                       (catch IllegalArgumentException ex
                         [::no-op
-                         (log2/exception log-state
-                                         ex
-                                         ::action-trigger
-                                         "Should have been a variant"
-                                         {::trigger-details prelog
-                                          ::specs/message-loop-name message-loop-name})]))
+                         (log/exception log-state
+                                        ex
+                                        ::action-trigger
+                                        "Should have been a variant"
+                                        {::trigger-details prelog
+                                         ::specs/message-loop-name message-loop-name})]))
         ;; TODO: Really should add something like an action ID to the state
         ;; to assist in tracing the action. flow-control seems like a very
         ;; likely place to put it.
@@ -869,7 +869,7 @@
                   ;; Q: Is this worth switching to something like core.match or a multimethod?
                   ::specs/child-> (let [[_ callback ack] next-action]
                                     (partial trigger-from-child io-handle callback ack))
-                  ::drained (fn [{log-state ::log2/state
+                  ::drained (fn [{log-state ::log/state
                                   :as state}]
                               ;; Actually, this seems like a strong argument for
                               ;; having a pair of streams. Child could still have
@@ -880,12 +880,12 @@
                               ;; TODO: Another piece to revisit once the basics
                               ;; work.
                               (update state
-                                      ::log2/state
-                                      #(log2/warn %
-                                                  ::action-trigger
-                                                  "Stream closed. Surely there's more to do"
-                                                  {::trigger-details prelog
-                                                   ::specs/message-loop-name message-loop-name})))
+                                      ::log/state
+                                      #(log/warn %
+                                                 ::action-trigger
+                                                 "Stream closed. Surely there's more to do"
+                                                 {::trigger-details prelog
+                                                  ::specs/message-loop-name message-loop-name})))
                   ::no-op identity
                   ;; Q: Shouldn't this be from the specs ns?
                   ::parent-> (partial trigger-from-parent
@@ -908,28 +908,28 @@
                                       (deliver dst state)
                                       state)
                                     (update state
-                                            ::log2/state
-                                            #(log2/warn %
-                                                        ::action-trigger
-                                                        "state-query request missing required deferred"
-                                                        {::trigger-details prelog
-                                                         ::specs/message-loop-name message-loop-name}))))
+                                            ::log/state
+                                            #(log/warn %
+                                                       ::action-trigger
+                                                       "state-query request missing required deferred"
+                                                       {::trigger-details prelog
+                                                        ::specs/message-loop-name message-loop-name}))))
                   ::timed-out (fn [state]
                                 (trigger-from-timer io-handle
                                                     (update state
-                                                            ::log2/state
-                                                            #(log2/debug %
-                                                                         "Re-triggering Output due to timeot"
-                                                                         (assoc timing-details
-                                                                                ::trigger-details prelog
-                                                                                ::specs/message-loop-name message-loop-name))))))
+                                                            ::log/state
+                                                            #(log/debug %
+                                                                        "Re-triggering Output due to timeot"
+                                                                        (assoc timing-details
+                                                                               ::trigger-details prelog
+                                                                               ::specs/message-loop-name message-loop-name))))))
         state (assoc state
-                     ::log2/state
-                     (log2/debug log-state
-                                 ::action-trigger
-                                 "Processing event"
-                                 {::tag tag
-                                  ::specs/message-loop-name message-loop-name}))
+                     ::log/state
+                     (log/debug log-state
+                                ::action-trigger
+                                "Processing event"
+                                {::tag tag
+                                 ::specs/message-loop-name message-loop-name}))
         ;; At the end of the main ioloop in the reference
         ;; implementation, there's a block that closes the pipe
         ;; to the child if we're done.
@@ -971,22 +971,22 @@
         ;; one for bytes travelling the other direction)
 
         state (update state
-                      ::log2/state
-                      #(log2/warn %
-                                  ::action-trigger
-                                  "Trying to run updater because of"
-                                  {::tag tag}))
+                      ::log/state
+                      #(log/warn %
+                                 ::action-trigger
+                                 "Trying to run updater because of"
+                                 {::tag tag}))
 
         state' (try (updater state)
                     (catch ExceptionInfo ex
                       (update state
-                              ::log2/state
-                              #(log2/exception %
-                                               ex
-                                               ::action-trigger
-                                               "Running updater failed"
-                                               {::details (.getData ex)
-                                                ::specs/message-loop-name message-loop-name})))
+                              ::log/state
+                              #(log/exception %
+                                              ex
+                                              ::action-trigger
+                                              "Running updater failed"
+                                              {::details (.getData ex)
+                                               ::specs/message-loop-name message-loop-name})))
                     (catch RuntimeException ex
                       ;; The eternal question in this scenario:
                       ;; Fail fast, or hope we can keep limping
@@ -999,40 +999,40 @@
                       ;; currently-undefined status updater
                       (comment state)
                       (update state
-                              ::log2/state
-                              #(log2/exception %
-                                               ex
-                                               ::action-trigger
-                                               "Running updater: low-level failure"
-                                               {::specs/message-loop-name message-loop-name}))))
+                              ::log/state
+                              #(log/exception %
+                                              ex
+                                              ::action-trigger
+                                              "Running updater: low-level failure"
+                                              {::specs/message-loop-name message-loop-name}))))
         state' (update state'
-                       ::log2/state
-                       #(log2/warn %
-                                   ::action-trigger
-                                   "Updater returned"
-                                   (dissoc state' ::log2/state)))
+                       ::log/state
+                       #(log/warn %
+                                  ::action-trigger
+                                  "Updater returned"
+                                  (dissoc state' ::log/state)))
         _ (assert (::specs/outgoing state') (str "After updating for " tag))
-        my-logs (::log2/state state')
-        forked-logs (log2/fork my-logs)
+        my-logs (::log/state state')
+        forked-logs (log/fork my-logs)
         mid (System/currentTimeMillis)
         ;; This is taking a ludicrous amount of time.
         ;; Q: How much should I blame on logging?
         _ (schedule-next-timeout! io-handle (assoc state'
-                                                   ::log2/state
+                                                   ::log/state
                                                    forked-logs))
         end (System/currentTimeMillis)
-        my-logs (log2/warn my-logs
-                           ::action-trigger
-                           "Need to update the caller's log state")]
+        my-logs (log/warn my-logs
+                          ::action-trigger
+                          "Need to update the caller's log state")]
     (reset! log-state-atom
-            (log2/flush-logs! (::log2/logger io-handle)
-                              (log2/debug  my-logs
-                                           ::action-trigger
-                                           "Handled a triggered action"
-                                           {::tag tag
-                                            ::handling-ms (- mid start)
-                                            ::rescheduling-ms (- end mid)
-                                            ::specs/message-loop-name message-loop-name}))))
+            (log/flush-logs! (::log/logger io-handle)
+                              (log/debug  my-logs
+                                          ::action-trigger
+                                          "Handled a triggered action"
+                                          {::tag tag
+                                           ::handling-ms (- mid start)
+                                           ::rescheduling-ms (- end mid)
+                                           ::specs/message-loop-name message-loop-name}))))
   nil)
 
 (comment
@@ -1080,7 +1080,7 @@
 ;;; it takes me back to Square One in terms of
 ;;; handling the timer. But it's tempting.
 (defn schedule-next-timeout!
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::specs/->parent
            ::specs/child-output-loop
            ::specs/child-input-loop
@@ -1097,7 +1097,7 @@
             ::specs/receive-written]} ::specs/incoming
     {:keys [::specs/send-eof-acked]
      :as outgoing} ::specs/outgoing
-    log-state ::log2/state
+    log-state ::log/state
     :as state}]
   {:pre [recent
          outgoing]}
@@ -1106,13 +1106,13 @@
         ;; So calling it again this quickly seems like
         ;; a waste of ~30-ish nanoseconds.
         now (System/nanoTime)
-        log-state (log2/debug log-state
-                              ::schedule-next-timeout!
-                              "Top of scheduler"
-                              {::now now})]
+        log-state (log/debug log-state
+                             ::schedule-next-timeout!
+                             "Top of scheduler"
+                             {::now now})]
     (if (not (strm/closed? stream))
       (let [{actual-next ::next-action-time
-             log-state ::log2/state}
+             log-state ::log/state}
             ;; TODO: Reframe this logic around
             ;; whether child-input-loop and
             ;; child-output-loop have been realized
@@ -1126,20 +1126,21 @@
                ;; After all, unit tests want/need to
                ;; examine the final system state (which
                ;; means calling into this loop)
-               ::log2/state (log2/warn log-state
-                                       "Main ioloop is done. Idling."
-                                       {::specs/message-loop-name message-loop-name
-                                        ::specs/receive-eof receive-eof
-                                        ::specs/receive-written receive-written
-                                        ::specs/receive-total-bytes receive-total-bytes
-                                        ::specs/send-eof-acked send-eof-acked})}
+               ::log/state (log/warn log-state
+                                     ::schedule-next-timeout!
+                                     "Main ioloop is done. Idling."
+                                     {::specs/message-loop-name message-loop-name
+                                      ::specs/receive-eof receive-eof
+                                      ::specs/receive-written receive-written
+                                      ::specs/receive-total-bytes receive-total-bytes
+                                      ::specs/send-eof-acked send-eof-acked})}
               (choose-next-scheduled-time (assoc state
-                                                 ::log2/state
+                                                 ::log/state
                                                  log-state)
                                           to-child-done?))]
         (let [{:keys [::delta_f
                       ::next-action]
-               log-state ::log2/state}
+               log-state ::log/state}
               (if actual-next
                 ;; TODO: add an optional debugging step that stores state and the
                 ;; calculated time so I can just look at exactly what I have
@@ -1162,25 +1163,25 @@
                               (inc (utils/nanos->millis delta-nanos)))
                       ;; For printing
                       delta_f (float delta)
-                      log-state (log2/debug log-state
-                                            ::schedule-next-timeout!
-                                            "Setting timer to trigger after an initially calculated scheduled delay"
-                                            {::scheduled-delay scheduled-delay  ; Q: Convert to long?
-                                             ::specs/recent recent
-                                             ::now now
-                                             ::actual-delay delta_f
-                                             ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
-                                             ::stream stream})]
+                      log-state (log/debug log-state
+                                           ::schedule-next-timeout!
+                                           "Setting timer to trigger after an initially calculated scheduled delay"
+                                           {::scheduled-delay scheduled-delay  ; Q: Convert to long?
+                                            ::specs/recent recent
+                                            ::now now
+                                            ::actual-delay delta_f
+                                            ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
+                                            ::stream stream})]
                   {::delta_f delta_f
                    ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
-                   ::log2/state log-state})
+                   ::log/state log-state})
                 ;; The i/o portion of this loop is finished.
                 ;; But we still need to wait on the caller to close the underlying stream.
                 ;; If nothing else, it may still want/need to query state.
                 {::delta_f ##Inf
                  ::next-action (strm/take! stream [::drained])
-                 ::log2/state log-state})]
-          (let [forked-logs (log2/fork log-state)]
+                 ::log/state log-state})]
+          (let [forked-logs (log/fork log-state)]
             (when-not (::specs/outgoing state)
               (throw (ex-info "Missing outgoing" state)))
             (dfrd/on-realized next-action
@@ -1189,24 +1190,24 @@
                                         ::delta_f delta_f
                                         ::scheduling-time now}
                                        io-handle
-                                       (assoc state ::log2/state nil)
+                                       (assoc state ::log/state nil)
                                        (atom forked-logs))
                               (fn [failure]
-                                (log2/flush-logs! logger
-                                                  (log2/error forked-logs
-                                                              ::schedule-next-timeout!
-                                                              "Waiting on some I/O to happen in timeout"
-                                                              {::actual-delay delta_f
-                                                               ::now now}))
+                                (log/flush-logs! logger
+                                                 (log/error forked-logs
+                                                            ::schedule-next-timeout!
+                                                            "Waiting on some I/O to happen in timeout"
+                                                            {::actual-delay delta_f
+                                                             ::now now}))
                                 ;; We don't have any business doing this here, but the
                                 ;; alternatives don't seem appealing.
                                 ;; Well, we could recurse manually without a scheduled
                                 ;; time.
                                 (strm/close! stream))))))
-      (log2/flush-logs! logger
-                        (log2/warn log-state
-                                   ::schedule-next-timeout!
-                                   "I/O Handle closed")))
+      (log/flush-logs! logger
+                       (log/warn log-state
+                                 ::schedule-next-timeout!
+                                 "I/O Handle closed")))
     ;; Don't rely on the return value of a function called for side-effects
     nil))
 
@@ -1221,11 +1222,11 @@
 ;;; abstraction that just don't fit.
 ;;;          205-259 fork child
 (defn start-event-loops!
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::specs/->child
            ::specs/message-loop-name]
     :as io-handle}
-   {log-state ::log2/state
+   {log-state ::log/state
     :as state}]
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
@@ -1244,12 +1245,12 @@
                      ::specs/recent recent)
         child-output-loop (from-child/start-child-monitor! state io-handle)
         child-input-loop (to-child/start-parent-monitor! io-handle log-state ->child)
-        log-state (log2/debug log-state
-                              ::start-event-loops!
-                              "Child monitor thread should be running now. Scheduling next ioloop timeout")
+        log-state (log/debug log-state
+                             ::start-event-loops!
+                             "Child monitor thread should be running now. Scheduling next ioloop timeout")
         state (assoc state
-                        ::log2/state
-                        (log2/flush-logs! logger log-state))]
+                        ::log/state
+                        (log/flush-logs! logger log-state))]
     (schedule-next-timeout! (assoc io-handle
                                    ::specs/child-output-loop child-output-loop
                                    ::specs/child-input-loop child-input-loop)
@@ -1264,7 +1265,7 @@
                      ;; argument is optional?
                      :server? :boolean?
                      :opts ::specs/state
-                     :logger ::log2/logger)
+                     :logger ::log/logger)
         :ret ::specs/state)
 (defn initial-state
   "Put together an initial state that's ready to start!"
@@ -1279,11 +1280,11 @@
      :as opts}
     logger]
     ;; FIXME: Really also needs an initial log-state I can fork from that instead
-   (let [log-state (log2/debug (log2/init human-name 0)
-                               ::initialization
-                               "Building state for initial loop based around options"
-                               (assoc opts ::overrides {::->child-size pipe-to-child-size
-                                                        ::child->size pipe-from-child-size}))]
+   (let [log-state (log/debug (log/init human-name 0)
+                              ::initialization
+                              "Building state for initial loop based around options"
+                              (assoc opts ::overrides {::->child-size pipe-to-child-size
+                                                       ::child->size pipe-from-child-size}))]
      (let [pending-client-response (promise)]
        (when server?
          (deliver pending-client-response ::never-waited))
@@ -1350,8 +1351,8 @@
                           ::specs/strm-hwm 0
                           ::specs/total-blocks 0
                           ::specs/total-block-transmissions 0
-                          ::specs/un-ackd-blocks (build-un-ackd-blocks {::log2/logger logger
-                                                                        ::log2/state log-state})
+                          ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
+                                                                        ::log/state log-state})
                           ::specs/un-sent-blocks PersistentQueue/EMPTY
                           ::specs/want-ping (if server?
                                               ::specs/false
@@ -1362,7 +1363,7 @@
                                               ;; trying to send the next
                                               ;; message
                                               ::specs/immediate)}
-        ::log2/state log-state
+        ::log/state log-state
         ::specs/message-loop-name human-name
         ;; In the original, this is a local in main rather than a global
         ;; Q: Is there any difference that might matter to me, other
@@ -1381,7 +1382,7 @@
                      :logger ::specs/logger
                      :parent-callback ::specs/->parent
                      :child-callback ::specs/->child)
-        :ret (s/keys :req [::log2/state
+        :ret (s/keys :req [::log/state
                            ::specs/io-handle]))
 (defn start!
   [{:keys [::specs/message-loop-name]
@@ -1403,13 +1404,13 @@
    ;; just now.
    child-cb]
   (let [state (update state
-                      ::log2/state
-                      #(log2/debug %
-                                   ::start!
-                                   "Starting an I/O loop"
-                                   {::specs/message-loop-name message-loop-name
-                                    ::specs/pipe-from-child-size pipe-from-child-size
-                                    ::specs/pipe-to-child-size pipe-to-child-size}))
+                      ::log/state
+                      #(log/debug %
+                                  ::start!
+                                  "Starting an I/O loop"
+                                  {::specs/message-loop-name message-loop-name
+                                   ::specs/pipe-from-child-size pipe-from-child-size
+                                   ::specs/pipe-to-child-size pipe-to-child-size}))
         ;; TODO: Need to tune and monitor this execution pool
         ;; c.f. ztellman's dirigiste
         ;; For starters, I probably at least want the option to
@@ -1438,7 +1439,7 @@
         ;; either in the un-ackd or un-sent queues.
         ;; Still, this is a starting point.
         child-out (PipedInputStream. from-child pipe-from-child-size)
-        [main-log-state io-log-state] (log2/fork (::log2/state state) ::io-handle)
+        [main-log-state io-log-state] (log/fork (::log/state state) ::io-handle)
         io-handle {::specs/->child child-cb
                    ::specs/->parent parent-cb
                    ;; This next piece really doesn't make
@@ -1460,58 +1461,23 @@
                    ::specs/to-child-done? (dfrd/deferred)
                    ::specs/from-parent-trigger (strm/stream)
                    ::specs/executor executor
-                   ::log2/logger logger
+                   ::log/logger logger
                    ::specs/message-loop-name message-loop-name
-                   ::log2/state-atom (atom io-log-state)
+                   ::log/state-atom (atom io-log-state)
                    ::specs/stream s}
-        [main-log-state child-log-state] (log2/fork main-log-state message-loop-name)]
+        [main-log-state child-log-state] (log/fork main-log-state message-loop-name)]
     ;; We really can't rely on what this returns.
     ;; Aside from the fact that we shouldn't, since it's called for side effects
     (start-event-loops! io-handle (assoc state
-                                         ::log2/state
+                                         ::log/state
                                          child-log-state))
     {::specs/io-handle io-handle
-     ::log2/state (log2/flush-logs! logger
-                                    (log2/info main-log-state
-                                               ::start!
-                                               "Started an event loop"
-                                               {::specs/message-loop-name message-loop-name
-                                                ::specs/stream s}))}))
-
-(s/fdef halt!
-        :args (s/cat :io-handle ::specs/io-handle)
-        :ret any?)
-(defn halt!
-  [{:keys [::log2/logger
-           ::specs/message-loop-name
-           ::specs/stream
-           ::specs/from-child
-           ::specs/child-out]
-    :as io-handle}]
-  ;; TODO: We need the log-state here, so we can append to it.
-  ;; The obvious choice seems to involve calling get-state.
-  (let [{log-state ::log2/state} (get-state io-handle)
-        my-logs (log2/fork log-state)
-        my-logs (log2/info my-logs
-                           ::halt!
-                           "I/O Loop Halt Requested"
-                           {::specs/message-loop-name message-loop-name})
-        my-logs (try
-                  (strm/close! stream)
-                  (doseq [pipe [from-child
-                                child-out]]
-                    (.close pipe))
-                  (log2/info my-logs
-                             ::halt!
-                             "Halt initiated"
-                             {::specs/message-loop-name message-loop-name})
-                  (catch RuntimeException ex
-                    (log2/exception my-logs
-                                    ex
-                                    ::halt!
-                                    "Signalling halt failed"
-                                    {::specs/message-loop-name message-loop-name})))]
-    (log2/flush-logs! logger my-logs)))
+     ::log/state (log/flush-logs! logger
+                                  (log/info main-log-state
+                                            ::start!
+                                            "Started an event loop"
+                                            {::specs/message-loop-name message-loop-name
+                                             ::specs/stream s}))}))
 
 (s/fdef get-state
         :args (s/cat :io-handle ::specs/io-handle
@@ -1530,18 +1496,18 @@
   "Synchronous equivalent to deref"
   ;; This really involves side-effects
   ;; Q: Rename to get-state!
-  ([{:keys [::log2/logger
+  ([{:keys [::log/logger
             ::specs/message-loop-name
             ::specs/stream]
-     log-state-atom ::log2/state-atom}
+     log-state-atom ::log/state-atom}
     timeout
     failure-signal]
    (swap! log-state-atom
-          #(log2/debug %
-                       ::querying
-                       "Submitting get-state query"
-                       {::specs/message-loop-name message-loop-name
-                        ::specs/stream stream}))
+          #(log/debug %
+                      ::querying
+                      "Submitting get-state query"
+                      {::specs/message-loop-name message-loop-name
+                       ::specs/stream stream}))
    (let [state-holder (dfrd/deferred)
          req (strm/try-put! stream [::query-state state-holder] timeout)]
      ;; FIXME: Switch to using dfrd/chain instead
@@ -1552,39 +1518,74 @@
                                 ;; since it isn't purely functional, or even
                                 ;; idempotent.
                                 ;; The alternatives seem worse.
-                                #(log2/flush-logs! logger
-                                                   (log2/debug %
-                                                               ::succeeded
-                                                               "get-state query submitted"
-                                                               {::result success
-                                                                ::specs/message-loop-name message-loop-name}))))
+                                #(log/flush-logs! logger
+                                                  (log/debug %
+                                                             ::succeeded
+                                                             "get-state query submitted"
+                                                             {::result success
+                                                              ::specs/message-loop-name message-loop-name}))))
                        (fn [failure]
                          (swap! log-state-atom
-                                #(log2/flush-logs! logger
-                                                   (if (instance? Throwable failure)
-                                                     (log2/exception %
-                                                                     failure
-                                                                     ::exceptional-failure
-                                                                     "Submitting get-state query failed"
-                                                                     {::specs/message-loop-name message-loop-name})
-                                                     (log2/error %
-                                                                 ::non-exceptional-failure
-                                                                 "Submitting get-state failed mysteriously"
-                                                                 {::result failure
-                                                                  ::specs/message-loop-name message-loop-name}))))
+                                #(log/flush-logs! logger
+                                                  (if (instance? Throwable failure)
+                                                    (log/exception %
+                                                                   failure
+                                                                   ::exceptional-failure
+                                                                   "Submitting get-state query failed"
+                                                                   {::specs/message-loop-name message-loop-name})
+                                                     (log/error %
+                                                                ::non-exceptional-failure
+                                                                "Submitting get-state failed mysteriously"
+                                                                {::result failure
+                                                                 ::specs/message-loop-name message-loop-name}))))
                          (deliver state-holder failure)))
      ;; Need to sync log-state with local-logs.
      ;; This really should be less complex, but a better approach isn't coming to mind.
-     (let [{log-state ::log2/state
+     (let [{log-state ::log/state
             :as result} (deref state-holder timeout failure-signal)
            main-log-state-atom (atom log-state)]
        (swap! log-state-atom (fn [io-log-state]
-                               (let [[main-log-state io-log-state] (log2/synchronize log-state io-log-state)]
+                               (let [[main-log-state io-log-state] (log/synchronize log-state io-log-state)]
                                  (reset! main-log-state-atom main-log-state)
                                  io-log-state)))
-       (assoc result ::log2/state @main-log-state-atom))))
+       (assoc result ::log/state @main-log-state-atom))))
   ([stream-holder]
    (get-state stream-holder 500 ::timed-out)))
+
+(s/fdef halt!
+        :args (s/cat :io-handle ::specs/io-handle)
+        :ret any?)
+(defn halt!
+  [{:keys [::log/logger
+           ::specs/message-loop-name
+           ::specs/stream
+           ::specs/from-child
+           ::specs/child-out]
+    :as io-handle}]
+  ;; TODO: We need the log-state here, so we can append to it.
+  ;; The obvious choice seems to involve calling get-state.
+  (let [{log-state ::log/state} (get-state io-handle)
+        my-logs (log/fork log-state)
+        my-logs (log/info my-logs
+                          ::halt!
+                          "I/O Loop Halt Requested"
+                          {::specs/message-loop-name message-loop-name})
+        my-logs (try
+                  (strm/close! stream)
+                  (doseq [pipe [from-child
+                                child-out]]
+                    (.close pipe))
+                  (log/info my-logs
+                            ::halt!
+                            "Halt initiated"
+                            {::specs/message-loop-name message-loop-name})
+                  (catch RuntimeException ex
+                    (log/exception my-logs
+                                   ex
+                                   ::halt!
+                                   "Signalling halt failed"
+                                   {::specs/message-loop-name message-loop-name})))]
+    (log/flush-logs! logger my-logs)))
 
 (s/fdef child->!
         :args (s/cat :io-handle ::specs/io-handle
@@ -1623,16 +1624,16 @@
   ;; the streaming.
 
 ;;;  319-336: Maybe read bytes from child
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::specs/child-out
            ::specs/from-child
            ::specs/message-loop-name
            ::specs/pipe-from-child-size]
-    log-state-atom ::log2/state-atom
+    log-state-atom ::log/state-atom
     :as io-handle}
    array-o-bytes]
   (swap! log-state-atom
-         #(log2/debug % ::child-> "Top" {::specs/message-loop-name message-loop-name}))
+         #(log/debug % ::child-> "Top" {::specs/message-loop-name message-loop-name}))
   (when-not from-child
     (let [prelog (utils/pre-log message-loop-name)]
       (throw (ex-info (str prelog "Missing PipedOutStream from child inside io-handle")
@@ -1647,19 +1648,19 @@
     ;; Although we might send back "try again later"
     ;; responses.
     (swap! log-state-atom
-           #(log2/debug %
-                        ::child->
-                        "Trying to send bytes from child"
-                        {::message-size n
-                         ::buffer-space-available buffer-space
-                         ::specs/message-loop-name message-loop-name}))
+           #(log/debug %
+                       ::child->
+                       "Trying to send bytes from child"
+                       {::message-size n
+                        ::buffer-space-available buffer-space
+                        ::specs/message-loop-name message-loop-name}))
     (let [result
           (if (< buffer-space n)
             (do
               (swap! log-state-atom
-                     #(log2/warn %
-                                 ::child->
-                                 "Not enough room to write.\nRefusing to block"))
+                     #(log/warn %
+                                ::child->
+                                "Not enough room to write.\nRefusing to block"))
               ;; TODO: Add an optional parameter to allow blocking.
               ;; TODO: Adjust the meaning of this return value.
               ;; Anything numeric should be the buffer space available
@@ -1674,14 +1675,14 @@
               ;; It probably makes sense usually, but it won't always.
               (.flush from-child)
               (swap! log-state-atom
-                     #(log2/debug %
-                                  ::child->
-                                  "Buffered"
-                                  {::specs/message-loop-name message-loop-name
-                                   ::message-size n}))
+                     #(log/debug %
+                                 ::child->
+                                 "Buffered"
+                                 {::specs/message-loop-name message-loop-name
+                                  ::message-size n}))
               true))]
       (swap! log-state-atom
-             #(log2/flush-logs! logger %)))))
+             #(log/flush-logs! logger %)))))
 
 (s/fdef parent->!
         :args (s/cat :io-handle ::specs/io-handle
@@ -1699,10 +1700,10 @@
   It's replacing one of the polling triggers that
   set off the main() event loop. Need to account for
   that fundamental strategic change"
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::specs/message-loop-name
            ::specs/stream]
-    log-state-atom ::log2/state-atom
+    log-state-atom ::log/state-atom
     :as io-handle}
    ^bytes array-o-bytes]
   ;; Note that it doesn't make sense to use the
@@ -1714,48 +1715,48 @@
   ;; needs to happen first.
   (let [prelog (utils/pre-log message-loop-name)]
     (swap! log-state-atom
-           #(log2/info %
-                       ::parent->
-                       "Top"
-                       {::specs/message-loop-name message-loop-name}))
+           #(log/info %
+                      ::parent->
+                      "Top"
+                      {::specs/message-loop-name message-loop-name}))
     (try
       (let [success (strm/put! stream [::parent-> array-o-bytes])]
         (swap! log-state-atom
-               #(log2/debug %
-                            ::parent->
-                            "Parent put!. Setting up on-realized handler"
-                            {::specs/message-loop-name message-loop-name}))
+               #(log/debug %
+                           ::parent->
+                           "Parent put!. Setting up on-realized handler"
+                           {::specs/message-loop-name message-loop-name}))
         (dfrd/on-realized success
                           (fn [x]
                             (swap! log-state-atom
-                                   #(log2/flush-logs! logger (log2/debug %
-                                                                         ::parent->
-                                                                         "Buffered bytes from parent"
-                                                                         ;; Note that this probably should run on a
-                                                                         ;; totally different thread than the outer function
-                                                                         {::triggered-from prelog
-                                                                          ::specs/message-loop-name message-loop-name}))))
+                                   #(log/flush-logs! logger (log/debug %
+                                                                       ::parent->
+                                                                       "Buffered bytes from parent"
+                                                                       ;; Note that this probably should run on a
+                                                                       ;; totally different thread than the outer function
+                                                                       {::triggered-from prelog
+                                                                        ::specs/message-loop-name message-loop-name}))))
                           (fn [x]
                             (swap! log-state-atom
-                                   #(log2/flush-logs! logger (log2/warn %
-                                                                        ::parent->
-                                                                        "Failed to buffer bytes from parent"
-                                                                        {::triggered-from prelog
-                                                                         ::specs/message-loop-name message-loop-name})))))
+                                   #(log/flush-logs! logger (log/warn %
+                                                                      ::parent->
+                                                                      "Failed to buffer bytes from parent"
+                                                                      {::triggered-from prelog
+                                                                       ::specs/message-loop-name message-loop-name})))))
         (swap! log-state-atom
-               #(log2/debug %
-                            ::parent->
-                            "bottom"
-                            {::specs/message-loop-name message-loop-name}))
+               #(log/debug %
+                           ::parent->
+                           "bottom"
+                           {::specs/message-loop-name message-loop-name}))
         nil)
       (catch Exception ex
         (swap! log-state-atom
-               #(log2/flush-logs! logger
-                                  (log2/exception %
-                                                  ex
-                                                  ::parent->
-                                                  "Sending message to parent failed"
-                                                  {::specs/message-loop-name message-loop-name})))))))
+               #(log/flush-logs! logger
+                                 (log/exception %
+                                                ex
+                                                ::parent->
+                                                "Sending message to parent failed"
+                                                {::specs/message-loop-name message-loop-name})))))))
 
 (s/fdef child-close!
         :args (s/cat :io-handle ::io-handle)
