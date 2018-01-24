@@ -751,11 +751,12 @@
                                        {::un-ackd-block-count (count un-ackd-blocks)
                                         ::un-sent-block-count (count (get-in state''
                                                                              [::specs/outgoing ::specs/un-sent-blocks]))
-                                        ::specs/message-loop-name message-loop-name}))]
+                                        ::specs/message-loop-name message-loop-name}))
+                {:keys [::specs/earliest-time]
+                 log2-state ::log/state} (help/earliest-block-time message-loop-name log-state un-ackd-blocks)]
 ;;;      408: earliestblocktime_compute()
             (-> (assoc state'' ::log/state log-state)
-                (assoc-in [::specs/outgoing ::specs/earliest-time]
-                          (help/earliest-block-time message-loop-name un-ackd-blocks))
+                (assoc-in [::specs/outgoing ::specs/earliest-time] earliest-time)
                 (update ::specs/outgoing dissoc ::specs/next-block-queue)))
           ;; To make traffic analysis more difficult for bad guys, should intermittently
           ;; send meaningless garbage when nothing else is available.

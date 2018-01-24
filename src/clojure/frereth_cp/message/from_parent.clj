@@ -654,9 +654,11 @@ Line 608"
                       (get-in state
                               [::specs/outgoing
                                ::specs/un-ackd-blocks])))
-      (-> state
-          help/drop-ackd!
-          cope-with-child-eof))))
+      (let [result
+            (-> state
+                help/drop-ackd!
+                cope-with-child-eof)]
+        result))))
 
 (s/fdef possibly-ack!
         :args (s/cat :io-handle ::specs/io-handle

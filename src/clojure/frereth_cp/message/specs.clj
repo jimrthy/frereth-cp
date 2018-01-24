@@ -190,7 +190,7 @@
 ;;    because input hasn't arrived quickly enough to
 ;;    trigger it.
 ;; Q: Does this serve any useful purpose any longer?
-(s/def ::earliest-time int?)
+(s/def ::earliest-time nat-int?)
 ;; Corresponds to lastblocktime in original
 ;; Undocumented, but it looks like the value of recent
 ;; at the end of the previous send to parent
