@@ -26,7 +26,7 @@
       (finally
         (.release buf)))))
 
-(deftest check-flacked-others
+(deftest check-flackd-others
   ;; This test is [still] failing with logic errors.
   ;; I think this is probably because I botched up the starting
   ;; conditions.
@@ -52,7 +52,7 @@
         {decoded-packet ::specs/packet
          log-state ::log2/state} (from-parent/deserialize (::log2/state start-state)
                                                           raw-buffer)
-        log-state (log2/debug log-state ::check-flacked-others "Calling failing flag-acked"
+        log-state (log2/debug log-state ::check-flackd-others "Calling failing flag-ackd"
                               {::specs/state start-state
                                ::specs/packet decoded-packet})]
     (let [{{:keys [::specs/blocks
@@ -63,9 +63,9 @@
                    ::specs/total-block-transmissions]
             :as outgoing} ::specs/outgoing
            log-state ::log2/state
-           :as flagged} (from-parent/flag-acked-others! (assoc start-state
-                                                               ::log2/state log-state)
-                                                        decoded-packet)
+           :as flagged} (from-parent/flag-ackd-others! (assoc start-state
+                                                              ::log2/state log-state)
+                                                       decoded-packet)
           ;; The ACKs specified in the incoming packet should drop the first two blocks
           expected-remaining-blocks (drop 2 (get-in start-state [::specs/outgoing ::specs/blocks]))]
       (try
@@ -85,7 +85,7 @@
           (doseq [b (get-in flagged [::specs/outgoing ::specs/blocks])]
             (.release (::specs/buf b))))))))
 (comment
-  (check-flacked-others)
+  (check-flackd-others)
   (let [start-state (test-helpers/build-ack-flag-message-portion)
         raw-buffer (::test-helpers/packet start-state)
         start-state (dissoc start-state ::test-helpers/packet)
@@ -98,7 +98,7 @@
                                           ::specs/un-ackd-blocks
                                           (take 2)
                                           (map #(-> % ::specs/buf .readableBytes))))
-        decoded-packet (from-parent/deserialize "from-parent-test/check-flacked-others" raw-buffer)]
+        decoded-packet (from-parent/deserialize "from-parent-test/check-flackd-others" raw-buffer)]
     start-state
     (count raw-buffer)
     (count starting-unackd)
@@ -160,9 +160,13 @@
                                                                      :receive-total-bytes 0
                                                                      :receive-written 0
                                                                      :strm-hwm 0}
-                         ::specs/message-loop-name "from-parent-test/check-start-stop-calculation"}]
-        (let [^bytes pkt (to-parent/build-message-block-description human-name (assoc dscr ::specs/message-id 1))
-              decoded-packet (from-parent/deserialize human-name pkt)
+                         ::specs/message-loop-name "from-parent-test/check-start-stop-calculation"}
+            log-state (log2/init "Unit test: Check start-stop calculations" 0)]
+        (let [{^bytes pkt ::specs/bs-or-eof
+               log-state ::log2/state} (to-parent/build-message-block-description log-state (assoc dscr ::specs/message-id 1))
+              {log-state ::log2/state
+               decoded-packet ::specs/packet} (from-parent/deserialize log-state pkt)
+              _ (throw (RuntimeException. "I've really mangled this"))
               calculated (from-parent/calculate-start-stop-bytes start-state decoded-packet)]
           (is (= base-expectations
                  calculated)))
@@ -247,8 +251,8 @@
   )
 
 
-(deftest check-big-flacked-others
-  ;; This needs to be expanded to match the behavior in check-flacked-others
+(deftest check-big-flackd-others
+  ;; This needs to be expanded to match the behavior in check-flackd-others
   ;; Once that one works.
   ;; As it is, right now, this is busted.
   ;; TODO: get this test working
@@ -267,7 +271,7 @@
       (.writeShort buf 16)  ; bytes in range #5
       (.writeShort buf 24)  ; bytes between ranges 5-6
       (.writeShort buf 32)  ; bytes in range #6
-      (let [flagged (from-parent/flag-acked-others! {::specs/message-loop-name "Check big flacked"}
-                                                    {::specs/message-id 10237
-                                                     ::specs/receive-buf buf})]
+      (let [flagged (from-parent/flag-ackd-others! {::specs/message-loop-name "Check big flackd"}
+                                                   {::specs/message-id 10237
+                                                    ::specs/receive-buf buf})]
         (is (not flagged) "What should that look like?")))))

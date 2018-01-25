@@ -348,11 +348,11 @@
                               "Pure ACK never updates received gap-buffer"))))
       (assoc state ::log/state log-state))))
 
-(s/fdef flag-acked-others!
+(s/fdef flag-ackd-others!
         :args (s/cat :state ::specs/state
                      :packet ::specs/packet)
         :ret ::specs/state)
-(defn flag-acked-others!
+(defn flag-ackd-others!
   "Cope with sent message the other side just ACK'd
 
   Lines 544-560"
@@ -369,8 +369,8 @@
   ;; have been called in the first place.
   (let [prelog (utils/pre-log message-loop-name)
         log-state (log/info log-state
-                            ::flag-acked-others!
-                            "Top of flag-acked-others!\nHandling gaps ACK'd"
+                            ::flag-ackd-others!
+                            "Top of flag-ackd-others!\nHandling gaps ACK'd"
                             packet)]
     ;; TODO: Check for performance difference if we switch to a reducible.
     (let [gaps (map (fn [[startfn stopfn]]
@@ -382,7 +382,7 @@
                      [::specs/ack-gap-4->5 ::specs/ack-length-5] ; 30-32
                      [::specs/ack-gap-5->6 ::specs/ack-length-6]]) ; 34-36
           log-state (log/debug log-state
-                               ::flag-acked-others!
+                               ::flag-ackd-others!
                                "ACK'd with Gaps"
                                {::gaps (into [] gaps)
                                 ::specs/state state})]
@@ -394,7 +394,7 @@
                  (let [log-state
                        (if-not (and start stop)
                          (log/error log-state
-                                    ::flag-acked-others!
+                                    ::flag-ackd-others!
                                     "Missing stop/start somewhere in packet"
                                     {::start start
                                      ::stop stop})
@@ -546,7 +546,7 @@ Line 608"
 
 (s/fdef flag-blocks-ackd-by-id
         :args (s/cat :state ::specs/state
-                     :acked-blocks ::specs/blocks)
+                     :ackd-blocks ::specs/blocks)
         :ret ::specs/state)
 (defn flag-blocks-ackd-by-id
   "Reference implementation ignores these"
@@ -595,7 +595,7 @@ Line 608"
   (let [state (update state ::log/state
                       #(log/debug %
                                   ::cope-with-child-eof
-                                  "Q: Has other side ACKed the child's EOF message?"
+                                  "Q: Has other side ACKd the child's EOF message?"
                                   {::specs/send-eof send-eof
                                    ::pending-block-count (+ (count un-ackd-blocks)
                                                             (count un-sent-blocks))}))]
@@ -627,7 +627,7 @@ Line 608"
                                     ::log/state
                                     #(log/debug %
                                                 ::handle-incoming-ack
-                                                "looking for un-acked blocks by message ID"
+                                                "looking for un-ackd blocks by message ID"
                                                 {::specs/un-ackd-blocks un-ackd-blocks
                                                  ::specs/acked-message acked-message}))]
     ;; The acked-message ID should only be 0 on the
@@ -643,11 +643,11 @@ Line 608"
             initial-state)
         state
       ;; That takes us down to line 544
-      ;; It seems more than a bit silly to calculate flag-acked-others!
+      ;; It seems more than a bit silly to calculate flag-ackd-others!
       ;; if the incoming message is a pure ACK (i.e. message ID 0).
       ;; That seeming silliness is completely correct: this
       ;; is the entire point behind a pure ACK.
-      (flag-acked-others! state packet)
+      (flag-ackd-others! state packet)
       (reduce flow-control/update-statistics
               state
               (filter ::specs/ackd?

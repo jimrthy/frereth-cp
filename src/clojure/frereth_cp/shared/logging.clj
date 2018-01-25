@@ -20,9 +20,19 @@
   "Extend this for logging side-effects"
   (log! [this msg]
     "At least queue up a log message to side-effect")
+  ;; It's tempting to add things like filtering to do things like
+  ;; discarding all logs except warn and error.
+  ;; Don't give in to temptation: keep the concerns separated.
+  ;; Honestly, that's something that should probably be stateful
+  ;; in a serious system, so operators can modify logging levels
+  ;; on the fly based on whether or not something's going wrong.
+  ;; For that matter, it would be nice to use something like anomaly
+  ;; detectiong to handle those changes automatically.
   (flush! [this] "Some loggers need to do this at the end of a batch"))
 (s/def ::logger #(satisfies? Logger %))
 
+;;; TODO: I need a map of these keys to numeric values to make
+;;; things like removing unwanted messages trivial.
 (def log-levels #{::trace
                   ::debug
                   ::info

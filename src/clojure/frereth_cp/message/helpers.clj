@@ -18,38 +18,46 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
 
-(s/fdef flag-acked-blocks
+(s/fdef flag-ackd-blocks
         :args (s/cat :start int?
                      :stop int?
-                     :acc ::block-counting-state
+                     :state ::block-counting-state
                      :block ::specs/block)
         :ret ::block-counting-state)
 (declare mark-block-ackd)
-(defn flag-acked-blocks
+(defn flag-ackd-blocks
   [start stop
-   acc
+   state
    {:keys [::specs/start-pos
            ::specs/transmissions
            ::specs/buf]
     :as block}]
   {:pre [transmissions]}
-  (log/debug (str "flag-acked-blocks: " start "-" stop
-                  " for\n" block))
-  (let [length (.readableBytes buf)]
-    (if (<= start
-            start-pos
-            (+ start-pos length)
-            stop)
-      (do
-        (log/trace "(it's a match)")
-        (update acc
-                ::specs/outgoing
-                (fn [cur]
-                  (-> cur
-                      (mark-block-ackd block)
-                      (update ::specs/total-blocks inc)
-                      (update ::specs/total-block-transmissions + transmissions)))))
-      acc)))
+  (let [state (update state
+                      ::log2/state
+                      #(log2/debug %
+                                   ::flag-ackd-blocks
+                                   ""
+                                   {::start start
+                                    ::stop stop
+                                    ::block block}))]
+    (let [length (.readableBytes buf)]
+      (if (<= start
+              start-pos
+              (+ start-pos length)
+              stop)
+        (-> state
+            (update ::log2/state
+                    #(log2/trace %
+                                 ::flag-ackd-blocks
+                                 "(it's a match)"))
+            (update ::specs/outgoing
+                    (fn [cur]
+                      (-> cur
+                          (mark-block-ackd block)
+                          (update ::specs/total-blocks inc)
+                          (update ::specs/total-block-transmissions + transmissions)))))
+        state))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -243,7 +251,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 ;;;           159-167: Flag these blocks as sent
 ;;;                    Marks blocks between start and stop as ACK'd
 ;;;                    Updates totalblocktransmissions and totalblocks
-      (as-> (reduce (partial flag-acked-blocks start stop)
+      (as-> (reduce (partial flag-ackd-blocks start stop)
                     state
                     un-ackd-blocks) state
         (update state
