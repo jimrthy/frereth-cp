@@ -269,20 +269,27 @@
 ;;;                So everything else is shifted right by 8 bytes
     (let [q (next-block-queue outgoing)
           current-message (first q)
-          ;; This is where message correlation would be
+          ;; This is where message consolidation would be
           ;; a good thing, at least for new messages.
-          ;; Really should pull pull all the bytes we can
+          ;; Really should pull all the bytes we can
           ;; send (which depends on whether :client-waiting-on-response
-          ;; in :flow-control has been delivered) from q.
+          ;; in :flow-control has been delivered) from queue.
           ;; Although that consolidation probably doesn't make a lot
           ;; of sense here
-          ;; TODO: make that happen
+          ;; TODO: make that happen. Somewhere.
+          ;; In my message-test/bigger-outbound test, this message is
+          ;; causing problems because it's trying to log a Buf with refCnt
+          ;; 0.
+          ;; Meaning that it got released before we got around to actually
+          ;; calling log! (which now happens inside an agent).
+          ;; TODO: Narrow down the culprit (current guess: one of the
+          ;; un-ackd queues in outbound)
           log-state (log/debug log-state
                                label
                                "Next message source"
                                {::next-block-queue-size (count q)
                                 ::specs/next-block-queue next-block-queue
-                                ::specs/outgoing outgoing})
+                                ::specs/outgoing (dissoc outgoing ::send-buf)})
           transmission-count (::specs/transmissions current-message)
           _ (assert transmission-count
                     (str pre-log

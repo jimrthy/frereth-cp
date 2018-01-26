@@ -271,8 +271,13 @@
             (is (not= state ::timed-out) "Querying for initial state timed out")
             (when (not= state ::timed-out)
               (reset! io-handle-atom io-handle)
-              (is (not
-                   (s/explain-data ::specs/state state)))
+              (let [problem (s/explain-data ::specs/state state)]
+                (when problem
+                  (let [log-ctx (get-in state [::log2/state ::log2/context])]
+                    (is (not problem) (str "Latest breakage is due to "
+                                           log-ctx
+                                           " a "
+                                           (class log-ctx))))))
 
               ;; TODO: Add similar tests that send a variety of
               ;; gibberish messages

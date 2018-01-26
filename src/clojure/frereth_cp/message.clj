@@ -1021,18 +1021,16 @@
                                                    ::log/state
                                                    forked-logs))
         end (System/currentTimeMillis)
-        my-logs (log/warn my-logs
-                          ::action-trigger
-                          "Need to update the caller's log state")]
+        my-logs (log/debug  my-logs
+                            ::action-trigger
+                            "Handled a triggered action"
+                            {::tag tag
+                             ::handling-ms (- mid start)
+                             ::rescheduling-ms (- end mid)
+                             ::specs/message-loop-name message-loop-name})]
     (reset! log-state-atom
             (log/flush-logs! (::log/logger io-handle)
-                              (log/debug  my-logs
-                                          ::action-trigger
-                                          "Handled a triggered action"
-                                          {::tag tag
-                                           ::handling-ms (- mid start)
-                                           ::rescheduling-ms (- end mid)
-                                           ::specs/message-loop-name message-loop-name}))))
+                             my-logs)))
   nil)
 
 (comment
@@ -1682,7 +1680,8 @@
                                   ::message-size n}))
               true))]
       (swap! log-state-atom
-             #(log/flush-logs! logger %)))))
+             #(log/flush-logs! logger %))
+      result)))
 
 (s/fdef parent->!
         :args (s/cat :io-handle ::specs/io-handle

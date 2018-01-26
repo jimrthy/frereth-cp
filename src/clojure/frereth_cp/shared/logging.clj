@@ -2,6 +2,7 @@
   "Functional logging mechanism"
   (:require [clojure.spec.alpha :as s]
             [clojure.stacktrace :as s-t]
+            [clojure.string :as str]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as utils])
   (:import clojure.lang.ExceptionInfo
@@ -10,10 +11,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(s/def ::context (s/or :string string?
-                       :keyword keyword?
-                       :uuid uuid?
-                       :int int?))
+(s/def ::ctx-atom (s/or :string string?
+                        :keyword keyword?
+                        :uuid uuid?
+                        :int int?))
+(s/def ::ctx-seq (s/coll-of ::ctx-atom))
+(s/def ::context (s/or :atom ::ctx-atom
+                       :seq ::ctx-seq))
 
 ;;;; Implement this for your side-effects
 (defprotocol Logger
@@ -63,6 +67,7 @@
 
 (s/def ::entry (s/keys :req [::level
                              ::label
+                             ::lamport
                              ::time
                              ::message]
                        :opt [::details]))
@@ -161,6 +166,37 @@
          message#]
         (add-log-entry log-state# ~tag label# message#)))))
 
+(defn exception-details
+  [ex]
+  (let [stack-trace (with-out-str (s-t/print-stack-trace ex))
+        base {::stack stack-trace
+              ::exception ex}
+        with-details (if (instance? ExceptionInfo ex)
+                       (assoc-in base [::data ::problem] (.getData ex))
+                       base)]
+    (if-let [cause (.getCause ex)]
+      (assoc with-details ::cause (exception-details cause))
+      with-details)))
+
+(declare init)
+(defn format-log-string
+  [caller-stack-holder entry]
+  (try
+    (prn-str entry)
+    (catch RuntimeException ex
+      (let [injected
+            (prn-str (add-log-entry {::entries (init ::logging-formatter)
+                                     ::lamport -1}
+                                    ::exception
+                                    ::log!
+                                    "Failed to write a log"
+                                    {::immediate (exception-details ex)
+                                     ::caller (exception-details caller-stack-holder)
+                                     ::redacted-problem (prn-str (dissoc entry ::details))}))]
+        ;; Q: What's the best thing to do here?
+        (comment (throw ex))
+        injected))))
+
 (defrecord OutputWriterLogger [writer]
   Logger
   ;; According to stackoverflow (and the java source
@@ -170,6 +206,7 @@
   (log! [{writer :writer
           :as this}
          msg]
+    ;; TODO: Refactor this to use format-log-string
     (.write writer (prn-str msg)))
   (flush! [{^BufferedWriter writer :writer
             :as this}]
@@ -185,6 +222,7 @@
   (log! [{^OutputStream stream :stream
           :as this}
          msg]
+    ;; TODO: Refactor this to use format-log-string
     (.write stream (prn-str msg)))
   (flush! [{^OutputStream stream :stream
             :as this}]
@@ -198,24 +236,28 @@
   Logger
   (log! [{:keys [:state-agent]
           :as this} msg]
-    (send state-agent prn msg))
+    (when-let [ex (agent-error state-agent)]
+      ;; Q: What are the odds this will work?
+      (let [last-state @state-agent]
+        (println "Logging Agent Failed:\n"
+                 (exception-details ex)
+                 "\nLogging Agent State:\n"
+                 last-state)
+        (restart-agent state-agent last-state)))
+    ;; Creating an exception that we're going to throw away
+    ;; for almost every log message seems really wasteful.
+    (let [get-caller-stack (RuntimeException. "Q: Is there a cheaper way to get the call stack?")]
+      (send state-agent (fn [state entry]
+                          (print (format-log-string get-caller-stack entry))
+                          state)
+            msg)))
   ;; Q: Is there any point to calling .flush
   ;; on STDOUT?
   ;; A: Not according to stackoverflow.
   ;; It flushes itself after every CR/LF
-  (flush! [_]))
+  (flush! [_]
+    (send state-agent #(update % ::flush-count inc))))
 
-(defn exception-details
-  [ex]
-  (let [stack-trace (with-out-str (s-t/print-stack-trace ex))
-        base {::stack stack-trace
-              ::exception ex}
-        with-details (if (instance? ExceptionInfo ex)
-                       (assoc-in base [::data ::problem] (.getData ex))
-                       base)]
-    (if-let [cause (.getCause ex)]
-      (assoc with-details ::cause (exception-details cause))
-      with-details)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
