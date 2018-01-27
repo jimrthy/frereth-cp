@@ -180,6 +180,21 @@ Needing to declare these things twice is annoying."
                          ::description dscr
                          ::source-value v}))))))
 
+(defn save-byte-buf
+  [^ByteBuf b]
+  (let [ref-cnt (.refCnt b)]
+    (throw (RuntimeException. "Start back here"))
+    (if (< 0 ref-cnt)
+      {::capacity (.capacity b)
+       ::backed-by-array? (.hasArray b)
+       ::hash-code (.hashCode b)
+       ::has-memory-address (.hasMemoryAddress b)
+       ::is-direct (.isDirect b)
+       ::readableBytes (.readableBytes b)
+       ::ref-cnt ref-cnt
+       ::writableBytes (.writableBytes b)}
+      ::released)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -328,6 +343,8 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
       pair)
     (crypto/random-key-pair)))
 
+;;; encode-server name no longer seems to be used anywhere.
+;;; TODO: Verify that and then eliminate it
 (s/fdef encode-server-name
         :args (s/cat :name ::dns-string)
         :ret ::K/server-name)
@@ -391,7 +408,7 @@ Or there's probably something similar in guava"
   "To avoid creating this over and over.
 
 Q: Refactor this to a function?
-(note that that makes like quite a bit more difficult for zero-out!)"
+(note that that makes life quite a bit more difficult for zero-out!)"
   (zero-bytes 128))
 
 (defn zero-out!
@@ -402,3 +419,25 @@ Q: Refactor this to a function?
       (alter-var-root all-zeros
                       (fn [_] (zero-bytes n)))))
   (b-t/byte-copy! dst start end all-zeros))
+
+(s/fdef format-map-for-logging
+        :args (s/cat :src map?)
+        :fn #(= (keys (:ret %))
+                (-> % :args :src keys))
+        :ret map?)
+(defn format-map-for-logging
+  "Switches to current values of dangerous fields (like mutable classes)"
+  [src]
+  (reduce (fn [dst k]
+            (assoc dst k
+                   (let [klass (class k)
+                         v (src k)]
+                     (cond
+                       (map? v) (format-map-for-logging v)
+                       (vector? v) (mapv format-map-for-logging v)
+                       ;; Q: What about other seqs?
+                       ;; Top of the list is a sorted queue
+                       (instance? ByteBuf v) (save-byte-buf v)
+                       :else v))))
+          {}
+          (keys src)))

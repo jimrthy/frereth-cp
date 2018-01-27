@@ -289,7 +289,7 @@
                                "Next message source"
                                {::next-block-queue-size (count q)
                                 ::specs/next-block-queue next-block-queue
-                                ::specs/outgoing (dissoc outgoing ::send-buf)})
+                                ::specs/outgoing (shared/format-map-for-logging outgoing)})
           transmission-count (::specs/transmissions current-message)
           _ (assert transmission-count
                     (str pre-log
