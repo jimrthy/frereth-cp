@@ -8,7 +8,6 @@
             [clojure.tools.logging :as log]
             [frereth-cp.client :as clnt]
             [frereth-cp.client.state :as clnt-state]
-            [frereth-cp.schema :as specs]
             [frereth-cp.server :as srvr]
             [frereth-cp.server.state :as srvr-state]
             [frereth-cp.server-test :as server-test]
@@ -350,7 +349,7 @@
      ::hidden-child hidden}))
 
 (s/fdef server-child-spawner
-        :args (s/cat :write-stream ::specs/manifold-stream)
+        :args (s/cat :write-stream strm/stream?)
         :ret ::srvr-state/child-interaction)
 (defn server-child-spawner
   [read-stream]

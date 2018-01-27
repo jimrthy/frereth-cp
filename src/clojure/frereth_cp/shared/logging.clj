@@ -185,8 +185,7 @@
     (prn-str entry)
     (catch RuntimeException ex
       (let [injected
-            (prn-str (add-log-entry {::entries (init ::logging-formatter)
-                                     ::lamport -1}
+            (prn-str (add-log-entry (init ::logging-formatter -1)
                                     ::exception
                                     ::log!
                                     "Failed to write a log"

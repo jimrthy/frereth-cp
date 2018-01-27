@@ -240,22 +240,22 @@
      :as outgoing} ::specs/outgoing
     log-state ::log/state
     :as state}]
-  (let [pre-log (utils/pre-log message-loop-name)
+  (let [prelog (utils/pre-log message-loop-name)
         label ::pre-calculate-state-after-send
         ;; Really just for timing info
         log-state (log/debug log-state
                              label
                              "Top of pre-calculate after-send")]
     (assert next-block-queue
-            (str pre-log
+            (str prelog
                  "No next-block-queue to tell us what to send\nAvailable:\n"
                  (keys outgoing)
                  "\nHopeful: \""
                  next-block-queue
                  "\""))
-    ;; Starts with line 380 sendblock:
-    ;; Resending old block will goto this
-    ;; It's in the middle of a do {} while(0) loop
+            ;; Starts with line 380 sendblock:
+            ;; Resending old block will goto this
+            ;; It's in the middle of a do {} while(0) loop
 
 ;;;      382-404:  Build the message packet
 ;;;                N.B.: Ignores most of the ACK bits
@@ -267,6 +267,18 @@
 ;;;                the write to FD9 at offset +7, which is the
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
+
+    (println prelog "<log>")
+    (try
+      (println "Trying to prn")
+      (prn (assoc outgoing ::where ::here))
+      (println "prn worked here")
+      (catch Throwable ex
+        (println "Trying to prn")
+        (println (log/exception-details ex))
+        (print outgoing))
+      (finally
+        (println prelog "</log>")))
     (let [q (next-block-queue outgoing)
           current-message (first q)
           ;; This is where message consolidation would be
@@ -292,7 +304,7 @@
                                 ::specs/outgoing (shared/format-map-for-logging outgoing)})
           transmission-count (::specs/transmissions current-message)
           _ (assert transmission-count
-                    (str pre-log
+                    (str prelog
                          "Missing ::transmissions under "
                          next-block-queue
                          " for "

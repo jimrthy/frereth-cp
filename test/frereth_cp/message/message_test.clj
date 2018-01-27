@@ -618,26 +618,27 @@
                                     response-state @srvr-child-state]
                                 (if (keyword? incoming)
                                   (do
-                                    (swap! log2/warn
-                                           ::server-child-cb
-                                           "Received EOF"
-                                           incoming)
+                                    (swap! log-atom
+                                           #(log2/warn %
+                                                       ::server-child-cb
+                                                       "Received EOF"
+                                                       incoming))
                                     (is (s/valid? ::specs/eof-flag incoming))
                                     (message/child-close! @client-io-atom))
                                   (swap! log-atom
-                                         log2/debug
-                                         ::server-child-cb
-                                         "Received message bytes"
-                                         (-> response-state
-                                             (dissoc :buffer)
-                                             (assoc :buffer-size (count (:buffer response-state)))
-                                             (assoc ::packet-size packet-size))))
+                                         #(log2/debug %
+                                                      ::server-child-cb
+                                                      "Received message bytes"
+                                                      (-> response-state
+                                                          (dissoc :buffer)
+                                                          (assoc :buffer-size (count (:buffer response-state)))
+                                                          (assoc ::packet-size packet-size)))))
                                 (swap! srvr-child-state
                                        (fn [cur]
                                          (swap! log-atom
-                                                log2/info
-                                                ::server-child-cb
-                                                "Incrementing state count")
+                                                #(log2/info %
+                                                            ::server-child-cb
+                                                            "Incrementing state count"))
                                          (let [incoming (if (keyword? incoming)
                                                           [incoming]
                                                           incoming)]

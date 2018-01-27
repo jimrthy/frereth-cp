@@ -437,6 +437,9 @@ Q: Refactor this to a function?
                        (vector? v) (mapv format-map-for-logging v)
                        ;; Q: What about other seqs?
                        ;; Top of the list is a sorted queue
+                       ;; A: Don't particularly care about retaining those
+                       ;; sorts of detail for a log message
+                       (seq? v) (mapv format-map-for-logging v)
                        (instance? ByteBuf v) (save-byte-buf v)
                        :else v))))
           {}
