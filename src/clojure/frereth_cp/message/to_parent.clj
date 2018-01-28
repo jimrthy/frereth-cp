@@ -271,10 +271,10 @@
     (println prelog "<log>")
     (try
       (println "Trying to prn")
-      (prn (assoc outgoing ::where ::here))
+      (prn (assoc (shared/format-map-for-logging outgoing) ::where ::here))
       (println "prn worked here")
       (catch Throwable ex
-        (println "Trying to prn")
+        (println "Trying to prn failed")
         (println (log/exception-details ex))
         (print outgoing))
       (finally

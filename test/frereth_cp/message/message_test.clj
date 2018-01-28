@@ -547,7 +547,8 @@
   ;; a single message packet.
   (let [test-run (gensym)
         prelog (utils/pre-log test-run)
-        logger (log2/std-out-log-factory)
+        logger #_(log2/file-writer-factory "/tmp/message-test.bigger-outbound.clj")
+        (log2/std-out-log-factory)
         log-atom (atom (log2/info (log2/init ::bigger-outbound 0)
                                   ::test-top
                                   ""))]
