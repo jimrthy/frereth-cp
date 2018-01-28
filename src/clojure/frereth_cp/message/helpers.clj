@@ -1,9 +1,8 @@
 (ns frereth-cp.message.helpers
   "Top-level message helpers"
   (:require [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils])
   (:import io.netty.buffer.ByteBuf))
 
@@ -34,23 +33,23 @@
     :as block}]
   {:pre [transmissions]}
   (let [state (update state
-                      ::log2/state
-                      #(log2/debug %
-                                   ::flag-ackd-blocks
-                                   ""
-                                   {::start start
-                                    ::stop stop
-                                    ::block block}))]
+                      ::log/state
+                      #(log/debug %
+                                  ::flag-ackd-blocks
+                                  ""
+                                  {::start start
+                                   ::stop stop
+                                   ::block block}))]
     (let [length (.readableBytes buf)]
       (if (<= start
               start-pos
               (+ start-pos length)
               stop)
         (-> state
-            (update ::log2/state
-                    #(log2/trace %
-                                 ::flag-ackd-blocks
-                                 "(it's a match)"))
+            (update ::log/state
+                    #(log/trace %
+                                ::flag-ackd-blocks
+                                "(it's a match)"))
             (update ::specs/outgoing
                     (fn [cur]
                       (-> cur
@@ -64,10 +63,10 @@
 
 (s/fdef earliest-block-time
         :args (s/cat :message-loop-name string?
-                     :log-state ::log2/state
+                     :log-state ::log/state
                      :blocks ::specs/un-ackd-blocks)
         :ret (s/keys :req [::specs/earliest-time
-                           ::log2/state]))
+                           ::log/state]))
 (defn earliest-block-time
   "Calculate the earliest time
 
@@ -83,12 +82,12 @@ Based on earliestblocktime_compute, in lines 138-153
   ;; TODO: Switch from remove to set/select
   (let [un-flagged (remove ::specs/ackd? un-acked-blocks)
         prelog (utils/pre-log message-loop-name)
-        log-state (log2/debug log-state
-                              ::earliest-block-time
-                              "Calculating min-time across un-ACK'd blocks"
-                              {::specs/message-loop-name message-loop-name
-                               ::un-ackd-count (count un-flagged)})]
-    {::log2/state log-state
+        log-state (log/debug log-state
+                             ::earliest-block-time
+                             "Calculating min-time across un-ACK'd blocks"
+                             {::specs/message-loop-name message-loop-name
+                              ::un-ackd-count (count un-flagged)})]
+    {::log/state log-state
      ::specs/earliest-time
      (if (< 0 (count un-flagged))
        (let [original (apply min (map ::specs/time
@@ -140,17 +139,17 @@ Based on earliestblocktime_compute, in lines 138-153
         to-drop (filter ::specs/ackd? un-ackd-blocks)
         to-keep (remove ::specs/ackd? un-ackd-blocks)
         state (update state
-                      ::log2/state
-                      #(log2/debug %
-                                   ::drop-ackd!
-                                   "Keeping un-ACKed"
-                                   {::specs/message-loop-name message-loop-name
-                                    ::retention-count (count to-keep)
-                                    ::retaining (reduce (fn [acc b]
-                                                          (str acc "\n" b))
-                                                        ""
-                                                        to-keep)
-                                    ::dropping (count un-ackd-blocks)}))
+                      ::log/state
+                      #(log/debug %
+                                  ::drop-ackd!
+                                  "Keeping un-ACKed"
+                                  {::specs/message-loop-name message-loop-name
+                                   ::retention-count (count to-keep)
+                                   ::retaining (reduce (fn [acc b]
+                                                         (str acc "\n" b))
+                                                       ""
+                                                       to-keep)
+                                   ::dropping (count un-ackd-blocks)}))
         dropped-block-lengths (apply + (map (fn [b]
                                               (-> b ::specs/buf .readableBytes))
                                             to-drop))
@@ -159,12 +158,12 @@ Based on earliestblocktime_compute, in lines 138-153
                      un-ackd-blocks
                      to-drop)
         state (-> state
-                  (update ::log2/state
-                          #(log2/warn %
-                                      ::drop-ackd!
-                                      "Really should be smarter re: ::ackd-addr here"
-                                      {::specs/ackd-addr ackd-addr
-                                       ::specs/message-loop-name message-loop-name}))
+                  (update ::log/state
+                          #(log/warn %
+                                     ::drop-ackd!
+                                     "Really should be smarter re: ::ackd-addr here"
+                                     {::specs/ackd-addr ackd-addr
+                                      ::specs/message-loop-name message-loop-name}))
                   ;; Note that this really needs to be the stream address of the
                   ;; highest contiguous block that's been ACK'd.
                   ;; This makes any scheme for ACK'ing pieces out of
@@ -180,21 +179,21 @@ Based on earliestblocktime_compute, in lines 138-153
                         (let [^ByteBuf buffer (::specs/buf block)]
                           (.release buffer))
                         (update state
-                                ::log2/state
-                                #(log2/debug %
-                                             ::drop-ackd!
-                                             "Releasing associated buf"
-                                             block)))
+                                ::log/state
+                                #(log/debug %
+                                            ::drop-ackd!
+                                            "Releasing associated buf"
+                                            block)))
                       state
                       to-drop)]
     (let [{:keys [::specs/earliest-time]
-           log-state ::log2/state} (earliest-block-time message-loop-name
-                                                        (::log2/state state)
+           log-state ::log/state} (earliest-block-time message-loop-name
+                                                        (::log/state state)
                                                         un-ackd-blocks)]
       (assoc (assoc-in state
                        [::specs/outgoing ::specs/earliest-time]
                        earliest-time)
-             ::log2/state log-state))))
+             ::log/state log-state))))
 
 ;;;; 155-185: acknowledged(start, stop)
 (s/fdef mark-ackd-by-addr
@@ -221,13 +220,13 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
         ;; any of these addressing options and really only ACK'ing
         ;; the high-water-mark stream address.
         state (update state
-                      ::log2/state
-                      #(log2/debug %
-                                   ::mark-ackd-by-addr
-                                   "Setting ACK flags on blocks between start and stop"
-                                   {::start start
-                                    ::stop stop
-                                    ::specs/message-loop-name message-loop-name}))
+                      ::log/state
+                      #(log/debug %
+                                  ::mark-ackd-by-addr
+                                  "Setting ACK flags on blocks between start and stop"
+                                  {::start start
+                                   ::stop stop
+                                   ::specs/message-loop-name message-loop-name}))
         state (if (< strm-hwm
                      (if (= send-eof ::specs/false)
                        stop
@@ -239,13 +238,13 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                 ;; so it's probably just my broken logic
                 ;; TODO: Figure out something more extreme to do here.
                 (update state
-                        ::log2/state
-                        #(log2/error %
-                                     ::mark-ackd-by-addr
-                                     "Other side ACK'd bytes we haven't sent yet"
-                                     {::specs/strm-hwm strm-hwm
-                                      ::stop stop
-                                      ::specs/send-eof send-eof}))
+                        ::log/state
+                        #(log/error %
+                                    ::mark-ackd-by-addr
+                                    "Other side ACK'd bytes we haven't sent yet"
+                                    {::specs/strm-hwm strm-hwm
+                                     ::stop stop
+                                     ::specs/send-eof send-eof}))
                 state)]
     (if (not= start stop)
 ;;;           159-167: Flag these blocks as sent
@@ -255,18 +254,18 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                     state
                     un-ackd-blocks) state
         (update state
-                ::log2/state
-                #(log2/debug %
-                             ::mark-ackd-by-addr
-                             "Done w/ initial flag reduce"
-                             (dissoc state ::log2/state)))
+                ::log/state
+                #(log/debug %
+                            ::mark-ackd-by-addr
+                            "Done w/ initial flag reduce"
+                            (dissoc state ::log/state)))
         ;; Again, gaps kill it
         (update state
-                ::log2/state
-                #(log2/warn %
-                            ::mark-ackd-by-addr
-                            "This treatment of ::ackd-addr also fails"
-                            {::specs/message-loop-name message-loop-name}))
+                ::log/state
+                #(log/warn %
+                           ::mark-ackd-by-addr
+                           "This treatment of ::ackd-addr also fails"
+                           {::specs/message-loop-name message-loop-name}))
         (assoc-in state
                   [::specs/outgoing ::specs/ackd-addr]
                   stop))
@@ -293,11 +292,11 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 
       ;; No real change
       (update state
-              ::log2/state
-              #(log2/info %
-                          ::mark-ackd-by-addr
-                          "Nothing ACK'd by address"
-                          {::specs/message-loop-name message-loop-name})))))
+              ::log/state
+              #(log/info %
+                         ::mark-ackd-by-addr
+                         "Nothing ACK'd by address"
+                         {::specs/message-loop-name message-loop-name})))))
 
 (s/fdef mark-block-ackd
         :args (s/cat :outgoing ::specs/outgoing

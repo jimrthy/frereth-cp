@@ -766,7 +766,7 @@
                                                                              [::specs/outgoing ::specs/un-sent-blocks]))
                                         ::specs/message-loop-name message-loop-name}))
                 {:keys [::specs/earliest-time]
-                 log2-state ::log/state} (help/earliest-block-time message-loop-name log-state un-ackd-blocks)]
+                 log-state ::log/state} (help/earliest-block-time message-loop-name log-state un-ackd-blocks)]
 ;;;      408: earliestblocktime_compute()
             (-> (assoc state'' ::log/state log-state)
                 (assoc-in [::specs/outgoing ::specs/earliest-time] earliest-time)
