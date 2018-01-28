@@ -268,17 +268,6 @@
 ;;;                len/16 byte.
 ;;;                So everything else is shifted right by 8 bytes
 
-    (println prelog "<log>")
-    (try
-      (println "Trying to prn")
-      (prn (assoc (shared/format-map-for-logging outgoing) ::where ::here))
-      (println "prn worked here")
-      (catch Throwable ex
-        (println "Trying to prn failed")
-        (println (log/exception-details ex))
-        (print outgoing))
-      (finally
-        (println prelog "</log>")))
     (let [q (next-block-queue outgoing)
           current-message (first q)
           ;; This is where message consolidation would be
@@ -440,31 +429,36 @@
                                  label
                                  "It has been long enough to justify resending one of our un-ACK'd blocks"
                                  {::specs/message-loop-name message-loop-name
-                                  ::un-ackd-block-count (count un-ackd-blocks)})]
-        ;; This gets us to line 344
-        ;; It finds the first block that matches earliest-time
-        ;; It's going to re-send that block (it *does* exist...right?)
-        (let [block (first un-ackd-blocks)
-              state' (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)]
-          (println "Prepping flow-control updates on\n"
-                   (assoc
-                    (select-keys (::specs/flow-control state')
-                                 [::specs/n-sec-per-block
-                                  ::specs/last-edge])
-                    ::specs/last-panic (-> state' ::specs/outgoing ::specs/last-panic))
-                   "\nwhere n-sec-per-block is a" (class (get-in state' [::specs/flow-control ::specs/n-sec-per-block])))
-          (assoc
-           ;; But first, it might adjust some of the globals.
-           (if (> recent (+ last-panic (* 4 rtt-timeout)))
-             ;; Need to update some of the related flow-control fields
-             (-> state'
-                 (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
-                 (assoc-in [::specs/outgoing ::specs/last-panic] recent)
-                 (assoc-in [::specs/flow-control ::specs/last-edge] recent))
-             ;; We haven't had another timeout since the last-panic.
-             ;; Don't adjust those dials.
-             state')
-           ::log/state log-state)))
+                                  ::un-ackd-block-count (count un-ackd-blocks)})
+            ;; This gets us to line 344
+            ;; It finds the first block that matches earliest-time
+            ;; It's going to re-send that block (it *does* exist...right?)
+            block (first un-ackd-blocks)
+            state' (assoc-in state [::specs/outgoing ::specs/next-block-queue] ::specs/un-ackd-blocks)
+            log-state (log/debug log-state
+                                   label
+                                   "Prepping flow-control updates"
+                                   (assoc
+                                    (select-keys (::specs/flow-control state')
+                                                 [::specs/n-sec-per-block
+                                                  ::specs/last-edge])
+                                    ::specs/last-panic (-> state' ::specs/outgoing ::specs/last-panic)
+                                    ::n-sec-per-block-class (-> state'
+                                                                ::specs/flow-control
+                                                                ::specs/n-sec-per-block
+                                                                class)))]
+        (assoc
+         ;; But first, it might adjust some of the globals.
+         (if (> recent (+ last-panic (* 4 rtt-timeout)))
+           ;; Need to update some of the related flow-control fields
+           (-> state'
+               (update-in [::specs/flow-control ::specs/n-sec-per-block] * 2)
+               (assoc-in [::specs/outgoing ::specs/last-panic] recent)
+               (assoc-in [::specs/flow-control ::specs/last-edge] recent))
+           ;; We haven't had another timeout since the last-panic.
+           ;; Don't adjust those dials.
+           state')
+         ::log/state log-state))
       ;; Honestly, it makes more sense to consolidate the
       ;; gap-buffer with any ACKs in this message before
       ;; looking for messages to resend.

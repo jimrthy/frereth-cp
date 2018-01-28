@@ -13,7 +13,6 @@
 
   But that makes it much more difficult to test."
   (:require [byte-streams :as b-s]
-            [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.client.cookie :as cookie]

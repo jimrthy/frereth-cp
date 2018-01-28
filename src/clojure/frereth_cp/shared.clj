@@ -2,7 +2,6 @@
   "For pieces shared among client, server, and messaging"
   (:require [byte-streams :as b-s]
             [clojure.java.io :as io]
-            [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
@@ -162,7 +161,7 @@ Needing to declare these things twice is annoying."
         ::K/int-64 (.writeLong dst v)
         ::K/zeroes (let [n (::K/length dscr)]
                      (log/debug "Getting ready to write " n " zeros to " dst " based on "
-                               (with-out-str (pprint dscr)))
+                                (util/pretty dscr))
                      (.writeZero dst n))
         (throw (ex-info "No matching clause" dscr)))
       (catch IllegalArgumentException ex
