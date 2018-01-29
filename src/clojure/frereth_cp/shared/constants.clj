@@ -47,6 +47,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+;;; Q: Why are these here instead of top-level shared?
+;;; A: Because they're used in here, and I want to avoid
+;;; circular dependencies.
+;;; Q: Would it make sense to have a dedicated shared.specs ns
+;;; that everything could use?
+;;; The way these things are split up now is a bit of a mess.
+
 (s/def ::client-nonce-suffix (s/and bytes?
                                     #(= (count %) client-nonce-suffix-length)))
 (s/def ::server-nonce-suffix (s/and bytes?

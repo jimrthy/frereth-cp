@@ -1,7 +1,6 @@
 (ns frereth-cp.shared
   "For pieces shared among client, server, and messaging"
   (:require [byte-streams :as b-s]
-            [clojure.java.io :as io]
             [clojure.spec.alpha :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
@@ -22,7 +21,7 @@
 
 ;; TODO: Uncomment this...most of the pieces in here are fairly
 ;; performance-sensitive
-(comment (set! *warn-on-reflection* true))
+(comment) (set! *warn-on-reflection* true)
 
 (def hello-header (.getBytes (str K/client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
@@ -48,6 +47,10 @@
                                    (throw (RuntimeException. (str n " too long"))))))
                              s)))
 (s/def ::extension (s/and bytes? #(= (count %) 16)))
+
+;;; TODO: The specs dealing with crypto things (like keys) belong in <s>either
+;;; 1. shared.crypto
+;;; 2.</s> shared.specs
 ;; Q: Worth adding a check to verify that it's a folder that exists on the classpath?
 (s/def ::keydir string?)
 (s/def ::long-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
@@ -320,28 +323,6 @@ allocated using default-packet-manager"
   {::working-nonce (byte-array K/nonce-length)
    ::text (byte-array 2048)})
 
-(declare slurp-bytes)
-(defn do-load-keypair
-  "Honestly, these should be stored with something like base64 encoding.
-
-And encrypted with a passphrase, of course.
-
-This really belongs in the crypto ns, but then where does slurp-bytes move?"
-  [keydir]
-  (if keydir
-    (let [secret (slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
-          pair (TweetNaclFast$Box/keyPair_fromSecretKey secret)]
-      (log/info "FIXME: Don't record this\n"
-                "Loaded secret key from file:\n"
-                (b-t/->string secret)
-                "which produced the following key pair:\n"
-                "Secret:\n"
-                (b-t/->string (.getSecretKey pair))
-                "Public:\n"
-                (b-t/->string (.getPublicKey pair)))
-      pair)
-    (crypto/random-key-pair)))
-
 ;;; encode-server name no longer seems to be used anywhere.
 ;;; TODO: Verify that and then eliminate it
 (s/fdef encode-server-name
@@ -378,26 +359,6 @@ Either based upon one previously stashed in keydir or random"
           tmp (byte-array n)]
       (crypto/random-bytes! tmp)
       (b-t/byte-copy! dst offset n tmp))))
-
-(defn slurp-bytes
-  "Slurp the bytes from a slurpable thing
-
-Copy/pasted from stackoverflow. Credit: Matt W-D.
-
-alt approach: Add dependency to org.apache.commons.io
-
-Or there's probably something similar in guava"
-  [bs]
-  (with-open [out (java.io.ByteArrayOutputStream.)]
-    (clojure.java.io/copy (clojure.java.io/input-stream bs) out)
-    (.toByteArray out)))
-
-(defn spit-bytes
-  "Spit bytes to a spittable thing"
-  [f bs]
-  (with-open [out (clojure.java.io/output-stream f)]
-    (with-open [in (clojure.java.io/input-stream bs)]
-      (clojure.java.io/copy in out))))
 
 (defn zero-bytes
   [n]

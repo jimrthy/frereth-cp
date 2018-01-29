@@ -1,10 +1,12 @@
 (ns frereth-cp.shared.crypto
   "Wrap up the low-level crypto functions"
   (:require [byte-streams :as b-s]
+            [clojure.java.io :as io]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
@@ -87,6 +89,48 @@
   (let [shared (byte-array K/shared-key-length)]
     (TweetNaclFast/crypto_box_beforenm shared public secret)
     shared))
+
+(s/fdef random-key-pair
+        :args (s/cat)
+        :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
+(defn random-key-pair
+  "Generates a pair of random keys"
+  ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair []
+  (TweetNaclFast$Box/keyPair))
+
+(s/fdef do-load-keypair
+        :args (s/cat :key-dir-name string?)
+        :ret #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
+(defn do-load-keypair
+  "Honestly, these should be stored with something like base64 encoding.
+
+And encrypted with a passphrase, of course.
+
+This really belongs in the crypto ns, but then where does slurp-bytes move?"
+  [keydir]
+  (if keydir
+    (let [secret (util/slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
+          pair (TweetNaclFast$Box/keyPair_fromSecretKey secret)]
+      ;; TODO: Switch to functional logging
+      (log/info "FIXME: Don't record this\n"
+                "Loaded secret key from file:\n"
+                (b-t/->string secret)
+                "which produced the following key pair:\n"
+                "Secret:\n"
+                (b-t/->string (.getSecretKey pair))
+                "Public:\n"
+                (b-t/->string (.getPublicKey pair)))
+      pair)
+    (random-key-pair)))
+
+(comment
+  ;; Cheap way to save a key to disk in a way that's
+  ;; easily loadable by do-load-keypair
+  (let [pair (random-key-pair)
+        public (.getPublicKey pair)
+        secret (.getSecretKey pair)]
+    (util/spit-bytes "$HOME/projects/snowcrash/cp/test/client-test/.expertsonly/secretkey"
+                     secret)))
 
 (s/fdef open-after
         :args (s/cat :box bytes?
@@ -231,14 +275,6 @@ which I'm really not qualified to touch."
   "Returns a byte array suitable for use as a random key"
   []
   (random-array K/key-length))
-
-(s/fdef random-key-pair
-        :args (s/cat)
-        :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
-(defn random-key-pair
-  "Generates a pair of random keys"
-  ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair []
-  (TweetNaclFast$Box/keyPair))
 
 (defn random-mod
   "Returns a cryptographically secure random number between 0 and n

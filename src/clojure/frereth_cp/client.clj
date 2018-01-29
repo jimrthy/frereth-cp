@@ -63,8 +63,8 @@
 ;; 1) a writer channel we can use to send messages to the child.
 ;; 2) a reader channel that the child will use to send byte
 ;; arrays/bufs to us
-(s/def ::child-spawner (s/fspec :args (s/cat :this ::state-agent)
-                                :ret (s/keys :req [::child
+(s/def ::child-spawner (s/fspec :args (s/cat :this ::state/state-agent)
+                                :ret (s/keys :req [::state/child
                                                    ::reader
                                                    ::release
                                                    ::writer])))

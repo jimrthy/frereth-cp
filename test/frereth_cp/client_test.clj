@@ -4,43 +4,40 @@
             [frereth-cp.client :as clnt]
             [frereth-cp.client.cookie :as cookie]
             [frereth-cp.client.hello :as hello]
+            [frereth-cp.client.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))
 
+(s/fdef raw-client
+        :args (s/cat :child-spawner ::clnt/child-spawner
+                     :server-keys ))
 (defn raw-client
-  [child-spawner]
+  [child-spawner
+   {:keys [::shared/public-long ::shared/public-short]
+    :as server-keys}]
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
                                       0x09 0x0a 0x0b 0x0c
                                       0x0d 0x0e 0x0f 0x10])
-        server-long-pk (byte-array [37 108 -55 -28 25 -45 24 93
-                                    51 -105 -107 -125 -120 -41 83 -46
-                                    -23 -72 109 -58 -100 87 115 95
-                                    89 -74 -21 -33 20 21 110 95])
-        server-name (shared/encode-server-name "hypothet.i.cal")]
-    ;; This fails now, because it's missing a required
-    ;; ::clnt/server-long-term-pk
-    (throw (RuntimeException. "Get this running again"))
+        server-name (shared/encode-server-name "hypothet.i.cal")
+        long-pair (crypto/random-key-pair)]
     (clnt/ctor {;; Aleph supplies a single bi-directional channel.
                 ;; My tests break trying to use that here.
                 ;; For now, take a step back and get them working
-                ::clnt/chan<-server (strm/stream)
-                ::clnt/chan->server (strm/stream)
+                ::state/chan<-server (strm/stream)
+                ::state/chan->server (strm/stream)
+                ::shared/my-keys {::shared/keydir "client-test"
+                                  ::shared/long-pair long-pair
+                                  ::K/server-name server-name}
                 ::clnt/child-spawner child-spawner
                 ::clnt/server-extension server-extension
-                ;; Q: Where do I get the server's public key?
-                ;; A: Right now, I just have the secret key's 32 bytes encoded as
-                ;; the alphabet.
-                ;; TODO: Really need to mirror what the code does to load the
-                ;; secret key from a file.
-                ;; Then I can just generate a random key pair for the server.
-                ;; Use the key-put functionality to store the secret, then
-                ;; hard-code the public key here.
-                ::clnt/server-security {::clnt/server-long-term-pk server-long-pk
-                                        ::shared/server-name server-name}})))
+                ::state/server-security {::clnt/server-long-term-pk public-long
+                                         ::K/server-name server-name
+                                         ::state/server-short-term-pk public-short}})))
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"

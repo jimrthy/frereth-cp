@@ -18,6 +18,13 @@
   []
   (System/getProperty "java.runtime.version"))
 
+(s/fdef get-cpu-count
+        :ret nat-int?)
+(defn get-cpu-count
+  []
+  (let [^Runtime rt (Runtime/getRuntime)]
+    (.availableProcessors rt)))
+
 (defn get-current-thread
   []
   (.getName (Thread/currentThread)))
@@ -104,9 +111,22 @@ Falling back to standard")
             base
             (get-stack-trace ex))))
 
-(s/fdef get-cpu-count
-        :ret nat-int?)
-(defn get-cpu-count
-  []
-  (let [^Runtime rt (Runtime/getRuntime)]
-    (.availableProcessors rt)))
+(defn slurp-bytes
+  "Slurp the bytes from a slurpable thing
+
+Copy/pasted from stackoverflow. Credit: Matt W-D.
+
+alt approach: Add dependency to org.apache.commons.io
+
+Or there's probably something similar in guava"
+  [bs]
+  (with-open [out (java.io.ByteArrayOutputStream.)]
+    (clojure.java.io/copy (clojure.java.io/input-stream bs) out)
+    (.toByteArray out)))
+
+(defn spit-bytes
+  "Spit bytes to a spittable thing"
+  [f bs]
+  (with-open [out (clojure.java.io/output-stream f)]
+    (with-open [in (clojure.java.io/input-stream bs)]
+      (clojure.java.io/copy in out))))

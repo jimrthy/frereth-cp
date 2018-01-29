@@ -53,11 +53,15 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;; Q: Is there any reason at all to store this?
 (s/def ::server-short-term-pk ::shared/public-key)
 (s/def ::server-security (s/keys :req [::server-long-term-pk
-                                       ;; Q: Is there a valid reason for this to live here?
-                                       ;; I can discard it after sending the vouch, can't I?
-                                       ::server-cookie
                                        ::shared/server-name
-                                       ::server-short-term-pk]))
+                                       ::server-short-term-pk]
+                                 ;; Q: Is there a valid reason for this to live here?
+                                 ;; Q: I can discard it after sending the vouch, can't I?
+                                 ;; A: Yes.
+                                 ;; Q: Do I want to?
+                                 ;; A: Well...keeping it seems like a potential security hole
+                                 ;; TODO: Make it go away
+                                 :opt [::server-cookie]))
 
 (s/def ::client-long<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-long ::shared/shared-secret)

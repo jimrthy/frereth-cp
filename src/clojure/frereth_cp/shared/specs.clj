@@ -9,3 +9,8 @@ This really seems like a bad road to go down."
   #(instance? klass %))
 
 (s/def ::atom (class-predicate (class (atom nil))))
+
+(s/def ::public-long bytes?)
+(s/def ::public-short bytes?)
+(s/def ::peer-keys (s/keys :req [::public-long
+                                 ::public-short]))
