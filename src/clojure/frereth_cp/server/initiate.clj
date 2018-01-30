@@ -8,6 +8,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -445,9 +446,9 @@ Note that that includes TODOs re:
                                                                 ;; keypair here again.
                                                                 ;; But I already did that during a call to configure-shared-secrets
                                                                 ::state/client-security (into (::state/client-security state)
-                                                                                              #:frereth-cp.shared {:long-pk client-long-pk
-                                                                                                                   :short-pk client-short-pk
-                                                                                                                   :frereth-cp.server/server-short-sk server-short-sk}))
+                                                                                              #:frereth-cp.shared.specs {:public-long client-long-pk
+                                                                                                                         :public-short client-short-pk
+                                                                                                                         :frereth-cp.server/server-short-sk server-short-sk}))
                                        child-reader (::state/write->child child)]
                                    ;; This doesn't actually matter. That field should probably be
                                    ;; considered a private black-box member from our perspective.

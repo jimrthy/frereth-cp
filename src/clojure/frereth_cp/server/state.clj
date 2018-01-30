@@ -7,6 +7,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.specs :as shared-specs]
             [manifold.stream :as strm]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -21,14 +22,14 @@
                                      ::minute-key
                                      ::last-minute-key]))
 
-(s/def ::server-short-sk ::crypto/crypto-key)
+(s/def ::server-short-sk ::shared-specs/crypto-key)
 
 ;; Q: Do I really want to store the client's long-term PK?
 ;; A: Reference implementation has was looks like TODO items
 ;; about things like caching, policy management, and validating.
 ;; So almost definitely.
-(s/def ::client-security (s/keys :opt [::shared/long-pk
-                                       ::shared/short-pk
+(s/def ::client-security (s/keys :opt [::shared-specs/public-long
+                                       ::shared-specs/public-short
                                        ::server-short-sk]))
 
 ;; This seems like something that should basically be defined in

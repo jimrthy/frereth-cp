@@ -48,9 +48,9 @@
                              s)))
 (s/def ::extension (s/and bytes? #(= (count %) 16)))
 
-;;; TODO: The specs dealing with crypto things (like keys) belong in <s>either
-;;; 1. shared.crypto
-;;; 2.</s> shared.specs
+;;; TODO: The specs dealing with crypto things (like keys) belong in
+;;; shared.specs
+
 ;; Q: Worth adding a check to verify that it's a folder that exists on the classpath?
 (s/def ::keydir string?)
 (s/def ::long-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
@@ -65,6 +65,9 @@
                                ::K/server-name
                                ::short-pair]))
 
+;;; Note that the definition of crypto-key has moved to shared.specs.
+;;; Which means this really can't compile any longer.
+;;; Might as well rip the bandaid off
 (s/def ::long-pk ::crypto/crypto-key)
 (s/def ::short-pk ::crypto/crypto-key)
 

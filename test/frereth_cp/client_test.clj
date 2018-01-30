@@ -1,5 +1,6 @@
 (ns frereth-cp.client-test
   (:require [clojure.pprint :refer (pprint)]
+            [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as clnt]
             [frereth-cp.client.cookie :as cookie]
@@ -9,15 +10,16 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.specs :as shared-specs]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))
 
 (s/fdef raw-client
         :args (s/cat :child-spawner ::clnt/child-spawner
-                     :server-keys ))
+                     :server-keys ::shared-specs/peer-keys))
 (defn raw-client
   [child-spawner
-   {:keys [::shared/public-long ::shared/public-short]
+   {:keys [::shared-specs/public-long ::shared-specs/public-short]
     :as server-keys}]
   (let [server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
@@ -41,7 +43,7 @@
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"
-    (let [client-agent (raw-client nil)
+    (let [client-agent (raw-client nil (crypto/random-keys))
           client @client-agent
           {:keys [::clnt/chan<-server ::clnt/chan->server]} client]
         (strm/on-drained chan<-server

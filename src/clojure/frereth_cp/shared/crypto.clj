@@ -18,9 +18,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(s/def ::crypto-key (s/and bytes?
-                           #(= (count %) K/key-length)))
-
+(s/def ::long-short #{::long ::short})
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -97,6 +95,19 @@
   "Generates a pair of random keys"
   ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair []
   (TweetNaclFast$Box/keyPair))
+
+(s/fdef random-keys
+        :args (s/cat :which ::long-short)
+        :ret (s/or :long ::specs/my-long-keys
+                   :short ::specs/my-short-keys))
+(defn random-keys
+  [which]
+  (let [pair (random-key-pair)
+        namespace "frereth-cp.shared-specs"
+        pk (keyword namespace (str "my-" (name which) "-public"))
+        sk (keyword namespace (str "my-" (name which) "-secret"))]
+    {pk (.getPublicKey pair)
+     sk (.getSecretKey pair)}))
 
 (s/fdef do-load-keypair
         :args (s/cat :key-dir-name string?)
@@ -226,7 +237,7 @@ which I'm really not qualified to touch."
                                               (count %)))
                      :suffix-buffer #(instance? ByteBuf %)
                      :crypto-buffer #(instance? ByteBuf %)
-                     :shared-key ::crypto-key)
+                     :shared-key ::specs/crypto-key)
         :ret (s/nilable #(instance? ByteBuf %)))
 (defn open-crypto-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
