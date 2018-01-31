@@ -9,6 +9,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
@@ -52,16 +53,15 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::server-cookie any?)
 ;;; Q: Is there any reason at all to store this?
 (s/def ::server-short-term-pk ::shared/public-key)
-(s/def ::server-security (s/keys :req [::server-long-term-pk
-                                       ::shared/server-name
-                                       ::server-short-term-pk]
-                                 ;; Q: Is there a valid reason for this to live here?
-                                 ;; Q: I can discard it after sending the vouch, can't I?
-                                 ;; A: Yes.
-                                 ;; Q: Do I want to?
-                                 ;; A: Well...keeping it seems like a potential security hole
-                                 ;; TODO: Make it go away
-                                 :opt [::server-cookie]))
+(s/def ::server-security (s/merge ::specs/peer-keys
+                                  (s/keys :req [::shared/server-name]
+                                          ;; Q: Is there a valid reason for this to live here?
+                                          ;; Q: I can discard it after sending the vouch, can't I?
+                                          ;; A: Yes.
+                                          ;; Q: Do I want to?
+                                          ;; A: Well...keeping it seems like a potential security hole
+                                          ;; TODO: Make it go away
+                                          :opt [::server-cookie])))
 
 (s/def ::client-long<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-long ::shared/shared-secret)
@@ -218,8 +218,7 @@ TODO: Need to ask around about that."
               server-short-term-pk (byte-array K/key-length)
               server-cookie (byte-array K/server-cookie-length)
               server-security (assoc (::server-security this)
-                                     ::server-short-term-pk
-                                     server-short-term-pk,
+                                     ::specs/public-short server-short-term-pk,
                                      ::server-cookie server-cookie)
               {^ByteBuf s' ::K/s'
                ^ByteBuf black-box ::K/black-box} extracted]
@@ -302,7 +301,7 @@ TODO: Need to ask around about that."
       (do
         (log/info "Setting up working nonce " working-nonce)
         (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
-        (shared/safe-nonce nonce-suffix keydir 0)
+        (crypto/safe-nonce nonce-suffix keydir 0)
         (b-t/byte-copy! working-nonce
                         K/server-nonce-prefix-length
                         K/server-nonce-suffix-length nonce-suffix)
@@ -373,7 +372,7 @@ TODO: Need to ask around about that."
       (let [{:keys [::shared/my-keys]} this
             server-short (get-in this
                                  [::server-security
-                                  ::server-short-term-pk])]
+                                  ::specs/public-short])]
         (log/debug "Managed to decrypt the cookie")
         (if server-short
           (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
@@ -394,7 +393,7 @@ TODO: Need to ask around about that."
             ;; can switch to sending those.
             (into this (build-vouch this)))
           (do
-            (log/error (str "Missing server-short-term-pk among\n"
+            (log/error (str "Missing ::specs/public-short among\n"
                             (keys (::server-security this))
                             "\namong bigger-picture\n"
                             (keys this)))
@@ -416,7 +415,7 @@ TODO: Need to ask around about that."
 (defn load-keys
   [my-keys]
   (let [key-dir (::shared/keydir my-keys)
-        long-pair (shared/do-load-keypair key-dir)
+        long-pair (crypto/do-load-keypair key-dir)
         short-pair (crypto/random-key-pair)]
     (log/info (str "Loaded long-term client key pair from '"
                    key-dir "'"))
@@ -436,41 +435,40 @@ TODO: Need to ask around about that."
   [{:keys [::shared/my-keys
            ::server-security]
     :as this}]
-  (let [long-pk (::server-long-term-pk server-security)]
-    (when-not long-pk
-      (throw (ex-info (str "Missing ::server-long-term-pk among"
+  (let [server-long-term-pk (::specs/public-long server-security)]
+    (when-not server-long-term-pk
+      (throw (ex-info (str "Missing ::specs/public-long among"
                            (keys server-security))
-                      {::this this}))))
-  (let [server-long-term-pk (::server-long-term-pk server-security)
-        ^TweetNaclFast$Box$KeyPair long-pair (::shared/long-pair my-keys)
-        ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)
-        long-shared  (crypto/box-prepare
-                      server-long-term-pk
-                      (.getSecretKey long-pair))]
-    (log/info (str "Server long-term public key:\n"
-                   (b-t/->string server-long-term-pk)
-                   "My long-term public key:\n"
-                   (b-t/->string (.getPublicKey long-pair))
-                   "Combined, they produced this shared secret:\n"
-                   (b-t/->string long-shared)))
-    (into this
-          {::child-packets []
-           ::client-extension-load-time 0
-           ::recent (System/nanoTime)
-           ;; This seems like something that we should be able to set here.
-           ;; djb's docs say that it's a security matter, like connecting
-           ;; from a random port.
-           ;; Hopefully, someday, operating systems will have some mechanism
-           ;; for rotating these automatically
-           ;; Q: Is nil really better than just picking something random
-           ;; here?
-           ;; A: Who am I to argue with one of the experts?
-           ::shared/extension nil
-           ::shared-secrets {::client-long<->server-long long-shared
-                             ::client-short<->server-long (crypto/box-prepare
-                                                           server-long-term-pk
-                                                           (.getSecretKey short-pair))}
-           ::server-security server-security})))
+                      {::have server-security})))
+    (let [^TweetNaclFast$Box$KeyPair long-pair (::shared/long-pair my-keys)
+          ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)
+          long-shared  (crypto/box-prepare
+                        server-long-term-pk
+                        (.getSecretKey long-pair))]
+      (log/info (str "Server long-term public key:\n"
+                     (b-t/->string server-long-term-pk)
+                     "My long-term public key:\n"
+                     (b-t/->string (.getPublicKey long-pair))
+                     "Combined, they produced this shared secret:\n"
+                     (b-t/->string long-shared)))
+      (into this
+            {::child-packets []
+             ::client-extension-load-time 0
+             ::recent (System/nanoTime)
+             ;; This seems like something that we should be able to set here.
+             ;; djb's docs say that it's a security matter, like connecting
+             ;; from a random port.
+             ;; Hopefully, someday, operating systems will have some mechanism
+             ;; for rotating these automatically
+             ;; Q: Is nil really better than just picking something random
+             ;; here?
+             ;; A: Who am I to argue with one of the experts?
+             ::shared/extension nil
+             ::shared-secrets {::client-long<->server-long long-shared
+                               ::client-short<->server-long (crypto/box-prepare
+                                                             server-long-term-pk
+                                                             (.getSecretKey short-pair))}
+             ::server-security server-security}))))
 
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.

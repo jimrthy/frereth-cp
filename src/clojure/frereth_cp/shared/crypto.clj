@@ -4,6 +4,7 @@
             [clojure.java.io :as io]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
+            [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.specs :as specs]
@@ -88,6 +89,26 @@
     (TweetNaclFast/crypto_box_beforenm shared public secret)
     shared))
 
+(defn build-crypto-box
+  "Compose a map into bytes and encrypt it
+
+Really belongs in crypto.
+
+But it depends on compose, which would set up circular dependencies"
+  [tmplt src ^ByteBuf dst key-pair nonce-prefix nonce-suffix]
+  {:pre [dst]}
+  (let [^ByteBuf buffer (Unpooled/wrappedBuffer dst)]
+    (.writerIndex buffer 0)
+    (shared/compose tmplt src buffer)
+    (let [n (.readableBytes buffer)
+          nonce (byte-array K/nonce-length)]
+      (b-t/byte-copy! nonce nonce-prefix)
+      (b-t/byte-copy! nonce
+                      (count nonce-prefix)
+                      (count nonce-suffix)
+                      nonce-suffix)
+      (box-after key-pair dst n nonce))))
+
 (s/fdef random-key-pair
         :args (s/cat)
         :ret com.iwebpp.crypto.TweetNaclFast$Box$KeyPair)
@@ -103,21 +124,20 @@
 (defn random-keys
   [which]
   (let [pair (random-key-pair)
-        namespace "frereth-cp.shared-specs"
+        namespace "frereth-cp.shared.specs"
         pk (keyword namespace (str "my-" (name which) "-public"))
         sk (keyword namespace (str "my-" (name which) "-secret"))]
     {pk (.getPublicKey pair)
      sk (.getSecretKey pair)}))
+(comment
+  (random-keys ::long)
+  )
 
 (s/fdef do-load-keypair
         :args (s/cat :key-dir-name string?)
         :ret #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
 (defn do-load-keypair
-  "Honestly, these should be stored with something like base64 encoding.
-
-And encrypted with a passphrase, of course.
-
-This really belongs in the crypto ns, but then where does slurp-bytes move?"
+  "Honestly, these should be stored with something like base64 encoding"
   [keydir]
   (if keydir
     (let [secret (util/slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
@@ -132,6 +152,9 @@ This really belongs in the crypto ns, but then where does slurp-bytes move?"
                 "Public:\n"
                 (b-t/->string (.getPublicKey pair)))
       pair)
+    ;; FIXME: This really should call random-keys instead.
+    ;; Q: Shouldn't it?
+    ;; A: Well, that depends on context
     (random-key-pair)))
 
 (comment
@@ -324,6 +347,20 @@ Or maybe that's (dec n)"
   "Generates a number suitable for use as a cryptographically secure random nonce"
   []
   (long (random-mod K/max-random-nonce)))
+
+(defn safe-nonce
+  "Produce a nonce that's theoretically safe.
+
+Either based upon one previously stashed in keydir or random"
+  [dst keydir offset]
+  (if keydir
+    ;; Read the last saved version from something in keydir
+    (throw (RuntimeException. "Get real safe-nonce implementation translated"))
+    ;; TODO: Switch to using ByteBuf for this sort of thing
+    (let [n (- (count dst) offset)
+          tmp (byte-array n)]
+      (random-bytes! tmp)
+      (b-t/byte-copy! dst offset n tmp))))
 
 (defn secret-box
   "Symmetric encryption

@@ -6,9 +6,7 @@
             [clojure.tools.logging :as log]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
-            ;; Honestly, this has no place here.
-            ;; But it's useful for refactoring
-            [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
@@ -35,7 +33,8 @@
 (def nanos-in-second (* nanos-in-milli millis-in-second))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;; Specs
+;;;; TODO: Refactor these into shared.specs
 
 (s/def ::dns-string (s/and string?
                            #(> (count %) 0)
@@ -68,8 +67,8 @@
 ;;; Note that the definition of crypto-key has moved to shared.specs.
 ;;; Which means this really can't compile any longer.
 ;;; Might as well rip the bandaid off
-(s/def ::long-pk ::crypto/crypto-key)
-(s/def ::short-pk ::crypto/crypto-key)
+(s/def ::long-pk ::specs/crypto-key)
+(s/def ::short-pk ::specs/crypto-key)
 
 ;; "Recent" timestamp, in nanoseconds
 (s/def ::recent integer?)
@@ -207,6 +206,8 @@ Needing to declare these things twice is annoying."
  [bs]
  (with-out-str (b-s/print-bytes bs)))
 
+;;; TODO: Refactor compose and decompose (along with their
+;;; support functions) into their own ns.
 (defn compose
   "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt"
   ^ByteBuf [tmplt fields ^ByteBuf dst]
@@ -223,26 +224,6 @@ Needing to declare these things twice is annoying."
    (partial composition-reduction tmplt fields dst)
    (keys tmplt))
   dst)
-
-(defn build-crypto-box
-  "Compose a map into bytes and encrypt it
-
-Really belongs in crypto.
-
-But it depends on compose, which would set up circular dependencies"
-  [tmplt src ^ByteBuf dst key-pair nonce-prefix nonce-suffix]
-  {:pre [dst]}
-  (let [^ByteBuf buffer (Unpooled/wrappedBuffer dst)]
-    (.writerIndex buffer 0)
-    (compose tmplt src buffer)
-    (let [n (.readableBytes buffer)
-          nonce (byte-array K/nonce-length)]
-      (b-t/byte-copy! nonce nonce-prefix)
-      (b-t/byte-copy! nonce
-                      (count nonce-prefix)
-                      (count nonce-suffix)
-                      nonce-suffix)
-      (crypto/box-after key-pair dst n nonce))))
 
 (s/fdef decompose
         ;; TODO: tmplt needs a spec for the values
@@ -349,40 +330,6 @@ allocated using default-packet-manager"
             (swap! pos inc)))))
     result))
 
-(defn safe-nonce
-  "Produce a nonce that's theoretically safe.
-
-Either based upon one previously stashed in keydir or random"
-  [dst keydir offset]
-  (if keydir
-    ;; Read the last saved version from something in keydir
-    (throw (RuntimeException. "Get real safe-nonce implementation translated"))
-    ;; TODO: Switch to using ByteBuf for this sort of thing
-    (let [n (- (count dst) offset)
-          tmp (byte-array n)]
-      (crypto/random-bytes! tmp)
-      (b-t/byte-copy! dst offset n tmp))))
-
-(defn zero-bytes
-  [n]
-  (byte-array n (repeat 0)))
-
-(def ^{:tag 'bytes} all-zeros
-  "To avoid creating this over and over.
-
-Q: Refactor this to a function?
-(note that that makes life quite a bit more difficult for zero-out!)"
-  (zero-bytes 128))
-
-(defn zero-out!
-  "Shove zeros into the byte-array at dst, from indexes start to end"
-  [dst start end]
-  (let [n (- end start)]
-    (when (<= (count all-zeros) n)
-      (alter-var-root all-zeros
-                      (fn [_] (zero-bytes n)))))
-  (b-t/byte-copy! dst start end all-zeros))
-
 (s/fdef format-map-for-logging
         :args (s/cat :src map?)
         :fn #(= (keys (:ret %))
@@ -407,3 +354,23 @@ Q: Refactor this to a function?
                        :else v))))
           {}
           (keys src)))
+
+(defn zero-bytes
+  [n]
+  (byte-array n (repeat 0)))
+
+(def ^{:tag 'bytes} all-zeros
+  "To avoid creating this over and over.
+
+Q: Refactor this to a function?
+(note that that makes life quite a bit more difficult for zero-out!)"
+  (zero-bytes 128))
+
+(defn zero-out!
+  "Shove zeros into the byte-array at dst, from indexes start to end"
+  [dst start end]
+  (let [n (- end start)]
+    (when (<= (count all-zeros) n)
+      (alter-var-root all-zeros
+                      (fn [_] (zero-bytes n)))))
+  (b-t/byte-copy! dst start end all-zeros))

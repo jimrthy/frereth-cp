@@ -28,7 +28,7 @@
                                         -23 -72 109 -58 -100 87 115 95
                                         89 -74 -21 -33 20 21 110 95])
             keydir "curve-test"
-            server-pair (shared/do-load-keypair keydir)
+            server-pair (crypto/do-load-keypair keydir)
             client-pair (crypto/random-key-pair)
             client-shared (TweetNaclFast$Box. server-long-pk (.getSecretKey client-pair))
             server-shared (TweetNaclFast$Box.
@@ -49,7 +49,7 @@
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         keydir "curve-test"
-        server-pair (shared/do-load-keypair keydir)
+        server-pair (crypto/do-load-keypair keydir)
         pk (.getPublicKey server-pair)]
     (testing "Disk matches hard-coded in-memory"
         (is (b-t/bytes= pk server-long-pk)))

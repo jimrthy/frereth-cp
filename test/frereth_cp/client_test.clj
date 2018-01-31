@@ -10,6 +10,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as shared-specs]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))
@@ -37,43 +38,55 @@
                                   ::K/server-name server-name}
                 ::clnt/child-spawner child-spawner
                 ::clnt/server-extension server-extension
-                ::state/server-security {::clnt/server-long-term-pk public-long
-                                         ::K/server-name server-name
-                                         ::state/server-short-term-pk public-short}})))
+                ::state/server-security {::K/server-name server-name
+                                         ::shared-specs/public-long public-long
+                                         ::state/public-short public-short}})))
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"
-    (let [client-agent (raw-client nil (crypto/random-keys))
+    (let [long-srvr-keys (crypto/random-keys ::crypto/long)
+          pk-long (::shared-specs/my-long-public long-srvr-keys)
+          shrt-srvr-keys (crypto/random-keys ::crypto/short)
+          pk-shrt (::shared-specs/my-short-public shrt-srvr-keys)
+          client-agent (raw-client nil {::shared-specs/public-long pk-long
+                                        ::shared-specs/public-short pk-shrt})
           client @client-agent
-          {:keys [::clnt/chan<-server ::clnt/chan->server]} client]
-        (strm/on-drained chan<-server
-                         #(send client-agent clnt/server-closed!))
-        ;; Q: Doesn't this also need to send the packet?
-        ;; A: Probably.
-        ;; Trying to send a bogus response fails below.
-        (send client-agent hello/do-build-hello)
-        (if (await-for 150 client-agent)
-          (do
-            (is (not (agent-error client-agent)))
-            (let [cookie-waiter (dfrd/future (cookie/wait-for-cookie))
-                  ;; Q: Worth building a real Cookie response packet instead?
-                  basic-check "Did this work?"
-                  fut (dfrd/future (let [d (strm/try-put! chan<-server basic-check 150 ::timed-out)]
-                                     ;; Important detail:
-                                     ;; This test fails, if you look at the actual output in the
-                                     ;; REPL.
-                                     ;; But it looks like it's succeeding in CIDER.
-                                     (dfrd/on-realized d
-                                                       #(is (not= % ::timed-out))
-                                                       #(is false (str "put! " %)))))]
-              ;; TODO: Need to make sure both cookie-waiter and fut resolve
-              ;; Q: Should they be promises?
-              (is false "Get this working, for real")
-              (let [d' (strm/try-take! chan->server ::nada 200 ::response-timed-out)]
-                (dfrd/on-realized d'
-                                  #(is (= % basic-check))
-                                  #(is false (str "take! " %))))))
-          (is false "Timed out waiting for client agent to build HELLO packet")))))
+          {:keys [::state/chan<-server ::clnt/chan->server]} client]
+      (when-not chan<-server
+        (throw (ex-info "Missing from-server channel"
+                        client)))
+      (strm/on-drained chan<-server
+                       #(send client-agent clnt/server-closed!))
+      ;; Q: Doesn't this also need to send the packet?
+      ;; A: Probably.
+      ;; Trying to send a bogus response fails below.
+      (send client-agent hello/do-build-hello)
+      (if (await-for 150 client-agent)
+        (do
+          (is (not (agent-error client-agent)))
+          (let [cookie-waiter (dfrd/future (cookie/wait-for-cookie))
+                ;; Q: Worth building a real Cookie response packet instead?
+                basic-check "Did this work?"
+                fut (dfrd/future (let [d (strm/try-put! chan<-server basic-check 150 ::timed-out)]
+                                   ;; Important detail:
+                                   ;; This test fails, if you look at the actual output in the
+                                   ;; REPL.
+                                   ;; But it looks like it's succeeding in CIDER.
+                                   (dfrd/on-realized d
+                                                     #(is (not= % ::timed-out))
+                                                     #(is false (str "put! " %)))))]
+            ;; TODO: Need to make sure both cookie-waiter and fut resolve
+            ;; Q: Should they be promises?
+            (is false "Get this working, for real")
+            (let [d' (strm/try-take! chan->server ::nada 200 ::response-timed-out)]
+              (dfrd/on-realized d'
+                                #(is (= % basic-check))
+                                #(is false (str "take! " %))))))
+        (is false (str "Timed out waiting for client agent\n"
+                       (if-let [problem (agent-error client-agent)]
+                         (log/exception-details problem)
+                         @client-agent)
+                       "\nto build HELLO packet"))))))
 
 (deftest build-hello
   (testing "Can I build a Hello packet?"

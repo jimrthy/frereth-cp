@@ -267,7 +267,7 @@
 
   ;; So we're starting by loading up the long-term keys
   (let [keydir (::shared/keydir my-keys)
-        long-pair (shared/do-load-keypair keydir)
+        long-pair (crypto/do-load-keypair keydir)
         this (assoc-in this [::shared/my-keys ::shared/long-pair] long-pair)
         almost (assoc this ::state/cookie-cutter (state/randomized-cookie-cutter))]
     (log/info "Kicking off event loop. packet-management:" (::shared/packet-management almost))

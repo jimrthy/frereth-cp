@@ -5,7 +5,8 @@
             [frereth-cp.client.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K])
+            [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.crypto :as crypto])
   (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
 
@@ -35,7 +36,7 @@
                    "\nInner Nonce Suffix:\n" (b-t/->string inner-nonce-suffix)
                    "FIXME: Do not log this!!\n"
                    "Shared secret:\n" (b-t/->string secret)))
-    (shared/build-crypto-box tmplt
+    (crypto/build-crypto-box tmplt
                              src
                              (::shared/text work-area)
                              secret
