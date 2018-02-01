@@ -13,7 +13,7 @@
 
 (set! *warn-on-reflection* true)
 
-(defn build-raw-hello
+(defn build-raw
   [{:keys [::state/server-extension
            ::shared/extension
            ::shared/my-keys
@@ -24,7 +24,7 @@
   (if-let [{:keys [::state/server-security]} this]
     (log/debug "server-security for raw-hello:" server-security)
     (log/warn "Missing server-security among" (keys this)
-              "\ninn" this))
+              "\nin\n" this))
 
   (let [my-short<->their-long (::state/client-short<->server-long shared-secrets)
         _ (assert my-short<->their-long)
@@ -60,13 +60,13 @@
                      :short-nonce integer?
                      :working-nonce bytes?)
         :ret ::state/state)
-(defn build-actual-hello-packet
+(defn build-actual-packet
   [{:keys [::shared/packet-management]
     :as this}
    short-term-nonce
    working-nonce]
   (assert packet-management)
-  (let [raw-hello (build-raw-hello this short-term-nonce working-nonce)
+  (let [raw-hello (build-raw this short-term-nonce working-nonce)
         {packet ::shared/packet} packet-management]
     (assert packet)
     (log/info (str "Building Hello based on\n"
@@ -91,9 +91,9 @@ Note that this is really called for side-effects"
     (log/info (str short-term-nonce " packed into\n"
                    (b-t/->string working-nonce)))
 
-    (let [packet (build-actual-hello-packet this
-                                            short-term-nonce
-                                            working-nonce)]
+    (let [packet (build-actual-packet this
+                                      short-term-nonce
+                                      working-nonce)]
       (log/info "hello packet built inside the agent. Returning/updating")
       (update this ::shared/packet-management
               (fn [current]

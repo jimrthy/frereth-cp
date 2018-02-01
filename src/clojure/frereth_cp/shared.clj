@@ -135,6 +135,23 @@ Needing to declare these things twice is annoying."
   (let [dscr (k tmplt)
         cnvrtr (::K/type dscr)
         ^bytes v (k fields)]
+    ;; An assertion error here is better than killing the JVM
+    ;; through a SIGSEGV, which is what this would do
+    (assert (or (= ::K/zeroes cnvrtr)
+                v) (str "Composing from '"
+                   (pr-str v)
+                   "' (a "
+                   (pr-str (class v))
+                   ")\nbased on "
+                   k
+                   " among\n"
+                   (keys fields)
+                   "\nto "
+                   dst
+                   "\nbased on "
+                   cnvrtr
+                   "\nfor\n"
+                   dscr))
     (try
       (case cnvrtr
         ::K/bytes (let [^Long n (::K/length dscr)
