@@ -7,6 +7,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as util])
   (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair))
 
@@ -20,6 +21,10 @@
     :as this}
    short-term-nonce
    working-nonce]
+  (if-let [{:keys [::state/server-security]} this]
+    (log/debug "server-security for raw-hello:" server-security)
+    (log/warn "Missing server-security among" (keys this)
+              "\ninn" this))
 
   (let [my-short<->their-long (::state/client-short<->server-long shared-secrets)
         _ (assert my-short<->their-long)
@@ -37,7 +42,7 @@
                      b-t/->string)
                  "\nto\n"
                  (b-t/->string (get-in this [::state/server-security
-                                             ::state/server-long-term-pk]))
+                                             ::shared-specs/public-long]))
                  "\nshared\n"
                  (b-t/->string my-short<->their-long))]
     (log/info msg)
@@ -86,7 +91,9 @@ Note that this is really called for side-effects"
     (log/info (str short-term-nonce " packed into\n"
                    (b-t/->string working-nonce)))
 
-    (let [packet (build-actual-hello-packet this short-term-nonce working-nonce)]
+    (let [packet (build-actual-hello-packet this
+                                            short-term-nonce
+                                            working-nonce)]
       (log/info "hello packet built inside the agent. Returning/updating")
       (update this ::shared/packet-management
               (fn [current]

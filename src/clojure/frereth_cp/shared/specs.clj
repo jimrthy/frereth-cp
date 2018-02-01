@@ -31,4 +31,5 @@ This really seems like a bad road to go down."
 
 ;; Keys of the peer with which we're communicating
 (s/def ::peer-keys (s/keys :req [::public-long
+                                 ;; Q: Is there any reason to retain this?
                                  ::public-short]))

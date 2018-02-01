@@ -52,6 +52,7 @@
 
 ;; Q: Worth adding a check to verify that it's a folder that exists on the classpath?
 (s/def ::keydir string?)
+;; TODO: Refactor the key specs into shared.specs
 (s/def ::long-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
 (s/def ::short-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
 (s/def ::client-keys (s/keys :req-un [::long-pair ::short-pair]
@@ -64,9 +65,6 @@
                                ::K/server-name
                                ::short-pair]))
 
-;;; Note that the definition of crypto-key has moved to shared.specs.
-;;; Which means this really can't compile any longer.
-;;; Might as well rip the bandaid off
 (s/def ::long-pk ::specs/crypto-key)
 (s/def ::short-pk ::specs/crypto-key)
 

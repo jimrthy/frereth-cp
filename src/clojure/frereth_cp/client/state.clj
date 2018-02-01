@@ -44,15 +44,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::client-extension-load-time nat-int?)
 
 (s/def ::server-extension ::shared/extension)
-(s/def ::server-long-term-pk ::shared/public-key)
 ;; TODO: Needs a real spec
 ;; Q: Is this the box that we decrypted with the server's
 ;; short-term public key?
 ;; Or is it the 96-byte black box that we send back as part of
 ;; the Vouch?
 (s/def ::server-cookie any?)
-;;; Q: Is there any reason at all to store this?
-(s/def ::server-short-term-pk ::shared/public-key)
 (s/def ::server-security (s/merge ::specs/peer-keys
                                   (s/keys :req [::shared/server-name]
                                           ;; Q: Is there a valid reason for this to live here?
@@ -215,14 +212,14 @@ TODO: Need to ask around about that."
       (try
         (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
               extracted (shared/decompose K/cookie decrypted)
-              server-short-term-pk (byte-array K/key-length)
+              server-short-pk (byte-array K/key-length)
               server-cookie (byte-array K/server-cookie-length)
               server-security (assoc (::server-security this)
-                                     ::specs/public-short server-short-term-pk,
+                                     ::specs/public-short server-short-pk,
                                      ::server-cookie server-cookie)
               {^ByteBuf s' ::K/s'
                ^ByteBuf black-box ::K/black-box} extracted]
-          (.readBytes s' server-short-term-pk)
+          (.readBytes s' server-short-pk)
           (.readBytes black-box server-cookie)
           (assoc this ::server-security server-security))
         (catch ExceptionInfo ex
