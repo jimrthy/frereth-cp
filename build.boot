@@ -3,17 +3,16 @@
 
 (set-env! :resource-paths #{"src/clojure"}
           :dependencies '[[adzerk/boot-test "RELEASE" :scope "test"]
-                          ;; This uses a version of netty that's about 6 months
+                          ;; Default uses a version of netty that's about 6 months
                           ;; old.
                           ;; That might not be a huge deal...but there have been
                           ;; 6 bug fix releases since then.
-                          ;; TODO: Switch to newer version and see how it works.
-                          ;; (The current version includes an exception that has
-                          ;; started showing up when I allocate an uninitialized
-                          ;; unpooled buffer. I don't know why I haven't seen
-                          ;; this before. According to the github issue, it's
-                          ;; harmless).
-                          [aleph "0.4.4" :exclusions [org.clojure/tools.logging]]
+                          ;; STARTED: Switch to newer version and see how it works.
+                          [aleph "0.4.4" :exclusions [io.netty/netty-all
+                                                      org.clojure/tools.logging]]
+                          ;; Alt: Try this instead
+                          #_[aleph "0.4.5-alpha3"]
+                          [io.netty/netty-all "4.1.20.Final"]
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
                           ;; users
@@ -27,7 +26,7 @@
                           [org.clojure/tools.logging "0.4.0" :exclusions [org.clojure/clojure]]
                           ;; TODO: Move this into the dev task
                           [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]
-                          [tolitius/boot-check "0.1.6" :scope "test"]]
+                          [tolitius/boot-check "0.1.7" :scope "test"]]
           :source-paths   #{"src/java"})
 
 (task-options!
