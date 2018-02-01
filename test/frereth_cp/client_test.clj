@@ -37,7 +37,7 @@
                                   ::shared/long-pair long-pair
                                   ::K/server-name server-name}
                 ::clnt/child-spawner child-spawner
-                ::clnt/server-extension server-extension
+                ::state/server-extension server-extension
                 ::state/server-security {::K/server-name server-name
                                          ::shared-specs/public-long public-long
                                          ::state/public-short public-short}})))
@@ -51,7 +51,7 @@
           client-agent (raw-client nil {::shared-specs/public-long pk-long
                                         ::shared-specs/public-short pk-shrt})
           client @client-agent
-          {:keys [::state/chan<-server ::clnt/chan->server]} client]
+          {:keys [::state/chan<-server ::state/chan->server]} client]
       (when-not chan<-server
         (throw (ex-info "Missing from-server channel"
                         client)))
@@ -77,7 +77,6 @@
                                                      #(is false (str "put! " %)))))]
             ;; TODO: Need to make sure both cookie-waiter and fut resolve
             ;; Q: Should they be promises?
-            (is false "Get this working, for real")
             (let [d' (strm/try-take! chan->server ::nada 200 ::response-timed-out)]
               (dfrd/on-realized d'
                                 #(is (= % basic-check))
