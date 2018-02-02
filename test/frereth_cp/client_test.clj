@@ -19,37 +19,39 @@
         :args (s/cat :child-spawner ::clnt/child-spawner
                      :server-keys ::shared-specs/peer-keys))
 (defn raw-client
-  [child-spawner
-   {:keys [::shared-specs/public-long ::shared-specs/public-short]
-    :as server-keys}]
-  (let [server-extension (byte-array [0x01 0x02 0x03 0x04
+  [child-spawner]
+  (let [long-srvr-keys (crypto/random-keys ::crypto/long)
+        pk-long (::shared-specs/my-long-public long-srvr-keys)
+        shrt-srvr-keys (crypto/random-keys ::crypto/short)
+        pk-shrt (::shared-specs/my-short-public shrt-srvr-keys)
+        server-extension (byte-array [0x01 0x02 0x03 0x04
                                       0x05 0x06 0x07 0x08
                                       0x09 0x0a 0x0b 0x0c
                                       0x0d 0x0e 0x0f 0x10])
         server-name (shared/encode-server-name "hypothet.i.cal")
         long-pair (crypto/random-key-pair)]
-    (clnt/ctor {;; Aleph supplies a single bi-directional channel.
-                ;; My tests break trying to use that here.
-                ;; For now, take a step back and get them working
-                ::state/chan<-server (strm/stream)
-                ::state/chan->server (strm/stream)
-                ::shared/my-keys {::shared/keydir "client-test"
-                                  ::shared/long-pair long-pair
-                                  ::K/server-name server-name}
-                ::clnt/child-spawner child-spawner
-                ::state/server-extension server-extension
-                ::state/server-security {::K/server-name server-name
-                                         ::shared-specs/public-long public-long
-                                         ::state/public-short public-short}})))
+    {::client-agent (clnt/ctor {;; Aleph supplies a single bi-directional channel.
+                                ;; My tests break trying to use that here.
+                                ;; For now, take a step back and get them working
+                                ::state/chan<-server (strm/stream)
+                                ::state/chan->server (strm/stream)
+                                ::shared/my-keys {::shared/keydir "client-test"
+                                                  ::shared/long-pair long-pair
+                                                  ::K/server-name server-name}
+                                ::clnt/child-spawner child-spawner
+                                ::state/server-extension server-extension
+                                ::state/server-security {::K/server-name server-name
+                                                         ::shared-specs/public-long pk-long
+                                                         ::state/public-short pk-shrt}})
+     ::long-srvr-keys long-srvr-keys
+     ::shrt-srvr-keys shrt-srvr-keys}))
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"
-    (let [long-srvr-keys (crypto/random-keys ::crypto/long)
-          pk-long (::shared-specs/my-long-public long-srvr-keys)
-          shrt-srvr-keys (crypto/random-keys ::crypto/short)
-          pk-shrt (::shared-specs/my-short-public shrt-srvr-keys)
-          client-agent (raw-client nil {::shared-specs/public-long pk-long
-                                        ::shared-specs/public-short pk-shrt})
+    (let [
+          {:keys [::client-agent
+                  ::long-srvr-keys
+                  ::shrt-srvr-keys]} (raw-client nil)
           client @client-agent
           {:keys [::state/chan<-server ::state/chan->server]} client]
       (when-not chan<-server
@@ -72,6 +74,7 @@
                                    ;; This test fails, if you look at the actual output in the
                                    ;; REPL.
                                    ;; But it looks like it's succeeding in CIDER.
+                                   ;; FIXME: This means the last commit was a false positive
                                    (dfrd/on-realized d
                                                      #(is (not= % ::timed-out))
                                                      #(is false (str "put! " %)))))]
@@ -79,6 +82,7 @@
             ;; Q: Should they be promises?
             (let [d' (strm/try-take! chan->server ::nada 200 ::response-timed-out)]
               (dfrd/on-realized d'
+                                ;; Note that this is also timing out
                                 #(is (= % basic-check))
                                 #(is false (str "take! " %))))))
         (is false (str "Timed out waiting for client agent\n"
@@ -86,10 +90,14 @@
                          (log/exception-details problem)
                          @client-agent)
                        "\nto build HELLO packet"))))))
+(comment
+  ;; Maybe the problem isn't just CIDER. This also looks as
+  ;; though it produces a false positive
+  (step-1))
 
 (deftest build-hello
   (testing "Can I build a Hello packet?"
-    (let [client-agent (raw-client nil)
+    (let [{:keys [::client-agent]} (raw-client nil)
           client @client-agent
           updated (hello/do-build-hello client)]
       (let [p-m (::shared/packet-management updated)
@@ -105,6 +113,8 @@
             (let [v (vec dst)]
               (is (= (subvec v 0 (count shared/hello-header)) (vec shared/hello-header)))
               (is (= (subvec v 72 136) (take 64 (repeat 0)))))))))))
+(comment
+  (vec shared/hello-header))
 
 (deftest start-stop
   (let [spawner (fn [owner-agent]

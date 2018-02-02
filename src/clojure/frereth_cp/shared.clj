@@ -13,13 +13,11 @@
            [io.netty.buffer ByteBuf Unpooled]
            java.security.SecureRandom))
 
+(set! *warn-on-reflection* true)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic constants
 ;;; TODO: Pretty much all of these should move into constants
-
-;; TODO: Uncomment this...most of the pieces in here are fairly
-;; performance-sensitive
-(comment) (set! *warn-on-reflection* true)
 
 (def hello-header (.getBytes (str K/client-header-prefix "H")))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
