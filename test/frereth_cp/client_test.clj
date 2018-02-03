@@ -13,7 +13,8 @@
             [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as shared-specs]
             [manifold.deferred :as dfrd]
-            [manifold.stream :as strm]))
+            [manifold.stream :as strm])
+  (:import io.netty.buffer.ByteBuf))
 
 (s/fdef raw-client
         :args (s/cat :child-spawner ::clnt/child-spawner
@@ -29,27 +30,28 @@
                                       0x09 0x0a 0x0b 0x0c
                                       0x0d 0x0e 0x0f 0x10])
         server-name (shared/encode-server-name "hypothet.i.cal")
-        long-pair (crypto/random-key-pair)]
-    {::client-agent (clnt/ctor {;; Aleph supplies a single bi-directional channel.
-                                ;; My tests break trying to use that here.
-                                ;; For now, take a step back and get them working
-                                ::state/chan<-server (strm/stream)
-                                ::state/chan->server (strm/stream)
-                                ::shared/my-keys {::shared/keydir "client-test"
-                                                  ::shared/long-pair long-pair
-                                                  ::K/server-name server-name}
-                                ::clnt/child-spawner child-spawner
-                                ::state/server-extension server-extension
-                                ::state/server-security {::K/server-name server-name
-                                                         ::shared-specs/public-long pk-long
-                                                         ::state/public-short pk-shrt}})
+        long-pair (crypto/random-key-pair)
+        result (clnt/ctor {;; Aleph supplies a single bi-directional channel.
+                           ;; My tests break trying to use that here.
+                           ;; For now, take a step back and get them working
+                           ::state/chan<-server (strm/stream)
+                           ::state/chan->server (strm/stream)
+                           ::shared/my-keys {::shared/keydir "client-test"
+                                             ::shared/long-pair long-pair
+                                             ::K/server-name server-name}
+                           ::clnt/child-spawner child-spawner
+                           ::state/server-extension server-extension
+                           ::state/server-security {::K/server-name server-name
+                                                    ::shared-specs/public-long pk-long
+                                                    ::state/public-short pk-shrt}})]
+    (clnt/start! result)
+    {::client-agent result
      ::long-srvr-keys long-srvr-keys
      ::shrt-srvr-keys shrt-srvr-keys}))
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"
-    (let [
-          {:keys [::client-agent
+    (let [{:keys [::client-agent
                   ::long-srvr-keys
                   ::shrt-srvr-keys]} (raw-client nil)
           client @client-agent
@@ -82,8 +84,14 @@
             ;; Q: Should they be promises?
             (let [d' (strm/try-take! chan->server ::nada 200 ::response-timed-out)]
               (dfrd/on-realized d'
-                                ;; Note that this is also timing out
-                                #(is (= % basic-check))
+                                (fn [buf]
+                                  (assert (instance? ByteBuf buf)
+                                          (str "Expected ByteBuf. Got" (class buf)))
+                                  (let [expected-n (count basic-check)
+                                        actual-n (.readableBytes buf)]
+                                    (is (= expected-n actual-n)))
+                                  (let [response (.toString buf (java.nio.charset.Charset/defaultCharset))]
+                                    (is (= response basic-check))))
                                 #(is false (str "take! " %))))))
         (is false (str "Timed out waiting for client agent\n"
                        (if-let [problem (agent-error client-agent)]

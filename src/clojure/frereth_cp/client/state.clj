@@ -111,6 +111,25 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::state (s/merge ::mutable-state
                         ::immutable-value))
 
+;;; Using an agent here seems like a dubious choice.
+;;; After all, they're slow.
+;;; But it makes sense for in initial pass:
+;;; We have a messaging layer that processes data streams
+;;; of data to/from a child. That layer interacts with a
+;;; single Client instance, which handles the cryptography
+;;; and actual network communication.
+;;; We could probably do what we need via atoms, except that
+;;; those are for managing state and really should not trigger
+;;; side-effects.
+;;; Using something like core.async or manifold.streams
+;;; is probably "the" proper way to go here. Especially
+;;; since, realistically, we want multiple clients speaking
+;;; with multiple servers. And it's perfectly reasonable
+;;; to expect a single "child" to contact multiple servers.
+;;; Actually, that latter point makes this architecture seem
+;;; inside-out.
+;;; Stick with this for now, but keep in mind that it probably
+;;; should change.
 (s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
                             #(s/valid? ::state (deref %))))
 
