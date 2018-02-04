@@ -78,43 +78,43 @@
                       (get-in this [::shared/packet-management ::shared/packet])))))
 
 (defn build-and-send-vouch
-"param wrapper: the agent that's managing the state
-param cookie-packet: what arrived over the stream
+  "param wrapper: the agent that's managing the state
+  param cookie-packet: what arrived over the stream
 
-The current implementation is based on the assumption that cookie-packet
-is either a byte stream or a byte array.
+  The current implementation is based on the assumption that cookie-packet
+  is either a byte stream or a byte array.
 
-And that I can just write the response byte-buffer back to the output
-stream.
+  And that I can just write the response byte-buffer back to the output
+  stream.
 
-That assumption does not seem valid at all.
+  That assumption does not seem valid at all.
 
-I have to have an address/port destination so the stream can know
-where to route the message.
+  I have to have an address/port destination so the stream can know
+  where to route the message.
 
-According to the Aleph docs, cookie-packet really should be a map that
-includes :address and :port keys, along with the :message value which is
-the actual byte-array (ByteBuf?).
+  According to the Aleph docs, cookie-packet really should be a map that
+  includes :address and :port keys, along with the :message value which is
+  the actual byte-array (ByteBuf?).
 
-That's what I've set up the server side to send, so that's what I'm
-currently receiving here.
+  That's what I've set up the server side to send, so that's what I'm
+  currently receiving here.
 
-TODO: Need to validate that assumption.
+  TODO: Need to validate that assumption.
 
-To make matters worse, this entire premise is built around side-effects.
+  To make matters worse, this entire premise is built around side-effects.
 
-We send a request to the agent in wrapper to update its state with the
-Vouch, based on the cookie packet. Then we do another send to get it to
-send the vouch
+  We send a request to the agent in wrapper to update its state with the
+  Vouch, based on the cookie packet. Then we do another send to get it to
+  send the vouch
 
-This matches the original implementation, but it seems like a really
-terrible approach in an environment that's intended to multi-thread."
+  This matches the original implementation, but it seems like a really
+  terrible approach in an environment that's intended to multi-thread."
   [wrapper cookie-packet]
   (if (and (not= cookie-packet ::hello-response-timed-out)
            (not= cookie-packet ::drained))
     (do
       (assert cookie-packet)
-      (log/info "Received cookie in " wrapper ". Forking child")
+      (log/info "Received cookie in\n" wrapper "\nForking child")
       ;; Got a Cookie response packet from server.
       ;; Theory in the reference implementation is that this is
       ;; a good signal that it's time to spawn the child to do

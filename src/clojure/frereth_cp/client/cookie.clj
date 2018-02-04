@@ -3,6 +3,8 @@
             [clojure.tools.logging :as log]
             [frereth-cp.client.initiate :as initiate]
             [frereth-cp.client.state :as state]
+            [frereth-cp.shared.constants :as K]
+            [frereth-cp.util :as utils]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm]))
 
@@ -24,9 +26,19 @@
                                 timeout
                                 ::hello-response-timed-out)]
         (deferred/on-realized d
-          (fn [cookie]
+          (fn [{:keys [:host :message :port]
+                :as cookie}]
             (log/info "Incoming response from server:\n"
-                      (with-out-str (pprint cookie)))
+                      (utils/pretty cookie))
+            ;; TODO: More forgiving error handling.
+            ;; One bad server really shouldn't ruin everything.
+            (assert (= K/cookie-packet-length (count message))
+                    (str "Invalid cookie. Expected "
+                         K/cookie-packet-length
+                         " bytes. Got "
+                         (count message)
+                         " in\n"
+                         cookie))
             (if-not (or (= cookie ::drained)
                         (= cookie ::hello-response-timed-out))
               (do

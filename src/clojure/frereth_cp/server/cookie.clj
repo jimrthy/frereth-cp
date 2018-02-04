@@ -9,12 +9,15 @@
             [frereth-cp.shared.crypto :as crypto])
   (:import io.netty.buffer.Unpooled))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Magic Constants
-
 (set! *warn-on-reflection* true)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Magic Constants
+
 (def send-timeout 50)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
 
 (defn prepare-cookie!
   [{:keys [::state/client-short<->server-long
@@ -38,6 +41,10 @@ Except that it doesn't seem to do that at all."
         buffer (Unpooled/buffer K/server-cookie-length)]
     (.retain buffer)
     (try
+      ;; Q: Do I care whether it's an array-backed buffer?
+      ;; A: Well, I'm interacting with the array directly
+      ;; below.
+      ;; So...maybe.
       (assert (.hasArray buffer))
       ;; TODO: Rewrite this using compose
       (.writeBytes buffer shared/all-zeros 0 K/decrypt-box-zero-bytes)

@@ -165,8 +165,9 @@ TODO: Need to ask around about that."
    wrapper]
   (log/info "Spawning child!!")
   (when-not child-spawner
-    (assert child-spawner (str "No way to spawn child.\nAvailable keys:\n"
-                               (keys this))))
+    (throw (ex-info (str "No way to spawn child.\nAvailable keys:\n"
+                         (keys this))
+                    this)))
   (let [{:keys [::child ::reader ::release ::writer]} (child-spawner wrapper)]
     (log/info (str "Setting up initial read against the agent wrapping "
                    #_this

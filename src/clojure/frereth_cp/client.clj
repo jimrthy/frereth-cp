@@ -275,6 +275,10 @@ implementation. This is code that I don't understand yet"
                            raw-packet
                            timeout
                            ::sending-hello-timed-out)]
+      ;; FIXME: use dfrd/chain instead of manually building
+      ;; up the chain using on-realized.
+      ;; Although being explicit about the failure
+      ;; modes is nice.
       (deferred/on-realized d
         (partial cookie/wait-for-cookie wrapper)
         (partial hello-failed! wrapper)))))
