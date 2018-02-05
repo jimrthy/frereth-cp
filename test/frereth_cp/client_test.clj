@@ -55,11 +55,11 @@
   (or (and (not= result ::nada)
            (not= result ::timed-out)
            result)
-      (let [details (if-let [problem (agent-error client-agent)]
-                      (log/exception-details problem)
-                      @client-agent)]
-        (throw (ex-info (str "Failed at '" where "'")
-                        details)))))
+      (throw (ex-info (str "Failed at '" where "'")
+                      {::details (if-let [problem (agent-error client-agent)]
+                                   (log/exception-details problem)
+                                   @client-agent)
+                       ::result result}))))
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"
@@ -83,31 +83,33 @@
       ;; Trying to send a bogus response fails below.
       (send client-agent hello/do-build-hello)
       (if (await-for 150 client-agent)
-        (let [cookie "Did this work?"
+        (let [cookie #_"Did this work?" (byte-array 200)
               basic-check {:host "10.0.0.12"
                            :port 48637
                            :message cookie}]
           (is (not (agent-error client-agent)))
-          (let [hello-waiter (strm/try-take! chan->server ::nada 200 ::timed-out)]
-            (dfrd/chain hello-waiter
-                        (partial check-success client-agent "Waiting for hello")
-                        (fn [hello]
-                          (strm/try-put! chan<-server basic-check 150 ::timed-out))
-                        (partial check-success client-agent "Putting the cookie")
-                        (fn [_]
-                          (strm/try-take! chan->server ::nada 200 ::timed-out))
-                        (partial check-success client-agent "Taking the vouch")
-                        (fn [buf]
-                          (is (instance? ByteBuf buf)
-                              (str "Expected ByteBuf. Got" (class buf)))
-                          ;; FIXME: Need to extract the cookie from the vouch that
-                          ;; we just received.
-                          (let [expected-n (count cookie)
-                                actual-n (.readableBytes buf)]
-                            (is (= expected-n actual-n)))
-                          (let [response (byte-array (.readableBytes buf))]
-                            (.getBytes buf 0 response)
-                            (is (= (vec response) (vec (.getBytes basic-check)))))))))
+          (let [success
+                (dfrd/chain (strm/try-take! chan->server ::nada 200 ::timed-out)
+                            (partial check-success client-agent "Waiting for hello")
+                            (fn [hello]
+                              (strm/try-put! chan<-server basic-check 150 ::timed-out))
+                            (partial check-success client-agent "Putting the cookie")
+                            (fn [_]
+                              (strm/try-take! chan->server ::nada 200 ::timed-out))
+                            (partial check-success client-agent "Taking the vouch")
+                            (fn [buf]
+                              (is (instance? ByteBuf buf)
+                                  (str "Expected ByteBuf. Got" (class buf)))
+                              ;; FIXME: Need to extract the cookie from the vouch that
+                              ;; we just received.
+                              (let [expected-n (count cookie)
+                                    actual-n (.readableBytes buf)]
+                                (is (= expected-n actual-n)))
+                              (let [response (byte-array (.readableBytes buf))]
+                                (.getBytes buf 0 response)
+                                (is (= (vec response) (vec (.getBytes basic-check))))
+                                true)))]
+            (is @success)))
         (is false (str "Timed out waiting for client agent\n"
                        (if-let [problem (agent-error client-agent)]
                          (log/exception-details problem)

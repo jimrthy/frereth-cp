@@ -9,6 +9,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
@@ -164,6 +165,15 @@ TODO: Need to ask around about that."
     :as this}
    wrapper]
   (log/info "Spawning child!!")
+  ;; The fundamental idea behind this is wrong.
+  ;; The API this was setting up is just too complicated.
+  ;; TODO: Need to convert the client to use the functional
+  ;; interaction that I set up for messaging.
+  ;; Although now I'm not positive I set it up that way at
+  ;; this level.
+  ;; TODO: Need to review how the message layer communicates
+  ;; with parent.
+  (throw (RuntimeException. "Deprecated"))
   (when-not child-spawner
     (throw (ex-info (str "No way to spawn child.\nAvailable keys:\n"
                          (keys this))
