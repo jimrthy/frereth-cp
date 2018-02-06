@@ -6,6 +6,8 @@
             [frereth-cp.client.cookie :as cookie]
             [frereth-cp.client.hello :as hello]
             [frereth-cp.client.state :as state]
+            [frereth-cp.message :as message]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server.cookie :as srvr-cookie]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
@@ -16,6 +18,27 @@
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import io.netty.buffer.ByteBuf))
+
+(s/fdef child-spawner
+  :args (s/cat :human-name string?
+               :server? boolean?
+               :parent-cb ::msg-specs/->parent
+               :child-cb ::msg-specs/->child
+               :state-agent ::state/state-agent)
+  :ret (s/keys :req [::log/state
+                     ::msg-specs/io-handle]))
+(defn child-spawner
+  "This is basically what gets set up in handshake-test"
+  [human-name server? parent-cb child-cb
+   state-agent]
+  (let [logger #_(log/file-writer-factory (str "/tmp/client-test-"
+                                             human-name
+                                             "-"
+                                             (gensym)
+                                             ".clj"))
+        (log/std-out-log-factory)
+        initialized (message/initial-state human-name server? {} logger)]
+    (message/start! initialized logger (partial parent-cb state-agent) child-cb)))
 
 (s/fdef raw-client
         :args (s/cat :child-spawner ::clnt/child-spawner
@@ -40,7 +63,7 @@
                            ::shared/my-keys {::shared/keydir "client-test"
                                              ::shared/long-pair long-pair
                                              ::K/server-name server-name}
-                           ::clnt/child-spawner child-spawner
+                           ::state/child-spawner child-spawner
                            ::state/server-extension server-extension
                            ::state/server-security {::K/server-name server-name
                                                     ::shared-specs/public-long pk-long
@@ -68,9 +91,21 @@
     ;; A: It starts by sending a HELO
     ;; packet, then setting the client up to wait for a
     ;; Cookie back from the server.
-    (let [{:keys [::client-agent
+    (let [parent-cb (fn [agent-wrapper
+                         chunk]
+                      (throw (ex-info "Didn't really expect anything at parent callback"
+                                      {::client-state @agent-wrapper
+                                       ::message chunk})))
+          child-cb (fn [chunk]
+                     (throw (ex-info "Didn't really expect anything at child callback"
+                                     {::message chunk})))
+          {:keys [::client-agent
                   ::long-srvr-keys
-                  ::shrt-srvr-keys]} (raw-client nil)
+                  ::shrt-srvr-keys]} (raw-client (partial child-spawner
+                                                          "step-1"
+                                                          false
+                                                          parent-cb
+                                                          child-cb))
           client @client-agent
           {:keys [::state/chan<-server ::state/chan->server]} client]
       (when-not chan<-server

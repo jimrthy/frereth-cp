@@ -5,6 +5,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
@@ -92,6 +93,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ::shared/recent
                                      ::server-security
                                      ::shared-secrets
+                                     ;; FIXME: Add ::log2/state
                                      ::shared/work-area]
                                :opt [::child
                                      ;; Q: Why am I tempted to store this at all?
@@ -134,7 +136,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
                             #(s/valid? ::state (deref %))))
 
-
+(s/def ::child-spawner (s/fspec :args (s/cat :state-agent ::state-agent)
+                                :ret (s/keys :req [::log2/state
+                                                   ::msg-specs/io-handle])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Implementation
@@ -152,47 +156,44 @@ So, yes, it *is* weird.
 
 It happens in the agent processing thread pool, during a send operation.
 
-It's the child's responsibility to return a manifold.stream we can use to send it
-bytes from the server.
-
-It notifies us that it has bytes ready to process via the standard agent (send)
-mechanism.
-
 Although send-off might seem more appropriate, it probably isn't.
 
-TODO: Need to ask around about that."
+TODO: Need to ask around about that.
+
+Bigger TODO: This really should be identical to the server implementation.
+
+Which at least implies that the agent approach should go away."
   [{:keys [::child-spawner]
     :as this}
    wrapper]
   (log/info "Spawning child!!")
-  ;; The fundamental idea behind this is wrong.
-  ;; The API this was setting up is just too complicated.
-  ;; TODO: Need to convert the client to use the functional
-  ;; interaction that I set up for messaging.
-  ;; Although now I'm not positive I set it up that way at
-  ;; this level.
-  ;; TODO: Need to review how the message layer communicates
-  ;; with parent.
-  (throw (RuntimeException. "Deprecated"))
   (when-not child-spawner
     (throw (ex-info (str "No way to spawn child.\nAvailable keys:\n"
                          (keys this))
                     this)))
-  (let [{:keys [::child ::reader ::release ::writer]} (child-spawner wrapper)]
-    (log/info (str "Setting up initial read against the agent wrapping "
-                   #_this
-                   "\n...this...\naround\n"
-                   child))
-    ;; Q: Do these all *really* belong at the top level?
-    ;; I'm torn between the basic fact that flat data structures
-    ;; are easier (simpler?) and the fact that namespacing this
-    ;; sort of thing makes collisions much less likely.
-    ;; Not to mention the whole "What did I mean for this thing
-    ;; to be?" question.
+  (let [{child-io-handle ::msg-specs/io-handle
+         child-log-state ::log2/state
+         :as child} (child-spawner wrapper)
+        child-log-state (log2/info child-log-state
+                                   ::fork
+                                   "Setting up initial read against the client agent"
+                                   {::this this
+                                    ::child child})]
+    ;; Should do the flush! through the child's logger.
+    ;; Assuming that start! hasn't done so already.
+    ;; OTOH, I shouldn't touch that part of child's io-handle.
+    ;; This should be a black box.
+    (throw (RuntimeException. "Need to flush child-start logs"))
+    ;; Need to synchronize this with child log-state
+    (throw (RuntimeException. "Honestly, need our own log state"))
+    (throw (RuntimeException. "The rest of this goes out the window"))
     (assoc this
-           ::chan<-child writer
-           ::release->child release
-           ::chan->child reader
+
+           ::chan<-child (comment writer)
+           ::release->child (comment release)
+           ::chan->child (comment reader)
+           ;; Q: Back to the question of flat vs. nested data
+           ;; structures
            ::child child
            ::read-queue clojure.lang.PersistentQueue/EMPTY)))
 
