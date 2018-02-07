@@ -93,14 +93,15 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ::shared/recent
                                      ::server-security
                                      ::shared-secrets
-                                     ;; FIXME: Add ::log2/state
+                                     ::log2/state
                                      ::shared/work-area]
                                :opt [::child
                                      ;; Q: Why am I tempted to store this at all?
                                      ;; A: Well...I might need to resend it if it
                                      ;; gets dropped initially.
                                      ::vouch]))
-(s/def ::immutable-value (s/keys :req [::shared/my-keys
+(s/def ::immutable-value (s/keys :req [::log2/logger
+                                       ::shared/my-keys
                                        ;; Q: How do these mesh with netty's pipeline model?
                                        ;; For that matter, how much sense does the idea of
                                        ;; spawning a child process here?
@@ -164,6 +165,7 @@ Bigger TODO: This really should be identical to the server implementation.
 
 Which at least implies that the agent approach should go away."
   [{:keys [::child-spawner]
+    log-state ::log2/state
     :as this}
    wrapper]
   (log/info "Spawning child!!")
@@ -171,6 +173,9 @@ Which at least implies that the agent approach should go away."
     (throw (ex-info (str "No way to spawn child.\nAvailable keys:\n"
                          (keys this))
                     this)))
+  ;; FIXME: Message child really should fork its logs from ours to
+  ;; start with our lamport clock.
+  ;; This interaction between the two layers is quite desirable
   (let [{child-io-handle ::msg-specs/io-handle
          child-log-state ::log2/state
          :as child} (child-spawner wrapper)
@@ -179,6 +184,7 @@ Which at least implies that the agent approach should go away."
                                    "Setting up initial read against the client agent"
                                    {::this this
                                     ::child child})]
+    (log/debug "Child spawned")
     ;; Should do the flush! through the child's logger.
     ;; Assuming that start! hasn't done so already.
     ;; OTOH, I shouldn't touch that part of child's io-handle.
@@ -188,7 +194,6 @@ Which at least implies that the agent approach should go away."
     (throw (RuntimeException. "Honestly, need our own log state"))
     (throw (RuntimeException. "The rest of this goes out the window"))
     (assoc this
-
            ::chan<-child (comment writer)
            ::release->child (comment release)
            ::chan->child (comment reader)
@@ -197,11 +202,13 @@ Which at least implies that the agent approach should go away."
            ::child child
            ::read-queue clojure.lang.PersistentQueue/EMPTY)))
 
+;;; Q: Does this really make sense here rather than client.cookie?
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet-management
            ::shared/work-area
            ::shared-secrets
            ::server-security]
+    log-state ::log2/state
     :as this}
    {:keys [::K/header
            ::K/client-extension
@@ -261,6 +268,7 @@ Which at least implies that the agent approach should go away."
   [{:keys [::shared/extension
            ::shared/packet-management
            ::server-extension]
+    log-state ::log2/state
     :as this}]
   (let [^ByteBuf packet (::shared/packet packet-management)]
     ;; Q: How does packet length actually work?
@@ -320,6 +328,7 @@ Which at least implies that the agent approach should go away."
            ::shared/my-keys
            ::shared-secrets
            ::shared/work-area]
+    log-state ::log2/state
     :as this}]
   (let [{:keys [::shared/working-nonce
                 ::shared/text]} work-area
@@ -440,30 +449,47 @@ Which at least implies that the agent approach should go away."
                    cookie-packet
                    "\nQ: What happened?")))))
 
+(s/fdef load-keys
+        :args (s/cat :logger ::log2/state
+                     :my-keys ::shared/my-keys)
+        :ret (s/keys :req [::log2/state
+                           ::shared/my-keys]))
 (defn load-keys
-  [my-keys]
+  [log-state my-keys]
   (let [key-dir (::shared/keydir my-keys)
         long-pair (crypto/do-load-keypair key-dir)
         short-pair (crypto/random-key-pair)]
     (log/info (str "Loaded long-term client key pair from '"
                    key-dir "'"))
-    (assoc my-keys
-           ::shared/long-pair long-pair
-           ::shared/short-pair short-pair)))
+    {::shared/my-keys (assoc my-keys
+                             ::shared/long-pair long-pair
+                             ::shared/short-pair short-pair)
+     ::log2/state log-state}))
 
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
-  [this]
-  ;; In theory, it seems like it would make sense to -> this through a chain of
-  ;; these sorts of initializers.
-  ;; In practice, as it stands, it seems a little silly.
-  (update this ::shared/my-keys load-keys))
+  [{log-state ::log2/state
+    :as this}
+   log-initializer]
+  (let [logger (log-initializer)]
+    (-> this
+        (assoc ::log2/logger logger)
+        ;; FIXME: This is a cheeseball way to do this.
+        ;; Honestly, to follow the "proper" (i.e. established)
+        ;; pattern, load-keys should just operate on the full
+        ;; ::state map.
+        ;; OTOH, I've gotten pretty fierce about how this is a
+        ;; terrible approach, and there's no time like the present
+        ;; to mend my ways.
+        ;; So maybe this is exactly what I want after all.
+        (into (load-keys log-state (::shared/my-keys this))))))
 
 (defn initialize-mutable-state!
   [{:keys [::shared/my-keys
            ::server-security]
     :as this}]
-  (let [server-long-term-pk (::specs/public-long server-security)]
+  (let [log-state (log2/init ["client" (util/random-uuid)])
+        server-long-term-pk (::specs/public-long server-security)]
     (when-not server-long-term-pk
       (throw (ex-info (str "Missing ::specs/public-long among"
                            (keys server-security))
@@ -496,7 +522,8 @@ Which at least implies that the agent approach should go away."
                                ::client-short<->server-long (crypto/box-prepare
                                                              server-long-term-pk
                                                              (.getSecretKey short-pair))}
-             ::server-security server-security}))))
+             ::server-security server-security
+             ::log2/state log-state}))))
 
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.

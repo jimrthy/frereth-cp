@@ -22,6 +22,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
@@ -346,15 +347,17 @@ like a timing attack."
             (shared/release-packet-manager! (::shared/packet-management this))))))
 
 (s/fdef ctor
-        :args (s/keys :req [::state/chan<-server
-                            ::state/chan->server
-                            ::shared/my-keys
-                            ::state/server-security])
+        :args (s/cat :opts (s/keys :req [::state/chan<-server
+                                         ::state/chan->server
+                                         ::shared/my-keys
+                                         ::state/server-security])
+                     :log-initializer (s/fspec :args nil
+                                               :ret ::log2/logger))
         :ret ::state/state-agent)
 (defn ctor
-  [opts]
+  [opts logger-initializer]
   (-> opts
-      state/initialize-immutable-values
+      (state/initialize-immutable-values logger-initializer)
       state/initialize-mutable-state!
       (assoc
        ;; This seems very cheese-ball, but they

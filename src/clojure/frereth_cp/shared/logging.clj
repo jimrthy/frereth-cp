@@ -278,22 +278,16 @@
 (deflogger fatal)
 
 (s/fdef init
-        :args (s/cat :start-time ::lamport)
+        :args (s/cat :context ::context
+                     :start-time ::lamport)
         :ret ::state)
 (defn init
   ([context start-clock]
    {::entries []
     ::lamport start-clock
     ::context context})
-  ;; FIXME: Honestly, this needs a high-level context
-  ;; i.e. What is the purpose of this group of logs?
   ([context]
-   (init context 0))
-  ([]
-   ;; the 1-arity version should include the context.
-   ;; *This* is the arity that should just go away
-   (throw (RuntimeException. "Don't do this"))
-   (init 0)))
+   (init context 0)))
 
 (defn file-writer-factory
   [file-name]
@@ -394,4 +388,4 @@
                       (::lamport src))]
      (synchronize src forked)))
   ([src]
-   (init (::context src) (::lamport src))))
+   (init (::context src) (inc (::lamport src)))))

@@ -598,24 +598,13 @@
          last-block-time
          flow-control
          n-sec-per-block]}
+  (println "This isn't showing up in the logs, but top of choose-next-scheduled-time")
   ;;; This amounts to lines 286-305
 
   ;; I should be able to just completely bypass this if there's
   ;; more new data pending.
   ;; TODO: Figure out how to make that work
 
-  ;; Bigger issue:
-  ;; This scheduler is so aggressive at waiting for an initial
-  ;; message from the child that it takes 10 ms for the agent
-  ;; send about it to actually get through the queue
-  ;; Spinning around fast-idling while I'm doing nothing is
-  ;; stupid.
-  ;; And it winds up scheduling into the past, which leaves
-  ;; this triggering every millisecond.
-  ;; We can get pretty good turn-around time in memory,
-  ;; but this part...actually, if we could deliver a message
-  ;; and get an ACK in the past, that would be awesome.
-  ;; TODO: Be smarter about the timeout.
   (let [now (System/nanoTime)
         ;; TODO: Switch to the alt version using cond->
         ;; But first, see whether the performance diffence
@@ -691,6 +680,9 @@
         ;; Lines 302-305
         actual-next (max based-on-closed-child recent)
         mid1-time (System/nanoTime)
+        ;; TODO: Just build log-message in one fell swoop instead
+        ;; of all these individual steps.
+        ;; Give the JIT something to work with.
         log-message (cl-format nil
                                (str "Minimum resend time: ~:d\n"
                                     "which is ~:d nanoseconds\n"

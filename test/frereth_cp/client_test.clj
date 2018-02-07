@@ -67,7 +67,8 @@
                            ::state/server-extension server-extension
                            ::state/server-security {::K/server-name server-name
                                                     ::shared-specs/public-long pk-long
-                                                    ::state/public-short pk-shrt}})]
+                                                    ::state/public-short pk-shrt}}
+                          log/std-out-log-factory)]
     (clnt/start! result)
     {::client-agent result
      ::long-srvr-keys long-srvr-keys
