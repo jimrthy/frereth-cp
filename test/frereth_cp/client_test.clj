@@ -94,10 +94,12 @@
     ;; Cookie back from the server.
     (let [parent-cb (fn [agent-wrapper
                          chunk]
+                      (println "parent-cb: getting ready to fail")
                       (throw (ex-info "Didn't really expect anything at parent callback"
                                       {::client-state @agent-wrapper
                                        ::message chunk})))
           child-cb (fn [chunk]
+                     (println "child-cb: getting ready to fail")
                      (throw (ex-info "Didn't really expect anything at child callback"
                                      {::message chunk})))
           {:keys [::client-agent

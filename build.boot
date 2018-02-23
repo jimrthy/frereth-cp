@@ -71,11 +71,13 @@
         (println "\nVerified there are no dependency conflicts.")))))
 
 (deftask dev
+  "Add the dev resources to the mix"
   []
   (merge-env! :source-paths #{"dev" "dev-resources"})
   identity)
 
 (deftask testing
+  "Add pieces for testing"
   []
   (merge-env! :dependencies '[[gloss "0.2.6"
                                :scope "test"
@@ -92,6 +94,9 @@
   []
   ;; Just because I'm prone to forget one of the vital helper steps
   ;; Note that this would probably make more sense under profile.boot.
+  ;; Except that doesn't have access to the defined in here, such
+  ;; as...well, almost any of what it actually uses.
+  ;; Q: Should they move to there also?
   (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl)))
 
 (deftask run

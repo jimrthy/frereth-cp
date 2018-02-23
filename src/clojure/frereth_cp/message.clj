@@ -598,6 +598,8 @@
          last-block-time
          flow-control
          n-sec-per-block]}
+  ;; Verified that I am getting here.
+  ;; Twice in a pretty quick row.
   (println "This isn't showing up in the logs, but top of choose-next-scheduled-time")
   ;;; This amounts to lines 286-305
 
@@ -756,6 +758,7 @@
                                         (- mid2-time mid1-time)
                                         (- end-time mid2-time)
                                         (long alt)))]
+    (println "Made it to the bottom of choose-next-scheduled-time")
     {::next-action-time actual-next
      ::log/state log-state}))
 
@@ -1128,6 +1131,9 @@
                                                  ::log/state
                                                  log-state)
                                           to-child-done?))]
+        ;; This part doesn't really seem to be the problem.
+        (println "Made it back from choosing next scheduled time. actual-next:"
+                 actual-next)
         (let [{:keys [::delta_f
                       ::next-action]
                log-state ::log/state}
@@ -1170,30 +1176,41 @@
                 ;; If nothing else, it may still want/need to query state.
                 {::delta_f ##Inf
                  ::next-action (strm/take! stream [::drained])
-                 ::log/state log-state})]
-          (let [forked-logs (log/fork log-state)]
-            (when-not (::specs/outgoing state)
-              (throw (ex-info "Missing outgoing" state)))
-            (dfrd/on-realized next-action
-                              (partial action-trigger
-                                       {::actual-next actual-next
-                                        ::delta_f delta_f
-                                        ::scheduling-time now}
-                                       io-handle
-                                       (assoc state ::log/state nil)
-                                       (atom forked-logs))
-                              (fn [failure]
-                                (log/flush-logs! logger
-                                                 (log/error forked-logs
-                                                            ::schedule-next-timeout!
-                                                            "Waiting on some I/O to happen in timeout"
-                                                            {::actual-delay delta_f
-                                                             ::now now}))
-                                ;; We don't have any business doing this here, but the
-                                ;; alternatives don't seem appealing.
-                                ;; Well, we could recurse manually without a scheduled
-                                ;; time.
-                                (strm/close! stream))))))
+                 ::log/state log-state})
+              log-state (log/flush-logs! logger log-state)
+              ;; Q: Why am I forking logs here?
+              forked-logs (log/fork log-state)]
+          (when-not (::specs/outgoing state)
+            (println "Missing outgoing in" state)
+            (throw (ex-info "Missing outgoing" state)))
+          (println "Setting up deferred to trigger on next action")
+          (dfrd/on-realized next-action
+                            (partial action-trigger
+                                     {::actual-next actual-next
+                                      ::delta_f delta_f
+                                      ::scheduling-time now}
+                                     io-handle
+                                     ;; Q: Wait. Why am I setting log-state to nil in here?
+                                     ;; (I vaguely remember doing this. It just seems wrong)
+                                     (assoc state ::log/state nil)
+                                     ;; Putting the logs into an atom here ties in to setting
+                                     ;; the state's log-state to nil.
+                                     ;; It seems like a very screw-ball choice.
+                                     ;; TODO: Remember why I did this and either document
+                                     ;; the screwiness or roll it back out.
+                                     (atom #_forked-logs log-state))
+                            (fn [failure]
+                              (log/flush-logs! logger
+                                               (log/error forked-logs
+                                                          ::schedule-next-timeout!
+                                                          "Waiting on some I/O to happen in timeout"
+                                                          {::actual-delay delta_f
+                                                           ::now now}))
+                              ;; We don't have any business doing this here, but the
+                              ;; alternatives don't seem appealing.
+                              ;; Well, we could recurse manually without a scheduled
+                              ;; time.
+                              (strm/close! stream)))))
       (log/flush-logs! logger
                        (log/warn log-state
                                  ::schedule-next-timeout!
