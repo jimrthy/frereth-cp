@@ -159,15 +159,29 @@ Needing to declare these things twice is annoying."
                                       n
                                       " bytes to\n"
                                       dst
+                                      " a "
+                                      (class dst)
                                       "\nfor field "
                                       k))
                       (.writeBytes dst v 0 n)
                       (let [end (.readableBytes dst)]
                         (assert (= (- end beg) n)))
+                      (catch ClassCastException ex
+                        (log/error ex (str "Trying to write " n " bytes from\n"
+                                           v "\nto\n" dst))
+                        (throw (ex-info "Setting bytes failed"
+                                        {::field k
+                                         ::length n
+                                         ::dst dst
+                                         ::dst-length (.capacity dst)
+                                         ::src v
+                                         ::source-class (class v)
+                                         ::description dscr
+                                         ::error ex})))
                       (catch IllegalArgumentException ex
                         (log/error ex (str "Trying to write " n " bytes from\n"
                                            v "\nto\n" dst))
-                      (throw (ex-info "Setting bytes failed"
+                        (throw (ex-info "Setting bytes failed"
                                         {::field k
                                          ::length n
                                          ::dst dst

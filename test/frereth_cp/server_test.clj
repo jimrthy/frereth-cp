@@ -78,9 +78,6 @@
             ;; buildig code)
             success (deref (strm/try-put! client msg 1000 ::timed-out))]
         (println "put! success:" success)
-        ;; This is failing.
-        ;; Probably because I'm not really creating a Client.
-        ;; Q: Is that worth actually doing?
         (is (not= ::timed-out success))
         (is (= @recvd msg)))
       (finally
@@ -88,31 +85,43 @@
         (stop started)))))
 
 (deftest test-cookie-composition
-  (let [client-extension (byte-array (take 16 (repeat 0)))
-        server-extension (byte-array (take 16 (range)))
-        working-nonce (byte-array (take 24 (drop 40 (range))))
-        boxed (byte-array 200)
-        dst (Unpooled/buffer 400)
-        to-encode {::K/header K/cookie-header
-                   ::K/client-extension client-extension
-                   ::K/server-extension server-extension
-                   ::K/client-nonce-suffix (Unpooled/wrappedBuffer working-nonce
-                                                                   K/server-nonce-prefix-length
-                                                                   K/server-nonce-suffix-length)
-                   ;; This is also a great big FAIL:
-                   ;; Have to drop the first 16 bytes
-                   ;; Q: Have I fixed that yet?
-                   ::K/cookie (Unpooled/wrappedBuffer boxed
-                                                      K/box-zero-bytes
-                                                      144)}]
-    (try
-      ;; FIXME: This fails because we can't cast a ByteBuf to a B]
-      (let [composed (shared/compose K/cookie-frame to-encode dst)]
-        (is composed))
-      (catch clojure.lang.ExceptionInfo ex
-        (is (not (.getData ex)))))))
+  ;; FIXME: This test does not belong in here.
+  ;; The magic numbers for the first few fields are really just to try
+  ;; to make the arrays distinctive enough that I can tell what's broken
+  ;; if/when things go sideways.
+  (let [client-extension (byte-array (take K/server-nonce-suffix-length (repeat 0)))
+        server-extension (byte-array (take K/server-nonce-suffix-length (range)))
+        working-nonce (byte-array (take (+ K/server-nonce-suffix-length
+                                           K/server-nonce-prefix-length)
+                                        (drop 40 (range))))
+        boxed (byte-array K/cookie-packet-length)
+        ;; Make sure we have plenty of room for writing
+        dst (Unpooled/buffer (* 2 K/cookie-packet-length))
+        ;; Built from the array, offset, and the length
+        buffered-nonce-suffix (Unpooled/wrappedBuffer working-nonce
+                                                      K/server-nonce-prefix-length
+                                                      K/server-nonce-suffix-length)
+        nonce-suffix (byte-array K/server-nonce-suffix-length)
+        buffered-cookie (Unpooled/wrappedBuffer boxed
+                                                K/box-zero-bytes
+                                                K/cookie-frame-length)
+        cookie (byte-array K/cookie-frame-length)]
+    (.readBytes buffered-nonce-suffix nonce-suffix)
+    (.readBytes buffered-cookie cookie)
+    (let [to-encode {::K/header K/cookie-header
+                     ::K/client-extension client-extension
+                     ::K/server-extension server-extension
+                     ::K/client-nonce-suffix nonce-suffix
+                     ::K/cookie cookie}]
+      (try
+        (let [composed (shared/compose K/cookie-frame to-encode dst)]
+          ;; It's very tempting to dissect this.
+          (is composed))
+        (catch clojure.lang.ExceptionInfo ex
+          (is (not (.getData ex))))))))
 
 (deftest vouch-extraction
+  ;; FIXME: This doesn't belong in here.
   ;; TODO:
   ;; Use client/build-vouch to generate a vouch wrapper.
   ;; Then call server/decrypt-initiate-vouch to verify that
