@@ -34,13 +34,13 @@
 
 (defn stop
   [started]
-  (let [ch (get-in started [:client-read-chan :chan])]
+  (let [ch (get-in started [::state/client-read-chan ::state/chan])]
     (strm/close! ch))
-  (let [ch (get-in started [:client-write-chan :chan])]
+  (let [ch (get-in started [::state/client-write-chan ::state/chan])]
     (strm/close! ch))
-  {:cp-server (server/stop! (:cp-server started))
-   :client-read-chan {:chan nil}
-   :client-write-chan {:chan nil}})
+  {::cp-server (server/stop! (::cp-server started))
+   ::state/client-read-chan {::state/chan nil}
+   ::state/client-write-chan {::state/chan nil}})
 
 (deftest start-stop
   (testing "That we can start and stop successfully"
@@ -62,24 +62,10 @@
     (try
       (println "Sending bogus HELLO")
       (let [msg "Howdy!"
-            client (get-in started [:client-write-chan :chan])
+            client (get-in started [::state/client-write-chan ::state/chan])
             recvd (strm/try-take! client ::drained 500 ::timed-out)
-            ;; Currently, this fails silently (from our perspective).
-            ;; Which, really, is a fine thing.
-            ;; Although the log message should be improved (since this could
-            ;; very well indicate a hacking attempt).
-            ;; Still, the current behavior is good enough for now.
-            ;; I need to build packets to send to do the real work.
-            ;; That will be easier/simpler to do in shared when I'm
-            ;; interacting with a real client.
-            ;; (The alternative is to either capture that exchange so
-            ;; I can send it manually or reinvent the client's packet
-            ;; buildig code)
             success (deref (strm/try-put! client msg 1000 ::timed-out))]
         (println "put! success:" success)
-        ;; This is failing.
-        ;; Probably because I'm not really creating a Client.
-        ;; Q: Is that worth actually doing?
         (is (not= ::timed-out success))
         (is (= @recvd msg)))
       (finally

@@ -273,6 +273,7 @@
         :args (s/cat :this ::handle)
         :ret ::handle)
 (defn stop!
+  "Stop the ioloop (but not the read/write channels: we don't own them)"
   [{:keys [::event-loop-stopper
            ::shared/packet-management]
     :as this}]
@@ -280,12 +281,12 @@
   (try
     (when event-loop-stopper
       (log/info "Sending stop signal to event loop")
-      ;; This is fairly pointless. The client channel Component on which this
-      ;; depends will close shortly after this returns. That will cause the
-      ;; event loop to exit directly.
-      ;; But, just in case that doesn't work, this will tell the event loop to
-      ;; exit the next time it times out.
-      (event-loop-stopper 1))
+      ;; The caller needs to close the client-read-chan,
+      ;; which will effectively stop the ioloop by draining
+      ;; the reduce's source.
+      ;; This will signal it to stop directly.
+      ;; It's probably redudant, but feels safer.
+      (event-loop-stopper))
     (log/warn "Clearing secrets")
     (let [outcome
           (assoc (try
