@@ -33,3 +33,20 @@ This really seems like a bad road to go down."
 (s/def ::peer-keys (s/keys :req [::public-long
                                  ;; Q: Is there any reason to retain this?
                                  ::public-short]))
+
+(def header-length 8)
+(defn random-header
+  []
+  (byte-array (take header-length
+                    (repeatedly #(- (rand-int 256) 128)))))
+(comment (random-header))
+
+(s/def ::prefix
+  (s/and bytes?
+         #(= (count %) header-length)))
+
+(def extension-length 16)
+(s/def ::extension (s/and bytes?
+                          #(= (count %) extension-length)))
+(s/def ::srvr-xtn ::extension)
+(s/def ::clnt-xtn ::extension)

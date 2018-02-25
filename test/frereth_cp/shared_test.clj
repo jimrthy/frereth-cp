@@ -1,7 +1,9 @@
 (ns frereth-cp.shared-test
-  (:require [clojure.test :refer (are is deftest testing)]
+  (:require [clojure.spec.alpha :as s]
+            [clojure.test :refer (are is deftest testing)]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]))
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.constants :as K]))
 
 (deftest basic-byte-copy
   (let [dst (byte-array (take 32 (repeat 0)))]

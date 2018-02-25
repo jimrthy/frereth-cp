@@ -6,12 +6,11 @@
             [clojure.tools.logging :as log]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.specs :as specs]
-            [frereth-cp.util :as util])
+            [frereth-cp.shared.marshal :as marshal]
+            [frereth-cp.shared.specs :as specs])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
-           [io.netty.buffer ByteBuf Unpooled]
-           java.security.SecureRandom))
+           [io.netty.buffer ByteBuf Unpooled]))
 
 (set! *warn-on-reflection* true)
 
@@ -123,94 +122,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
-(defn composition-reduction
-  "Reduction function associated for run!ing from compose.
-
-TODO: Think about a way to do this using specs instead.
-
-Needing to declare these things twice is annoying."
-  [tmplt fields ^ByteBuf dst k]
-  (let [dscr (k tmplt)
-        cnvrtr (::K/type dscr)
-        ^bytes v (k fields)]
-    ;; An assertion error here is better than killing the JVM
-    ;; through a SIGSEGV, which is what this would do
-    (assert (or (= ::K/zeroes cnvrtr)
-                v) (str "Composing from '"
-                   (pr-str v)
-                   "' (a "
-                   (pr-str (class v))
-                   ")\nbased on "
-                   k
-                   " among\n"
-                   (keys fields)
-                   "\nto "
-                   dst
-                   "\nbased on "
-                   cnvrtr
-                   "\nfor\n"
-                   dscr))
-    (try
-      (case cnvrtr
-        ::K/bytes (let [^Long n (::K/length dscr)
-                        beg (.readableBytes dst)]
-                    (try
-                      (log/debug (str "Getting ready to write "
-                                      n
-                                      " bytes to\n"
-                                      dst
-                                      " a "
-                                      (class dst)
-                                      "\nfor field "
-                                      k))
-                      (.writeBytes dst v 0 n)
-                      (let [end (.readableBytes dst)]
-                        (assert (= (- end beg) n)))
-                      (catch ClassCastException ex
-                        (log/error ex (str "Trying to write " n " bytes from\n"
-                                           v "\nto\n" dst))
-                        (throw (ex-info "Setting bytes failed"
-                                        {::field k
-                                         ::length n
-                                         ::dst dst
-                                         ::dst-length (.capacity dst)
-                                         ::src v
-                                         ::source-class (class v)
-                                         ::description dscr
-                                         ::error ex})))
-                      (catch IllegalArgumentException ex
-                        (log/error ex (str "Trying to write " n " bytes from\n"
-                                           v "\nto\n" dst))
-                        (throw (ex-info "Setting bytes failed"
-                                        {::field k
-                                         ::length n
-                                         ::dst dst
-                                         ::dst-length (.capacity dst)
-                                         ::src v
-                                         ::source-class (class v)
-                                         ::description dscr
-                                         ::error ex})))))
-        ::K/int-64 (.writeLong dst v)
-        ::K/zeroes (let [n (::K/length dscr)]
-                     (log/debug "Getting ready to write " n " zeros to " dst " based on "
-                                (util/pretty dscr))
-                     (.writeZero dst n))
-        (throw (ex-info "No matching clause" dscr)))
-      (catch IllegalArgumentException ex
-        (throw (ex-info "Missing clause"
-                        {::problem ex
-                         ::cause cnvrtr
-                         ::field k
-                         ::description dscr
-                         ::source-value v})))
-      (catch NullPointerException ex
-        (throw (ex-info "NULL"
-                        {::problem ex
-                         ::cause cnvrtr
-                         ::field k
-                         ::description dscr
-                         ::source-value v}))))))
-
 (defn save-byte-buf
   [^ByteBuf b]
   (let [ref-cnt (.refCnt b)]
@@ -233,25 +144,15 @@ Needing to declare these things twice is annoying."
  [bs]
  (with-out-str (b-s/print-bytes bs)))
 
-;;; TODO: Refactor compose and decompose (along with their
-;;; support functions) into their own ns.
+;;; STARTED: Refactor compose (along with their
+;;; support functions) into its own marshalling ns.
 (defn compose
   "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt"
   ^ByteBuf [tmplt fields ^ByteBuf dst]
-  ;; Q: How much do I gain by supplying dst?
-  ;; A: It does let callers reuse the buffer, which
-  ;; will definitely help with GC pressure.
-  ;; Yes, it's premature optimization. And how
-  ;; often will this get used?
-  ;; Rename this to compose!
-  ;; Add a purely functional version of compose that
-  ;; creates the ByteBuf, calls compose! and
-  ;; returns dst.
-  (run!
-   (partial composition-reduction tmplt fields dst)
-   (keys tmplt))
-  dst)
+  (log/warn "Deprecated: use marshal ns instead")
+  (marshal/compose! tmplt fields dst))
 
+;;; STARTED: Refactor into the marshall ns
 (s/fdef decompose
         ;; TODO: tmplt needs a spec for the values
         :args (s/cat :template map?
@@ -266,43 +167,15 @@ Needing to declare these things twice is annoying."
   ;; Q: Is ztellman's vertigo applicable here?
   "Read a C-style ByteBuf struct into a map, based on a template"
   [tmplt ^ByteBuf src]
-  (reduce
-   (fn
-     [acc k]
-     (let [dscr (k tmplt)
-           cnvrtr (::K/type dscr)]
-       ;; The correct approach would be to move this (and compose)
-       ;; into its own tiny ns that everything else can use.
-       ;; helpers seems like a good choice.
-       ;; That's more work than I have time for at the moment.
-       (assoc acc k (case cnvrtr
-                      ;; .readBytes does not produce a derived buffer.
-                      ;; The buffer that gets created here will need to be
-                      ;; released separately
-                      ::K/bytes (let [^Long len (::K/length dscr)]
-                                  (.readBytes src len))
-                      ::K/int-64 (.readLong src)
-                      ::K/int-32 (.readInt src)
-                      ::K/int-16 (.readShort src)
-                      ::K/uint-64 (b-t/possibly-2s-uncomplement-64 (.readLong src))
-                      ::K/uint-32 (b-t/possibly-2s-uncomplement-32 (.readInt src))
-                      ::K/uint-16 (b-t/possibly-2s-uncomplement-16 (.readShort src))
-                      ::K/zeroes (.readSlice src (::K/length dscr))
-                      (throw (ex-info "Missing case clause"
-                                      {::failure cnvrtr
-                                       ::acc acc
-                                       ::key k
-                                       ::template tmplt
-                                       ::source src}))))))
-   {}
-   (keys tmplt)))
+  (log/warn "Use the shared.marshal ns directly instead")
+  (marshal/decompose tmplt src))
 
 (s/fdef default-packet-manager
         :args (s/cat)
         :ret ::packet-management)
 (defn default-packet-manager
   []
-  (let [packet (io.netty.buffer.Unpooled/directBuffer 4096)]
+  (let [packet (Unpooled/directBuffer 4096)]
     ;; TODO: Really need a corresponding .release when we're done
     (.retain packet)
     ;; Highly important:
@@ -382,22 +255,7 @@ allocated using default-packet-manager"
           {}
           (keys src)))
 
-(defn zero-bytes
-  [n]
-  (byte-array n (repeat 0)))
-
-(def ^{:tag 'bytes} all-zeros
-  "To avoid creating this over and over.
-
-Q: Refactor this to a function?
-(note that that makes life quite a bit more difficult for zero-out!)"
-  (zero-bytes 128))
-
 (defn zero-out!
-  "Shove zeros into the byte-array at dst, from indexes start to end"
   [dst start end]
-  (let [n (- end start)]
-    (when (<= (count all-zeros) n)
-      (alter-var-root all-zeros
-                      (fn [_] (zero-bytes n)))))
-  (b-t/byte-copy! dst start end all-zeros))
+  (log/warn "Deprecated: Moved to shared.constants")
+  (K/zero-out! dst start end))

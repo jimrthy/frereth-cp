@@ -64,9 +64,9 @@
   (let [start-state (test-helpers/build-ack-flag-message-portion)
         blocks (get-in start-state [::specs/outgoing ::specs/un-ackd-blocks])
         block (last blocks)
-        flagged (help/flag-acked-blocks 0 56
-                                        start-state
-                                        block)]
+        flagged (help/flag-ackd-blocks 0 56
+                                       start-state
+                                       block)]
     (try
       (testing "ACK'd"
         (let [expected (-> start-state
@@ -79,9 +79,9 @@
                            (assoc-in [::specs/outgoing ::specs/total-blocks] 1))]
           (is (= expected flagged))))
       (testing "Not"
-          (let [flagged (help/flag-acked-blocks 0 56
-                                                start-state
-                                                (second blocks))]
+          (let [flagged (help/flag-ackd-blocks 0 56
+                                               start-state
+                                               (second blocks))]
             (is (= start-state flagged))))
       (finally
         (doseq [b (::specs/blocks start-state)]

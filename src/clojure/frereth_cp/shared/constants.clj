@@ -1,6 +1,8 @@
 (ns frereth-cp.shared.constants
   "Magical names, numbers, and data structures"
-  (:require [clojure.spec.alpha :as s]))
+  (:require [clojure.spec.alpha :as s]
+            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.specs :as specs]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Magic Constants
@@ -9,8 +11,8 @@
 ;; getting a ^:const metadata hint to justify it?
 (def ^Integer client-nonce-prefix-length 16)
 (def ^Integer client-nonce-suffix-length 8)
-(def extension-length 16)
-(def header-length 8)
+(def extension-length specs/extension-length)
+(def header-length specs/header-length)
 
 (def box-zero-bytes 16)
 (def ^Integer decrypt-box-zero-bytes 32)
@@ -59,6 +61,12 @@
 (s/def ::server-nonce-suffix (s/and bytes?
                                     #(= (count %) server-nonce-suffix-length)))
 
+;; The prefixes are all a series of constant bytes.
+;; Callers shouldn't need to know/worry about them.
+;; FIXME: Add a ::constant-bytes type that just
+;; hard-codes the magic.
+(s/def ::prefix ::specs/prefix)
+
 ;; This is a name suitable for submitting a DNS query.
 ;; 1. Its encoder starts with an array of zeros
 ;; 2. Each name segment is prefixed with the number of bytes
@@ -69,11 +77,15 @@
 ;;; Hello packets
 
 (def ^Integer hello-crypto-box-length 80)
+(def ^Integer ^:const zero-box-length (- hello-crypto-box-length box-zero-bytes))
+;; FIXME: It would be really nice to be able to generate this from the spec
+;; or vice-versa.
+;; Specs, coercion, and serialization are currently a hot topic on the mailing list.
 (def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length header-length}
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-short-pk {::type ::bytes ::length key-length}
-                                  ::zeros {::type ::zeroes ::length (- hello-crypto-box-length box-zero-bytes)}
+                                  ::zeros {::type ::zeroes ::length zero-box-length}
                                   ;; This gets weird/confusing.
                                   ;; It's a 64-bit number, so 8 octets
                                   ;; But, really, that's just integer?
@@ -84,6 +96,29 @@
                                                          ::length client-nonce-suffix-length}
                                   ::crypto-box {::type ::bytes
                                                 ::length hello-crypto-box-length}))
+;; Here's a bit of nastiness:
+;; I can define these in shared.specs. But I have to redefine
+;; them here because of the namespacing.
+;; Unless I want to update my dscr templates, which really is the correct
+;; answer.
+;; TODO: Make that so
+;; (just do it one step at a time)
+(s/def ::srvr-xtn ::specs/srvr-xtn)
+(s/def ::clnt-xtn ::specs/clnt-xtn)
+(s/def ::clnt-short-pk ::specs/public-short)
+(s/def ::zeros (s/with-gen
+                 (s/and bytes
+                        #(= (count %) zero-box-length)
+                        (fn [x]
+                          (every? #(= 0 %) x)))
+                 (byte-array (take zero-box-length (repeat 0)))))
+(s/def ::hello-spec (s/keys :req [::prefix
+                                  ::srvr-xtn
+                                  ::clnt-xtn
+                                  ::clnt-short-pk
+                                  ::zeros
+                                  ::client-nonce-suffix
+                                  ::crypto-box]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Cookie packets
@@ -242,3 +277,23 @@ TODO: Rename this to something like initiate-client-vouch-message"
                 ::hidden-client-short-pk
                 ::server-name
                 ::message]))
+
+(defn zero-bytes
+  [n]
+  (byte-array n (repeat 0)))
+
+(def ^{:tag 'bytes} all-zeros
+  "To avoid creating this over and over.
+
+Q: Refactor this to a function?
+(note that that makes life quite a bit more difficult for zero-out!)"
+  (zero-bytes 128))
+
+(defn zero-out!
+  "Shove zeros into the byte-array at dst, from indexes start to end"
+  [dst start end]
+  (let [n (- end start)]
+    (when (<= (count all-zeros) n)
+      (alter-var-root all-zeros
+                      (fn [_] (zero-bytes n)))))
+  (b-t/byte-copy! dst start end all-zeros))

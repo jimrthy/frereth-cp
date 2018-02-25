@@ -46,11 +46,14 @@
 ;; TODO: Surely I have a ByteBuf spec somewhere.
 (s/fdef build-initiate-packet!
         :args (s/cat :this ::state/state
+                     ;; FIXME: This really should be a B]
                      :msg-byte-buf #(instance? ByteBuf %))
         :fn #(= (count (:ret %)) (+ 544 (count (-> % :args :msg-byte-buf K/initiate-message-length-filter))))
         :ret #(instance? ByteBuf %))
 (defn build-initiate-packet!
-  "This is destructive in the sense that it reads from msg-byte-buf"
+  "Combine message buffer and client state into an Initiate packet
+
+This is destructive in the sense that it reads from msg-byte-buf"
   [wrapper msg-byte-buf]
   (let [this @wrapper
         msg (message/pull-initial-message-bytes wrapper msg-byte-buf)

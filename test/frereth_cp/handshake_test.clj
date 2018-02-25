@@ -1,6 +1,9 @@
 (ns frereth-cp.handshake-test
   "Test the different pieces involved in connection establishment"
-  (:require [clojure.test :refer (deftest is testing)]
+  (:require [clojure.spec.alpha :as s]
+            [clojure.test :refer (deftest is testing)]
+            [frereth-cp.client :as clnt]
+            [frereth-cp.client.initiate :as clnt-init]
             [frereth-cp.server :as server]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K])
@@ -40,9 +43,17 @@
         (catch clojure.lang.ExceptionInfo ex
           (is (not (.getData ex))))))))
 
-(deftest vouch-extraction
-  ;; TODO:
-  ;; Use client/build-vouch to generate a vouch wrapper.
-  ;; Then call server/decrypt-initiate-vouch to verify that
-  ;; it extracted correctly.
-  (throw (RuntimeException. "Not Implemented")))
+(deftest vouch-encoding
+  (throw (RuntimeException. "Really want to exercise-fn clnt/build-initiate-packet!")))
+
+(deftest vouch-round-trip
+  (let [client-state (clnt/ctor {})
+        ;; This is totally wrong.
+        ;; The ByteBuf argument is the message that goes along with the initiate packet.
+        raw-vouches (s/exercise ::K/initiate-packet-spec)
+        vouches (map (partial clnt-init/build-initiate-packet! client-state) raw-vouches)]
+    ;; TODO:
+    ;; Use client/build-vouch to generate a vouch wrapper.
+    ;; Then call server/decrypt-initiate-vouch to verify that
+    ;; it extracted correctly.
+    (throw (RuntimeException. "Not Implemented"))))

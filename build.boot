@@ -8,10 +8,11 @@
                           ;; That might not be a huge deal...but there have been
                           ;; 6 bug fix releases since then.
                           ;; STARTED: Switch to newer version and see how it works.
-                          [aleph "0.4.4" :exclusions [io.netty/netty-all
+                          #_[aleph "0.4.4" :exclusions [io.netty/netty-all
                                                       org.clojure/tools.logging]]
                           ;; Alt: Try this instead
-                          #_[aleph "0.4.5-alpha3"]
+                          [aleph "0.4.5-alpha4"]
+                          ;; Note that 5.0.0 is up to alpha2
                           [io.netty/netty-all "4.1.20.Final"]
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
@@ -25,8 +26,9 @@
                           ;; that I really don't have any business imposing on anyone else
                           [org.clojure/tools.logging "0.4.0" :exclusions [org.clojure/clojure]]
                           ;; TODO: Move this into the dev task
+                          ;; (sadly, it isn't a straight copy/paste)
                           [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]
-                          [tolitius/boot-check "0.1.7" :scope "test"]]
+                          [tolitius/boot-check "0.1.9" :scope "test" :exclusions [org.clojure/clojure]]]
           :source-paths   #{"src/java"})
 
 (task-options!
@@ -83,6 +85,7 @@
                                             io.aleph/dirigiste
                                             manifold
                                             org.clojure/tools.logging
+                                            potemkin
                                             riddley]]]
               :source-paths #{"test"})
   identity)
