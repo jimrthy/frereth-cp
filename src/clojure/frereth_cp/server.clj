@@ -14,8 +14,8 @@
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.util :as util]
-            [manifold.deferred :as deferred]
-            [manifold.stream :as stream])
+            [manifold.deferred :as dfrd]
+            [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            io.netty.buffer.ByteBuf))
 
@@ -42,14 +42,28 @@
 ;;; go with this model.
 ;;; From this perspective, from-child is really just sourceable?
 ;;; while to-child is just sinkable?
-(s/def ::from-child (s/and stream/sinkable?
-                           stream/sourceable?))
-(s/def ::to-child (s/and stream/sinkable?
-                         stream/sourceable?))
+(s/def ::from-child (s/and strm/sinkable?
+                           strm/sourceable?))
+(s/def ::to-child (s/and strm/sinkable?
+                         strm/sourceable?))
 
 (s/def ::child-interaction (s/keys :req [::child-id
                                          ::to-child
                                          ::from-child]))
+
+(s/def ::stopper dfrd/deferrable?)
+
+(s/def ::handle (s/keys :req [::max-active-clients
+                              ::shared/extension
+                              ::shared/my-keys
+                              ::shared/working-area
+                              ::state/active-clients
+                              ::state/current-client
+                              ::state/client-read-chan
+                              ::state/client-write-chan]
+                        :opt [::event-loop-stopper
+                              ::shared/packet-management
+                              ::state/cookie-cutter]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -158,98 +172,79 @@
       (log/debug "Ignoring packet of illegal length")
       state)))
 
+(defn input-reducer
+  "Convert input into the next state"
+  [{:keys [::state/client-read-chan]
+    :as this}
+   msg]
+  (log/info (str "Top of Server Event loop received " msg
+                 "\nfrom " (::state/chan client-read-chan)
+                 "\nin " client-read-chan))
+  (case msg
+    ::stop (reduced (do
+                      (log/warn "Received stop signal")
+                      ::exited))
+    ::rotate (do
+               (log/info "Possibly Rotating"
+                         #_(util/pretty (helpers/hide-long-arrays this))
+                         "...this...")
+               (state/handle-key-rotation this))
+    ::drained (do
+                (log/debug "Server recv from" (::state/chan client-read-chan) ":" msg)
+                (reduced ::drained))
+    ;; Default is "Keep going"
+    (try
+      ;; Q: Do I want unhandled exceptions to be fatal errors?
+      (let [modified-state (handle-incoming! this msg)]
+        (log/info "Updated state based on incoming msg:"
+                  (helpers/hide-long-arrays modified-state))
+        modified-state)
+      (catch clojure.lang.ExceptionInfo ex
+        (log/error "handle-incoming! failed" ex (.getStackTrace ex))
+        this)
+      (catch RuntimeException ex
+        (log/error "Unhandled low-level exception escaped handler" ex (.getStackTrace ex))
+        (reduced nil))
+      (catch Exception ex
+        (log/error "Major problem escaped handler" ex (.getStackTrace ex))
+        (reduced nil)))))
+
+(s/fdef begin!
+        :args (s/cat :this ::handle)
+        :ret ::stopper)
 (defn begin!
   "Start the event loop"
   [{:keys [::state/client-read-chan]
     :as this}]
-  (let [stopper (deferred/deferred)
-        stopped (promise)]
-    ;; TODO: Rethink using deferred/loop here.
-    ;; strm/consume or strm/consume-async seem like
-    ;; a much better choice.
-    ;; Then I could use strm/periodically to trigger
-    ;; key-rotation.
-    ;; Though, realistically, that should probably happen elsewhere.
-    (deferred/loop [this (assoc this
-                                ::timeout (helpers/one-minute))]
-      (log/info "Top of Server event loop. Timeout: " (::timeout this) "in"
-               #_(util/pretty (helpers/hide-long-arrays this))
-               "...[this]...")
-      (deferred/chain
-        ;; The timeout is in milliseconds, but state's timeout uses
-        ;; the nanosecond clock
-        (stream/try-take! (:chan client-read-chan)
-                          ::drained
-                          ;; Need to convert nanoseconds into milliseconds
-                          (inc (/ (::timeout this) shared/nanos-in-milli))
-                          ::timedout)
-        (fn [msg]
-          (log/info (str "Top of Server Event loop received " msg
-                        "\nfrom " (:chan client-read-chan)
-                        "\nin " client-read-chan))
-          (if-not (or (identical? ::drained msg)
-                      (identical? ::timedout msg))
-            (try
-              ;; Q: Do I want unhandled exceptions to be fatal errors?
-              (let [modified-state (handle-incoming! this msg)]
-                (log/info "Updated state based on incoming msg:"
-                          (helpers/hide-long-arrays modified-state))
-                modified-state)
-              (catch clojure.lang.ExceptionInfo ex
-                (log/error "handle-incoming! failed" ex (.getStackTrace ex))
-                this)
-              (catch RuntimeException ex
-                (log/error "Unhandled low-level exception escaped handler" ex (.getStackTrace ex))
-                nil)
-              (catch Exception ex
-                (log/error "Major problem escaped handler" ex (.getStackTrace ex))
-                nil))
-            (do
-              (log/debug "Server recv from" (:chan client-read-chan) ":" msg)
-              (if (identical? msg ::drained)
-                msg
-                this))))
-        ;; Chain the handler to a function that loops
-        ;; Or not, if we're done
-        (fn [this]
-          (if this
-            (if-not (identical? this ::drained)
-              ;; Weren't called to explicitly close
-              (if-not (realized? stopper)
-                (do
-                  ;; The promise that tells us to stop hasn't
-                  ;; been fulfilled
-                  (log/info "Possibly Rotating"
-                           #_(util/pretty (helpers/hide-long-arrays this))
-                           "...this...")
-                  (deferred/recur (state/handle-key-rotation this)))
-                (do
-                  (log/warn "Received stop signal")
-                  (deliver stopped ::exited)))
-              (do
-                (log/warn "Closing because client connection is drained")
-                (deliver stopped ::drained)))
-            (do
-              (log/error "Exiting event loop because state turned falsey. Unhandled exception?")
-              (deliver stopped ::failed))))))
-    (fn [timeout]
-      (when (not (realized? stopped))
-        (deliver stopper ::exiting))
-      (deref stopped timeout ::stopping-timed-out))))
+  (let [in-chan (::state/chan client-read-chan)
+        ;; The part that handles input from the client
+        finalized (strm/reduce input-reducer this in-chan)
+        ;; Once a minute, signal rotation of the hidden symmetric key that handles cookie
+        ;; encryption.
+        key-rotator (strm/periodically (helpers/one-minute)
+                                       (constantly ::rotate))]
+    (strm/connect key-rotator in-chan {:upstream? true
+                                       :description "Periodically trigger cookie key rotation"})
+    (fn []
+      @(strm/put! in-chan ::stop))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(s/fdef start!
+         :args (s/cat :this ::handle)
+         :ret ::handle)
 (defn start!
+  "Start the server"
   [{:keys [::state/client-read-chan
            ::state/client-write-chan
            ::shared/extension
            ::shared/my-keys]
     :as this}]
   {:pre [client-read-chan
-         (:chan client-read-chan)
+         (::state/chan client-read-chan)
          client-write-chan
-         (:chan client-write-chan)
+         (::state/chan client-write-chan)
          (::K/server-name my-keys)
          (::shared/keydir my-keys)
          extension
@@ -264,7 +259,6 @@
   ;; Q: Can it?
   ;; A: Skip it, for now
 
-
   ;; So we're starting by loading up the long-term keys
   (let [keydir (::shared/keydir my-keys)
         long-pair (crypto/do-load-keypair keydir)
@@ -275,7 +269,11 @@
            ::event-loop-stopper (begin! almost)
            ::shared/packet-management (shared/default-packet-manager))))
 
+(s/fdef stop!
+        :args (s/cat :this ::handle)
+        :ret ::handle)
 (defn stop!
+  "Stop the ioloop (but not the read/write channels: we don't own them)"
   [{:keys [::event-loop-stopper
            ::shared/packet-management]
     :as this}]
@@ -283,12 +281,12 @@
   (try
     (when event-loop-stopper
       (log/info "Sending stop signal to event loop")
-      ;; This is fairly pointless. The client channel Component on which this
-      ;; depends will close shortly after this returns. That will cause the
-      ;; event loop to exit directly.
-      ;; But, just in case that doesn't work, this will tell the event loop to
-      ;; exit the next time it times out.
-      (event-loop-stopper 1))
+      ;; The caller needs to close the client-read-chan,
+      ;; which will effectively stop the ioloop by draining
+      ;; the reduce's source.
+      ;; This will signal it to stop directly.
+      ;; It's probably redudant, but feels safer.
+      (event-loop-stopper))
     (log/warn "Clearing secrets")
     (let [outcome
           (assoc (try
@@ -307,6 +305,9 @@
     (finally
       (shared/release-packet-manager! packet-management))))
 
+(s/fdef ctor
+        :args (s/cat :cfg (s/keys :opt [::max-active-clients]))
+        :ret ::handle)
 (defn ctor
   "Just like in the Component lifecycle, this is about setting up a value that's ready to start"
   [{:keys [::max-active-clients]

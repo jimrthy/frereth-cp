@@ -32,12 +32,11 @@
                                        ::shared-specs/public-short
                                        ::server-short-sk]))
 
-;; This seems like something that should basically be defined in
-;; shared.
-;; Or, at least, ::chan ought to.
-;; Except that it's a...what?
-;; (it seems like it ought to be an async/chan, but it might really
-;; be a manifold/stream
+;; These definitions seem dubious.
+;; Originally, I expected them to be core.async channels.
+;; They should probably be manifold streams, in which
+;; case read-chan seems like it should be a source?
+;; and write-chan seems like it should be a sink?
 (s/def ::client-read-chan (s/keys :req [::chan]))
 (s/def ::client-write-chan (s/keys :req [::chan]))
 

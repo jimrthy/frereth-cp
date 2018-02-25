@@ -4,44 +4,43 @@
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
-            [manifold.stream :as strm])
-  (:import io.netty.buffer.Unpooled))
+            [manifold.stream :as strm]))
 
 (defn system-options
   []
   (let [server-name (shared/encode-server-name "test.frereth.com")]
-    {:cp-server {::shared/extension (byte-array [0x01 0x02 0x03 0x04
-                                                 0x05 0x06 0x07 0x08
-                                                 0x09 0x0a 0x0b 0x0c
-                                                 0x0d 0x0e 0x0f 0x10])
-                 ::shared/my-keys #::shared{::K/server-name server-name
-                                           :keydir "curve-test"}}}))
+    {::cp-server {::shared/extension (byte-array [0x01 0x02 0x03 0x04
+                                                  0x05 0x06 0x07 0x08
+                                                  0x09 0x0a 0x0b 0x0c
+                                                  0x0d 0x0e 0x0f 0x10])
+                  ::shared/my-keys #::shared{::K/server-name server-name
+                                             :keydir "curve-test"}}}))
 
 (defn build
   []
-  {:cp-server (server/ctor (:cp-server (system-options)))
-   :client-read-chan {:chan (strm/stream)}
-   :client-write-chan {:chan (strm/stream)}})
+  {::cp-server (server/ctor (::cp-server (system-options)))
+   ::state/client-read-chan {::state/chan (strm/stream)}
+   ::state/client-write-chan {::state/chan (strm/stream)}})
 
 (defn start
   [inited]
-  (let [client-write-chan (:client-write-chan inited)
-        client-read-chan (:client-read-chan inited)]
-    {:cp-server (server/start! (assoc (:cp-server inited)
+  (let [client-write-chan (::state/client-write-chan inited)
+        client-read-chan (::state/client-read-chan inited)]
+    {::cp-server (server/start! (assoc (::cp-server inited)
                                       ::state/client-read-chan client-read-chan
                                       ::state/client-write-chan client-write-chan))
-     :client-read-chan client-read-chan
-     :client-write-chan client-write-chan}))
+     ::state/client-read-chan client-read-chan
+     ::state/client-write-chan client-write-chan}))
 
 (defn stop
   [started]
-  (let [ch (get-in started [:client-read-chan :chan])]
+  (let [ch (get-in started [::state/client-read-chan ::state/chan])]
     (strm/close! ch))
-  (let [ch (get-in started [:client-write-chan :chan])]
+  (let [ch (get-in started [::state/client-write-chan ::state/chan])]
     (strm/close! ch))
-  {:cp-server (server/stop! (:cp-server started))
-   :client-read-chan {:chan nil}
-   :client-write-chan {:chan nil}})
+  {::cp-server (server/stop! (::cp-server started))
+   ::state/client-read-chan {::state/chan nil}
+   ::state/client-write-chan {::state/chan nil}})
 
 (deftest start-stop
   (testing "That we can start and stop successfully"
@@ -63,19 +62,8 @@
     (try
       (println "Sending bogus HELLO")
       (let [msg "Howdy!"
-            client (get-in started [:client-write-chan :chan])
+            client (get-in started [::state/client-write-chan ::state/chan])
             recvd (strm/try-take! client ::drained 500 ::timed-out)
-            ;; Currently, this fails silently (from our perspective).
-            ;; Which, really, is a fine thing.
-            ;; Although the log message should be improved (since this could
-            ;; very well indicate a hacking attempt).
-            ;; Still, the current behavior is good enough for now.
-            ;; I need to build packets to send to do the real work.
-            ;; That will be easier/simpler to do in shared when I'm
-            ;; interacting with a real client.
-            ;; (The alternative is to either capture that exchange so
-            ;; I can send it manually or reinvent the client's packet
-            ;; buildig code)
             success (deref (strm/try-put! client msg 1000 ::timed-out))]
         (println "put! success:" success)
         (is (not= ::timed-out success))
@@ -83,47 +71,3 @@
       (finally
         (println "Triggering event loop exit")
         (stop started)))))
-
-(deftest test-cookie-composition
-  ;; FIXME: This test does not belong in here.
-  ;; The magic numbers for the first few fields are really just to try
-  ;; to make the arrays distinctive enough that I can tell what's broken
-  ;; if/when things go sideways.
-  (let [client-extension (byte-array (take K/server-nonce-suffix-length (repeat 0)))
-        server-extension (byte-array (take K/server-nonce-suffix-length (range)))
-        working-nonce (byte-array (take (+ K/server-nonce-suffix-length
-                                           K/server-nonce-prefix-length)
-                                        (drop 40 (range))))
-        boxed (byte-array K/cookie-packet-length)
-        ;; Make sure we have plenty of room for writing
-        dst (Unpooled/buffer (* 2 K/cookie-packet-length))
-        ;; Built from the array, offset, and the length
-        buffered-nonce-suffix (Unpooled/wrappedBuffer working-nonce
-                                                      K/server-nonce-prefix-length
-                                                      K/server-nonce-suffix-length)
-        nonce-suffix (byte-array K/server-nonce-suffix-length)
-        buffered-cookie (Unpooled/wrappedBuffer boxed
-                                                K/box-zero-bytes
-                                                K/cookie-frame-length)
-        cookie (byte-array K/cookie-frame-length)]
-    (.readBytes buffered-nonce-suffix nonce-suffix)
-    (.readBytes buffered-cookie cookie)
-    (let [to-encode {::K/header K/cookie-header
-                     ::K/client-extension client-extension
-                     ::K/server-extension server-extension
-                     ::K/client-nonce-suffix nonce-suffix
-                     ::K/cookie cookie}]
-      (try
-        (let [composed (shared/compose K/cookie-frame to-encode dst)]
-          ;; It's very tempting to dissect this.
-          (is composed))
-        (catch clojure.lang.ExceptionInfo ex
-          (is (not (.getData ex))))))))
-
-(deftest vouch-extraction
-  ;; FIXME: This doesn't belong in here.
-  ;; TODO:
-  ;; Use client/build-vouch to generate a vouch wrapper.
-  ;; Then call server/decrypt-initiate-vouch to verify that
-  ;; it extracted correctly.
-  (throw (RuntimeException. "Not Implemented")))
