@@ -22,20 +22,23 @@ Needing to declare these things twice is annoying."
     ;; An assertion error here is better than killing the JVM
     ;; through a SIGSEGV, which is what this would do
     (assert (or (= ::K/zeroes cnvrtr)
-                v) (str "Composing from '"
-                   (pr-str v)
-                   "' (a "
-                   (pr-str (class v))
-                   ")\nbased on "
-                   k
-                   " among\n"
-                   (keys fields)
-                   "\nto "
-                   dst
-                   "\nbased on "
-                   cnvrtr
-                   "\nfor\n"
-                   dscr))
+                v) (try (str "Composing from '"
+                             (pr-str v)
+                             "' (a "
+                             (pr-str (class v))
+                             ")\nbased on "
+                             k
+                             " among\n"
+                             (keys fields)
+                             "\nto "
+                             dst
+                             "\nbased on "
+                             cnvrtr
+                             "\nfor\n"
+                             dscr)
+                        (catch ClassCastException ex
+                          (str ex "\nTrying to build error message about '" v
+                               "' under " k " in\n" fields))))
     (try
       (case cnvrtr
         ::K/bytes (let [^Long n (::K/length dscr)
@@ -76,6 +79,7 @@ Needing to declare these things twice is annoying."
                                          ::source-class (class v)
                                          ::description dscr
                                          ::error ex})))))
+        ::K/const (.writeBytes dst (::K/contents v))
         ::K/int-64 (.writeLong dst v)
         ::K/zeroes (let [n (::K/length dscr)]
                      (log/debug "Getting ready to write " n " zeros to " dst " based on "
@@ -102,6 +106,7 @@ Needing to declare these things twice is annoying."
     :as dscr}]
   (case cnvrtr
     ::K/bytes (::K/length dscr)
+    ::K/const (count (::K/contents dscr))
     ::K/int-64 8
     ::K/zeroes (::K/length dscr)))
 
@@ -165,6 +170,14 @@ Needing to declare these things twice is annoying."
                       ;; released separately
                       ::K/bytes (let [^Long len (::K/length dscr)]
                                   (.readBytes src len))
+                      ::K/const (let [contents (::K/contents dscr)
+                                      len (count contents)
+                                      extracted (.readBytes src len)]
+                                  (when-not (b-t/bytes= extracted contents)
+                                    (throw (ex-info "Deserialization constant mismatched"
+                                                    {::expected (vec contents)
+                                                     ::actual (vec extracted)})))
+                                  extracted)
                       ::K/int-64 (.readLong src)
                       ::K/int-32 (.readInt src)
                       ::K/int-16 (.readShort src)

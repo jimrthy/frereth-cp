@@ -46,7 +46,7 @@
                  "\nshared\n"
                  (b-t/->string my-short<->their-long))]
     (log/info msg)
-    {::K/prefix shared/hello-header
+    {::K/hello-prefix nil
      ::K/srvr-xtn server-extension
      ::K/clnt-xtn extension
      ::K/clnt-short-pk (.getPublicKey my-short-pair)

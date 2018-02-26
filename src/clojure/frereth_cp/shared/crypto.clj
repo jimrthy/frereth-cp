@@ -125,6 +125,11 @@ But it depends on compose, which would set up circular dependencies"
   [which]
   (let [pair (random-key-pair)
         namespace "frereth-cp.shared.specs"
+        ;; The keys generated here don't really mesh well with the
+        ;; way specs is written.
+        ;; That really just uses ::public-long and ::public-short
+        ;; FIXME: Track down where this is called and switch to
+        ;; that simpler/easier approach
         pk (keyword namespace (str "my-" (name which) "-public"))
         sk (keyword namespace (str "my-" (name which) "-secret"))]
     {pk (.getPublicKey pair)

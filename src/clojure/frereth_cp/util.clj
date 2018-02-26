@@ -4,12 +4,14 @@
   Because I haven't really decided what to do with them yet"
   ;; TODO: Try to require fipp and use it instead of
   ;; pprint
+  ;; TODO: Move into frereth-cp.shared.util
   (:require [clojure.pprint :as pprint]
             [clojure.spec.alpha :as s]
             [clojure.stacktrace :as s-t]
             [clojure.string :as string]
             [clojure.tools.logging :as log])
   (:import clojure.lang.ExceptionInfo
+           java.security.SecureRandom
            java.util.UUID))
 
 (set! *warn-on-reflection* true)
@@ -90,6 +92,19 @@ Falling back to standard")
                 " at " (.getFileName frame)
                 " line " (.getLineNumber frame))))
    [] (.getStackTrace ex)))
+
+(s/fdef random-secure-bytes
+        :args (s/cat :count nat-int?)
+        :fn (fn [{:keys [:args :ret]}]
+              (= (count ret) (:count args)))
+        :ret bytes?)
+(let [generator (SecureRandom.)]
+  (defn random-secure-bytes
+    "Returns an array of n bytes, generated in a cryptographically secure manner"
+    [n]
+    (let [result (byte-array n)]
+      (.nextBytes generator result)
+      result)))
 
 (s/fdef show-stack-trace
         :args (s/cat :ex #(instance? Throwable %))

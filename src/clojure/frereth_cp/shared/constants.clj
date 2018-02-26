@@ -16,7 +16,7 @@
 
 (def box-zero-bytes 16)
 (def ^Integer decrypt-box-zero-bytes 32)
-(def ^Integer key-length 32)
+(def key-length specs/key-length)
 (def max-random-nonce (long (Math/pow 2 48)))
 (def message-len 1104)
 (def nonce-length 24)
@@ -76,12 +76,16 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Hello packets
 
+(def hello-header-string "QvnQ5XlH")
+(def hello-header (.getBytes hello-header-string))
+(s/def ::hello-prefix (s/and ::specs/prefix
+                             #(= hello-header-string (String. %))))
 (def ^Integer hello-crypto-box-length 80)
 (def ^Integer ^:const zero-box-length (- hello-crypto-box-length box-zero-bytes))
 ;; FIXME: It would be really nice to be able to generate this from the spec
 ;; or vice-versa.
 ;; Specs, coercion, and serialization are currently a hot topic on the mailing list.
-(def hello-packet-dscr (array-map ::prefix {::type ::bytes ::length header-length}
+(def hello-packet-dscr (array-map ::hello-prefix {::type ::const ::contents hello-header}
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-short-pk {::type ::bytes ::length key-length}
@@ -104,15 +108,18 @@
 ;; TODO: Make that so
 ;; (just do it one step at a time)
 (s/def ::srvr-xtn ::specs/srvr-xtn)
-(s/def ::clnt-xtn ::specs/clnt-xtn)
+#_(s/def ::clnt-xtn ::specs/clnt-xtn)
+#_(s/def ::clnt-xtn ::specs/extension)
+(s/def ::clnt-xtn (s/and bytes?
+                         #(= (count %) extension-length)))
 (s/def ::clnt-short-pk ::specs/public-short)
-(s/def ::zeros (s/with-gen
-                 (s/and bytes
+(s/def ::zeros (s/and bytes
                         #(= (count %) zero-box-length)
                         (fn [x]
-                          (every? #(= 0 %) x)))
-                 (byte-array (take zero-box-length (repeat 0)))))
-(s/def ::hello-spec (s/keys :req [::prefix
+                          (every? #(= 0 %) x))))
+(s/def ::crypto-box (s/and bytes
+                           #(= (count %) hello-crypto-box-length)))
+(s/def ::hello-spec (s/keys :req [::hello-prefix
                                   ::srvr-xtn
                                   ::clnt-xtn
                                   ::clnt-short-pk
