@@ -20,8 +20,10 @@ Needing to declare these things twice is annoying."
         cnvrtr (::K/type dscr)
         ^bytes v (k fields)]
     ;; An assertion error here is better than killing the JVM
-    ;; through a SIGSEGV, which is what this would do
+    ;; through a SIGSEGV, which is what happens without it
     (assert (or (= ::K/zeroes cnvrtr)
+                (and (= ::K/const cnvrtr)
+                     (::K/contents dscr))
                 v) (try (str "Composing from '"
                              (pr-str v)
                              "' (a "
@@ -79,7 +81,7 @@ Needing to declare these things twice is annoying."
                                          ::source-class (class v)
                                          ::description dscr
                                          ::error ex})))))
-        ::K/const (.writeBytes dst (::K/contents v))
+        ::K/const (.writeBytes dst (::K/contents dscr))
         ::K/int-64 (.writeLong dst v)
         ::K/zeroes (let [n (::K/length dscr)]
                      (log/debug "Getting ready to write " n " zeros to " dst " based on "
@@ -168,15 +170,24 @@ Needing to declare these things twice is annoying."
                       ;; .readBytes does not produce a derived buffer.
                       ;; The buffer that gets created here will need to be
                       ;; released separately
+                      ;; Q: Would .readSlice make more sense?
                       ::K/bytes (let [^Long len (::K/length dscr)]
                                   (.readBytes src len))
                       ::K/const (let [contents (::K/contents dscr)
                                       len (count contents)
                                       extracted (.readBytes src len)]
-                                  (when-not (b-t/bytes= extracted contents)
-                                    (throw (ex-info "Deserialization constant mismatched"
-                                                    {::expected (vec contents)
-                                                     ::actual (vec extracted)})))
+                                  ;; Can't use bytes= for comparison, because it can't
+                                  ;; cope with ByteBuf instances
+                                  ;; It's tempting to not test at all, but this is one
+                                  ;; of our immediate first opportunities to play defense.
+                                  ;; FIXME: Revisit this.
+                                  ;; Especially since the test that's actually using it really needs
+                                  ;; something similar.
+                                  (comment
+                                    (when-not (b-t/bytes= extracted contents)
+                                      (throw (ex-info "Deserialization constant mismatched"
+                                                      {::expected (vec contents)
+                                                       ::actual (vec extracted)}))))
                                   extracted)
                       ::K/int-64 (.readLong src)
                       ::K/int-32 (.readInt src)

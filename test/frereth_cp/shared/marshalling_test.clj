@@ -143,6 +143,11 @@
   ;; This is a way to avoid dipping down into lo-gen
   (gen/generate (gen/fmap byte-array (gen/vector (gen/choose -128 127) K/extension-length)))
 
+  ;; Note that this definitely does not do what I want
+  (comment (count (gen/generate (gen/bytes 16))))
+  ;; Neither does this
+  (count (gen/generate (gen/bytes nil 16)))
+
   (gen/generate (s/gen ::K/clnt-short-pk))
   (gen/generate (lo-gen/->Generator (fn [_ _]
                                       (rose/make-rose (utils/random-secure-bytes K/key-length) []))))
@@ -181,23 +186,54 @@
                   ::K/crypto-box #(gen/fmap byte-array (gen/vector lo-gen/byte K/hello-crypto-box-length))}))
   )
 
+(defn fixed-length-byte-array-generator
+  [n]
+  (gen/fmap byte-array (gen/vector (gen/choose -128 127) n)))
+
 (deftest hello-round-trip
   ;; FIXME: The code for generating a specific byte array needs to
   ;; be moved somewhere generally useful
   ;; FIXME: Convert to gen/sample instead of gen/generate
-  (let [hellos (gen/generate (s/gen
-                              ::K/hello-spec
-                              {::K/hello-prefix #(gen/return K/hello-header)
-                               ::K/srvr-xtn #(gen/vector lo-gen/byte K/extension-length)
-                               ::K/clnt-xtn #(gen/vector lo-gen/byte K/extension-length)
-                               ::K/clnt-short-pk #(lo-gen/->Generator (fn [_ _]
-                                                                        (rose/make-rose (utils/random-secure-bytes K/key-length) [])))
-                               ::K/zeros #(gen/return (byte-array (take K/zero-box-length (repeat 0))))
-                               ::K/client-nonce-suffix #(gen/fmap byte-array (gen/vector lo-gen/byte K/client-nonce-suffix-length))
-                               ::K/crypto-box #(gen/fmap byte-array (gen/vector lo-gen/byte K/hello-crypto-box-length))}))
-        serialized (map (partial marshal/compose K/hello-packet-dscr) hellos)]
+  (let [hellos (gen/sample (s/gen
+                            ::K/hello-spec
+                            {::K/hello-prefix #(gen/return K/hello-header)
+                             ::specs/extension (partial fixed-length-byte-array-generator K/extension-length)
+                             ;; It seems like the next line is the way this
+                             ;; should be handled, but the previous one seems
+                             ;; to work more often.
+                             ;; Sadly, neither approach seems to actually work with any consistency.
+                             #_[::K/clnt-xtn #(gen/vector lo-gen/byte K/extension-length)]
+                             ::K/clnt-short-pk #(lo-gen/->Generator (fn [_ _]
+                                                                      (rose/make-rose (utils/random-secure-bytes K/key-length) [])))
+                             ::K/zeros #(gen/return (byte-array (take K/zero-box-length (repeat 0))))
+                             ::K/client-nonce-suffix (partial fixed-length-byte-array-generator K/client-nonce-suffix-length)
+                             ::K/crypto-box (partial fixed-length-byte-array-generator K/hello-crypto-box-length)}))
+        buffers (map (partial marshal/compose K/hello-packet-dscr) hellos)
+        ;; FIXME: Make this go back away
+        serialized (map (fn [buffer]
+                          (let [dst (byte-array (.readableBytes buffer))]
+                            (.readBytes buffer dst)
+                            dst))
+                        buffers)]
+    ;; each hello is a map of field names to byte arrays
+    ;; decompose returns a similar map, but the values are ByteBuf instances.
+    ;; Which seems wrong.
+    ;; However, even if it round-tripped seamlessly (and, realistically, it needs to),
+    ;; I couldn't get a decent comparison using plain =
+    (let [a (first hellos)
+          ;; Sometimes I get an error about trying to read past the end
+          ;; of the buffer.
+          ;; FIXME: Why?
+          b (marshal/decompose K/hello-packet-dscr (first buffers))]
+      (println "First raw: " a
+               "\nFirst decomposed: " b))
     (dorun (map #(is (= %1 (marshal/decompose K/hello-packet-dscr %2)))
                 hellos
-                serialized))))
+                ;; decompose does expect a ByteBuf
+                #_serialized
+                buffers))
+    (comment
+      (println (count (first serialized))))))
 (comment
-  (hello-round-trip))
+  (hello-round-trip)
+  )
