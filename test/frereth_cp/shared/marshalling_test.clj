@@ -1,7 +1,7 @@
 (ns frereth-cp.shared-test
   (:require [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
-            [clojure.test :refer (are is deftest testing)]
+            [clojure.test :refer (are deftest is testing)]
             [clojure.test.check.generators :as lo-gen]
             [clojure.test.check.rose-tree :as rose]
             [frereth-cp.shared :as shared]
@@ -106,17 +106,17 @@
                                                                      []))))]
                         ::K/zeros #(gen/return (byte-array (take K/zero-box-length (repeat 0))))
                         }))
-  (gen/generate (s/gen (s/keys :req [::K/hello-prefix
-                                     #_::K/srvr-xtn
-                                     #_::K/clnt-xtn
-                                     ::K/clnt-short-pk
-                                     ::K/zeros
-                                     ::K/client-nonce-suffix
-                                     ::K/crypto-box])
+  (gen/sample (s/gen (s/keys :req [#_::K/hello-prefix
+                                     ::K/srvr-xtn
+                                     ::K/clnt-xtn
+                                     #_::K/clnt-short-pk
+                                     #_::K/zeros
+                                     #_::K/client-nonce-suffix
+                                     #_::K/crypto-box])
                        #_::K/hello-spec
                        {::K/hello-prefix #(gen/return K/hello-header)
-                        ::K/srvr-xtn #(gen/fmap byte-array (gen/vector lo-gen/byte K/extension-length))
-                        ::K/clnt-xtn #(gen/fmap byte-array (gen/vector lo-gen/byte K/extension-length))
+                        ::K/srvr-xtn #(gen/fmap byte-array (gen/vector (gen/choose -128 127) K/extension-length))
+                        ::K/clnt-xtn #(gen/fmap byte-array (gen/vector (gen/choose -128 127) K/extension-length))
                         ;; This generates a random encrypted keypair.
                         ;; Which isn't what I want, but this is the secret magical
                         ;; sauce to make a dead-simple custom generator work.
@@ -132,8 +132,16 @@
                         ::K/crypto-box #(gen/fmap byte-array (gen/vector lo-gen/byte K/hello-crypto-box-length))
                         }))
   (count (gen/generate (gen/fmap byte-array (gen/vector lo-gen/byte K/hello-crypto-box-length))))
-  (gen/generate (s/gen ::K/clnt-xtn
-                       {::K/clnt-xtn #(gen/fmap byte-array (gen/vector lo-gen/byte K/extension-length))}))
+  (gen/generate (s/gen (s/keys :req [::K/clnt-xtn
+                                     ::K/srvr-xtn])
+                       {::K/clnt-xtn #(gen/fmap byte-array (gen/vector lo-gen/byte K/extension-length))
+                        ::K/srvr-xtn #(gen/fmap byte-array (gen/vector lo-gen/byte K/extension-length))}))
+  (count (gen/sample (gen/fmap byte-array (gen/vector lo-gen/byte K/extension-length)) 200))
+  (let [sample (gen/sample (gen/fmap byte-array (gen/vector lo-gen/byte K/extension-length)) 200)]
+    (doseq [x sample]
+      (when-not (s/valid? ::K/clnt-xtn x)
+        (throw (ex-info "Something went wrong"
+                        (s/explain-data ::K/clnt-xtn x))))))
 
   (gen/generate (s/gen ::K/clnt-xtn
                        {::specs/extension #(gen/fmap byte-array (gen/vector (gen/choose -128 127) K/extension-length))}))
