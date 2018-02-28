@@ -201,10 +201,10 @@
 (deftest hello-round-trip
   ;; FIXME: The code for generating a specific byte array needs to
   ;; be moved somewhere generally useful
-  ;; FIXME: Convert to gen/sample instead of gen/generate
   (let [hellos (gen/sample (s/gen
                             ::K/hello-spec
                             {::K/hello-prefix #(gen/return K/hello-header)
+                             ;; FIXME: Go back to spec'ing out both
                              ::specs/extension (partial fixed-length-byte-array-generator K/extension-length)
                              ;; It seems like the next line is the way this
                              ;; should be handled, but the previous one seems

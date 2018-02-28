@@ -4,6 +4,10 @@
             [clojure.test :refer (deftest is)]))
 
 (def extension-length 16)
+(comment
+  (s/def ::extension (s/with-gen (s/and bytes?
+                                        #(= (count %) extension-length))
+                       #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length)))))
 (s/def ::extension (s/and bytes?
                           #(= (count %) extension-length)))
 (s/def ::srvr-xtn ::extension)
@@ -32,10 +36,27 @@
   []
   (gen/sample (s/gen (s/keys :req [::srvr-xtn
                                    ::clnt-xtn])
+                     #_{::srvr-xtn #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))
+                        ::clnt-xtn #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))
+                        ::extension #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))}
+                     {::extension #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))})))
+;; Calling this fails pretty much every time, unless I specify the generator for ::extension.
+(comment (manual-check))
+
+(comment
+  (gen/sample (s/gen (s/keys :req [::srvr-xtn
+                                   ::clnt-xtn])
                      {::srvr-xtn #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))
-                      ::clnt-xtn #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))})))
-;; Calling this fails pretty much every time
-(manual-check)
+                      ::clnt-xtn #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))}))
+  )
+
+(s/def ::test (s/with-gen (s/and bytes?
+                                 #(= (count %) extension-length))
+                #(gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))))
+(comment
+  (gen/sample (s/gen ::test))
+  (map count (gen/sample (s/gen ::test)))
+  )
 
 ;; Calling manual-check from inside a test passes
 (deftest transitive-indirect
@@ -72,7 +93,7 @@
 (comment
   (let [xs (generate-directly)]
     (doseq [x xs]
-      #_(println ".")
+      (println ".")
       (when-let [problem (s/explain-data ::srvr-xtn x)]
         (throw (ex-info "oops" problem)))))
   )
@@ -81,3 +102,10 @@
   (let [xs (generate-directly)]
     (doseq [x xs]
       (is (not (s/explain-data ::srvr-xtn x))))))
+
+
+(comment
+  (map count (gen/sample (gen/vector (gen/choose -128 127))))
+  (map count (gen/sample (gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))))
+  (map vec (gen/sample (gen/fmap byte-array (gen/vector (gen/choose -128 127) extension-length))))
+  )
