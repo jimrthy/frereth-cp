@@ -3,11 +3,11 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.flow-control :as flow-control]
             [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.marshall :as marshall]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.logging :as log]
+            [frereth-cp.shared.marshal :as marshal]
             [frereth-cp.util :as utils])
   (:import [io.netty.buffer ByteBuf Unpooled]
            java.nio.ByteOrder))
@@ -58,7 +58,7 @@
         ;; Using decompose is nice and convenient here, but
         ;; I can definitely see it cause problems.
         ;; TODO: Benchmark!
-        header (shared/decompose marshall/message-header-dscr buf)
+        header (marshal/decompose marshal/message-header-dscr buf)
         D' (::specs/size-and-flags header)
         SF (bit-and D' (bit-or K/eof-normal K/eof-error))
         D (- D' SF)
@@ -75,7 +75,8 @@
       (.skipBytes buf padding-count))
 
     ;;; And then return a portion of buf that we can
-    ;;; safely mangle later.
+    ;;; safely mangle later (i.e. it's shared state that
+    ;;; will get modified destructively)
     ;;; I really don't like any of the obvious options.
 
     ;; 3 approaches seem to make sense here:

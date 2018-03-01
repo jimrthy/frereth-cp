@@ -167,8 +167,7 @@
   ;; Q: Is ztellman's vertigo applicable here?
   "Read a C-style ByteBuf struct into a map, based on a template"
   [tmplt ^ByteBuf src]
-  (log/warn "Use the shared.marshal ns directly instead")
-  (marshal/decompose tmplt src))
+  (throw (RuntimeException. "Switch to the version in marshall. Expect byte arrays")))
 
 (s/fdef default-packet-manager
         :args (s/cat)

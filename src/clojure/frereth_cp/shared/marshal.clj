@@ -1,4 +1,11 @@
 (ns frereth-cp.shared.marshal
+  "I didn't do enough research before choosing this name.
+
+Marshalling is really tied in with things like RMI and CORBA
+and DCOM. It's really about OOP, which just does not belong
+in this picture.
+
+FIXME: Rename for better semantics before this progresses any further."
   (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.shared.bit-twiddling :as b-t]
@@ -112,6 +119,13 @@ Needing to declare these things twice is annoying."
     ::K/int-64 8
     ::K/zeroes (::K/length dscr)))
 
+(defn read-byte-array
+  [dscr src]
+  (let [^Long len (calculate-length dscr)
+        dst (byte-array len)]
+    (.readBytes src dst)
+    dst))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -171,23 +185,13 @@ Needing to declare these things twice is annoying."
                       ;; The buffer that gets created here will need to be
                       ;; released separately
                       ;; Q: Would .readSlice make more sense?
-                      ::K/bytes (let [^Long len (::K/length dscr)]
-                                  (.readBytes src len))
+                      ::K/bytes (read-byte-array dscr src)
                       ::K/const (let [contents (::K/contents dscr)
-                                      len (count contents)
-                                      extracted (.readBytes src len)]
-                                  ;; Can't use bytes= for comparison, because it can't
-                                  ;; cope with ByteBuf instances
-                                  ;; It's tempting to not test at all, but this is one
-                                  ;; of our immediate first opportunities to play defense.
-                                  ;; FIXME: Revisit this.
-                                  ;; Especially since the test that's actually using it really needs
-                                  ;; something similar.
-                                  (comment
-                                    (when-not (b-t/bytes= extracted contents)
-                                      (throw (ex-info "Deserialization constant mismatched"
-                                                      {::expected (vec contents)
-                                                       ::actual (vec extracted)}))))
+                                      extracted (read-byte-array dscr src)]
+                                  (when-not (b-t/bytes= extracted contents)
+                                    (throw (ex-info "Deserialization constant mismatched"
+                                                    {::expected (vec contents)
+                                                     ::actual (vec extracted)})))
                                   extracted)
                       ::K/int-64 (.readLong src)
                       ::K/int-32 (.readInt src)
@@ -195,7 +199,13 @@ Needing to declare these things twice is annoying."
                       ::K/uint-64 (b-t/possibly-2s-uncomplement-64 (.readLong src))
                       ::K/uint-32 (b-t/possibly-2s-uncomplement-32 (.readInt src))
                       ::K/uint-16 (b-t/possibly-2s-uncomplement-16 (.readShort src))
-                      ::K/zeroes (.readSlice src (::K/length dscr))
+                      ::K/zeroes (let [dst (read-byte-array dscr src)]
+                                   (when-not (every? zero? dst)
+                                     (throw (ex-info "Corrupted zeros field"
+                                                     {::field dscr
+                                                      ::src src
+                                                      ::tmplt tmplt})))
+                                   dst)
                       (throw (ex-info "Missing case clause"
                                       {::failure cnvrtr
                                        ::acc acc
