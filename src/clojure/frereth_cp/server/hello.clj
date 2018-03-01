@@ -9,6 +9,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.serialization :as serial]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as stream])
@@ -25,11 +26,11 @@
            ::state/cookie-cutter
            ::shared/my-keys
            ::shared/working-area]
-    ^ByteBuf nonce-suffix ::nonce-suffix
+    ^bytes nonce-suffix ::nonce-suffix
     :as state}
    message
    ^ByteBuf crypto-box]
-  (log/warn "Deprecated. Use crypto/open-crypto-box instead")
+  (log/warn "Deprecated. Just use crypto/open-crypto-box instead")
   (let [^TweetNaclFast$Box$KeyPair long-keys (::shared/long-pair my-keys)]
     (when-not long-keys
       ;; Log whichever was missing and throw
@@ -55,7 +56,7 @@
                       (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))))
       (b-t/byte-copy! working-nonce
                       shared/hello-nonce-prefix)
-      (.readBytes nonce-suffix working-nonce K/client-nonce-prefix-length K/client-nonce-suffix-length)
+      (b-t/byte-copy! working-nonce K/client-nonce-prefix-length K/client-nonce-suffix-length nonce-suffix)
       (.readBytes crypto-box text 0 K/hello-crypto-box-length)
       (let [msg (str "Trying to open "
                      K/hello-crypto-box-length
@@ -89,13 +90,13 @@
   (if (= (.readableBytes message) shared/hello-packet-length)
     (do
       (log/info "This is the correct size")
-      (let [;; Q: Is the convenience here worth the performance hit of using decompose?
+      (let [;; Q: Is the convenience here worth the [hypothetical] performance hit of using decompose?
             {:keys [::K/clnt-xtn
                     ::K/crypto-box
                     ::K/client-nonce-suffix
                     ::K/srvr-xtn]
-             ^ByteBuf clnt-short-pk ::K/clnt-short-pk
-             :as decomposed} (shared/decompose K/hello-packet-dscr message)
+             ^bytes clnt-short-pk ::K/clnt-short-pk
+             :as decomposed} (serial/decompose K/hello-packet-dscr message)
             ;; We're keeping a ByteArray around for storing the key received by the current message.
             ;; The reference implementation just stores it in a global.
             ;; This undeniably has some impact on GC.
@@ -122,7 +123,11 @@
               (throw (ex-info "HELLO packet missed client short-term pk" decomposed)))
         ;; Q: Is there any real point to this?
         (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
-        (.getBytes clnt-short-pk 0 client-short-pk)
+        ;; Destructively overwriting the contents of the destination B] absolutely reeks.
+        ;; It seems like it would be much better to just assoc in the new B] containing
+        ;; the key and move along.
+        ;; Then again, this entire giant side-effecting mess is awful.
+        (System/arraycopy clnt-short-pk 0 client-short-pk 0 K/client-)
         ;; FIXME: This can't be/isn't right
         ;; (except for the basic fact that it works)
         ;; TODO: switch to crypto/open-crypto-box

@@ -1,4 +1,4 @@
-(ns frereth-cp.shared.marshal
+(ns frereth-cp.shared.serialization
   "I didn't do enough research before choosing this name.
 
 Marshalling is really tied in with things like RMI and CORBA

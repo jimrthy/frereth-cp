@@ -1,4 +1,4 @@
-(ns frereth-cp.shared-test
+(ns frereth-cp.serialization-test
   (:require [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
             [clojure.test :refer (are deftest is testing)]

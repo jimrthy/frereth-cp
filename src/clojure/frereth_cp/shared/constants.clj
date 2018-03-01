@@ -8,16 +8,19 @@
 ;;; Magic Constants
 
 ;; Q: How many of the rest of this could benefit enough by
-;; getting a ^:const metadata hint to justify it?
+;; getting a ^:const metadata hint to justify adding it?
+;; TODO: More benchmarking
+(def box-zero-bytes 16)
+(def ^Integer decrypt-box-zero-bytes 32)
+(def key-length specs/key-length)
+(def max-random-nonce (long (Math/pow 2 48)))
+
+(def client-key-length key-length)
 (def ^Integer client-nonce-prefix-length 16)
 (def ^Integer client-nonce-suffix-length 8)
 (def extension-length specs/extension-length)
 (def header-length specs/header-length)
 
-(def box-zero-bytes 16)
-(def ^Integer decrypt-box-zero-bytes 32)
-(def key-length specs/key-length)
-(def max-random-nonce (long (Math/pow 2 48)))
 (def message-len 1104)
 (def nonce-length 24)
 (def ^Integer server-nonce-prefix-length 8)
@@ -88,7 +91,7 @@
 (def hello-packet-dscr (array-map ::hello-prefix {::type ::const ::contents hello-header}
                                   ::srvr-xtn {::type ::bytes ::length extension-length}
                                   ::clnt-xtn {::type ::bytes ::length extension-length}
-                                  ::clnt-short-pk {::type ::bytes ::length key-length}
+                                  ::clnt-short-pk {::type ::bytes ::length client-key-length}
                                   ::zeros {::type ::zeroes ::length zero-box-length}
                                   ;; This gets weird/confusing.
                                   ;; It's a 64-bit number, so 8 octets
@@ -153,10 +156,10 @@
                        ::length cookie-frame-length}))
 
 (def black-box-dscr (array-map ::padding {::type ::zeroes ::length decrypt-box-zero-bytes}
-                               ::clnt-short-pk {::type ::bytes ::length key-length}
-                               ::srvr-short-sk {::type ::bytes ::length key-length}))
+                               ::clnt-short-pk {::type ::bytes ::length client-key-length}
+                               ::srvr-short-sk {::type ::bytes ::length server-key-length}))
 (def cookie
-  (array-map ::s' {::type ::bytes ::length key-length}
+  (array-map ::s' {::type ::bytes ::length server-key-length}
              ::black-box {::type ::bytes ::length server-cookie-length}))
 ;; TODO: Need matching specs for these keys.
 (s/def ::cookie-spec (s/keys :req [::s' ::black-box]))
@@ -179,7 +182,7 @@
 ;; Really, neither of those is a great name choice.
 (def vouch-length (+ box-zero-bytes ;; 16
                      ;; 32
-                     key-length))
+                     client-key-length))
 ;; The way this is wrapped up seems odd.
 ;; We have a box containing the short-term key encrypted
 ;; by the long-term public key.
@@ -195,12 +198,9 @@
 ;; (+ 16 32 16 48 256)
 ;; => 368
 (def minimum-vouch-length (+ box-zero-bytes  ; 16
-                             ;; 32
-                             key-length
-                             ;; 16
-                             server-nonce-suffix-length
-                             ;; 48
-                             vouch-length
+                             client-key-length ; 32
+                             server-nonce-suffix-length ; 16
+                             vouch-length ; 48
                              ;; 256
                              server-name-length))
 (defn initiate-message-length-filter
@@ -214,7 +214,7 @@
 (def vouch-wrapper
   "Template for composing the inner part of an Initiate Packet's Vouch that holds everything interesting"
   {::client-long-term-key {::type ::bytes
-                           ::length key-length}
+                           ::length client-key-length}
    ::inner-i-nonce {::type ::bytes ::length server-nonce-suffix-length}
    ::inner-vouch {::type ::bytes ::length vouch-length}
    ::server-name {::type ::bytes ::length server-name-length}
@@ -233,7 +233,7 @@
              ::clnt-xtn {::type ::bytes
                          ::length extension-length}
              ::clnt-short-pk {::type ::bytes
-                              ::length key-length}
+                              ::length client-key-length}
              ::cookie {::type ::bytes
                        ::length server-cookie-length}
              ::outer-i-nonce {::type ::bytes
@@ -269,11 +269,11 @@
 
 TODO: Rename this to something like initiate-client-vouch-message"
   (array-map ::long-term-public-key {::type ::bytes
-                                     ::length key-length}
+                                     ::length client-key-length}
              ::inner-i-nonce {::type ::bytes
                             ::length server-nonce-suffix-length}
              ::hidden-client-short-pk {::type ::bytes
-                                       ::length (+ key-length box-zero-bytes)}
+                                       ::length (+ client-key-length box-zero-bytes)}
              ::server-name {::type ::bytes
                             ::length server-name-length}
              ::message {::type ::bytes
