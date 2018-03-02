@@ -161,7 +161,13 @@
 (s/def ::size-and-flags ::unsigned-short)
 (s/def ::start-byte ::unsigned-long)
 ;; This represents an actual deserialized message
-;; from the parent
+;; from the parent.
+;; Using ::packet as the key for this spec was
+;; an unfortunate choice.
+;; Since the distinction between packets and
+;; messages (especially considering message
+;; packets) is already confusing.
+;; FIXME: Switch to a better choice.
 (s/def ::packet (s/keys :req [::message-id
                               ::acked-message
                               ::ack-length-1

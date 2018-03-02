@@ -266,6 +266,13 @@ which I'm really not qualified to touch."
                      :suffix-buffer #(instance? ByteBuf %)
                      :crypto-buffer #(instance? ByteBuf %)
                      :shared-key ::specs/crypto-key)
+        ;; This doesn't match the return spec for open-after.
+        ;; I'm 90% certain this actually returns (s/nilable vector?)
+        ;; where the vector contents are all bytes.
+        ;; FIXME: establish that last 10% confidence and fix
+        ;; whichever spec is wrong.
+        ;; Although having both return (s/nilable bytes?) is
+        ;; starting to look like the best option.
         :ret (s/nilable #(instance? ByteBuf %)))
 (defn open-crypto-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"

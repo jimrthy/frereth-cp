@@ -21,6 +21,13 @@
 
 (defn byte-copy!
   "Copies the bytes from src to dst"
+  ;; TODO: Benchmark this approach against
+  ;; System/arraycopy (the latter really should
+  ;; kill it...except for small arrays, which is
+  ;; really what's involved here)
+  ;; If we just need to copy a subset of src
+  ;; (as opposed to building dst in fits and starts),
+  ;; Arrays/copyOfRange seems to be the way to go.
   ([dst ^bytes src]
    (let [m (min (count src)
                 (count dst))]

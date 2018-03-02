@@ -167,14 +167,34 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets
 
+(def max-vouch-message-length 640)
+;; Q: Can this ever be < 16?
+;; A: Well, in the reference implementation, trying to write
+;; too few (< 16) or too many (> 640 in the Initiatet/Vouch phase)
+;; bytes causes the process to exit.
+;; And, because of the way those bytes are buffered, it really
+;; has to always write a multiple of 16 (Q: What about once
+;; EOF hits?)
+;; Actually, this part *is* a message.
+;; And, according to the spec, that has to be at least 16
+;; bytes.
+(def min-vouch-message-length 16)
+
+(s/def ::hidden-client-short-pk ::specs/public-short)
 (s/def ::inner-i-nonce ::server-nonce-suffix)
+(s/def ::long-term-public-key ::specs/public-long)
+;; FIXME: Actually, this should be a full-blown
+;; :frereth-cp.message.specs/packet, with a better
+;; name.
+;; FIXME: Switch to that name.
+(s/def ::message (s/and bytes?
+                        #(<= max-vouch-message-length (count %))
+                        #(<= (count %))))
 (s/def ::outer-i-nonce ::client-nonce-suffix)
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 (def initiate-header (.getBytes (str client-header-prefix "I")))
-
-(def max-vouch-message-length 640)
 
 ;; 48 bytes
 ;; Q: What is this for?

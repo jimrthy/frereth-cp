@@ -127,7 +127,7 @@
         ;; It seems like it would be much better to just assoc in the new B] containing
         ;; the key and move along.
         ;; Then again, this entire giant side-effecting mess is awful.
-        (System/arraycopy clnt-short-pk 0 client-short-pk 0 K/client-)
+        (b-t/byte-copy! client-short-pk clnt-short-pk)
         ;; FIXME: This can't be/isn't right
         ;; (except for the basic fact that it works)
         ;; TODO: switch to crypto/open-crypto-box
@@ -149,7 +149,8 @@
               ;; We don't actually care about the contents of the bytes we just decrypted.
               ;; They should be all zeroes for now, but that's really an area for possible future
               ;; expansion.
-              ;; For now, the point is that they unbox correctly on the other side
+              ;; For now, the point is that they unboxed correctly, so the client has our public
+              ;; key and the short-term private key so it didn't just send us random garbage.
               (let [crypto-box
                     (cookie/prepare-cookie! {::state/client-short<->server-long shared-secret
                                              ::state/client-short-pk clnt-short-pk
