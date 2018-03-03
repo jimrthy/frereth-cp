@@ -277,7 +277,7 @@
                               #(>= 640 (count %))))
 
 (s/def ::initiate-packet-spec (s/keys :req [::prefix
-                                            ::srvr-txn
+                                            ::srvr-xtn
                                             ::clnt-xtn
                                             ::clnt-short-pk
                                             ::cookie
