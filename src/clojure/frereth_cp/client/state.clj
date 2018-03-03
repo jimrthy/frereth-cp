@@ -10,6 +10,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.serialize :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
@@ -241,16 +242,12 @@ TODO: Need to ask around about that."
       ;; to notify callers immediately
       (try
         (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
-              extracted (shared/decompose K/cookie decrypted)
-              server-short-pk (byte-array K/key-length)
-              server-cookie (byte-array K/server-cookie-length)
+              {server-short-pk ::K/s'
+               server-cookie ::K/black-box
+               :as extracted} (serial/decompose K/cookie decrypted)
               server-security (assoc (::server-security this)
                                      ::specs/public-short server-short-pk,
-                                     ::server-cookie server-cookie)
-              {^ByteBuf s' ::K/s'
-               ^ByteBuf black-box ::K/black-box} extracted]
-          (.readBytes s' server-short-pk)
-          (.readBytes black-box server-cookie)
+                                     ::server-cookie server-cookie)]
           (assoc this ::server-security server-security))
         (catch ExceptionInfo ex
           (log/error ex (str "Decryption failed:\n"
@@ -274,13 +271,10 @@ TODO: Need to ask around about that."
         (throw (ex-info "Incoming cookie packet illegal" err))))
     (log/debug (str "Incoming packet that looks like it might be a cookie:\n"
                    (with-out-str (shared/bytes->string packet))))
-    (let [rcvd (shared/decompose K/cookie-frame packet)
-          hdr (byte-array K/header-length)
-          xtnsn (byte-array K/extension-length)
-          srvr-xtnsn (byte-array K/extension-length)
-          ^ByteBuf received-header (::K/header rcvd)
-          ^ByteBuf client-extension (::K/client-extension rcvd)
-          ^ByteBuf server-extension (::K/server-extension rcvd)]
+    (let [{:keys [::K/header
+                  ::K/client-extension
+                  ::K/server-extension]
+           :as rcvd} (serial/decompose K/cookie-frame packet)]
       ;; Reference implementation starts by comparing the
       ;; server IP and port vs. what we received.
       ;; Which we don't have here.
@@ -303,15 +297,12 @@ TODO: Need to ask around about that."
       ;; Well, the proof *is* in the pudding.
       ;; The most important point is whether the other side sent
       ;; us a cookie we can decrypt using our shared key.
-      (.readBytes received-header hdr)
-      (.readBytes client-extension xtnsn)
-      (.readBytes server-extension srvr-xtnsn)
       (log/info (str "Verifying that "
-                     hdr
+                     header
                      " looks like it belongs to a Cookie packet"))
-      (when (and (b-t/bytes= K/cookie-header hdr)
-                 (b-t/bytes= extension xtnsn)
-                 (b-t/bytes= server-extension srvr-xtnsn))
+      (when (and (b-t/bytes= K/cookie-header header)
+                 (b-t/bytes= extension client-extension)
+                 (b-t/bytes= server-extension server-extensionn))
         (decrypt-actual-cookie this rcvd)))))
 
 (defn build-vouch

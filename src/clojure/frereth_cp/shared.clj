@@ -6,7 +6,7 @@
             [clojure.tools.logging :as log]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.marshal :as marshal]
+            [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
@@ -150,24 +150,7 @@
   "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt"
   ^ByteBuf [tmplt fields ^ByteBuf dst]
   (log/warn "Deprecated: use marshal ns instead")
-  (marshal/compose! tmplt fields dst))
-
-;;; STARTED: Refactor into the marshall ns
-(s/fdef decompose
-        ;; TODO: tmplt needs a spec for the values
-        :args (s/cat :template map?
-                     :src #(instance? ByteBuf %))
-        ;; TODO: Really should match each value in tmplt
-        ;; with the corresponding value in ret and clarify
-        ;; a type that way.
-        :fn #(= (-> % :ret keys)
-                (-> % :tmplt keys))
-        :ret map?)
-(defn decompose
-  ;; Q: Is ztellman's vertigo applicable here?
-  "Read a C-style ByteBuf struct into a map, based on a template"
-  [tmplt ^ByteBuf src]
-  (throw (RuntimeException. "Switch to the version in marshall. Expect byte arrays")))
+  (serial/compose! tmplt fields dst))
 
 (s/fdef default-packet-manager
         :args (s/cat)
@@ -256,5 +239,5 @@ allocated using default-packet-manager"
 
 (defn zero-out!
   [dst start end]
-  (log/warn "Deprecated: Moved to shared.constants")
-  (K/zero-out! dst start end))
+  (log/warn "Deprecated: Moved to shared.bit-twiddling")
+  (b-t/zero-out! dst start end))

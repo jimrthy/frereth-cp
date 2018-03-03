@@ -1,7 +1,6 @@
 (ns frereth-cp.shared.constants
   "Magical names, numbers, and data structures"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.specs :as specs]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -23,6 +22,7 @@
 
 (def message-len 1104)
 (def nonce-length 24)
+(def server-key-length key-length)
 (def ^Integer server-nonce-prefix-length 8)
 (def ^Integer server-nonce-suffix-length 16)
 (def server-name-length 256)
@@ -315,12 +315,3 @@ TODO: Rename this to something like initiate-client-vouch-message"
 Q: Refactor this to a function?
 (note that that makes life quite a bit more difficult for zero-out!)"
   (zero-bytes 128))
-
-(defn zero-out!
-  "Shove zeros into the byte-array at dst, from indexes start to end"
-  [dst start end]
-  (let [n (- end start)]
-    (when (<= (count all-zeros) n)
-      (alter-var-root all-zeros
-                      (fn [_] (zero-bytes n)))))
-  (b-t/byte-copy! dst start end all-zeros))

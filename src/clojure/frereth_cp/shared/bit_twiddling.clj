@@ -243,3 +243,12 @@ So stick with this translation.
                              (bit-and 0xff)))))
           0
           (range 7 -1 -1)))
+
+(defn zero-out!
+  "Shove zeros into the byte-array at dst, from offset start to offset end"
+  [dst start end]
+  (let [n (- end start)]
+    (when (<= (count K/all-zeros) n)
+      (alter-var-root K/all-zeros
+                      (fn [_] (K/zero-bytes n)))))
+  (byte-copy! dst start end K/all-zeros))

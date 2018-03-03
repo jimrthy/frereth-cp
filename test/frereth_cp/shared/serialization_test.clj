@@ -1,4 +1,4 @@
-(ns frereth-cp.serialization-test
+(ns frereth-cp.serializationy-test
   (:require [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
             [clojure.test :refer (are deftest is testing)]
@@ -7,7 +7,7 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.marshal :as marshal]
+            [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as utils]))
 
@@ -16,9 +16,9 @@
   ;; since it has the variable-length message field
   (let [vouch-descriptions (gen/sample (s/gen ::K/initiate-packet-spec))
         encoded (map (fn [fields]
-                       (marshal/compose ::K/initiate-packet-dscr fields)))]
+                       (serial/compose ::K/initiate-packet-dscr fields)))]
     (dorun (map #(= %1
-                    (marshal/decompose ::K/initiate-packet-dscr %2))
+                    (serial/decompose ::K/initiate-packet-dscr %2))
                 vouch-descriptions
                 encoded))))
 
@@ -215,7 +215,7 @@
                              ::K/zeros #(gen/return (byte-array (take K/zero-box-length (repeat 0))))
                              ::K/client-nonce-suffix (partial fixed-length-byte-array-generator K/client-nonce-suffix-length)
                              ::K/crypto-box (partial fixed-length-byte-array-generator K/hello-crypto-box-length)}))
-        buffers (map (partial marshal/compose K/hello-packet-dscr) hellos)
+        buffers (map (partial serial/compose K/hello-packet-dscr) hellos)
         ;; FIXME: Make this go back away
         serialized (map (fn [buffer]
                           (let [dst (byte-array (.readableBytes buffer))]
@@ -231,10 +231,10 @@
           ;; Sometimes I get an error about trying to read past the end
           ;; of the buffer.
           ;; FIXME: Why?
-          b (marshal/decompose K/hello-packet-dscr (first buffers))]
+          b (serial/decompose K/hello-packet-dscr (first buffers))]
       (println "First raw: " a
                "\nFirst decomposed: " b))
-    (dorun (map #(is (= %1 (marshal/decompose K/hello-packet-dscr %2)))
+    (dorun (map #(is (= %1 (serial/decompose K/hello-packet-dscr %2)))
                 hellos
                 ;; decompose does expect a ByteBuf
                 #_serialized
