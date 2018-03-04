@@ -278,7 +278,10 @@
 
 ;; Note that this is really the wrapper for the vouch received from the client
 (s/def ::vouch-wrapper (s/and bytes?
-                              #(<= minimum-vouch-length (count %) max-vouch-message-length)
+                              ;; FIXME: The max size is wrong.
+                              #(<= minimum-vouch-length
+                                   (count %)
+                                   (+ minimum-vouch-length max-vouch-message-length))
                               ;; Evenly divisible by 16
                               #(= 0 (mod (count %) 16))))
 
