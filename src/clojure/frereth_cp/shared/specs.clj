@@ -2,7 +2,6 @@
   "For specs that make sense to share among all the pieces"
   (:require [clojure.spec.alpha :as s]
             [clojure.test.check.generators :as lo-gen]
-            [clojure.test.check.rose-tree :as rose]
             [frereth-cp.util :as utils]))
 
 (defn class-predicate
@@ -18,10 +17,8 @@ This really seems like a bad road to go down."
 ;; Much less something like rose-tree.
 ;; Those sorts of details really belong in a test ns.
 ;; But it seems to smell to split them up.
-(s/def ::crypto-key (s/with-gen (s/and bytes?
-                                       #(= (count %) key-length))
-                      #(lo-gen/->Generator (fn [_ _]
-                                             (rose/make-rose (utils/random-secure-bytes key-length) [])))))
+(s/def ::crypto-key (s/and bytes?
+                           #(= (count %) key-length)))
 
 ;; public long-term key
 (s/def ::public-long ::crypto-key)

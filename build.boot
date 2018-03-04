@@ -21,6 +21,8 @@
                           [org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
                           [org.clojure/clojure "1.9.0"]
                           [org.clojure/spec.alpha "0.1.143"]
+                          ;; FIXME: Move this to the testing task.
+                          ;; Don't want to depend on it in general.
                           [org.clojure/test.check "0.10.0-alpha2" :scope "test" :exclusions [org.clojure/clojure]]
                           ;; TODO: Eliminate this dependency. It's another one
                           ;; that I really don't have any business imposing on anyone else

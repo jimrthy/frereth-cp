@@ -76,6 +76,13 @@
 ;; 3. No name segment is longer than 63 bytes
 (s/def ::server-name (s/and bytes #(= (count %) server-name-length)))
 
+;;;; FIXME: Move these definitions somewhere more suitable.
+;;;; Maybe a packet-definitions ns?
+;;;; Or maybe frereth-cp.shared.packets.individual-packet-type
+;;;; It does need to be a shared location, since they're needed
+;;;; by both client and server.
+;;;; But putting them here just dilutes the point.
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Hello packets
 
@@ -271,10 +278,9 @@
 
 ;; Note that this is really the wrapper for the vouch received from the client
 (s/def ::vouch-wrapper (s/and bytes?
-                              #(< minimum-vouch-length (count %))
+                              #(<= minimum-vouch-length (count %) max-vouch-message-length)
                               ;; Evenly divisible by 16
-                              #(= 0 (bit-and (count %) 0xf))
-                              #(>= 640 (count %))))
+                              #(= 0 (mod (count %) 16))))
 
 (s/def ::initiate-packet-spec (s/keys :req [::prefix
                                             ::srvr-xtn

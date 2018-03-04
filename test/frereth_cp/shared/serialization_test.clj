@@ -24,14 +24,35 @@
 (deftest serialization-round-trip
   ;; initiate-packet-spec probably isn't a good choice for starting,
   ;; since it has the variable-length message field
-  (let [vouch-descriptions (gen/sample (s/gen ::K/initiate-packet-spec
-                                              {::specs/extension (partial fixed-length-byte-array-generator K/extension-length)}))
+  (let [vouch-descriptions (gen/sample (s/gen #_::K/initiate-packet-spec
+                                              (s/keys :req [#_::K/prefix
+                                                            ::K/srvr-xtn
+                                                            ::K/clnt-xtn
+                                                            #_::K/clnt-short-pk
+                                                            #_::K/cookie
+                                                            #_::K/outer-i-nonce
+                                                            #_::K/vouch-wrapper])
+                                              {::specs/extension (partial fixed-length-byte-array-generator K/extension-length)
+                                               #_::K/clnt-xtn (partial fixed-length-byte-array-generator K/extension-length)
+                                               #_::K/srvr-xtn (partial fixed-length-byte-array-generator K/extension-length)
+                                               ::specs/crypto-key #(lo-gen/->Generator (fn [_ _]
+                                                                                         (rose/make-rose (utils/random-secure-bytes K/key-length) [])))
+                                               ::K/cookie (partial fixed-length-byte-array-generator K/server-cookie-length)
+                                               ::K/vouch-wrapper (fn []
+                                                                   (gen/fmap byte-array
+                                                                             (gen/such-that #(<= K/min-vouch-message-length
+                                                                                                 (count %)
+                                                                                                 K/max-vouch-message-length)
+                                                                                            (gen/such-that #(= 0 (mod (count %) 16))
+                                                                                                           (gen/vector (gen/choose -128 127))))))}))
         encoded (map (fn [fields]
-                       (serial/compose ::K/initiate-packet-dscr fields)))]
-    (dorun (map #(= %1
+                       (serial/compose K/initiate-packet-dscr fields))
+                     vouch-descriptions)]
+    #_(dorun (map #(= %1
                     (serial/decompose ::K/initiate-packet-dscr %2))
-                vouch-descriptions
-                encoded))))
+                  encoded))
+    (doseq [x vouch-descriptions]
+      (is x))))
 
 (comment
   (gen/sample (s/gen #_::K/initiate-packet-spec
@@ -46,6 +67,7 @@
                      ;; fixed-length-byte-array-generator
                      {::specs/extension #(fixed-length-byte-array-generator K/extension-length)
                       #_(gen/fmap byte-array (gen/vector (gen/choose -128 127) K/extension-length))}))
+  (gen/sample (s/gen ::K/clnt-short-pk))
   )
 
 (deftest hello-round-trip
