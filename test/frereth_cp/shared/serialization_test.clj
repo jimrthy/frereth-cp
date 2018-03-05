@@ -1,4 +1,4 @@
-(ns frereth-cp.serializationy-test
+(ns frereth-cp.serialization-test
   (:require [clojure.data :as data]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
@@ -23,123 +23,239 @@
   (gen/fmap byte-array (gen/vector (gen/choose -128 127) n)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Tests
+;;;; Properties
 
-(deftest serialization-round-trip
-  ;; initiate-packet-spec probably isn't a good choice for starting,
-  ;; since it has the variable-length message field
-  (let [vouch-descriptions (gen/sample (s/gen #_::K/initiate-packet-spec
-                                              (s/keys :req [::K/prefix
-                                                            ::K/srvr-xtn
-                                                            ::K/clnt-xtn
-                                                            ::K/clnt-short-pk
-                                                            #_::K/cookie
-                                                            #_::K/outer-i-nonce
-                                                            #_::K/vouch-wrapper])
-                                              {::specs/extension (partial fixed-length-byte-array-generator K/extension-length)
-                                               ::K/clnt-xtn (partial fixed-length-byte-array-generator K/extension-length)
-                                               ::K/srvr-xtn (partial fixed-length-byte-array-generator K/extension-length)
-                                               ::specs/crypto-key #(lo-gen/->Generator (fn [_ _]
-                                                                                         (rose/make-rose (utils/random-secure-bytes K/key-length) [])))
-                                               ::K/cookie (partial fixed-length-byte-array-generator K/server-cookie-length)
-                                               ::K/vouch-wrapper (fn []
-                                                                   (gen/fmap byte-array
-                                                                             (gen/such-that #(<= K/min-vouch-message-length
-                                                                                                 (count %)
-                                                                                                 K/max-vouch-message-length)
-                                                                                            (gen/such-that #(= 0 (mod (count %) 16))
-                                                                                                           (gen/vector (gen/choose -128 127))))))}))
-        encoded (map (fn [fields]
-                       (serial/compose K/initiate-packet-dscr fields))
-                     vouch-descriptions)]
-    #_(dorun (map #(= %1
-                    (serial/decompose ::K/initiate-packet-dscr %2))
-                  encoded))
-    (doseq [x vouch-descriptions]
-      (is x))))
-
-(defspec initiate-round-trip 1  ;; The "run test this many times" parameter doesn't seem to work as advertised.
+(def can-round-trip-initiate-packet
   (props/for-all [prefix (gen/return K/cookie-header)
                   srvr-xtn (fixed-length-byte-array-generator K/extension-length)
                   clnt-xtn (fixed-length-byte-array-generator K/extension-length)
-                  clnt-short-pk (s/gen ::K/clnt-short-pk)
+                  clnt-short-pk (fixed-length-byte-array-generator K/client-key-length)
                   cookie (fixed-length-byte-array-generator K/server-cookie-length)
                   outer-i-nonce (fixed-length-byte-array-generator K/client-nonce-suffix-length)
                   vouch-wrapper (gen/fmap byte-array
                                           (gen/fmap (fn [x]
+                                                      (assert (every? (complement nil?) x))
+                                                      ;; Make sure length is an even multiple of 16
                                                       (let [n (count x)
                                                             extra (mod n 16)]
+                                                        (println "Coping with" extra "extra bytes out of" n)
                                                         (if (= 0 extra)
                                                           x
                                                           (if (> n 16)
                                                             (drop extra x)
                                                             (take 16 (cycle x))))))
-                                                    (gen/vector (gen/such-that (complement nil?) (gen/choose -128 127))
+                                                    (gen/vector (gen/choose -128 127)
                                                                 (+ K/minimum-vouch-length
                                                                    K/min-vouch-message-length)
-                                                                (+ K/max-vouch-message-length
-                                                                   K/minimum-vouch-length))))]
-                 (let [outer (map (fn [[spec o]]
-                                    (when-not (s/valid? spec o)
-                                      (println o "is not a valid" spec)
-                                      ;; This has already failed. Want to get an explanation for that failure
-                                      (is (not (s/explain-data spec o))
-                                          (str "Expected: " spec
-                                               "\nActual:\n"
-                                               (if (bytes? o)
-                                                 {::payload (vec o)
-                                                  ::length (count o)}
-                                                 o)))))
-                                  {::K/prefix prefix
-                                   ::K/srvr-xtn srvr-xtn
-                                   ::K/clnt-xtn clnt-xtn
-                                   ::K/clnt-short-pk clnt-short-pk
-                                   ::K/cookie cookie
-                                   ::K/outer-i-nonce outer-i-nonce
-                                   ::K/vouch-wrapper vouch-wrapper})]
-                   (dorun outer))
-                 (let [fields {::K/prefix prefix
-                               ::K/srvr-xtn srvr-xtn
-                               ::K/clnt-xtn clnt-xtn
-                               ::K/clnt-short-pk clnt-short-pk
-                               ::K/cookie cookie
-                               ::K/outer-i-nonce outer-i-nonce
-                               ::K/vouch-wrapper vouch-wrapper}
-                       serialized (serial/compose K/initiate-packet-dscr fields)]
-                   (println "Testing!")
-                   (is (s/valid? ::K/initiate-packet-spec fields))
-                   (let [rhs (serial/decompose K/initiate-packet-dscr serialized)]
-                     (if (= fields rhs)
-                       (is true)
-                       (let [delta (data/diff fields rhs)]
-                         (is (not (first delta)) "Things only in source")
-                         (is (not (second delta)) "Things only in deserialized")
-                         (is (= fields (nth delta 2)) "Things in both")))))))
+                                                                (+ K/minimum-vouch-length
+                                                                   K/max-vouch-message-length))))]
+                 (is (not-any? nil? vouch-wrapper))
+
+                 (let [vouch-wrapper-length (count vouch-wrapper)
+                       template (assoc-in K/initiate-packet-dscr
+                                          [::K/vouch-wrapper ::K/length]
+                                          vouch-wrapper-length)
+                       src {::K/prefix prefix
+                            ::K/srvr-xtn srvr-xtn
+                            ::K/clnt-xtn clnt-xtn
+                            ::K/clnt-short-pk clnt-short-pk
+                            ::K/cookie cookie
+                            ::K/outer-i-nonce outer-i-nonce
+                            ::K/vouch-wrapper vouch-wrapper}
+                       key-validation (map (fn [[spec o]]
+                                             (when-not (s/valid? spec o)
+                                               (println o "is not a valid" spec)
+                                               ;; This just failed. Want to get an explanation for that failure
+                                               (is (not (s/explain-data spec o))
+                                                   (str "Expected: " spec
+                                                        "\nActual:\n"
+                                                        (if (bytes? o)
+                                                          {::payload (vec o)
+                                                           ::length (count o)}
+                                                          o)))))
+                                           src)]
+                   ;; Verify each individual field by realizing that lazy seq
+                   (dorun key-validation)
+
+                   ;; And then check all the parts
+                   (is (s/valid? ::K/initiate-packet-spec src))
+                   (let [serialized (serial/compose template src)]
+                     (let [rhs (serial/decompose template serialized)]
+                       (doseq [k (keys rhs)]
+                         ;; This was a point of confusion for me, because the associated value
+                         ;; coming out of data/diff is a vector.
+                         ;; It's OK: decompose is producing byte arrays as expected.
+                         (is ((complement vector?) (k rhs)) (str "Decomposed a vector under " k)))
+                       (if (= src rhs)
+                         (do
+                           (println "Rainbows an unicorns")
+                           true)  ; Round-tripped correctly. We're good.
+                         ;; This is messy enough that it's worth taking some
+                         ;; effort to see what really went wrong.
+                         (let [delta (data/diff src rhs)
+                               only-in-src (first delta)]
+                           (println "You didn't expect it to be that easy, did you?")
+                           ;; I'm getting nils in the vouch wrapper here.
+                           ;; Q: How?
+                           ;; A: data/diff is recursive. Elements that match
+                           ;; in the byte arrays being compared show up as nil.
+                           (is (not only-in-src) "Things only in source")
+
+                           (is (not (second delta)) "Things only in deserialized")
+
+                           ;; Things that are in both
+                           (let [real-delta (nth delta 2)
+                                 matched (= src real-delta)]
+                             (or matched  ; Happy path
+                               (let [src-keys (set (keys src))
+                                     dst-keys (set (keys real-delta))]
+                                 (is (= src-keys dst-keys))
+                                 (let [comparison
+                                       (map (fn [k]
+                                              (let [expected (k src)
+                                                    actual (k real-delta)
+                                                    eql-len (= (count expected) (count actual))
+                                                    eql-contents (= (vec expected) (vec actual))]
+                                                (is eql-len
+                                                    (str "array lengths under " k))
+                                                (is eql-contents
+                                                    (str "values under " k))
+                                                (and eql-len eql-contents)))
+                                            src-keys)]
+                                   ;; Needs to return boolean-y
+                                   (every? identity comparison))))))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Tests
+
+(defspec initiate-round-trip 10  ;; The "run test this many times" parameter doesn't seem to work as advertised.
+  can-round-trip-initiate-packet)
 
 (comment
-  (let [prefix (gen/generate (gen/return K/cookie-header))]
-    (when-not (s/valid? ::K/prefix prefix)
-      (s/explain ::K/prefix prefix)))
-  (gen/sample (gen/fmap byte-array
-                        (gen/such-that #(<= K/min-vouch-message-length
-                                            (count %)
-                                            K/max-vouch-message-length)
-                                       (gen/such-that #(= 0 (mod (count %) 16))
-                                                      (gen/vector (gen/choose -128 127))))))
-  (map count (gen/sample (gen/vector (gen/choose -128 127) 16 640)))
-  (gen/sample (s/gen #_::K/initiate-packet-spec
-                     (s/keys :req [::K/prefix
-                                   ;;
-                                   #_::K/srvr-xtn
-                                   ;; Note that using this key works fine
-                                   ::specs/extension])
-                     ;; This is the work-around that I thought I'd found.
-                     ;; However, it isn't really working for ::srvr-xtn
-                     ;; Although declaring the function inline works better than using
-                     ;; fixed-length-byte-array-generator
-                     {::specs/extension #(fixed-length-byte-array-generator K/extension-length)
-                      #_(gen/fmap byte-array (gen/vector (gen/choose -128 127) K/extension-length))}))
-  (gen/sample (s/gen ::K/clnt-short-pk))
+  (time (initiate-round-trip 10))
+
+  (let [outcome
+        (quick-check 1 can-round-trip-initiate-packet
+                     #_[:reporter-fn (fn [m]
+                                       (println "Outcome:" m))])]
+    #_(:result :result-data :seed :failing-size :num-tests :fail :shrunk)
+    (keys outcome)
+    ;; The big thing here seems to be that :result is false
+    (select-keys outcome [:result :failing-size]))
+
+  ;; test.check is claiming that this all zeros sample is a failure. But it isn't giving me any hints about
+  ;; the actual problem.
+  (let [prefix K/cookie-header
+        srvr-xtn (byte-array K/extension-length)
+        clnt-xtn (byte-array K/extension-length)
+        clnt-short-pk (byte-array K/client-key-length)
+        cookie (byte-array K/server-cookie-length)
+        outer-i-nonce (byte-array K/client-nonce-suffix-length)
+        ;; 384 bytes
+        vouch-wrapper (byte-array  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        vouch-wrapper-length (count vouch-wrapper)
+        template (assoc-in K/initiate-packet-dscr
+                           [::K/vouch-wrapper ::K/length]
+                           vouch-wrapper-length)
+        src {::K/prefix prefix
+             ::K/srvr-xtn srvr-xtn
+             ::K/clnt-xtn clnt-xtn
+             ::K/clnt-short-pk clnt-short-pk
+             ::K/cookie cookie
+             ::K/outer-i-nonce outer-i-nonce
+             ::K/vouch-wrapper vouch-wrapper}
+        src' (reduce-kv (fn [acc k v]
+                          (assoc acc k (vec v)))
+                        {}
+                        src)
+        serialized (serial/compose template src)
+        deserialized (serial/decompose template serialized)
+        dsrlzd (reduce-kv (fn [acc k v]
+                            (assoc acc k (vec v)))
+                          {}
+                          deserialized)]
+    (when (not= src' dsrlzd)
+      (let [changes (reduce (fn [acc k]
+                              (let [expected (k src')
+                                    actual (k dsrlzd)]
+                                (if (= expected actual)
+                                  acc
+                                  (assoc-in (assoc-in acc [::expected k] expected)
+                                            [::actual k] actual))))
+                            {}
+                            (keys src))]
+        (throw (ex-info "Round trip failure" changes)))))
+
+  (let [lhs {:a [1 2 3 4]
+             :b [5 6 7 8]}
+        rhs {:a [1 2 4 5]
+             :b [5 6 9 8]}]
+    (data/diff lhs rhs))
+  (let [gend
+        (gen/sample
+         (gen/fmap byte-array
+                   (gen/fmap (fn [x]
+                               (let [n (count x)
+                                     extra (mod n 16)]
+                                 (if (= 0 extra)
+                                   x
+                                   (if (> n 16)
+                                     (drop extra x)
+                                     (take 16 (cycle x))))))
+                             (gen/vector (gen/such-that (complement nil?) (gen/choose -128 127))
+                                         (+ K/minimum-vouch-length
+                                            K/min-vouch-message-length)
+                                         (+ K/max-vouch-message-length
+                                            K/minimum-vouch-length))))
+         50)]
+    (doseq [bs gend]
+      (println ".")
+      (doseq [b bs]
+        (when (nil? b)
+          (throw (ex-info "nil snuck in" bs))))))
+
+  (let [gend (gen/sample (gen/vector (gen/bytes) 16 640))]
+    (map count gend))
+
+  (let [gend (gen/sample (gen/fmap (fn [xs]
+                                     (println (vec xs))
+                                     (byte-array xs))
+                                   (gen/fmap (fn [x]
+                                               (assert (every? (complement nil?) x))
+                                               ;; Make sure length is an even multiple of 16
+                                               (let [n (count x)
+                                                     extra (mod n 16)]
+                                                 (println "Coping with" extra "extra bytes out of" n)
+                                                 (if (= 0 extra)
+                                                   x
+                                                   (if (> n 16)
+                                                     (drop extra x)
+                                                     (take 16 (cycle x))))))
+                                             (gen/vector (gen/choose -128 127)
+                                                         (+ K/minimum-vouch-length
+                                                            K/min-vouch-message-length)
+                                                         (+ K/max-vouch-message-length
+                                                            K/minimum-vouch-length)))) 20)]
+    #_(map vec gend)
+    (map count gend))
+
+  (map count (gen/sample (gen/bytes 16 640)))
   )
 
 (deftest hello-round-trip

@@ -11,6 +11,7 @@ This really seems like a bad road to go down."
   #(instance? klass %))
 
 (s/def ::atom (class-predicate (class (atom nil))))
+(s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
 
 (def ^Integer key-length 32)
 ;; I really don't want to reference generators in here.
