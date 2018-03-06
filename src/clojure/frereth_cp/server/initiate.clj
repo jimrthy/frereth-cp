@@ -95,9 +95,9 @@ To be fair, this layer *is* pretty special."
         (if (< last-packet-nonce packet-nonce)
           (let [vouch (:K/vouch initiate)
                 shared-key (::client-short<->server-short client)]
-            (if-let [plain-text (decrypt-initiate-vouch shared-key
-                                                        packet-nonce-bytes
-                                                        vouch)]
+            (if-let [plain-text (decrypt-initiate-vouch! shared-key
+                                                         packet-nonce-bytes
+                                                         vouch)]
               (do
                 (swap! (::active-clients state)
                        update-in [client-short-key ::received-nonce]
@@ -340,7 +340,7 @@ Note that that includes TODOs re:
   [state
    short-pk
    client-message-box]
-  (let [^bytes client-longkey (::K/long-term-public-key client-message-box)]
+  (let [^bytes client-long-key (::K/long-term-public-key client-message-box)]
     (let [^TweetNaclFast$Box$KeyPair long-pair (get-in state [::shared/my-keys ::shared/long-pair])
           my-long-secret (.getSecretKey long-pair)
           shared-secret (crypto/box-prepare client-long-key
@@ -349,8 +349,6 @@ Note that that includes TODOs re:
       (log/info (str "Getting ready to decrypt the inner-most hidden public key\n"
                      "Supplied client long-term key:\n"
                      (b-t/->string client-long-key)
-                     "which arrived in: "
-                     client-long-buffer
                      "\nMy long-term secret key:\n"
                      (b-t/->string my-long-secret)
                      "My long-term public key:\n"

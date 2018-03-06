@@ -165,7 +165,7 @@
 (defspec hello-round-trip 10
   can-round-trip-initiate-packet)
 
-
 (comment
-  (hello-round-trip)
-  )
+  (hello-round-trip))
+
+;; FIXME: Add tests for the rest

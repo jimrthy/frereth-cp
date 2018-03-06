@@ -47,7 +47,7 @@ Except that it doesn't seem to do that at all."
       ;; So...maybe.
       (assert (.hasArray buffer))
       ;; TODO: Rewrite this using compose
-      (.writeBytes buffer shared/all-zeros 0 K/decrypt-box-zero-bytes)
+      (.writeBytes buffer K/all-zeros 0 K/decrypt-box-zero-bytes)
       (.writeBytes buffer client-short-pk 0 K/key-length)
       (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
 

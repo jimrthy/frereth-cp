@@ -11,7 +11,7 @@
 ;; TODO: More benchmarking
 (def box-zero-bytes 16)
 (def ^Integer decrypt-box-zero-bytes 32)
-(def key-length specs/key-length)
+(def ^Integer key-length specs/key-length)
 (def max-random-nonce (long (Math/pow 2 48)))
 
 (def client-key-length key-length)
