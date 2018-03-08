@@ -30,7 +30,7 @@
         _ (assert my-short<->their-long)
         ;; Note that this definitely inserts the 16-byte prefix for me
         boxed (crypto/box-after my-short<->their-long
-                                shared/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes) working-nonce)
+                                K/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes) working-nonce)
         ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
         msg (str "Hello crypo-box:\n"
                  (b-t/->string boxed)

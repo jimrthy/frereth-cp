@@ -10,7 +10,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log2]
-            [frereth-cp.shared.serialize :as serial]
+            [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
@@ -302,7 +302,7 @@ TODO: Need to ask around about that."
                      " looks like it belongs to a Cookie packet"))
       (when (and (b-t/bytes= K/cookie-header header)
                  (b-t/bytes= extension client-extension)
-                 (b-t/bytes= server-extension server-extensionn))
+                 (b-t/bytes= server-extension server-extension))
         (decrypt-actual-cookie this rcvd)))))
 
 (defn build-vouch
@@ -607,7 +607,7 @@ nor subject to timing attacks because it just won't be called very often."
                          (catch java.io.FileNotFoundException _
                            ;; This really isn't all that unexpected
                            (log/warn "Missing extension file")
-                           (shared/zero-bytes 16)))
+                           (K/zero-bytes 16)))
                     extension)]
     (assert (= (count extension) K/extension-length))
     (log/info "Loaded extension:" (vec extension))
