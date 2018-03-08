@@ -154,7 +154,8 @@
                 ::K/zeros zeros
                 ::K/client-nonce-suffix client-nonce-suffix
                 ::K/crypto-box crypto-box}]
-     (validate-keys hello))))
+     (validate-keys hello)
+     (check-round-trip ::K/hello-spec K/hello-packet-dscr hello))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Tests
