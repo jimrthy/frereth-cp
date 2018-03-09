@@ -430,6 +430,9 @@ TODO: Need to ask around about that."
                    cookie-packet
                    "\nQ: What happened?")))))
 
+(s/fdef load-keys
+        :args (s/cat :my-keys ::shared/my-keys)
+        :ret ::shared/my-keys)
 (defn load-keys
   [my-keys]
   (let [key-dir (::shared/keydir my-keys)

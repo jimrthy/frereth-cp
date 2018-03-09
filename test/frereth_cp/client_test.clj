@@ -9,46 +9,12 @@
             [frereth-cp.server.cookie :as srvr-cookie]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.specs :as shared-specs]
+            [frereth-cp.test-factory :as factory]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import io.netty.buffer.ByteBuf))
-
-(s/fdef raw-client
-        :args (s/cat :child-spawner ::clnt/child-spawner
-                     :server-keys ::shared-specs/peer-keys))
-(defn raw-client
-  [child-spawner]
-  (let [long-srvr-keys (crypto/random-keys ::crypto/long)
-        pk-long (::shared-specs/my-long-public long-srvr-keys)
-        shrt-srvr-keys (crypto/random-keys ::crypto/short)
-        pk-shrt (::shared-specs/my-short-public shrt-srvr-keys)
-        server-extension (byte-array [0x01 0x02 0x03 0x04
-                                      0x05 0x06 0x07 0x08
-                                      0x09 0x0a 0x0b 0x0c
-                                      0x0d 0x0e 0x0f 0x10])
-        server-name (shared/encode-server-name "hypothet.i.cal")
-        long-pair (crypto/random-key-pair)
-        result (clnt/ctor {;; Aleph supplies a single bi-directional channel.
-                           ;; My tests break trying to use that here.
-                           ;; For now, take a step back and get them working
-                           ::state/chan<-server (strm/stream)
-                           ::state/chan->server (strm/stream)
-                           ::shared/my-keys {::shared/keydir "client-test"
-                                             ::shared/long-pair long-pair
-                                             ::K/server-name server-name}
-                           ::clnt/child-spawner child-spawner
-                           ::state/server-extension server-extension
-                           ::state/server-security {::K/server-name server-name
-                                                    ::shared-specs/public-long pk-long
-                                                    ::state/public-short pk-shrt}})]
-    (clnt/start! result)
-    {::client-agent result
-     ::long-srvr-keys long-srvr-keys
-     ::shrt-srvr-keys shrt-srvr-keys}))
 
 (defn check-success
   [client-agent where result]
@@ -70,7 +36,7 @@
     ;; Cookie back from the server.
     (let [{:keys [::client-agent
                   ::long-srvr-keys
-                  ::shrt-srvr-keys]} (raw-client nil)
+                  ::shrt-srvr-keys]} (factory/raw-client nil)
           client @client-agent
           {:keys [::state/chan<-server ::state/chan->server]} client]
       (when-not chan<-server
@@ -122,7 +88,7 @@
 
 (deftest build-hello
   (testing "Can I build a Hello packet?"
-    (let [{:keys [::client-agent]} (raw-client nil)
+    (let [{:keys [::client-agent]} (factory/raw-client nil)
           client @client-agent
           updated (hello/do-build-hello client)]
       (let [p-m (::shared/packet-management updated)
@@ -172,7 +138,7 @@
                                       (fn [ex]
                                         (println "Either way, this is obviously broken")))
                     ch))
-        client-agent (raw-client spawner)
+        client-agent (factory/raw-client spawner)
         ;; One major advantage of using agents over async-loops:
         ;; Have state instantly available for the asking
         client @client-agent
@@ -286,9 +252,9 @@
       (is chan<-server "No channel to pull data from server"))))
 
 (comment
-  (def junk (raw-client))
+  (def junk (factory/raw-client nil))
   (-> junk :extension vec)
-  (-> junk :server-extension vec)o
+  (-> junk :server-extension vec)
   junk
   (-> junk keys)
   (alter-var-root #'junk #(.start %))

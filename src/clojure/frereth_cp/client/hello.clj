@@ -78,7 +78,14 @@
 (defn do-build-hello
   "Puts plain-text hello packet into packet-management
 
-Note that this is really called for side-effects"
+  Note that this is really called for side-effects"
+  ;; A major part of the way this is written revolves around
+  ;; updating packet-management and work-area in place.
+  ;; That seems like premature optimization here.
+  ;; Though it seems as though it might make sense for
+  ;; sending messages.
+  ;; Then again, if the implementation isn't shared...can
+  ;; it possibly be worth the trouble?
   [{:keys [::shared/packet-management
            ::shared/work-area]
     :as this}]

@@ -57,9 +57,17 @@
 (s/def ::server-keys (s/keys :req-un [::long-pair ::name ::short-pair]
                              :opt-un [::keydir]))
 
+;; Honestly, we have unpopulated-my-keys
+;; (or possibly something like key-loading-instructions?)
+;; and populated-my-keys.
+;; Once they're loaded, we don't care where they came
+;; from.
+;; Until they're loaded, we don't have anything to associate
+;; with the long-/short-pairs.
+;; TODO: Split this up.
 (s/def ::my-keys (s/keys :req [::keydir
-                               ::long-pair
-                               ::K/server-name
+                               ::K/server-name]
+                         :opt [::long-pair
                                ::short-pair]))
 
 (s/def ::long-pk ::specs/crypto-key)

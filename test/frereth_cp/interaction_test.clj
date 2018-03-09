@@ -1,4 +1,6 @@
 (ns frereth-cp.interaction-test
+  ;; FIXME: Rename
+  "This is really about message interactions"
   (:require [aleph.netty :as netty]
             [aleph.udp :as udp]
             [byte-streams :as bs]

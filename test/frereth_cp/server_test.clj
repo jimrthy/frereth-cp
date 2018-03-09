@@ -1,51 +1,15 @@
 (ns frereth-cp.server-test
   (:require [clojure.test :refer (deftest is testing)]
-            [frereth-cp.server :as server]
+            [frereth-cp.client :as client]
+            [frereth-cp.client.state :as client-state]
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
+            [frereth-cp.test-factory :as factory]
             [manifold.stream :as strm]))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Helpers
-
-(defn system-options
-  []
-  (let [server-name (shared/encode-server-name "test.frereth.com")]
-    {::cp-server {::shared/extension (byte-array [0x01 0x02 0x03 0x04
-                                                  0x05 0x06 0x07 0x08
-                                                  0x09 0x0a 0x0b 0x0c
-                                                  0x0d 0x0e 0x0f 0x10])
-                  ::shared/my-keys #::shared{::K/server-name server-name
-                                             :keydir "curve-test"}}}))
-
-(defn build
-  []
-  {::cp-server (server/ctor (::cp-server (system-options)))
-   ::state/client-read-chan {::state/chan (strm/stream)}
-   ::state/client-write-chan {::state/chan (strm/stream)}})
-
-(defn start
-  [inited]
-  (let [client-write-chan (::state/client-write-chan inited)
-        client-read-chan (::state/client-read-chan inited)]
-    {::cp-server (server/start! (assoc (::cp-server inited)
-                                      ::state/client-read-chan client-read-chan
-                                      ::state/client-write-chan client-write-chan))
-     ::state/client-read-chan client-read-chan
-     ::state/client-write-chan client-write-chan}))
-
-(defn stop
-  [started]
-  (let [ch (get-in started [::state/client-read-chan ::state/chan])]
-    (strm/close! ch))
-  (let [ch (get-in started [::state/client-write-chan ::state/chan])]
-    (strm/close! ch))
-  {::cp-server (server/stop! (::cp-server started))
-   ::state/client-read-chan {::state/chan nil}
-   ::state/client-write-chan {::state/chan nil}})
 
 (defn build-hello
   [srvr-xtn
@@ -56,6 +20,8 @@
   ;; I'm not overly fond of the current implementation.
   ;; Still, it's silly not to use whatever the client does.
   ;; TODO: Make what the client does less objectionable
+  ;; Although, realistically, this is the wrong place for
+  ;; tackling that.
   (let [empty-crypto-box "Q: What is this?"  ; A: a B] of (- K/hello-crypto-box-length K/box-zero-bytes) zeros
         crypto-box "FIXME: How do I encrypt this?"
         hello-dscr {::K/hello-prefix K/hello-header
@@ -72,24 +38,41 @@
 
 (deftest start-stop
   (testing "That we can start and stop successfully"
-    (let [inited (build)
-          started (start inited)]
+    (let [inited (factory/build-server)
+          started (factory/start-server inited)]
       (is started)
-      (is (stop started)))))
+      (is (factory/stop-server started)))))
 (comment
-  (def test-sys (build))
-  (alter-var-root #'test-sys start)
+  (def test-sys (factory/build-server))
+  (alter-var-root #'test-sys factory/start-server)
   (-> test-sys :client-chan keys)
-  (alter-var-root #'test-sys cpt/stop)
+  (alter-var-root #'test-sys cpt/stop-server)
   )
 
 (deftest shake-hands
-  (let [init (build)
-        started (start init)]
+  (let [init (factory/build-server)
+        started (factory/start-server init)]
     (println "Server should be started now")
     (try
+      (println "Building a Client")
+      (throw (RuntimeException. "FIXME: Take advantage of test-factory"))
+      (let [chan<-server (strm/stream)
+            chan->server (strm/stream)
+            server-name (get-in started [::shared/my-keys ::K/server-name])
+            client-keys {::shared/keydir "client-test"
+                         ;; Q: Does this matter for the client?
+                         ::K/server-name server-name}
+            server-security {::K/server-name server-name
+                             ::specs/public-long pk-long
+                             ::state/public-short pk-shrt}
+            client-agent (client/ctor {::client-state/chan<-server chan<-server
+                                       ::client-state/chan->server chan->server
+                                       ::shared/my-keys client-keys
+                                       ::client-state/server-security server-security})])
       (println "Sending bogus HELLO")
-      (let [msg (build-hello)
+      (let [misnamed-short-keys (crypto/random-keys "client")
+            msg (build-hello factory/server-extension
+                             {::specs/public-short (::specs/my-client-public misnamed-short-keys)})
             ->srvr (get-in started [::state/client-read-chan ::state/chan])
             success (deref (strm/try-put! ->srvr msg 1000 ::timed-out))]
         (println "put! success:" success)
@@ -106,4 +89,4 @@
               (throw (RuntimeException. "Q: What next?"))))))
       (finally
         (println "Triggering event loop exit")
-        (stop started)))))
+        (stop-server started)))))

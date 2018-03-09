@@ -62,13 +62,6 @@ Needing to declare these things twice is annoying."
                                       (class dst)
                                       "\nfor field "
                                       k))
-                      ;; At least one of my tests is generating nils
-                      ;; and passing it into here.
-                      ;; Somehow. It really should have thrown a NPE
-                      ;; when I called byte-array on it.
-                      (doseq [b v]
-                        (when (nil? b)
-                          (throw (NullPointerException. (vec v)))))
                       (.writeBytes dst v 0 n)
                       (let [end (.readableBytes dst)]
                         (assert (= (- end beg) n)))

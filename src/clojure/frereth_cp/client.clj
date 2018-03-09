@@ -4,14 +4,7 @@
   It seems like it would be nice if I could just declare
   the message exchange, but that approach gets complicated
   on the server side. At least half the point there is
-  reducing DoS.
-
-  This really doesn't seem to belong in here. I keep going
-  back and forth about that. It seems like it would be
-  cleaner to move this into the frereth.client, and the
-  server component into frereth.server.
-
-  But that makes it much more difficult to test."
+  reducing DoS."
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
@@ -58,6 +51,9 @@
 ;; about the expected traffic patterns.
 ;; TODO: Switch to PooledByteBufAllocator
 ;; Instead of mucking around with this release-notifier nonsense
+;; FIXME: Actually, make this go away completely.
+;; We *do* get a ByteBuf at this layer. But it really needs to get
+;; extracted to a B] (for decrypting) and then released.
 (s/def ::release ::writer)
 ;; Accepts the agent that owns "this" and returns
 ;; 1) a writer channel we can use to send messages to the child.
