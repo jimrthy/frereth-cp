@@ -326,6 +326,14 @@ like a timing attack."
     ;; But it probably should, since this is very
     ;; explicitly place-oriented programming working
     ;; with mutable state.
+    ;; Any way you look at it, it isn't worth doing
+    ;; here.
+    ;; This is something that happens once at startup.
+    ;; So it shouldn't be slow, but this level of optimization
+    ;; simply cannot be worth it.
+    ;; FIXME: Prune this back to a pure function (yes, that's
+    ;; easier said than done: I probably do need to scrap
+    ;; the idea of using an agent for this).
     (send wrapper hello/do-build-hello)
     (if (await-for timeout wrapper)
       (cope-with-successful-hello-creation wrapper chan->server timeout)
@@ -333,6 +341,9 @@ like a timing attack."
                            " milliseconds waiting to build HELLO packet")
                       {:problem (agent-error wrapper)})))))
 
+(s/fdef stop!
+        :args (s/cat :state-agent ::state/state-agent)
+        :ret any?)
 (defn stop!
   [wrapper]
   (if-let [err (agent-error wrapper)]

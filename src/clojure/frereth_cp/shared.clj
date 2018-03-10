@@ -157,7 +157,7 @@
 (defn compose
   "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt"
   ^ByteBuf [tmplt fields ^ByteBuf dst]
-  (log/warn "Deprecated: use marshal ns instead")
+  (log/warn "Deprecated compose: use marshal ns instead")
   (serial/compose! tmplt fields dst))
 
 (s/fdef default-packet-manager

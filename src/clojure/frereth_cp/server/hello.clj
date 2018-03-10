@@ -56,6 +56,8 @@
                       (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))))
       (b-t/byte-copy! working-nonce
                       shared/hello-nonce-prefix)
+      ;; Something in this vicinity is failing because a [B cannot be cast to a ByteBuf
+      ;; The stacktrace points to the line directly below.
       (b-t/byte-copy! working-nonce K/client-nonce-prefix-length K/client-nonce-suffix-length nonce-suffix)
       (.readBytes crypto-box text 0 K/hello-crypto-box-length)
       (let [msg (str "Trying to open "

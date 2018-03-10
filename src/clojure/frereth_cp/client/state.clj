@@ -591,12 +591,12 @@ nor subject to timing attacks because it just won't be called very often."
     :as this}]
   {:pre [(and client-extension-load-time recent)]}
   (let [reload (>= recent client-extension-load-time)
-        _ (log/debug "curve.client/clientextension-init:"
-                     reload
-                     "(currently:"
-                     extension
-                     ") in"
-                     (keys this))
+        _ (log/debug (str "curve.client/clientextension-init: "
+                          reload
+                          " (currently: "
+                          extension
+                          ") in\n"
+                          (keys this)))
         client-extension-load-time (if reload
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
@@ -609,7 +609,10 @@ nor subject to timing attacks because it just won't be called very often."
                              .getBytes)
                          (catch java.io.FileNotFoundException _
                            ;; This really isn't all that unexpected
-                           (log/warn "Missing extension file")
+                           ;; The original goal/dream was to get CurveCP
+                           ;; added as a standard part of every operating
+                           ;; system's network stack
+                           (log/warn "Missing extension file /etc/curvecpextension")
                            (K/zero-bytes 16)))
                     extension)]
     (assert (= (count extension) K/extension-length))
