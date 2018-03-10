@@ -268,13 +268,13 @@ To be fair, this layer *is* pretty special."
         :ret ::K/initiate-client-vouch-wrapper)
 (defn open-client-crypto-box
   [{:keys [::K/outer-i-nonce]
-    ^ByteBuf vouch-wrapper ::K/vouch-wrapper
+    ^bytes vouch-wrapper ::K/vouch-wrapper
     :as initiate}
    current-client]
 
   (log/info "Opening the Crypto box we just received from the client")
-  (log/debug "The box we're opening is" (.readableBytes vouch-wrapper) "bytes long")
-  (let [message-length (- (.readableBytes vouch-wrapper) K/minimum-vouch-length)]
+  (log/debug "The box we're opening is" (count vouch-wrapper) "bytes long")
+  (let [message-length (- (count vouch-wrapper) K/minimum-vouch-length)]
     (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix
                                                 outer-i-nonce
                                                 vouch-wrapper

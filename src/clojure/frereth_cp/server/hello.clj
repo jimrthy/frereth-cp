@@ -24,13 +24,11 @@
 (defn open-hello-crypto-box
   [{:keys [::client-short-pk
            ::state/cookie-cutter
-           ::shared/my-keys
-           ::shared/working-area]
+           ::shared/my-keys]
     ^bytes nonce-suffix ::nonce-suffix
     :as state}
    message
-   ^ByteBuf crypto-box]
-  (log/warn "Deprecated. Just use crypto/open-crypto-box instead")
+   ^bytes crypto-box]
   (let [^TweetNaclFast$Box$KeyPair long-keys (::shared/long-pair my-keys)]
     (when-not long-keys
       ;; Log whichever was missing and throw
@@ -39,43 +37,27 @@
         (log/error "Missing ::shared/my-keys among" (keys state)))
       (throw (ex-info "Missing long-term keypair" state)))
     (let [my-sk (.getSecretKey long-keys)
-          shared-secret (crypto/box-prepare client-short-pk my-sk)
-          ;; Q: How do I combine these to handle this all at once?
-          ;; I think I should be able to do something like:
-          ;; {:keys [{:keys [::text ::working-nonce] :as ::work-area}]}
-          ;; state
-          ;; (that fails spec validation)
-          ;; Better Q: Would that a good idea, if it worked?
-          ;; (Pretty sure this is/was the main thrust behind a plumatic library)
-          {^bytes working-nonce ::shared/working-nonce
-           ^bytes text ::shared/text} working-area]
+          ;; Q: Is this worth saving? It's used again for
+          ;; the outer crypto-box in the Cookie from the server
+          shared-secret (crypto/box-prepare client-short-pk my-sk)]
       (log/debug (str "Incoming HELLO\n"
                       "Client short-term PK:\n"
                       (with-out-str (b-s/print-bytes client-short-pk))
                       "\nMy long-term PK:\n"
                       (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))))
-      (b-t/byte-copy! working-nonce
-                      shared/hello-nonce-prefix)
-      ;; Something in this vicinity is failing because a [B cannot be cast to a ByteBuf
-      ;; The stacktrace points to the line directly below.
-      (b-t/byte-copy! working-nonce K/client-nonce-prefix-length K/client-nonce-suffix-length nonce-suffix)
-      (.readBytes crypto-box text 0 K/hello-crypto-box-length)
       (let [msg (str "Trying to open "
                      K/hello-crypto-box-length
                      " bytes of\n"
-                     (with-out-str (b-s/print-bytes (b-t/sub-byte-array text 0 (+ 32 K/hello-crypto-box-length))))
-                     "\nusing nonce\n"
-                     (with-out-str (b-s/print-bytes working-nonce))
+                     (with-out-str (b-s/print-bytes crypto-box))
+                     "\nusing nonce suffix\n"
+                     (with-out-str (b-s/print-bytes nonce-suffix))
                      "\nencrypted from\n"
-                     (with-out-str (b-s/print-bytes client-short-pk))
-                     "\nto\n"
-                     (with-out-str (b-s/print-bytes (.getPublicKey long-keys))))]
+                     (with-out-str (b-s/print-bytes client-short-pk)))]
         (log/debug msg))
-      {::opened (crypto/open-after
-                 text
-                 0
-                 K/hello-crypto-box-length
-                 working-nonce
+      {::opened (crypto/open-crypto-box
+                 shared/hello-nonce-prefix
+                 nonce-suffix
+                 crypto-box
                  shared-secret)
        ::shared-secret shared-secret})))
 
@@ -130,29 +112,27 @@
         ;; the key and move along.
         ;; Then again, this entire giant side-effecting mess is awful.
         (b-t/byte-copy! client-short-pk clnt-short-pk)
-        ;; FIXME: This can't be/isn't right
-        ;; (except for the basic fact that it works)
-        ;; TODO: switch to crypto/open-crypto-box
-        (let [unboxed (open-hello-crypto-box (assoc state
-                                                    ::client-short-pk client-short-pk
-                                                    ::nonce-suffix client-nonce-suffix)
-                                             message
-                                             crypto-box)
-              clear-text (::opened unboxed)]
+        (let [{clear-text ::opened
+               shared-secret ::shared-secret :as unboxed} (open-hello-crypto-box (assoc state
+                                                                                        ::client-short-pk client-short-pk
+                                                                                        ::nonce-suffix client-nonce-suffix)
+                                                                                 message
+                                                                                 crypto-box)]
           (log/info "box opened successfully")
           (if clear-text
-            (let [shared-secret (::shared-secret unboxed)
-                  minute-key (get-in state [::state/cookie-cutter ::state/minute-key])
+            (let [minute-key (get-in state [::state/cookie-cutter ::state/minute-key])
                   {:keys [::shared/text
                           ::shared/working-nonce]} working-area]
-              (log/debug "asserting minute-key" minute-key "among" (keys state))
-              (assert minute-key)
+              (assert minute-key (str "Missing minute-key among "
+                                      (keys state)))
               (log/info "Preparing cookie")
               ;; We don't actually care about the contents of the bytes we just decrypted.
               ;; They should be all zeroes for now, but that's really an area for possible future
               ;; expansion.
               ;; For now, the point is that they unboxed correctly, so the client has our public
               ;; key and the short-term private key so it didn't just send us random garbage.
+              ;; FIXME: This next section really deserves its own function.
+              ;; In the cookie ns.
               (let [crypto-box
                     (cookie/prepare-cookie! {::state/client-short<->server-long shared-secret
                                              ::state/client-short-pk clnt-short-pk

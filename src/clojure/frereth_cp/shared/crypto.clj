@@ -20,6 +20,7 @@
 ;;; Specs
 
 (s/def ::long-short #{::long ::short})
+(s/def ::unboxed #(instance? ByteBuf %))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -135,8 +136,7 @@ But it depends on compose, which would set up circular dependencies"
     {pk (.getPublicKey pair)
      sk (.getSecretKey pair)}))
 (comment
-  (random-keys ::long)
-  )
+  (random-keys ::long))
 
 (s/fdef do-load-keypair
         :args (s/cat :key-dir-name string?)
@@ -190,7 +190,7 @@ But it depends on compose, which would set up circular dependencies"
                        (- (+ (-> % :args :box-offset)
                              (-> % :args :box-length))
                           K/nonce-length)))
-        :ret vector?)
+        :ret ::unboxed)
 (defn open-after
   "Low-level direct crypto box opening
 
@@ -244,7 +244,7 @@ which I'm really not qualified to touch."
                                                   ::length box-length
                                                   ::nonce (b-t/->string nonce)
                                                   ::shared-key (b-t/->string shared-key)})))
-          ;; TODO: Compare the speed of doing this with allocating a new
+          ;; TODO: Compare the speed of these approaches with allocating a new
           ;; byte array without the 0-prefix padding and copying it back over
           ;; Keep in mind that we're limited to 1088 bytes per message.
           (comment (-> plain-text
@@ -261,10 +261,14 @@ which I'm really not qualified to touch."
 
 (s/fdef open-crypto-box
         :args (s/cat :prefix-bytes (s/and bytes?
-                                          #(= K/client-nonce-prefix-length
-                                              (count %)))
-                     :suffix-buffer #(instance? ByteBuf %)
-                     :crypto-buffer #(instance? ByteBuf %)
+                                          #(let [n (count %)]
+                                             (or (= K/client-nonce-prefix-length n)
+                                                 (= K/server-nonce-prefix-length n))))
+                     :suffix-buffer (s/and bytes?
+                                           #(let [n (count %)]
+                                              (or (= K/client-nonce-suffix-length n)
+                                                  (= K/server-nonce-suffix-length n))))
+                     :crypto-buffer bytes?
                      :shared-key ::specs/crypto-key)
         ;; This doesn't match the return spec for open-after.
         ;; I'm 90% certain this actually returns (s/nilable vector?)
@@ -273,27 +277,27 @@ which I'm really not qualified to touch."
         ;; whichever spec is wrong.
         ;; Although having both return (s/nilable bytes?) is
         ;; starting to look like the best option.
-        :ret (s/nilable #(instance? ByteBuf %)))
+        :ret (s/nilable ::unboxed))
 (defn open-crypto-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
-  [prefix-bytes ^ByteBuf suffix-buffer ^ByteBuf crypto-buffer shared-key]
+  [prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
   (let [nonce (byte-array K/nonce-length)
-        crypto-length (.readableBytes crypto-buffer)
-        crypto-text (byte-array crypto-length)]
+        crypto-length (count crypto-box)]
     (b-t/byte-copy! nonce prefix-bytes)
     (let [prefix-length (count prefix-bytes)]
-      (.getBytes suffix-buffer
-                 0
-                 nonce
-                 prefix-length
-                 ^Long (- K/nonce-length prefix-length)))
-    (.getBytes crypto-buffer 0 crypto-text)
+      (b-t/byte-copy! nonce
+                      0
+                      ^Long (- K/nonce-length prefix-length)
+                      suffix-bytes
+                      prefix-length))
     (try
-      (open-after crypto-text 0 crypto-length nonce shared-key)
+      (open-after crypto-box 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
         (log/error ex
                    (str "Failed to open box\n"
-                        (util/pretty (.getData ex))))))))
+                        (util/pretty (.getData ex))))
+        ;; Be explicit about this
+        nil))))
 
 (defn random-array
   "Returns an array of n random bytes"
