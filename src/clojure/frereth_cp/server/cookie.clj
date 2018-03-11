@@ -6,8 +6,9 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto])
-  (:import io.netty.buffer.Unpooled))
+            [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.serialization :as serial])
+  (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (set! *warn-on-reflection* true)
 
@@ -23,9 +24,13 @@
   [{:keys [::state/client-short<->server-long
            ::state/minute-key
            ;; Q: What is/was this for?
+           ;; A: This is/was supposed to be the buffer of bytes
+           ;; that get encrypted
            ::clear-text
            ::shared/working-nonce]
     ^bytes client-short-pk ::state/client-short-pk
+    ;; This is really the destination for the crypto-box
+    ;; being built from clear-text
     ^bytes text ::shared/text}]
   "Called purely for side-effects.
 
@@ -37,8 +42,10 @@ Except that it doesn't seem to do that at all."
         ;; This is just going to get thrown away, leading
         ;; to potential GC issues.
         ;; Probably need another static buffer for building
-        ;; and encrypting things like this
-        buffer (Unpooled/buffer K/server-cookie-length)]
+        ;; and encrypting things like this.
+        ;; Or just use text. That's what the reference implementation
+        ;; does.
+        ^ByteBuf buffer (Unpooled/buffer K/server-cookie-length)]
     (.retain buffer)
     (try
       ;; Q: Do I care whether it's an array-backed buffer?
@@ -47,7 +54,7 @@ Except that it doesn't seem to do that at all."
       ;; So...maybe.
       (assert (.hasArray buffer))
       ;; TODO: Rewrite this using compose
-      (.writeBytes buffer K/all-zeros 0 K/decrypt-box-zero-bytes)
+      (.writeBytes buffer K/all-zeros 0 K/decrypt-box-zero-bytes)  ; line 315
       (.writeBytes buffer client-short-pk 0 K/key-length)
       (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
 
@@ -69,14 +76,23 @@ Except that it doesn't seem to do that at all."
         ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
         ;; Go with the assumption that those are the initial garbage 0 bytes that should
         ;; be discarded anyway
-        (b-t/byte-copy! text 32 K/server-nonce-suffix-length working-nonce
-                        K/server-nonce-prefix-length)
+        (b-t/byte-copy! text
+                        K/key-length  ; reference uses 64 bytes here. 32 bytes of zeros
+                        K/server-nonce-suffix-length
+                        working-nonce
+                        K/server-nonce-prefix-length)  ; line 321
 
         ;; And now we need to encrypt that.
         ;; This really belongs in its own function
         ;; And it's another place where I should probably call compose
         (b-t/byte-copy! text 0 K/key-length (.getPublicKey keys))
-        ;; Reuse the other 16 byte suffix that came in from the client
+        ;; Overwrite the prefix.
+        ;; Reuse the 16 byte suffix that came in from the client.
+        ;; Note that, as written, we have to access this suffix
+        ;; later in build-cookie-packet.
+        ;; That may technically be functionally pure, but it seems
+        ;; pretty awful.
+        ;; If nothing else, it's far too tightly coupled.
         (b-t/byte-copy! working-nonce
                         0
                         K/server-nonce-prefix-length
@@ -84,7 +100,7 @@ Except that it doesn't seem to do that at all."
         (let [cookie (crypto/box-after client-short<->server-long
                                        text
                                        ;; TODO: named const for this.
-                                       128
+                                       K/unboxed-crypto-cookie-length ; 128
                                        working-nonce)]
           (log/info (str "Full cookie going to client that it should be able to decrypt:\n"
                          (with-out-str (b-s/print-bytes cookie))
@@ -95,17 +111,15 @@ Except that it doesn't seem to do that at all."
         (.release buffer)))))
 
 (defn build-cookie-packet
-  [packet client-extension server-extension ^bytes working-nonce crypto-cookie]
-  (let [composed (shared/compose K/cookie-frame {::K/header K/cookie-header
-                                                 ::K/client-extension client-extension
-                                                 ::K/server-extension server-extension
-                                                 ;; Q: Could this possibly be worth using Pooled?
-                                                 ::K/client-nonce-suffix (Unpooled/wrappedBuffer working-nonce
-                                                                                                 K/server-nonce-prefix-length
-                                                                                                 K/server-nonce-suffix-length)
-                                                 ::K/cookie crypto-cookie}
-                                 packet)]
-    ;; I really shouldn't need to do this
-    ;; FIXME: Make sure it gets released
-    (.retain composed)
-    composed))
+  [client-extension server-extension ^bytes working-nonce crypto-cookie]
+  (let [nonce-suffix (byte-array K/server-nonce-suffix-length)]
+    (b-t/byte-copy! nonce-suffix 0 K/server-nonce-suffix-length working-nonce K/server-nonce-prefix-length)
+    (let [^ByteBuf composed (serial/compose K/cookie-frame {::K/header K/cookie-header
+                                                            ::K/client-extension client-extension
+                                                            ::K/server-extension server-extension
+                                                            ::K/client-nonce-suffix nonce-suffix
+                                                            ::K/cookie crypto-cookie})]
+      ;; I really shouldn't need to do this
+      ;; FIXME: Make sure it gets released
+      (.retain composed)
+      composed)))

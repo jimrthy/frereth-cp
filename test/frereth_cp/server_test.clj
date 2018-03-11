@@ -72,27 +72,41 @@
           (println "Sending HELLO")
           (let [client->server (::client-state/chan->server @client-agent)
                 taken (strm/try-take! client->server ::drained 1000 ::timeout)
-                msg @taken]
-            (is (not= msg ::drained))
-            (is (not= msg ::timeout))
-            (when (not (or (= msg ::drained)
-                           (= msg ::timeout)))
+                hello @taken]
+            (if (not (or (= hello ::drained)
+                         (= hello ::timeout)))
               (let [->srvr (get-in started [::state/client-read-chan ::state/chan])
                     msg {:host client-host
                          :port client-port
-                         :message msg}
+                         :message hello}
                     success (deref (strm/try-put! ->srvr msg 1000 ::timed-out))]
-                (is (not= ::timed-out success))
-                (when (not= ::timed-out success)
+                (if (not= ::timed-out success)
                   (let [srvr-> (get-in started [::state/client-write-chan ::state/chan])
                         cookie @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
-                    (is (not= ::drained cookie))
-                    (is (not= ::timeout cookie))
-                    (when (and (not= ::drained cookie)
-                               (not= ::timeout cookie))
-                      ;; A: Decrypt the cookie and send an Initiate to get the server
-                      ;; to fork a child to handle messages with this client
-                      (throw (RuntimeException. "Q: What next?"))))))))
+                    ;; From the aleph docs:
+                    ;; "The stream will accept any messages which can be coerced into
+                    ;; a binary representation."
+                    ;; It's perfectly legit for the Server to send either B] or
+                    ;; ByteBuf instances here.
+                    ;; (Whether socket instances emit ByteBuf or B] depends on a
+                    ;; parameter to their ctor. The B] approach is slower due to
+                    ;; copying, but recommended for any but advanced users,
+                    ;; to avoid needing to cope with reference counts).
+                    ;; TODO: See which format aleph works with natively to
+                    ;; minimize copying for writes (this may or may not mean
+                    ;; rewriting compose to return B] instead)
+                    (throw (RuntimeException. "Need to ensure cookie is a B]"))
+                    (if (and (not= ::drained cookie)
+                             (not= ::timeout cookie))
+                      (let [client<-server (::client-state/chan<-server @client-agent)
+                            put @(strm/try-put! client<-server cookie 1000 ::timeout)]
+                        (if (not= ::timeout put)
+                          (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                            (throw (RuntimeException. "Don't stop here")))
+                          (throw (RuntimeException. "Timed out putting Cookie to Client"))))
+                      (throw (RuntimeException. (str cookie " reading Cookie from Server")))))
+                  (throw (RuntimeException. "Timed out putting Hello to Server"))))
+              (throw (RuntimeException. (str hello " taking Hello from Client")))))
           (finally
             (println "Stopping client")
             (client/stop! client-agent))))

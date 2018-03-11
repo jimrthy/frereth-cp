@@ -286,10 +286,9 @@ which I'm really not qualified to touch."
     (b-t/byte-copy! nonce prefix-bytes)
     (let [prefix-length (count prefix-bytes)]
       (b-t/byte-copy! nonce
-                      0
+                      prefix-length
                       ^Long (- K/nonce-length prefix-length)
-                      suffix-bytes
-                      prefix-length))
+                      suffix-bytes))
     (try
       (open-after crypto-box 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
@@ -372,7 +371,6 @@ Either based upon one previously stashed in keydir or random"
   (if keydir
     ;; Read the last saved version from something in keydir
     (throw (RuntimeException. "Get real safe-nonce implementation translated"))
-    ;; TODO: Switch to using ByteBuf for this sort of thing
     (let [n (- (count dst) offset)
           tmp (byte-array n)]
       (random-bytes! tmp)

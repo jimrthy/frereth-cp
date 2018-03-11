@@ -140,21 +140,22 @@
                                              ::cookie/clear-text clear-text
                                              ::shared/text text
                                              ::shared/working-nonce working-nonce})]
-                ;; Note that this overrides the incoming message in place
-                ;; Which seems dangerous, but it very deliberately is longer than
+                ;; Note that the reference implementation overwrites this incoming message in place.
+                ;; That seems dangerous, but it very deliberately is longer than
                 ;; our response.
                 ;; And it does save a malloc/GC.
-                ;; Important note: I'm deliberately not releasing this, because I'm sending it back.
-                (.clear message)
+                ;; I can't do that, because of the way compose works.
+                ;; TODO: Revisit this decision if/when the GC turns into a problem.
+                (.release message)
                 (let [^ByteBuf response
-                      (cookie/build-cookie-packet message clnt-xtn srvr-xtn working-nonce crypto-box)]
+                      (cookie/build-cookie-packet clnt-xtn srvr-xtn working-nonce crypto-box)]
                   (log/info (str "Cookie packet built. Returning it."))
                   (try
-                    (let [dst (get-in state [::state/client-write-chan :chan])]
+                    (let [dst (get-in state [::state/client-write-chan ::state/chan])]
                       (when-not dst
                         (log/warn "Missing destination")
                         (if-let [write-chan (::state/client-write-chan state)]
-                          (if-let [chan (:chan write-chan)]
+                          (if-let [chan (::state/chan write-chan)]
                             (log/error "Ummm...what's the problem?")
                             (log/error (str "Missing the :chan in\n"
                                             (util/pretty write-chan))))

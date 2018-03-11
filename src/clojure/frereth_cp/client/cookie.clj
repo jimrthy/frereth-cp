@@ -30,20 +30,26 @@
                 :as cookie}]
             (log/info "Incoming response from server:\n"
                       (utils/pretty cookie))
-            ;; TODO: More forgiving error handling.
-            ;; One bad server really shouldn't ruin everything.
-            (assert (= K/cookie-packet-length (count message))
-                    (str "Invalid cookie. Expected "
-                         K/cookie-packet-length
-                         " bytes. Got "
-                         (count message)
-                         " in\n"
-                         cookie))
             (if-not (or (= cookie ::drained)
                         (= cookie ::hello-response-timed-out))
               (do
+                ;; TODO: More forgiving error handling.
+                ;; One bad server really shouldn't ruin everything.
+                ;; (Note that that's another major part of the
+                ;; protocol that I've totally glossed over for the
+                ;; moment: trying to contact multiple servers at once)
+                (assert (= K/cookie-packet-length (count message))
+                        (str "Invalid cookie. Expected "
+                             K/cookie-packet-length
+                             " bytes. Got "
+                             (count message)
+                             " in\n"
+                             cookie))
                 (log/info "Building/sending Vouch")
                 (initiate/build-and-send-vouch wrapper cookie))
               (log/error "Server didn't respond to HELLO.")))
+          ;; Note that timing out doesn't actually count as
+          ;; an error.
+          ;; This branch will never be taken.
           (partial hello-response-timed-out! wrapper))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))

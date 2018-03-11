@@ -146,6 +146,7 @@
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def ^Integer server-cookie-length 96)
 (def ^Integer cookie-packet-length 200)
+(def unboxed-crypto-cookie-length 128)
 
 (def cookie-frame
   "The boiler plate around a cookie"
