@@ -149,18 +149,21 @@
                 (.release message)
                 (let [^ByteBuf response
                       (cookie/build-cookie-packet clnt-xtn srvr-xtn working-nonce crypto-box)]
-                  (log/info (str "Cookie packet built. Returning it."))
+                  (log/info (str "Cookie packet built. Sending it."))
                   (try
                     (let [dst (get-in state [::state/client-write-chan ::state/chan])]
                       (when-not dst
-                        (log/warn "Missing destination")
-                        (if-let [write-chan (::state/client-write-chan state)]
-                          (if-let [chan (::state/chan write-chan)]
-                            (log/error "Ummm...what's the problem?")
-                            (log/error (str "Missing the :chan in\n"
-                                            (util/pretty write-chan))))
-                          (log/error (str "Missing ::state/client-write-chan in\n"
-                                          (util/pretty (helpers/hide-long-arrays state))))))
+                        (throw (ex-info "Missing destination"
+                                        (or (::state/client-write-chan state)
+                                            {::problem "No client-write-chan"
+                                             ::keys (keys state)
+                                             ::actual state}))))
+                      ;; And this is why I need to refactor this. There's so much going
+                      ;; on in here that it's tough to remember that this is sending back
+                      ;; a map. It has to, since that's the way aleph handles
+                      ;; UDP connections, but it really shouldn't need to: that's the sort
+                      ;; of tightly coupled implementation detail that I can push further
+                      ;; to the boundary.
                       (let [put-future (stream/try-put! dst
                                                         (assoc packet
                                                                :message response)

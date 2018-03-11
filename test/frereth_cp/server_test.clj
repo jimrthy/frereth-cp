@@ -82,29 +82,34 @@
                     success (deref (strm/try-put! ->srvr msg 1000 ::timed-out))]
                 (if (not= ::timed-out success)
                   (let [srvr-> (get-in started [::state/client-write-chan ::state/chan])
-                        cookie @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
-                    ;; From the aleph docs:
-                    ;; "The stream will accept any messages which can be coerced into
-                    ;; a binary representation."
-                    ;; It's perfectly legit for the Server to send either B] or
-                    ;; ByteBuf instances here.
-                    ;; (Whether socket instances emit ByteBuf or B] depends on a
-                    ;; parameter to their ctor. The B] approach is slower due to
-                    ;; copying, but recommended for any but advanced users,
-                    ;; to avoid needing to cope with reference counts).
-                    ;; TODO: See which format aleph works with natively to
-                    ;; minimize copying for writes (this may or may not mean
-                    ;; rewriting compose to return B] instead)
-                    (throw (RuntimeException. "Need to ensure cookie is a B]"))
-                    (if (and (not= ::drained cookie)
-                             (not= ::timeout cookie))
-                      (let [client<-server (::client-state/chan<-server @client-agent)
-                            put @(strm/try-put! client<-server cookie 1000 ::timeout)]
-                        (if (not= ::timeout put)
-                          (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                            (throw (RuntimeException. "Don't stop here")))
-                          (throw (RuntimeException. "Timed out putting Cookie to Client"))))
-                      (throw (RuntimeException. (str cookie " reading Cookie from Server")))))
+                        ;; From the aleph docs:
+                        ;; "The stream will accept any messages which can be coerced into
+                        ;; a binary representation."
+                        ;; It's perfectly legit for the Server to send either B] or
+                        ;; ByteBuf instances here.
+                        ;; (Whether socket instances emit ByteBuf or B] depends on a
+                        ;; parameter to their ctor. The B] approach is slower due to
+                        ;; copying, but recommended for any but advanced users,
+                        ;; to avoid needing to cope with reference counts).
+                        ;; TODO: See which format aleph works with natively to
+                        ;; minimize copying for writes (this may or may not mean
+                        ;; rewriting compose to return B] instead)
+                        cookie-buffer (:message @(strm/try-take! srvr-> ::drained 1000 ::timeout))]
+                    (if (and (not= ::drained cookie-buffer)
+                             (not= ::timeout cookie-buffer))
+                      (let [cookie (byte-array (.readableBytes cookie-buffer))]
+                        (.readBytes cookie-buffer cookie)
+                        (.release cookie-buffer)
+                        ;; Now we're failing because it's a 0 byte cookie.
+                        ;; Or something along those lines.
+                        (throw (RuntimeException. "Get thit fixed"))
+                        (let [client<-server (::client-state/chan<-server @client-agent)
+                              put @(strm/try-put! client<-server cookie 1000 ::timeout)]
+                          (if (not= ::timeout put)
+                            (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                              (throw (RuntimeException. "Don't stop here")))
+                            (throw (RuntimeException. "Timed out putting Cookie to Client")))))
+                      (throw (RuntimeException. (str cookie-buffer " reading Cookie from Server")))))
                   (throw (RuntimeException. "Timed out putting Hello to Server"))))
               (throw (RuntimeException. (str hello " taking Hello from Client")))))
           (finally
