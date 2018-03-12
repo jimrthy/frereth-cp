@@ -82,6 +82,10 @@
          ;; confusion.
          (b-t/sub-byte-array cipher-text K/box-zero-bytes))))))
 
+(s/fdef box-prepare
+        :args (s/cat :public ::specs/crypto-key
+                     :secret ::specs/crypto-key)
+        :ret ::specs/crypto-key)
 (defn box-prepare
   "Set up shared secret so I can avoid the if logic to see whether it's been done.
   At least, I think that's the point."

@@ -1,24 +1,35 @@
 (ns frereth-cp.server.cookie
   "For dealing with cookie packets on the server side"
   (:require [byte-streams :as b-s]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.serialization :as serial])
+            [frereth-cp.shared.serialization :as serial]
+            [manifold.deferred :as dfrd]
+            [manifold.stream :as strm])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (set! *warn-on-reflection* true)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants
 
 (def send-timeout 50)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Public
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Specs
+
+(s/def ::cookie-components (s/keys :req [::state/client-short<->server-long
+                                         ::state/minute-key
+                                         ::clear-text
+                                         ::shared/working-nonce]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Internal Helpers
 
 (defn prepare-cookie!
   [{:keys [::state/client-short<->server-long
@@ -111,7 +122,10 @@ Except that it doesn't seem to do that at all."
         (.release buffer)))))
 
 (defn build-cookie-packet
-  [client-extension server-extension ^bytes working-nonce crypto-cookie]
+  [{client-extension ::K/clnt-xtn
+    server-extension ::K/srvr-xtn}
+   ^bytes working-nonce
+   crypto-cookie]
   (let [nonce-suffix (byte-array K/server-nonce-suffix-length)]
     (b-t/byte-copy! nonce-suffix 0 K/server-nonce-suffix-length working-nonce K/server-nonce-prefix-length)
     (let [^ByteBuf composed (serial/compose K/cookie-frame {::K/header K/cookie-header
@@ -123,3 +137,68 @@ Except that it doesn't seem to do that at all."
       ;; FIXME: Make sure it gets released
       (.retain composed)
       composed)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
+
+(s/fdef send-cookie-response!
+        :args (s/cat :state ::state/state
+                     :packet ::shared/network-packet
+                     :cookie-components ::cookie-components
+                     :hello-spec ::K/hello-spec)
+        :ret any?)
+(defn send-cookie-response!
+  [state
+   packet
+   {:keys [::shared/working-nonce]
+    :as cookie-components}
+   hello-spec]
+  (log/info "Preparing cookie")
+  (let [crypto-box (prepare-cookie! cookie-components)]
+    ;; Note that the reference implementation overwrites this incoming message in place.
+    ;; That seems dangerous, but it very deliberately is longer than
+    ;; our response.
+    ;; And it does save a malloc/GC.
+    ;; I can't do that, because of the way compose works.
+    ;; TODO: Revisit this decision if/when the GC turns into a problem.
+    (let [^ByteBuf response
+          (build-cookie-packet hello-spec working-nonce crypto-box)]
+      (log/info (str "Cookie packet built. Sending it."))
+      (try
+        (if-let [dst (get-in state [::state/client-write-chan ::state/chan])]
+          ;; And this is why I need to refactor this. There's so much going
+          ;; on in here that it's tough to remember that this is sending back
+          ;; a map. It has to, since that's the way aleph handles
+          ;; UDP connections, but it really shouldn't need to: that's the sort
+          ;; of tightly coupled implementation detail that I can push further
+          ;; to the boundary.
+          (let [put-future (strm/try-put! dst
+                                          (assoc packet
+                                                 :message response)
+                                          ;; TODO: This really needs to be part of
+                                          ;; state so it can be tuned while running
+                                          send-timeout
+                                          ::timed-out)]
+            (log/info "Cookie packet scheduled to send")
+            (dfrd/on-realized put-future
+                              (fn [success]
+                                (if success
+                                  (log/info "Sending Cookie succeeded")
+                                  (log/error "Sending Cookie failed"))
+                                ;; TODO: Make sure this does get released!
+                                ;; The caller has to handle that, though.
+                                ;; It can't be released until after it's been put
+                                ;; on the socket.
+                                (comment (.release response)))
+                              (fn [err]
+                                (log/error "Sending Cookie failed:" err)
+                                (.release response)))
+            state)
+          (throw (ex-info "Missing destination"
+                          (or (::state/client-write-chan state)
+                              {::problem "No client-write-chan"
+                               ::keys (keys state)
+                               ::actual state}))))
+        (catch Exception ex
+          (log/error ex "Failed to send Cookie response")
+          state)))))
