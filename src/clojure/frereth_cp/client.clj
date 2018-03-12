@@ -267,6 +267,9 @@ implementation. This is code that I don't understand yet"
     ;; the next, but a major selling point
     ;; is not waiting for TCP buffers
     ;; to expire.
+    ;; There's an interesting conundrum here:
+    ;; it probably makes more sense to handle that
+    ;; sort of detail closer to the network boundary.
     (let [d (strm/try-put! chan->server
                            raw-packet
                            timeout

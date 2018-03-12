@@ -150,8 +150,8 @@ This is destructive in the sense that it reads from msg-byte-buf"
             (log/error (str "Converting cookie to vouch took longer than "
                             timeout
                             " milliseconds."))
-            (if (agent-error wrapper)
-              (log/info "Agent failed while we were waiting")
+            (if-let [problem (agent-error wrapper)]
+              (log/error problem "Agent failed while we were waiting")
               (do
                 (log/warn "Switching agent into an error state")
                 (send wrapper

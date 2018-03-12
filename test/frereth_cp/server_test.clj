@@ -94,20 +94,30 @@
                         ;; TODO: See which format aleph works with natively to
                         ;; minimize copying for writes (this may or may not mean
                         ;; rewriting compose to return B] instead)
+                        ;; Note that I didn't need to do this for the Hello packet.
                         cookie-buffer (:message @(strm/try-take! srvr-> ::drained 1000 ::timeout))]
+                    (println "FIXME: Make packet sends more consistent")
                     (if (and (not= ::drained cookie-buffer)
                              (not= ::timeout cookie-buffer))
                       (let [cookie (byte-array (.readableBytes cookie-buffer))]
                         (.readBytes cookie-buffer cookie)
                         (.release cookie-buffer)
-                        ;; Now we're failing because it's a 0 byte cookie.
-                        ;; Or something along those lines.
-                        (throw (RuntimeException. "Get thit fixed"))
                         (let [client<-server (::client-state/chan<-server @client-agent)
-                              put @(strm/try-put! client<-server cookie 1000 ::timeout)]
+                              server-name "server"
+                              server-port 65000
+                              put @(strm/try-put! client<-server
+                                                  {:host server-name
+                                                   :message cookie
+                                                   :port server-port}
+                                                  1000
+                                                  ::timeout)]
                           (if (not= ::timeout put)
                             (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                              (throw (RuntimeException. "Don't stop here")))
+                              (if-not (or (= initiate ::drained)
+                                          (= initiate ::timeout))
+                                (throw (RuntimeException. "Don't stop here"))
+                                (throw (ex-info "Failed to take Initiate/Vouch from Client"
+                                                {::problem initiate}))))
                             (throw (RuntimeException. "Timed out putting Cookie to Client")))))
                       (throw (RuntimeException. (str cookie-buffer " reading Cookie from Server")))))
                   (throw (RuntimeException. "Timed out putting Hello to Server"))))

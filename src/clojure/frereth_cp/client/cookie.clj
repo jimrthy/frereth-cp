@@ -3,6 +3,7 @@
             [clojure.tools.logging :as log]
             [frereth-cp.client.initiate :as initiate]
             [frereth-cp.client.state :as state]
+            [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.util :as utils]
             [manifold.deferred :as deferred]
@@ -44,7 +45,7 @@
                              " bytes. Got "
                              (count message)
                              " in\n"
-                             cookie))
+                             (b-t/->string cookie)))
                 (log/info "Building/sending Vouch")
                 (initiate/build-and-send-vouch wrapper cookie))
               (log/error "Server didn't respond to HELLO.")))

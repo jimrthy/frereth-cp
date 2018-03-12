@@ -174,7 +174,7 @@ TODO: Need to ask around about that."
   ;; this level.
   ;; TODO: Need to review how the message layer communicates
   ;; with parent.
-  (throw (RuntimeException. "Deprecated"))
+  (throw (RuntimeException. "Deprecated. FIXME: Start back here"))
   (when-not child-spawner
     (throw (ex-info (str "No way to spawn child.\nAvailable keys:\n"
                          (keys this))
