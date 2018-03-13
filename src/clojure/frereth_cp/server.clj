@@ -5,6 +5,7 @@
             ;; TODO: Really need millisecond precision (at least)
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
+            [frereth-cp.server.cookie :as cookie]
             [frereth-cp.server.hello :as hello]
             [frereth-cp.server.helpers :as helpers]
             [frereth-cp.server.initiate :as initiate]
@@ -29,6 +30,10 @@
 ;; Q: Do any of these really belong in here instead of shared.constants?
 ;; (minimum-initiate-packet-length seems defensible)
 (def minimum-message-packet-length 112)
+
+(def send-timeout
+  "Milliseconds to wait for putting packets onto network queue"
+  50)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -83,6 +88,54 @@
          (<= r 1184)
          (= (bit-and r 0xf)))))
 
+(defn handle-hello!
+  [state
+   {:keys [:message]
+    :as packet}]
+  (when-let [cookie-recipe (hello/do-handle state message)]
+    (let [^ByteBuf cookie (cookie/do-build-cookie-response state cookie-recipe)]
+      (log/info (str "Cookie packet built. Sending it."))
+      (try
+        (if-let [dst (get-in state [::state/client-write-chan ::state/chan])]
+          ;; And this is why I need to refactor this. There's so much going
+          ;; on in here that it's tough to remember that this is sending back
+          ;; a map. It has to, since that's the way aleph handles
+          ;; UDP connections, but it really shouldn't need to: that's the sort
+          ;; of tightly coupled implementation detail that I can push further
+          ;; to the boundary.
+          (let [put-future (strm/try-put! dst
+                                          (assoc packet
+                                                 :message cookie)
+                                          ;; TODO: This really needs to be part of
+                                          ;; state so it can be tuned while running
+                                          send-timeout
+                                          ::timed-out)]
+            (log/info "Cookie packet scheduled to send")
+            (dfrd/on-realized put-future
+                              (fn [success]
+                                (if success
+                                  (log/info "Sending Cookie succeeded")
+                                  (log/error "Sending Cookie failed"))
+                                ;; TODO: Make sure this does get released!
+                                ;; The caller has to handle that, though.
+                                ;; It can't be released until after it's been put
+                                ;; on the socket.
+                                ;; Actually, aleph should release it after it
+                                ;; puts it in the socket
+                                (comment (.release cookie)))
+                              (fn [err]
+                                (log/error "Sending Cookie failed:" err)
+                                (.release cookie)))
+            state)
+          (throw (ex-info "Missing destination"
+                          (or (::state/client-write-chan state)
+                              {::problem "No client-write-chan"
+                               ::keys (keys state)
+                               ::actual state}))))
+        (catch Exception ex
+          (log/error ex "Failed to send Cookie response")
+          state)))))
+
 (s/fdef verify-my-packet
         :args (s/cat :packet bytes?)
         :ret boolean?)
@@ -134,6 +187,8 @@
   [state
    {:keys [:host
            :port]
+    ;; Q: How much performance do we really use if we
+    ;; set up the socket to send a B] rather than a ByteBuf?
     ^ByteBuf message :message
     :as packet}]
   (log/debug "Incoming")
@@ -156,7 +211,7 @@
             (log/info "Incoming packet-type-id: " packet-type-id)
             (try
               (case packet-type-id
-                \H (hello/handle! state packet)
+                \H (handle-hello! state packet)
                 \I (initiate/handle! state packet)
                 \M (handle-message! state packet))
               (catch Exception ex

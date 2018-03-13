@@ -5,6 +5,7 @@
             [clojure.tools.logging :as log]
             [frereth-cp.server.cookie :as cookie]
             [frereth-cp.server.helpers :as helpers]
+            [frereth-cp.server.shared-specs :as srvr-specs]
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
@@ -139,16 +140,15 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
-(s/fdef handle!
+(s/fdef do-handle
         :args (s/cat :state ::state/state
-                     :packet ::shared/network-packet)
-        :ret any?)
-(defn handle!
+                     :packet ::shared/message)
+        :ret (s/keys :req [::K/hello-spec ::srvr-specs/cookie-components]))
+(defn do-handle
   [{:keys [::shared/working-area]
     :as state}
-   {;; TODO: Evaluate the impact of just using bytes instead
-    ^ByteBuf message :message
-    :as packet}]
+   ;; TODO: Evaluate the impact of just using bytes instead
+   ^ByteBuf message]
   (log/debug "Have what looks like a HELLO packet")
   (let [{:keys [::shared-secret]
          clear-text ::opened
@@ -171,16 +171,13 @@
                     ::shared/working-nonce]} working-area]
         (assert minute-key (str "Missing minute-key among "
                                 (keys state)))
-        ;; FIXME: Move this to the caller
-        (cookie/send-cookie-response! state
-                                      packet
-                                      {::state/client-short<->server-long shared-secret
-                                       ::state/client-short-pk clnt-short-pk
-                                       ::state/minute-key minute-key
-                                       ::cookie/clear-text clear-text
-                                       ::shared/text text
-                                       ::shared/working-nonce working-nonce}
-                                      fields))
+        {::srvr-specs/cookie-components {::state/client-short<->server-long shared-secret
+                                         ::state/client-short-pk clnt-short-pk
+                                         ::state/minute-key minute-key
+                                         ::srvr-specs/clear-text clear-text
+                                         ::shared/text text
+                                         ::shared/working-nonce working-nonce}
+         ::K/hello-spec fields})
       (do
         (log/warn "Unable to open the HELLO crypto-box: dropping")
-        state))))
+        nil))))
