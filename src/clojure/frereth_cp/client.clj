@@ -11,10 +11,13 @@
             [frereth-cp.client.cookie :as cookie]
             [frereth-cp.client.hello :as hello]
             [frereth-cp.client.state :as state]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as deferred]
             [manifold.stream :as strm])
@@ -357,8 +360,10 @@ like a timing attack."
             (shared/release-packet-manager! (::shared/packet-management this))))))
 
 (s/fdef ctor
-        :args (s/keys :req [::state/chan<-server
+        :args (s/keys :req [::msg-specs/->child
                             ::state/chan->server
+                            ::log2/logger
+                            ::specs/message-loop-name
                             ::shared/my-keys
                             ::state/server-security])
         :ret ::state/state-agent)

@@ -5,6 +5,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
+            [frereth-cp.message :as message]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
@@ -29,12 +31,15 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
+;; FIXME: These should all go away.
 (s/def ::chan->child strm/stream?)
 (s/def ::chan<-child strm/stream?)
 (s/def ::chan->server strm/stream?)
 (s/def ::chan<-server strm/stream?)
 (s/def ::release->child strm/stream?)
 
+;; This is shared with the same sort of thing in messaging.
+;; FIXME: Eliminate the duplication
 (s/def ::recent nat-int?)
 ;; Periodically pull the client extension from...wherever it comes from.
 ;; Q: Why?
@@ -88,26 +93,30 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; happens) seems like a recipe for disaster.
 (s/def ::mutable-state (s/keys :req [::client-extension-load-time
                                      ::shared/extension
+                                     ::log2/logger
+                                     ::log2/state
+                                     ;; Q: Does this really make any sense?
                                      ::outgoing-message
                                      ::shared/packet-management
                                      ::shared/recent
                                      ::server-security
                                      ::shared-secrets
+                                     ::msg-specs/state
                                      ::shared/work-area]
                                :opt [::child
+                                     ::specs/io-handle
                                      ;; Q: Why am I tempted to store this at all?
                                      ;; A: Well...I might need to resend it if it
                                      ;; gets dropped initially.
                                      ::vouch]))
-(s/def ::immutable-value (s/keys :req [::shared/my-keys
+(s/def ::immutable-value (s/keys :req [::msg-specs/->child
+                                       ::shared/my-keys
+                                       ::specs/message-loop-name
                                        ;; Q: How do these mesh with netty's pipeline model?
                                        ;; For that matter, how much sense does the idea of
                                        ;; spawning a child process here?
                                        ::chan->server
                                        ::chan<-server
-                                       ;; The circular declaration of this is very
-                                       ;; suspicious.
-                                       ::child-spawner
                                        ::server-extension
                                        ::timeout]))
 (s/def ::state (s/merge ::mutable-state
@@ -162,40 +171,51 @@ mechanism.
 Although send-off might seem more appropriate, it probably isn't.
 
 TODO: Need to ask around about that."
-  [{:keys [::child-spawner]
+  [{:keys [::msg-specs/->child
+           ::log2/logger
+           ::specs/message-loop-name]
+    {log-state ::log2/state
+     :as initial-msg-state} ::msg-specs/state
     :as this}
    wrapper]
-  (log/info "Spawning child!!")
-  ;; The fundamental idea behind this is wrong.
-  ;; The API this was setting up is just too complicated.
-  ;; TODO: Need to convert the client to use the functional
-  ;; interaction that I set up for messaging.
-  ;; Although now I'm not positive I set it up that way at
-  ;; this level.
-  ;; TODO: Need to review how the message layer communicates
-  ;; with parent.
-  (throw (RuntimeException. "Deprecated. FIXME: Start back here"))
-  (when-not child-spawner
-    (throw (ex-info (str "No way to spawn child.\nAvailable keys:\n"
-                         (keys this))
-                    this)))
-  (let [{:keys [::child ::reader ::release ::writer]} (child-spawner wrapper)]
-    (log/info (str "Setting up initial read against the agent wrapping "
-                   #_this
-                   "\n...this...\naround\n"
-                   child))
-    ;; Q: Do these all *really* belong at the top level?
-    ;; I'm torn between the basic fact that flat data structures
-    ;; are easier (simpler?) and the fact that namespacing this
-    ;; sort of thing makes collisions much less likely.
-    ;; Not to mention the whole "What did I mean for this thing
-    ;; to be?" question.
-    (assoc this
-           ::chan<-child writer
-           ::release->child release
-           ::chan->child reader
-           ::child child
-           ::read-queue clojure.lang.PersistentQueue/EMPTY)))
+  (let [log-state (log2/info log-state ::fork "Spawning child!!")
+        child (message/initial-state message-loop-name
+                                     false
+                                     (assoc initial-msg-state
+                                            ::log2/state log-state)
+                                     logger)
+        child->srvr (fn [^bytes message-block]
+                      ;; FIXME: This really needs to write
+                      ;; packet to our UDP socket instance.
+                      ;; But first we need to bundle it into a message
+                      ;; packet and encrypt it.
+                      ;; Q: Use logger to log what's happening?
+                      (let [message-packet (throw (RuntimeException. "build this"))
+                            bundle {:host "unknown"
+                                    :port nil
+                                    :message message-packet}]
+                        (throw (RuntimeException. "Write this"))))
+        {:keys [::msg-specs/io-handle]
+         log-state ::log2/state} (message/start! child
+                                                 logger
+                                                 child->srvr
+                                                 ->child)]
+    (let [log-state (log2/info log-state
+                               ::fork
+                               (str "Setting up initial read against the agent")
+                               child)]
+      ;; Q: Would this be a good time to flush these logs?
+      (throw (RuntimeException. "FIXME: Start back here"))
+      ;; Q: Do these all *really* belong at the top level?
+      ;; I'm torn between the basic fact that flat data structures
+      ;; are easier (simpler?) and the fact that namespacing this
+      ;; sort of thing makes collisions much less likely.
+      ;; Not to mention the whole "What did I mean for this thing
+      ;; to be?" question.
+      (assoc this
+             ::child child
+             ::log2/state log-state
+             ::msg-specs/io-handle io-handle))))
 
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet-management
@@ -446,7 +466,9 @@ TODO: Need to ask around about that."
 
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
-  [this]
+  [{:keys [::specs/message-loop-name]
+    :as this}]
+  {:pre [message-loop-name]}
   ;; In theory, it seems like it would make sense to -> this through a chain of
   ;; these sorts of initializers.
   ;; In practice, as it stands, it seems a little silly.

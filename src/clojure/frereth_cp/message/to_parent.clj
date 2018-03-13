@@ -125,7 +125,7 @@
       ;; XXX: include any acknowledgments that have piled up (--DJB)
       ;; Reference implementation doesn't zero anything out. It just skips these
       ;; bytes. Which seems like it can't possibly be correct.
-      (.writeBytes send-buf #^bytes shared/all-zeros 0 34)  ; all the ACK fields
+      (.writeBytes send-buf #^bytes shared-K/all-zeros 0 34)  ; all the ACK fields
 
       ;; SUCC/FAIL flag | data block size
       (.writeShort send-buf flag-size)

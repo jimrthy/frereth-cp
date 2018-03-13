@@ -1275,8 +1275,12 @@
      {:keys [::specs/pipe-from-child-size]
       :or {pipe-from-child-size K/k-64}
       :as outgoing} ::specs/outgoing
+     ;; FIXME: This is going to break all my existing code.
+     ;; But it really needs to happen now.
+     log-state ::log/state
      :as opts}
     logger]
+   {:pre [log-state]}
     ;; FIXME: Really also needs an initial log-state I can fork from that instead
    (let [log-state (log/debug (log/init human-name 0)
                               ::initialization
@@ -1377,7 +1381,7 @@
 
 (s/fdef start!
         :args (s/cat :state ::specs/state
-                     :logger ::specs/logger
+                     :logger ::log/logger
                      :parent-callback ::specs/->parent
                      :child-callback ::specs/->child)
         :ret (s/keys :req [::log/state
