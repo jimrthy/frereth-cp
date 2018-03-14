@@ -84,6 +84,20 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
+(s/fdef build-log-entry
+        :args (s/cat :label ::label
+                     :lamport ::lamport
+                     :level ::level
+                     :message ::message))
+(defn build-log-entry
+  [label lamport level message]
+  {::current-thread (utils/get-current-thread)
+   ::label label
+   ::lamport lamport
+   ::level level
+   ::time (System/currentTimeMillis)
+   ::message message})
+
 (s/fdef add-log-entry
         :args (s/cat :log-state ::state
                      :level ::level
@@ -105,12 +119,7 @@
        (update
         ::entries
         conj
-        {::current-thread (utils/get-current-thread)
-         ::label label
-         ::lamport lamport
-         ::level level
-         ::time (System/currentTimeMillis)
-         ::message message})
+        (build-log-entry label lamport level message))
        (update ::lamport inc)))
   ([{:keys [::context
             ::lamport]
@@ -278,22 +287,16 @@
 (deflogger fatal)
 
 (s/fdef init
-        :args (s/cat :start-time ::lamport)
+        :args (s/cat :context ::context
+                     :start-time ::lamport)
         :ret ::state)
 (defn init
   ([context start-clock]
    {::entries []
     ::lamport start-clock
     ::context context})
-  ;; FIXME: Honestly, this needs a high-level context
-  ;; i.e. What is the purpose of this group of logs?
   ([context]
-   (init context 0))
-  ([]
-   ;; the 1-arity version should include the context.
-   ;; *This* is the arity that should just go away
-   (throw (RuntimeException. "Don't do this"))
-   (init 0)))
+   (init context 0)))
 
 (defn file-writer-factory
   [file-name]
@@ -320,30 +323,33 @@
   ;; So I can thread-first log-state through
   ;; log calls into this
   [logger
-   {:keys [::context]
-    :as log-state}]
+   log-state]
   ;; Honestly, there should be an agent that handles this
   ;; so we don't block the calling thread.
   ;; The i/o costs should be quite a bit higher than
-  ;; the agent overhead...though I do know that
+  ;; the agent overhead...though
   ;; a go-loop would be more efficient
-  (log! logger {::what "flushing"
-                ::context context})
-  (doseq [message (::entries log-state)]
-    (log! logger message))
-  (flush! logger)
-  ;; Q: Which of these next 2 options will perform
-  ;; better?
-  ;; It seems like it should be a toss-up, since most
-  ;; of the impact will come from garbage collecting the
-  ;; old entries anyway.
-  ;; But it seems like the latter might get a minor
-  ;; win by avoiding the overhead of the update call
-  (comment
-    (-> log-state
-        (update ::lamport inc)
-        (assoc ::entries [])))
-  (init (::context log-state) (inc (::lamport log-state))))
+  (let [{:keys [::context
+                ::lamport]
+         :as log-state} (add-log-entry log-state
+                                       ::trace
+                                       ::top
+                                       "flushing")]
+    (doseq [message (::entries log-state)]
+      (log! logger message))
+    (flush! logger)
+    ;; Q: Which of these next 2 options will perform
+    ;; better?
+    ;; It seems like it should be a toss-up, since most
+    ;; of the impact will come from garbage collecting the
+    ;; old entries anyway.
+    ;; But it seems like the latter might get a minor
+    ;; win by avoiding the overhead of the update call
+    (comment
+      (-> log-state
+          (update ::lamport inc)
+          (assoc ::entries [])))
+    (init context (inc lamport))))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state
@@ -394,4 +400,4 @@
                       (::lamport src))]
      (synchronize src forked)))
   ([src]
-   (init (::context src) (::lamport src))))
+   (init (::context src) (inc (::lamport src)))))

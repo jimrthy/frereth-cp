@@ -6,6 +6,8 @@
             [frereth-cp.client.cookie :as cookie]
             [frereth-cp.client.hello :as hello]
             [frereth-cp.client.state :as state]
+            [frereth-cp.message :as message]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server.cookie :as srvr-cookie]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
@@ -34,9 +36,19 @@
     ;; A: It starts by sending a HELO
     ;; packet, then setting the client up to wait for a
     ;; Cookie back from the server.
-    (let [{:keys [::client-agent
-                  ::long-srvr-keys
-                  ::shrt-srvr-keys]} (factory/raw-client nil)
+    (let [parent-cb (fn [agent-wrapper
+                         chunk]
+                      (println "parent-cb: getting ready to fail")
+                      (throw (ex-info "Didn't really expect anything at parent callback"
+                                      {::client-state @agent-wrapper
+                                       ::message chunk})))
+          child-cb (fn [chunk]
+                     (println "child-cb: getting ready to fail")
+                     (throw (ex-info "Didn't really expect anything at child callback"
+                                     {::message chunk})))
+          client-agent (factory/raw-client "step-1" 
+                                           logger
+                                           srvr-pk-long)
           client @client-agent
           {:keys [::state/chan<-server ::state/chan->server]} client]
       (when-not chan<-server

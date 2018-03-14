@@ -101,6 +101,21 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ::shared/recent
                                      ::server-security
                                      ::shared-secrets
+                                     ;; If we track ::msg-specs/state here,
+                                     ;; then ::log2/state is, honestly, redundant.
+                                     ::log2/state
+                                     ;; FIXME: Tracking this here doesn't really make
+                                     ;; any sense at all.
+                                     ;; It's really a member variable of the IOLoop
+                                     ;; class.
+                                     ;; Which seems like an awful way to think about
+                                     ;; it, but it's pretty inherently stateful.
+                                     ;; At least in the sense that it changes after
+                                     ;; pretty much every event through the ioloop.
+                                     ;; So maybe it's more like there's a monad in
+                                     ;; there that tracks this secretly.
+                                     ;; Whatever. It doesn't really make any
+                                     ;; sense here.
                                      ::msg-specs/state
                                      ::shared/work-area]
                                :opt [::child
@@ -144,7 +159,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
                             #(s/valid? ::state (deref %))))
 
-
+(s/def ::child-spawner (s/fspec :args (s/cat :state-agent ::state-agent)
+                                :ret (s/keys :req [::log2/state
+                                                   ::msg-specs/io-handle])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Implementation
@@ -162,15 +179,13 @@ So, yes, it *is* weird.
 
 It happens in the agent processing thread pool, during a send operation.
 
-It's the child's responsibility to return a manifold.stream we can use to send it
-bytes from the server.
-
-It notifies us that it has bytes ready to process via the standard agent (send)
-mechanism.
-
 Although send-off might seem more appropriate, it probably isn't.
 
-TODO: Need to ask around about that."
+TODO: Need to ask around about that.
+
+Bigger TODO: This really should be identical to the server implementation.
+
+Which at least implies that the agent approach should go away."
   [{:keys [::msg-specs/->child
            ::log2/logger
            ::specs/message-loop-name]
@@ -195,6 +210,9 @@ TODO: Need to ask around about that."
                                     :port nil
                                     :message message-packet}]
                         (throw (RuntimeException. "Write this"))))
+        ;; FIXME: Message child really should fork its logs from ours to
+        ;; start with our lamport clock.
+        ;; This interaction between the two layers is quite desirable
         {:keys [::msg-specs/io-handle]
          log-state ::log2/state} (message/start! child
                                                  logger
@@ -203,9 +221,14 @@ TODO: Need to ask around about that."
     (let [log-state (log2/info log-state
                                ::fork
                                (str "Setting up initial read against the agent")
-                               child)]
-      ;; Q: Would this be a good time to flush these logs?
-      (throw (RuntimeException. "FIXME: Start back here"))
+                               {::this this
+                                ::child child})]
+    (log/debug "Child spawned")
+    ;; Should do the flush! through the child's logger.
+    ;; Assuming that start! hasn't done so already.
+    ;; OTOH, I shouldn't touch that part of child's io-handle.
+    ;; This should be a black box.
+    (throw (RuntimeException. "Need to flush child-start logs"))
       ;; Q: Do these all *really* belong at the top level?
       ;; I'm torn between the basic fact that flat data structures
       ;; are easier (simpler?) and the fact that namespacing this
@@ -217,11 +240,13 @@ TODO: Need to ask around about that."
              ::log2/state log-state
              ::msg-specs/io-handle io-handle))))
 
+;;; Q: Does this really make sense here rather than client.cookie?
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet-management
            ::shared/work-area
            ::shared-secrets
            ::server-security]
+    log-state ::log2/state
     :as this}
    {:keys [::K/header
            ::K/client-extension
@@ -277,6 +302,7 @@ TODO: Need to ask around about that."
   [{:keys [::shared/extension
            ::shared/packet-management
            ::server-extension]
+    log-state ::log2/state
     :as this}]
   (let [^ByteBuf packet (::shared/packet packet-management)]
     ;; Q: How does packet length actually work?
@@ -330,6 +356,7 @@ TODO: Need to ask around about that."
            ::shared/my-keys
            ::shared-secrets
            ::shared/work-area]
+    log-state ::log2/state
     :as this}]
   (let [{:keys [::shared/working-nonce
                 ::shared/text]} work-area
@@ -451,36 +478,50 @@ TODO: Need to ask around about that."
                    "\nQ: What happened?")))))
 
 (s/fdef load-keys
-        :args (s/cat :my-keys ::shared/my-keys)
-        :ret ::shared/my-keys)
+        :args (s/cat :logger ::log2/state
+                     :my-keys ::shared/my-keys)
+        :ret (s/keys :req [::log2/state
+                           ::shared/my-keys]))
 (defn load-keys
-  [my-keys]
+  [log-state my-keys]
   (let [key-dir (::shared/keydir my-keys)
         long-pair (crypto/do-load-keypair key-dir)
         short-pair (crypto/random-key-pair)]
     (log/info (str "Loaded long-term client key pair from '"
                    key-dir "'"))
-    (assoc my-keys
-           ::shared/long-pair long-pair
-           ::shared/short-pair short-pair)))
+    {::shared/my-keys (assoc my-keys
+                             ::shared/long-pair long-pair
+                             ::shared/short-pair short-pair)
+     ::log2/state log-state}))
 
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
   [{:keys [::msg-specs/message-loop-name
            ::server-extension]
-    :as this}]
+    log-state ::log2/state
+    :as this}
+   log-initializer]
   {:pre [message-loop-name
          server-extension]}
-  ;; In theory, it seems like it would make sense to -> this through a chain of
-  ;; these sorts of initializers.
-  ;; In practice, as it stands, it seems a little silly.
-  (update this ::shared/my-keys load-keys))
+  (let [logger (log-initializer)]
+    (-> this
+        (assoc ::log2/logger logger)
+        ;; FIXME: This is a cheeseball way to do this.
+        ;; Honestly, to follow the "proper" (i.e. established)
+        ;; pattern, load-keys should just operate on the full
+        ;; ::state map.
+        ;; OTOH, I've gotten pretty fierce about how this is a
+        ;; terrible approach, and there's no time like the present
+        ;; to mend my ways.
+        ;; So maybe this is exactly what I want after all.
+        (into (load-keys log-state (::shared/my-keys this))))))
 
 (defn initialize-mutable-state!
   [{:keys [::shared/my-keys
            ::server-security]
     :as this}]
-  (let [server-long-term-pk (::specs/public-long server-security)]
+  (let [log-state (log2/init ["client" (util/random-uuid)])
+        server-long-term-pk (::specs/public-long server-security)]
     (when-not server-long-term-pk
       (throw (ex-info (str "Missing ::specs/public-long among"
                            (keys server-security))
@@ -513,7 +554,8 @@ TODO: Need to ask around about that."
                                ::client-short<->server-long (crypto/box-prepare
                                                              server-long-term-pk
                                                              (.getSecretKey short-pair))}
-             ::server-security server-security}))))
+             ::server-security server-security
+             ::log2/state log-state}))))
 
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.

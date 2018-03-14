@@ -137,6 +137,7 @@ This is destructive in the sense that it reads from msg-byte-buf"
       ;; until I have a working prototype
       (log/info "send cookie->vouch")
       (send wrapper state/cookie->vouch cookie-packet)
+      (log/info "sent cookie->vouch")
       (let [timeout (state/current-timeout wrapper)]
         ;; Give the other thread(s) a chance to catch up and get
         ;; the incoming cookie converted into a Vouch
@@ -150,8 +151,19 @@ This is destructive in the sense that it reads from msg-byte-buf"
             (log/error (str "Converting cookie to vouch took longer than "
                             timeout
                             " milliseconds."))
-            (if-let [problem (agent-error wrapper)]
-              (log/error problem "Agent failed while we were waiting")
+            (if-let [ex (agent-error wrapper)]
+              (do
+                (log/error ex "Agent failed while we were waiting")
+                ;; Actual error:
+                ;; RuntimeException about flushing the start logs from
+                ;; client.state/fork.
+                ;; Craziness: The failed assertion isn't interrupting my test.
+                ;; FIXME: Actually, something like this does need to be
+                ;; fatal. At least for this client.
+                ;; It's tempting to just call (System/exit) here, but
+                ;; I'd really prefer to avoid killing the JVM.
+                (println "FIXME: Start back here.")
+                (assert (not ex) "This should probably only be fatal for the sake of debugging"))
               (do
                 (log/warn "Switching agent into an error state")
                 (send wrapper

@@ -35,38 +35,42 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-;; Q: More sensible to check for strm/source and sink protocols?
+(comment
+  ;; Q: More sensible to check for strm/source and sink protocols?
 
-(s/def ::reader (s/keys :req [::state/chan<-child]))
-(s/def ::writer (s/keys :req [::state/chan->child]))
-;; This stream is for sending ByteBufs back to the child when we're done
-;; Tracking them in a thread-safe pool seems like a better approach.
-;; Especially when we're talking about the server.
-;; But I have to get a first draft written before I can worry about details
-;; like that.
-;; Actually, I pretty much have to have access to that pool now, so messages
-;; can go the other way.
-;; I could try to get clever and try to reuse buffers when we have a basic
-;; request/response scenario. But that idea totally falls apart if the
-;; communication is mostly one-sided.
-;; It's available as a potential optimization, but it probably only
-;; makes sense from the "child" perspective, where we have more knowledge
-;; about the expected traffic patterns.
-;; TODO: Switch to PooledByteBufAllocator
-;; Instead of mucking around with this release-notifier nonsense
-;; FIXME: Actually, make this go away completely.
-;; We *do* get a ByteBuf at this layer. But it really needs to get
-;; extracted to a B] (for decrypting) and then released.
-(s/def ::release ::writer)
-;; Accepts the agent that owns "this" and returns
-;; 1) a writer channel we can use to send messages to the child.
-;; 2) a reader channel that the child will use to send byte
-;; arrays/bufs to us
-(s/def ::child-spawner (s/fspec :args (s/cat :this ::state/state-agent)
-                                :ret (s/keys :req [::state/child
-                                                   ::reader
-                                                   ::release
-                                                   ::writer])))
+  (s/def ::reader (s/keys :req [::state/chan<-child]))
+  (s/def ::writer (s/keys :req [::state/chan->child]))
+  ;; This stream is for sending ByteBufs back to the child when we're done
+  ;; Tracking them in a thread-safe pool seems like a better approach.
+  ;; Especially when we're talking about the server.
+  ;; But I have to get a first draft written before I can worry about details
+  ;; like that.
+  ;; Actually, I pretty much have to have access to that pool now, so messages
+  ;; can go the other way.
+  ;; I could try to get clever and try to reuse buffers when we have a basic
+  ;; request/response scenario. But that idea totally falls apart if the
+  ;; communication is mostly one-sided.
+  ;; It's available as a potential optimization, but it probably only
+  ;; makes sense from the "child" perspective, where we have more knowledge
+  ;; about the expected traffic patterns.
+  ;; TODO: Switch to PooledByteBufAllocator
+  ;; Instead of mucking around with this release-notifier nonsense
+  ;; FIXME: Actually, make this go away completely.
+  ;; We *do* get a ByteBuf at this layer. But it really needs to get
+  ;; extracted to a B] (for decrypting) and then released.
+  ;; So, honestly, it makes more sense to just let the networking
+  ;; layer do that translation for us so we don't have to mess
+  ;; around with reference counting the ByteBuf.
+  (s/def ::release ::writer)
+  ;; Accepts the agent that owns "this" and returns
+  ;; 1) a writer channel we can use to send messages to the child.
+  ;; 2) a reader channel that the child will use to send byte
+  ;; arrays/bufs to us
+  (s/def ::child-spawner (s/fspec :args (s/cat :this ::state/state-agent)
+                                  :ret (s/keys :req [::state/child
+                                                     ::reader
+                                                     ::release
+                                                     ::writer]))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -360,17 +364,18 @@ like a timing attack."
             (shared/release-packet-manager! (::shared/packet-management this))))))
 
 (s/fdef ctor
-        :args (s/keys :req [::msg-specs/->child
-                            ::state/chan->server
-                            ::log2/logger
-                            ::specs/message-loop-name
-                            ::shared/my-keys
-                            ::state/server-security])
+        :args (s/cat :opts (s/keys :req [::msg-specs/->child
+                                         ::state/chan->server
+                                         ::specs/message-loop-name
+                                         ::shared/my-keys
+                                         ::state/server-security])
+                     :log-initializer (s/fspec :args nil
+                                               :ret ::log2/logger))
         :ret ::state/state-agent)
 (defn ctor
-  [opts]
+  [opts logger-initializer]
   (-> opts
-      state/initialize-immutable-values
+      (state/initialize-immutable-values logger-initializer)
       state/initialize-mutable-state!
       (assoc
        ;; This seems very cheese-ball, but they

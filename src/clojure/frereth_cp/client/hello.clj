@@ -95,7 +95,7 @@
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)]
     (b-t/byte-copy! working-nonce shared/hello-nonce-prefix)
     (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length short-term-nonce)
-    (log/info (str short-term-nonce " packed into\n"
+    (log/info (str "Short term nonce: " short-term-nonce " packed into\n"
                    (b-t/->string working-nonce)))
 
     (let [packet (build-actual-packet this
