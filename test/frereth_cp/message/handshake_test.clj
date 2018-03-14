@@ -1,4 +1,5 @@
 (ns frereth-cp.message.handshake-test
+  "Test basic message exchanges"
   (:require [clojure.edn :as edn]
             [clojure.java.io :as jio]
             [clojure.spec.alpha :as s]
@@ -18,14 +19,14 @@
            io.netty.buffer.Unpooled))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;; Specs
 
 (s/def ::count nat-int?)
 (s/def ::state (s/keys :req [::count]))
 (s/def ::next-object any?)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Magic constants
+;;;; Magic constants
 
 (def protocol
   (gloss/compile-frame
@@ -35,7 +36,7 @@
    edn/read-string))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Helper functions
+;;;; Helper functions
 
 (defn consumer
   [{:keys [::specs/message-loop-name]
@@ -457,7 +458,7 @@
                 bs))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Tests
+;;;; Tests
 
 (deftest check-decoder
   ;; Tests for checking my testing code seems like a really bad sign.
@@ -640,9 +641,9 @@
                              chzbrgr-length)
                     srvr-decode-sink)
 
-      (let [client-init (message/initial-state "Client" false {} client-logger)
+      (let [client-init (message/initial-state "Client" false {::log/state @client-log-atom} client-logger)
             {client-io ::specs/io-handle}  (message/start! client-init client-logger client-parent-cb client-child-cb)
-            server-init (message/initial-state "Server" true {} server-logger)
+            server-init (message/initial-state "Server" true {::log/state @server-log-atom} server-logger)
             ;; It seems like this next part really shouldn't happen until the initial message arrives
             ;; from the client.
             ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So

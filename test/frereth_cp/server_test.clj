@@ -6,6 +6,7 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.test-factory :as factory]
@@ -33,10 +34,6 @@
                     ::K/client-nonce-suffix (byte-array [0 0 0 0 0 0 0 1])
                     ::K/crypto-box crypto-box}]
     (serial/compose K/hello-packet-dscr hello-dscr)))
-
-(defn hand-shake-child-spawner
-  []
-  (throw (RuntimeException. "FIXME: Do I need/want to implement this?")))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Tests
@@ -66,8 +63,9 @@
             ;; Then again, the extra 2 bytes of memory involved here really don't
             ;; matter.
             client-port 48816
+            client-logger (log/std-out-log-factory)
             srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
-            client-agent (factory/raw-client hand-shake-child-spawner srvr-pk-long)]
+            client-agent (factory/raw-client "client-hand-shaker" client-logger srvr-pk-long)]
         (try
           (println "Sending HELLO")
           (let [client->server (::client-state/chan->server @client-agent)
@@ -105,6 +103,8 @@
                         (let [client<-server (::client-state/chan<-server @client-agent)
                               server-name "server"
                               server-port 65000
+                              ;; This is throwing a NPE.
+                              ;; Almost definitely because I'm not setting up chan<-server
                               put @(strm/try-put! client<-server
                                                   {:host server-name
                                                    :message cookie

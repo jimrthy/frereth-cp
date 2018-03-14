@@ -466,9 +466,11 @@ TODO: Need to ask around about that."
 
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
-  [{:keys [::specs/message-loop-name]
+  [{:keys [::msg-specs/message-loop-name
+           ::server-extension]
     :as this}]
-  {:pre [message-loop-name]}
+  {:pre [message-loop-name
+         server-extension]}
   ;; In theory, it seems like it would make sense to -> this through a chain of
   ;; these sorts of initializers.
   ;; In practice, as it stands, it seems a little silly.

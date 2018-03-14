@@ -3,11 +3,13 @@
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.client :as clnt]
             [frereth-cp.client.state :as client-state]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server :as server]
             [frereth-cp.server.state :as srvr-state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as shared-specs]
             [manifold.stream :as strm]))
 
@@ -57,34 +59,36 @@
    ::srvr-state/client-write-chan {::srvr-state/chan nil}})
 
 (s/fdef raw-client
-        :args (s/cat :child-spawner ::clnt/child-spawner
+        :args (s/cat :message-loop-name ::msg-specs/message-loop-name
+                     :child-spawner ::clnt/child-spawner
                      :srvr-pk-long ::shared-specs/public-long
                      :srvr-xtn-vec (s/and vector?
                                           #(= (count %) K/extension-length)))
         :ret ::client-state/state-agent)
 (defn raw-client
-  ([child-spawner srvr-pk-long]
-   (raw-client child-spawner
+  ([message-loop-name logger srvr-pk-long]
+   (raw-client message-loop-name
+               logger
                srvr-pk-long
                [0x01 0x02 0x03 0x04
                 0x05 0x06 0x07 0x08
                 0x09 0x0a 0x0b 0x0c
                 0x0d 0x0e 0x0f 0x10]))
-  ([child-spawner srvr-pk-long srvr-xtn-vec]
+  ([message-loop-name logger srvr-pk-long srvr-xtn-vec]
    (let [server-extension (byte-array srvr-xtn-vec)
          server-name (shared/encode-server-name "hypothet.i.cal")
          long-pair (crypto/random-key-pair)
-         result (clnt/ctor {;; Aleph supplies a single bi-directional channel.
-                            ;; My tests break trying to use that here.
-                            ;; For now, take a step back and get them working
-                            ::client-state/chan<-server (strm/stream)
+         log-state (log/init message-loop-name)
+         result (clnt/ctor {::msg-specs/->child (strm/stream)
                             ::client-state/chan->server (strm/stream)
+                            ::log/logger logger
+                            ::msg-specs/message-loop-name message-loop-name
                             ::shared/my-keys {::shared/keydir "client-test"
                                               ::shared/long-pair long-pair
                                               ::K/server-name server-name}
-                            ::clnt/child-spawner child-spawner
                             ::client-state/server-extension server-extension
                             ::client-state/server-security {::K/server-name server-name
-                                                            ::shared-specs/public-long srvr-pk-long}})]
+                                                            ::shared-specs/public-long srvr-pk-long}
+                            ::log/state log-state})]
      (clnt/start! result)
      result)))

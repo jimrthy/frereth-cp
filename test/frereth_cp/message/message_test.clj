@@ -668,12 +668,9 @@
                                          "Received all expected bytes")
                                   (deliver response @srvr-child-state)
                                   (message/child-close! @srvr-io-atom)))))
-          ;; I'm seeing log messages from this IO loop long after the test finished.
-          ;; TODO: Figure out why it didn't die (this could be a remnant from an initial
-          ;; broken test)
           srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
                                                   true
-                                                  {}
+                                                  {::log/state @log-atom}
                                                   logger)
           {srvr-io-handle ::specs/io-handle} (message/start! srvr-initialized logger server-parent-cb server-child-cb)
 
@@ -714,7 +711,7 @@
                      (is (s/valid? ::specs/eof-flag eof) "This should only get called for EOF"))
           client-initialized (message/initial-state (str "(test " test-run ") Client w/ Big Outbound")
                                                     false
-                                                    {}
+                                                    {::log/state @log-atom}
                                                     logger)
           {client-io-handle ::specs/io-handle} (message/start! client-initialized logger parent-cb child-cb)]
       (reset! srvr-io-atom srvr-io-handle)
@@ -834,6 +831,7 @@ Alt approach took 7,542 and calculated 1,077,185,421,583,970
 Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0, :drained? false, :buffer-size 0, :permanent? false, :type manifold, :sink? true, :closed? false, :pending-takes 1, :buffer-capacity 0, :source? true} >>
 "
   (testing "Mismatches"
+    ;; FIXME: This is broken
     (testing "1"
       (let [min-resend-time 1077185421583970
             n-sec-per-block 1000000000
