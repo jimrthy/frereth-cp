@@ -52,6 +52,7 @@
   )
 
 (deftest shake-hands
+  ;; Note that this is really trying to simulate the network layer between the two
   (let [init (factory/build-server)
         started (factory/start-server init)]
     (println "Server should be started now")
@@ -71,6 +72,7 @@
           (let [client->server (::client-state/chan->server @client-agent)
                 taken (strm/try-take! client->server ::drained 1000 ::timeout)
                 hello @taken]
+            (is (:host hello) "This layer doesn't know where to send anything")
             (if (not (or (= hello ::drained)
                          (= hello ::timeout)))
               (let [->srvr (get-in started [::state/client-read-chan ::state/chan])
@@ -100,25 +102,28 @@
                       (let [cookie (byte-array (.readableBytes cookie-buffer))]
                         (.readBytes cookie-buffer cookie)
                         (.release cookie-buffer)
-                        (let [client<-server (::client-state/chan<-server @client-agent)
-                              server-name "server"
-                              server-port 65000
-                              ;; This is throwing a NPE.
-                              ;; Almost definitely because I'm not setting up chan<-server
-                              put @(strm/try-put! client<-server
-                                                  {:host server-name
-                                                   :message cookie
-                                                   :port server-port}
-                                                  1000
-                                                  ::timeout)]
-                          (if (not= ::timeout put)
-                            (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                              (if-not (or (= initiate ::drained)
-                                          (= initiate ::timeout))
-                                (throw (RuntimeException. "Don't stop here"))
-                                (throw (ex-info "Failed to take Initiate/Vouch from Client"
-                                                {::problem initiate}))))
-                            (throw (RuntimeException. "Timed out putting Cookie to Client")))))
+                        (if-let [client<-server (::client-state/chan<-server @client-agent)]
+                          (let [server-name "server"
+                                server-port 65000
+                                ;; This is throwing a NPE.
+                                ;; Almost definitely because I'm not setting up chan<-server
+                                put @(strm/try-put! client<-server
+                                                    {:host server-name
+                                                     :message cookie
+                                                     :port server-port}
+                                                    1000
+                                                    ::timeout)]
+                            (if (not= ::timeout put)
+                              (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                (if-not (or (= initiate ::drained)
+                                            (= initiate ::timeout))
+                                  (throw (RuntimeException. "Don't stop here"))
+                                  (throw (ex-info "Failed to take Initiate/Vouch from Client"
+                                                  {::problem initiate}))))
+                              (throw (RuntimeException. "Timed out putting Cookie to Client"))))
+                          (throw (ex-info "I know I have a mechanism for writing from server to client among"
+                                          {::keys (keys @client-agent)
+                                           ::grand-scheme @client-agent}))))
                       (throw (RuntimeException. (str cookie-buffer " reading Cookie from Server")))))
                   (throw (RuntimeException. "Timed out putting Hello to Server"))))
               (throw (RuntimeException. (str hello " taking Hello from Client")))))

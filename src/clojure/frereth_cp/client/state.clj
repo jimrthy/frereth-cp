@@ -32,11 +32,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;; Specs
 
 ;; FIXME: These should all go away.
-(s/def ::chan->child strm/stream?)
-(s/def ::chan<-child strm/stream?)
+(comment
+  (s/def ::chan->child strm/stream?)
+  (s/def ::chan<-child strm/stream?)
+  (s/def ::release->child strm/stream?))
+;; Q: Do these make sense?
+;; Realistically, this is how we should be communicating with aleph.
+;; Although it might be worth dropping down to a lower-level approach
+;; for the sake of netty.
 (s/def ::chan->server strm/stream?)
 (s/def ::chan<-server strm/stream?)
-(s/def ::release->child strm/stream?)
 
 ;; This is shared with the same sort of thing in messaging.
 ;; FIXME: Eliminate the duplication
@@ -403,6 +408,9 @@ Which at least implies that the agent approach should go away."
   in our packet buffer with the vouch bytes we'll use
   as the response.
 
+  Q: How much of a performance hit am I looking at if I
+  make this purely functional instead?
+
   Handling an agent (send), which means `this` is already dereferenced"
   [this
    {:keys [:host :port]
@@ -412,10 +420,11 @@ Which at least implies that the agent approach should go away."
                  (with-out-str (b-s/print-bytes message))
                  "into a Vouch"))
   (try
+    ;; outer try is to make sure I .release the incoming message
     (try
       (let [^ByteBuf packet (get-in this
-                           [::shared/packet-management
-                            ::shared/packet])]
+                                    [::shared/packet-management
+                                     ::shared/packet])]
         (assert packet)
         (assert cookie-packet)
         ;; Don't even try to pretend that this approach is thread-safe
@@ -562,50 +571,49 @@ Which at least implies that the agent approach should go away."
   Now we can start doing something interesting."
   [{:keys [::chan<-server
            ::chan->server
-           ::chan->child
-           ::release->child
-           ::chan<-child]
+           ::msg-specs/->child]
     :as this}
    wrapper
    initial-server-response]
+  ;; Q: Does this function make any sense at all?
+  ;; Up until now, we've been funneling messages from the child through
+  ;; Initiate packets. Now we can extend that to full-blown Message
+  ;; packets.
+  ;; And we had a special state flag waiting for the first response back
+  ;; from the server, which we've just received.
+  ;; So yes. Special things do happen here/now.
+  ;; That doesn't mean that any of those special things fit with what
+  ;; I've been trying so far.
+  (log/warn "->message-exchange-mode deprecated")
   ;; I'm getting an ::interaction-test/timeout here
   (log/info "Initial Response from server:\n" initial-server-response)
   (if (not (keyword? (:message initial-server-response)))
-    (if (and chan<-child chan->server)
+    (if (and ->child chan->server)
       (do
         ;; Q: Do I want to block this thread for this?
         ;; A: As written, we can't. We're already inside an Agent$Action
         (comment (await-for (state/current-timeout wrapper) wrapper))
 
-        ;; And then wire this up to pretty much just pass messages through
+        ;; Need to wire this up to pretty much just pass messages through
         ;; Actually, this seems totally broken from any angle, since we need
-        ;; to handle decrypting, at a minimum.
+        ;; to handle encryption, at a minimum. (Q: Don't we?)
 
-        ;; And the send calls are totally wrong: I'm sure I can't just treat
-        ;; the streams as functions
-        ;; Important note about that "something better": it absolutely must take
-        ;; the ::child ::read-queue into account.
-
-        ;; Q: Do I want this or a plain consume?
-        (strm/connect-via chan<-child #(send wrapper chan->server %) chan->server)
-
-        ;; I'd like to just do this in final-wait and take out an indirection
-        ;; level.
-        ;; But I don't want children to have to know the implementation detail
-        ;; that they have to wait for the initial response before the floodgates
-        ;; can open.
-        ;; So go with this approach until something better comes to mind
-        (strm/connect-via chan<-server #(send wrapper chan->child %) chan->child)
-
-        ;; Q: Is this approach better?
-        ;; A: Well, at least it isn't total nonsense like what I wrote originally
-        (comment (strm/consume (::chan<-child this)
-                               (fn [bs]
-                                 (send-off wrapper (fn [state]
-                                                     (let [a
-                                                           (update state ::child-packets
-                                                                   conj bs)]
-                                                       (send-messages! a))))))))
+        (strm/consume (fn [msg]
+                        ;; as-written, we have to unwrap the message
+                        ;; bytes for the stream from the message
+                        ;; packet.
+                        #_(send wrapper chan->child %)
+                        (->child (:message msg))
+                        ;; Q: Is this approach better?
+                        ;; A: Well, at least it isn't total nonsense like what I wrote originally
+                        #_(send-off wrapper (fn [state]
+                                            (let [a
+                                                  (update state ::child-packets
+                                                          conj {:message msg})]
+                                              ;; Well...what did I have planned for this?
+                                              #_(send-messages! a)
+                                              (throw (RuntimeException. "Well, it's still mostly nonsense"))))))
+                      chan<-server))
       (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" @this)
                       {::state this})))
     (log/warn "That response to Initiate was a failure")))
