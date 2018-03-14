@@ -78,7 +78,6 @@
    (let [server-extension (byte-array srvr-xtn-vec)
          server-name (shared/encode-server-name "hypothet.i.cal")
          long-pair (crypto/random-key-pair)
-         log-state (log/init message-loop-name)
          result (clnt/ctor {::msg-specs/->child (strm/stream)
                             ::client-state/chan->server (strm/stream)
                             ::log/logger logger
@@ -88,7 +87,7 @@
                                               ::K/server-name server-name}
                             ::client-state/server-extension server-extension
                             ::client-state/server-security {::K/server-name server-name
-                                                            ::shared-specs/public-long srvr-pk-long}
-                            ::log/state log-state})]
+                                                            ::shared-specs/public-long srvr-pk-long}}
+                           #(log/init message-loop-name))]
      (clnt/start! result)
      result)))
