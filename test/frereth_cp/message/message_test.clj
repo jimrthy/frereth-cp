@@ -4,7 +4,6 @@
             [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (are deftest is testing)]
-            [clojure.tools.logging :as log]
             [frereth-cp.message :as message]
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.from-child :as from-child]
@@ -15,7 +14,7 @@
             [frereth-cp.message.to-child :as to-child]
             [frereth-cp.message.to-parent :as to-parent]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -51,22 +50,22 @@
   ;; FIXME: This really should be a fork
   ;; (which means the caller needs to supply
   ;; its log state)
-  (let [logs (log2/init ::try-multiple-sends 0)]
+  (let [logs (log/init ::try-multiple-sends 0)]
     (loop [m n]
       (if (f io-handle payload)
-        (let [logs (log2/info logs ::succeeded success-message)
-              logs (log2/debug logs
+        (let [logs (log/info logs ::succeeded success-message)
+              logs (log/debug logs
                                ::succeeded
                                (str "Sending took" (- (inc n) m) "attempt(s)"))]
-          (log2/flush-logs! logger logs))
+          (log/flush-logs! logger logs))
         (if (> 0 m)
           (let [failure (ex-info failure-message
                                  failure-body)
-                logs (log2/exception logs
+                logs (log/exception logs
                                      failure
                                      ::failed
                                      failure-message)]
-            (log2/flush-logs! logger logs)
+            (log/flush-logs! logger logs)
             ;; Need to make double-extra certain that
             ;; this exception doesn't just disappear
             (throw failure))
@@ -88,8 +87,8 @@
   ;; TODO: Revisit this decision. See whether it's uglier
   ;; with 2 sides to "communicate"
   (let [loop-name "Echo Test"
-        log-atom (atom (log2/init ::basic-echo 0))
-        logger (log2/std-out-log-factory)
+        log-atom (atom (log/init ::basic-echo 0))
+        logger (log/std-out-log-factory)
         src (Unpooled/buffer K/k-1)  ; w/ header, this takes it to the 1088 limit
         msg-len (- K/max-msg-len K/header-length K/min-padding-length)
         ;; Note that this is what the child sender should be supplying
@@ -102,12 +101,12 @@
     (is (= msg-len K/k-1))
     (.writeBytes src message-body)
     (let [{incoming ::specs/bs-or-eof
-           log-state ::log2/state} (to-parent/build-message-block-description @log-atom
-                                                                              {::specs/buf src
-                                                                               ::specs/length msg-len
-                                                                               ::specs/message-id message-id
-                                                                               ::specs/send-eof ::specs/false
-                                                                               ::specs/start-pos 0})]
+           log-state ::log/state} (to-parent/build-message-block-description @log-atom
+                                                                             {::specs/buf src
+                                                                              ::specs/length msg-len
+                                                                              ::specs/message-id message-id
+                                                                              ::specs/send-eof ::specs/false
+                                                                              ::specs/start-pos 0})]
       (reset! log-atom log-state)
       (is (= K/max-msg-len (count incoming)))
       (let [response (dfrd/deferred)
@@ -129,11 +128,11 @@
                         ;; might do.
                         (is (s/valid? bytes? buf))
                         (let [response-state @parent-state
-                              logs (log2/debug @log-atom
-                                               ::echo-parent-cb
-                                               "Top of callback"
-                                               {::response-state response-state
-                                                ::called-from (utils/get-stack-trace (Exception.))})
+                              logs (log/debug @log-atom
+                                              ::echo-parent-cb
+                                              "Top of callback"
+                                              {::response-state response-state
+                                               ::called-from (utils/get-stack-trace (Exception.))})
                               new-state (swap! parent-state inc)
                               ;; I'd like to get 3 message packets here:
                               ;; 1. ACK
@@ -154,9 +153,9 @@
                               ;; much more robust because of them.
                               ;; FIXME: Revisit this soon.
                               logs (if (= 3 new-state)
-                                     (let [logs (log2/info logs
-                                                           ::echo-parent-cb
-                                                           "Echo sent. Pretending other child triggers done")
+                                     (let [logs (log/info logs
+                                                          ::echo-parent-cb
+                                                          "Echo sent. Pretending other child triggers done")
                                            ;; This seems like a good time for the parent
                                            ;; to send EOF
                                            io-handle @io-handle-atom]
@@ -171,7 +170,7 @@
                                        (deliver response buf)
                                        logs)
                                      logs)
-                              logs (log2/flush-logs! logger logs)]
+                              logs (log/flush-logs! logger logs)]
                           (reset! log-atom logs)))
             child-message-counter (atom 0)
             strm-address (atom 0)
@@ -181,11 +180,11 @@
                        ;; TODO: Add another similar test that throws an
                        ;; exception here, for the sake of hardening the
                        ;; caller
-                       (let [logs (log2/info @log-atom
-                                             ::echo-child-cb
-                                             "Incoming to child"
-                                             {::rcvd array-o-bytes
-                                              ::type (class array-o-bytes)})]
+                       (let [logs (log/info @log-atom
+                                            ::echo-child-cb
+                                            "Incoming to child"
+                                            {::rcvd array-o-bytes
+                                             ::type (class array-o-bytes)})]
                          (is array-o-bytes "Falsey reached callback")
                          (try
                            (let [logs
@@ -193,18 +192,18 @@
                                    (let [msg-len (count array-o-bytes)
                                          locator (Exception.)
                                          logs (if (not= 0 msg-len)
-                                                (let [logs (log2/debug logs
-                                                                       ::echo-child-cb
-                                                                       "Echoing back an incoming message"
-                                                                       {::msg-len msg-len
-                                                                        ::called-from (utils/get-stack-trace (Exception.))})
+                                                (let [logs (log/debug logs
+                                                                      ::echo-child-cb
+                                                                      "Echoing back an incoming message"
+                                                                      {::msg-len msg-len
+                                                                       ::called-from (utils/get-stack-trace (Exception.))})
                                                       logs (if (not= K/k-1 msg-len)
-                                                             (log2/warn logs
-                                                                        ::echo-child-cb
-                                                                        "Incoming message doesn't match length we sent"
-                                                                        {::expected K/k-1
-                                                                         ::actual msg-len
-                                                                         ::details (vec array-o-bytes)})
+                                                             (log/warn logs
+                                                                       ::echo-child-cb
+                                                                       "Incoming message doesn't match length we sent"
+                                                                       {::expected K/k-1
+                                                                        ::actual msg-len
+                                                                        ::details (vec array-o-bytes)})
                                                              logs)
                                                       ;; Just echo it directly back.
                                                       io-handle @io-handle-atom]
@@ -224,23 +223,23 @@
                                                       (message/child-close! @io-handle-atom)
                                                       ;; This is called purely for side-effects.
                                                       ;; The return value does not matter.
-                                                      (let [[_ inner-logs] (log2/fork logs ::child-done)
-                                                            inner-logs (log2/info inner-logs
-                                                                                  ::echo-child-cb
-                                                                                  "Sent EOF after the message block")]
-                                                        (log2/flush-logs! logger inner-logs))))
+                                                      (let [[_ inner-logs] (log/fork logs ::child-done)
+                                                            inner-logs (log/info inner-logs
+                                                                                 ::echo-child-cb
+                                                                                 "Sent EOF after the message block")]
+                                                        (log/flush-logs! logger inner-logs))))
                                                   logs))]
-                                     (log2/warn logs :echo-child-cb "Empty incoming message. Highly suspicious"))
+                                     (log/warn logs :echo-child-cb "Empty incoming message. Highly suspicious"))
                                    (let [{:keys [::specs/from-child]
                                             :as io-handle} @io-handle-atom
-                                           logs (log2/warn logs
-                                                           ::echo-child-cb
-                                                           "Child received what should be EOF. Mark done.")]
+                                           logs (log/warn logs
+                                                          ::echo-child-cb
+                                                          "Child received what should be EOF. Mark done.")]
                                        (message/child-close! io-handle)
                                        (is (s/valid? ::specs/eof-flag array-o-bytes))
                                        (deliver child-finished array-o-bytes)
                                        logs))
-                                 logs (log2/flush-logs! logger logs)]
+                                 logs (log/flush-logs! logger logs)]
                              (reset! log-atom logs))
                            (catch Exception ex
                              (println "child-cb Failed:" ex)
@@ -254,14 +253,17 @@
             ;; message arrives.
             ;; Maybe it doesn't matter, since I'm trying to send the initial
             ;; message quickly, but the behavior seems suspicious.
-            initialized (message/initial-state loop-name true {} logger)
+            initialized (message/initial-state loop-name
+                                               true
+                                               {::log/state log-state}
+                                               logger)
             {:keys [::specs/io-handle]} (message/start! initialized logger parent-cb child-cb)]
         (dfrd/on-realized child-finished
                           (fn [success]
-                            (let [logs (log2/info @log-atom
+                            (let [logs (log/info @log-atom
                                                   ::child-finished
                                                   "Child just signalled EOF")
-                                  logs (log2/flush-logs! logger logs)]
+                                  logs (log/flush-logs! logger logs)]
                               (reset! log-atom logs))
                             (is (= ::specs/normal success)))
                           (fn [failure]
@@ -273,7 +275,7 @@
               (reset! io-handle-atom io-handle)
               (let [problem (s/explain-data ::specs/state state)]
                 (when problem
-                  (let [log-ctx (get-in state [::log2/state ::log2/context])]
+                  (let [log-ctx (get-in state [::log/state ::log/context])]
                     (is (not problem) (str "Latest breakage is due to "
                                            log-ctx
                                            " a "
@@ -283,14 +285,14 @@
               ;; gibberish messages
               (let [wrote (dfrd/future
                             (let [logs @log-atom
-                                  logs (log2/debug logs
-                                                   ::echo-initial-write
-                                                   "Writing message from parent")]
+                                  logs (log/debug logs
+                                                  ::echo-initial-write
+                                                  "Writing message from parent")]
                               (message/parent->! io-handle incoming)
-                              (let [logs (log2/debug logs
-                                                     ::echo-initial-write
-                                                     "Message should be headed to child")
-                                    logs (log2/flush-logs! logger logs)]
+                              (let [logs (log/debug logs
+                                                    ::echo-initial-write
+                                                    "Message should be headed to child")
+                                    logs (log/flush-logs! logger logs)]
                                 (reset! log-atom logs))))
                     ;; The time delay here is pretty crazy.
                     ;; It seems as though it should never take human-noticeable time.
@@ -317,23 +319,23 @@
                 ;; Note that state is fine here, but we're about to overwrite it
                 (is (not (s/explain-data ::specs/state state)))
                 (let [state (message/get-state io-handle 500 ::time-out)
-                      ;; FIXME: Need to merge this into state's ::log2/state
+                      ;; FIXME: Need to merge this into state's ::log/state
                       ;; key.
                       ;; But not before a bigger FIXME:
                       ;; How/where did the state logs get messed up?
-                      logs (log2/info @log-atom
-                                      ::echo-examination
-                                      "Final state query returned")]
+                      logs (log/info @log-atom
+                                     ::echo-examination
+                                     "Final state query returned")]
                   (is (not= state ::timeout))
                   (when (not= state ::timeout)
                     (is (not
-                         ;; This fails because ::log2/state is a map that only
-                         ;; contains a ::log2/entries key.
+                         ;; This fails because ::log/state is a map that only
+                         ;; contains a ::log/entries key.
                          ;; The value for that key looks like the actual expected log-state
                          (s/explain-data ::specs/state state)))
-                    (let [logs (log2/info logs
-                                          ::echo-examination
-                                          "Checking test outcome")]
+                    (let [logs (log/info logs
+                                         ::echo-examination
+                                         "Checking test outcome")]
                       (let [child-completion (deref child-finished 500 ::child-timed-out)]
                         (is (= ::specs/normal child-completion)))
 
@@ -364,20 +366,20 @@
                         ;; Keeping around as a reminder for when the implementation changes
                         ;; and I need to see what's really going on again
                         (comment (is (not outcome) "What should we have here?")))
-                      (let [logs (log2/flush-logs! logger logs)]
+                      (let [logs (log/flush-logs! logger logs)]
                         (reset! log-atom logs))))))))
           (catch ExceptionInfo ex
-            (let [logs (log2/exception @log-atom
+            (let [logs (log/exception @log-atom
                                        ex
                                        ::echo-failure
                                        "Starting the event loop")
-                  logs (log2/flush-logs! logger logs)]
+                  logs (log/flush-logs! logger logs)]
               (reset! log-atom logs)))
           (finally
-            (let [logs (log2/warn (second (log2/fork @log-atom ::echo-clean-up))
-                                  ::signal-halt
-                                  "")
-                  logs (log2/flush-logs! logger logs)]
+            (let [logs (log/warn (second (log/fork @log-atom ::echo-clean-up))
+                                 ::signal-halt
+                                 "")
+                  logs (log/flush-logs! logger logs)]
               (reset! log-atom logs)
               (message/halt! io-handle))))))))
 (comment (basic-echo))
@@ -409,23 +411,23 @@
                                        ::specs/strm-hwm 0
                                        ::specs/un-sent-blocks PersistentQueue/EMPTY}
                      ::specs/recent (System/nanoTime)}
-        logger (log2/std-out-log-factory)
-        log-state (log2/init ::wrap-chzbrgr-test 0)
+        logger (log/std-out-log-factory)
+        log-state (log/init ::wrap-chzbrgr-test 0)
         ;; TODO: Keep this magic number in sync
         ;; And verify the action with sizes that cross packet boundaries
         chzbrgr-lngth 182
         chzbrgr (byte-array (range chzbrgr-lngth))
         {consumer ::from-child/callback
-         log-state ::log2/state} (from-child/build-byte-consumer message-loop-name log-state chzbrgr)
-        log-state (log2/info log-state
-                             ::wrap-chzbrgr
-                             "Reading chzbrgr from child")
+         log-state ::log/state} (from-child/build-byte-consumer message-loop-name log-state chzbrgr)
+        log-state (log/info log-state
+                            ::wrap-chzbrgr
+                            "Reading chzbrgr from child")
         ;; This is much slower than I'd like
         {:keys [::specs/outgoing
                 ::specs/recent]
-         log-state ::log2/state
+         log-state ::log/state
          :as state'} (time (consumer (assoc start-state
-                                            ::log2/state log-state)))]
+                                            ::log/state log-state)))]
     (is (= 1 (count (::specs/un-sent-blocks outgoing))))
     (is (= chzbrgr-lngth (::specs/strm-hwm outgoing)))
     (let [current-message  (-> outgoing
@@ -440,12 +442,12 @@
                                 (update ::specs/transmissions inc)
                                 (assoc ::specs/time recent)
                                 (assoc ::specs/message-id current-message-id))
-            log-state (log2/info log-state
-                                 ::wrap-chzbrgr
-                                 "Building message block to send to parent")
+            log-state (log/info log-state
+                                ::wrap-chzbrgr
+                                "Building message block to send to parent")
             {buf ::specs/bs-or-eof
-             log-state ::log2/state} (time (to-parent/build-message-block-description log-state
-                                                                                      updated-message))]
+             log-state ::log/state} (time (to-parent/build-message-block-description log-state
+                                                                                     updated-message))]
         ;;; Start with the very basics
         ;; Q: Did that return what we expected?
         (is (s/valid? bytes? buf))
@@ -454,65 +456,74 @@
         (is (b-t/bytes= (.array out-buf) chzbrgr))
         (is (= read-index (.readerIndex out-buf)))
         (is (= write-index (.writerIndex out-buf)))
-        ;; Now, what does the decoded version look like?
-        ;; TODO: This is another piece that's just
-        ;; screaming for generative testing
-        (log/info "Deserializing message from parent")
-        (let [{{:keys [::specs/acked-message
-                       ::specs/ack-length-1
-                       ::specs/ack-length-2
-                       ::specs/ack-length-3
-                       ::specs/ack-length-4
-                       ::specs/ack-length-5
-                       ::specs/ack-length-6
-                       ::specs/ack-gap-1->2
-                       ::specs/ack-gap-2->3
-                       ::specs/ack-gap-3->4
-                       ::specs/ack-gap-4->5
-                       ::specs/ack-gap-5->6
-                       ::specs/buf
-                       ::specs/message-id
-                       ::specs/size-and-flags]} ::specs/packet
-               log-state ::log2/state
-               :as packet} (time (from-parent/deserialize log-state buf))]
-          (comment (is (not packet)))
-          (is (= chzbrgr-lngth size-and-flags))
-          (are [expected actual] (= expected actual)
-            0 acked-message
-            0 ack-length-1
-            0 ack-length-2
-            0 ack-length-3
-            0 ack-length-4
-            0 ack-length-5
-            0 ack-length-6
-            0 ack-gap-1->2
-            0 ack-gap-2->3
-            0 ack-gap-3->4
-            0 ack-gap-4->5
-            0 ack-gap-5->6)
-          (is (= message-id current-message-id))
-          (let [bytes-rcvd (.readableBytes buf)
-                dst (byte-array bytes-rcvd)]
-            (is (= chzbrgr-lngth bytes-rcvd))
-            (.readBytes buf dst)
-            (log2/flush-logs! logger (log2/info log-state
+        (let [log-state (log/info log-state ::wrap-chzbrgr "Deserializing message from parent")]
+          ;; Now, what does the decoded version look like?
+          ;; TODO: This is another piece that's just
+          ;; screaming for generative testing
+          (let [{{:keys [::specs/acked-message
+                         ::specs/ack-length-1
+                         ::specs/ack-length-2
+                         ::specs/ack-length-3
+                         ::specs/ack-length-4
+                         ::specs/ack-length-5
+                         ::specs/ack-length-6
+                         ::specs/ack-gap-1->2
+                         ::specs/ack-gap-2->3
+                         ::specs/ack-gap-3->4
+                         ::specs/ack-gap-4->5
+                         ::specs/ack-gap-5->6
+                         ::specs/buf
+                         ::specs/message-id
+                         ::specs/size-and-flags]} ::specs/packet
+                 log-state ::log/state
+                 :as packet} (time (from-parent/deserialize log-state buf))]
+            (comment (is (not packet)))
+            (is (= chzbrgr-lngth size-and-flags))
+            (are [expected actual] (= expected actual)
+              0 acked-message
+              0 ack-length-1
+              0 ack-length-2
+              0 ack-length-3
+              0 ack-length-4
+              0 ack-length-5
+              0 ack-length-6
+              0 ack-gap-1->2
+              0 ack-gap-2->3
+              0 ack-gap-3->4
+              0 ack-gap-4->5
+              0 ack-gap-5->6)
+            (is (= message-id current-message-id))
+            (let [bytes-rcvd (.readableBytes buf)
+                  dst (byte-array bytes-rcvd)]
+              (is (= chzbrgr-lngth bytes-rcvd))
+              (.readBytes buf dst)
+              (log/flush-logs! logger (log/info log-state
                                                 ::wrap-chzbrgr
                                                 "Comparing byte arrays"))
-            (is (time (b-t/bytes= chzbrgr dst)))))))))
+              (is (time (b-t/bytes= chzbrgr dst))))))))))
 
 (deftest overflow-from-child
   ;; If the child sends bytes faster than we can
   ;; buffer/send, we need a way to signal back-pressure.
-  (let [opts {::specs/outgoing {::specs/pipe-from-child-size K/k-1}}
-        logger (log2/std-out-log-factory)
+  (let [log-state (log/init ::overflow-from-child 0)
+        opts {::specs/outgoing {::specs/pipe-from-child-size K/k-1}
+              ::log/state log-state}
+        logger (log/std-out-log-factory)
         start-state (message/initial-state "Overflowing Test" true opts logger)
         parent-cb (fn [out]
-                    (log/warn "parent-cb called with"
-                              (count out) bytes)
+                    (log/flush-logs! logger
+                                     (log/warn log-state
+                                               ::parent-cb
+                                               ""
+                                               {::length (count out)}))
                     (is (not out) "Should never get called"))
         rcvd (atom [])
         child-cb (fn [in]
-                   (log/info "child-cb received" in)
+                   (log/flush-logs! logger
+                                    (log/info log-state
+                                              ::child-cb
+                                              ""
+                                              {::received in}))
                    (swap! rcvd conj in))
         {event-loop ::specs/io-handle} (message/start! start-state
                                                        logger
@@ -547,10 +558,10 @@
   ;; a single message packet.
   (let [test-run (gensym)
         prelog (utils/pre-log test-run)
-        logger (log2/file-writer-factory "/tmp/message-test.bigger-outbound.clj")
-        log-atom (atom (log2/info (log2/init ::bigger-outbound 0)
-                                  ::test-top
-                                  ""))]
+        logger (log/file-writer-factory "/tmp/message-test.bigger-outbound.clj")
+        log-atom (atom (log/info (log/init ::bigger-outbound 0)
+                                 ::test-top
+                                 ""))]
     ;; TODO: split this into 2 tests
     ;; 1 should stall out like the current implementation,
     ;; waiting for ACKs (maybe drop every other packet?
@@ -585,7 +596,7 @@
                              ;; up and then sends them
                              ;; all at once
                              (swap! log-atom
-                                    log2/info
+                                    log/info
                                     ::server-parent-cb
                                     (str "Message from server to client."
                                          "\nThis really should just be an ACK"))
@@ -594,7 +605,7 @@
           server-child-cb (fn [incoming]
                             (let [prelog (utils/pre-log test-run)]
                               (swap! log-atom
-                                     log2/info
+                                     log/info
                                      ::server-child-cb
                                      "Incoming to server's child")
 
@@ -619,26 +630,26 @@
                                 (if (keyword? incoming)
                                   (do
                                     (swap! log-atom
-                                           #(log2/warn %
-                                                       ::server-child-cb
-                                                       "Received EOF"
-                                                       incoming))
+                                           #(log/warn %
+                                                      ::server-child-cb
+                                                      "Received EOF"
+                                                      incoming))
                                     (is (s/valid? ::specs/eof-flag incoming))
                                     (message/child-close! @client-io-atom))
                                   (swap! log-atom
-                                         #(log2/debug %
-                                                      ::server-child-cb
-                                                      "Received message bytes"
-                                                      (-> response-state
-                                                          (dissoc :buffer)
-                                                          (assoc :buffer-size (count (:buffer response-state)))
-                                                          (assoc ::packet-size packet-size)))))
+                                         #(log/debug %
+                                                     ::server-child-cb
+                                                     "Received message bytes"
+                                                     (-> response-state
+                                                         (dissoc :buffer)
+                                                         (assoc :buffer-size (count (:buffer response-state)))
+                                                         (assoc ::packet-size packet-size)))))
                                 (swap! srvr-child-state
                                        (fn [cur]
                                          (swap! log-atom
-                                                #(log2/info %
-                                                            ::server-child-cb
-                                                            "Incrementing state count"))
+                                                #(log/info %
+                                                           ::server-child-cb
+                                                           "Incrementing state count"))
                                          (let [incoming (if (keyword? incoming)
                                                           [incoming]
                                                           incoming)]
@@ -652,7 +663,7 @@
                                                (update :address + packet-size)))))
                                 (when (= msg-len (:address @srvr-child-state))
                                   (swap! log-atom
-                                         log2/info
+                                         log/info
                                          ::srvr-child-cb
                                          "Received all expected bytes")
                                   (deliver response @srvr-child-state)
@@ -668,7 +679,7 @@
 
           parent-cb (fn [bs]
                       (swap! log-atom
-                             log2/info
+                             log/info
                              ::client-parent-cb
                              "Forwarding buffer to server")
                       ;; This approach is over-simplified for the sake
@@ -691,7 +702,7 @@
                      ;; ACKs.
                      ;; Q: Why aren't we?
                      (swap! log-atom
-                            log2/debug
+                            log/debug
                             ::client-child-cb
                             "Incoming"
                             {::payload eof})
@@ -713,7 +724,7 @@
         (let [;; Note that this is what the child sender should be supplying
               message-body (byte-array (range msg-len))]
           (swap! log-atom
-                 log2/debug
+                 log/debug
                  ::bigger-outbound
                  "Replicating child-send"
                  {::to client-io-handle})
@@ -732,7 +743,7 @@
                 end-time (System/currentTimeMillis)]
             (is (not= outcome ::timeout))
             (swap! log-atom
-                   log2/info
+                   log/info
                    ::bigger-outbound
                    "Verifying that state hasn't errored out"
                    {::elapsed-ms (- end-time start-time)})
@@ -750,7 +761,7 @@
                           ;; Q: Why not?
                           byte-seq (into [] (apply concat rcvd-blocks))
                           _ (swap! log-atom
-                                   log2/debug
+                                   log/debug
                                    ::bigger-outbound
                                    "Trying to recreate the incoming stream"
                                    {::rcvd-msg-packet-count (count byte-seq)
@@ -778,10 +789,10 @@
             (comment (is (not outcome) "What should we have here?"))))
         (finally
           (swap! log-atom
-                 log2/info
+                 log/info
                  ::bigger-outbound
                  "Ending test")
-          (log2/flush-logs! logger @log-atom)
+          (log/flush-logs! logger @log-atom)
           (try
             (message/halt! client-io-handle)
             (catch RuntimeException ex
