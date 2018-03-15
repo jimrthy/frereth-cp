@@ -64,9 +64,9 @@
             ;; Then again, the extra 2 bytes of memory involved here really don't
             ;; matter.
             client-port 48816
-            client-logger (log/std-out-log-factory)
+            log-state (log/init ::shake-hands)
             srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
-            client-agent (factory/raw-client "client-hand-shaker" client-logger srvr-pk-long)]
+            client-agent (factory/raw-client "client-hand-shaker" log/std-out-log-factory log-state srvr-pk-long)]
         (try
           (println "Sending HELLO")
           (let [client->server (::client-state/chan->server @client-agent)

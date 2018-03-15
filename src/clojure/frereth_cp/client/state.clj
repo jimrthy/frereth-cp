@@ -131,14 +131,20 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ::vouch]))
 (s/def ::immutable-value (s/keys :req [::msg-specs/->child
                                        ::shared/my-keys
-                                       ::specs/message-loop-name
-                                       ;; Q: How do these mesh with netty's pipeline model?
-                                       ;; For that matter, how much sense does the idea of
-                                       ;; spawning a child process here?
-                                       ::chan->server
+                                       ::msg-specs/message-loop-name
                                        ::chan<-server
                                        ::server-extension
-                                       ::timeout]))
+                                       ::timeout]
+                                 ;; This isn't optional as much
+                                 ;; as it's just something that isn't
+                                 ;; around for the initial creation.
+                                 ;; We're responsible for creating
+                                 ;; and releasing it, since we're in
+                                 ;; control of putting messages into its
+                                 ;; source.
+                                 ;; This is in direct contrast to
+                                 ;; ::chan<-server
+                                 :opt [::chan->server]))
 (s/def ::state (s/merge ::mutable-state
                         ::immutable-value))
 
@@ -170,80 +176,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Implementation
-;;; Q: How many (if any) of these really qualify?
-
-(declare current-timeout)
-
-(s/fdef fork
-        :args (s/cat :wrapper ::state-agent)
-        :ret ::state)
-(defn fork
-  "This has to 'fork' a child with access to the agent, and update the agent state
-
-So, yes, it *is* weird.
-
-It happens in the agent processing thread pool, during a send operation.
-
-Although send-off might seem more appropriate, it probably isn't.
-
-TODO: Need to ask around about that.
-
-Bigger TODO: This really should be identical to the server implementation.
-
-Which at least implies that the agent approach should go away."
-  [{:keys [::msg-specs/->child
-           ::log2/logger
-           ::specs/message-loop-name]
-    {log-state ::log2/state
-     :as initial-msg-state} ::msg-specs/state
-    :as this}
-   wrapper]
-  (let [log-state (log2/info log-state ::fork "Spawning child!!")
-        child (message/initial-state message-loop-name
-                                     false
-                                     (assoc initial-msg-state
-                                            ::log2/state log-state)
-                                     logger)
-        child->srvr (fn [^bytes message-block]
-                      ;; FIXME: This really needs to write
-                      ;; packet to our UDP socket instance.
-                      ;; But first we need to bundle it into a message
-                      ;; packet and encrypt it.
-                      ;; Q: Use logger to log what's happening?
-                      (let [message-packet (throw (RuntimeException. "build this"))
-                            bundle {:host "unknown"
-                                    :port nil
-                                    :message message-packet}]
-                        (throw (RuntimeException. "Write this"))))
-        ;; FIXME: Message child really should fork its logs from ours to
-        ;; start with our lamport clock.
-        ;; This interaction between the two layers is quite desirable
-        {:keys [::msg-specs/io-handle]
-         log-state ::log2/state} (message/start! child
-                                                 logger
-                                                 child->srvr
-                                                 ->child)]
-    (let [log-state (log2/info log-state
-                               ::fork
-                               (str "Setting up initial read against the agent")
-                               {::this this
-                                ::child child})]
-    (log/debug "Child spawned")
-    ;; Should do the flush! through the child's logger.
-    ;; Assuming that start! hasn't done so already.
-    ;; OTOH, I shouldn't touch that part of child's io-handle.
-    ;; This should be a black box.
-    (throw (RuntimeException. "Need to flush child-start logs"))
-      ;; Q: Do these all *really* belong at the top level?
-      ;; I'm torn between the basic fact that flat data structures
-      ;; are easier (simpler?) and the fact that namespacing this
-      ;; sort of thing makes collisions much less likely.
-      ;; Not to mention the whole "What did I mean for this thing
-      ;; to be?" question.
-      (assoc this
-             ::child child
-             ::log2/state log-state
-             ::msg-specs/io-handle io-handle))))
+;;; Q: How many (if any) of these really belong in here?
 
 ;;; Q: Does this really make sense here rather than client.cookie?
 (defn decrypt-actual-cookie
@@ -503,18 +436,29 @@ Which at least implies that the agent approach should go away."
                              ::shared/short-pair short-pair)
      ::log2/state log-state}))
 
+(s/fdef initialize-immutable-values
+        :args (s/cat :this ::immutable-value
+                     :log-initializer (s/fspec :args (s/cat)
+                                               :ret ::log2/logger))
+        :ret ::immutable-value)
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
   [{:keys [::msg-specs/message-loop-name
-           ::server-extension]
+           ::server-extension
+           ::chan<-server]
     log-state ::log2/state
     :as this}
    log-initializer]
   {:pre [message-loop-name
          server-extension]}
+  (when-not chan<-server
+    (throw (ex-info "Missing channel from server"
+                    {::keys (keys this)
+                     ::big-picture this})))
   (let [logger (log-initializer)]
     (-> this
         (assoc ::log2/logger logger)
+        (assoc ::chan->server (strm/stream))
         ;; FIXME: This is a cheeseball way to do this.
         ;; Honestly, to follow the "proper" (i.e. established)
         ;; pattern, load-keys should just operate on the full
@@ -525,11 +469,16 @@ Which at least implies that the agent approach should go away."
         ;; So maybe this is exactly what I want after all.
         (into (load-keys log-state (::shared/my-keys this))))))
 
+(s/fdef initialize-mutable-state!
+        :args (s/cat :this ::mutable-state)
+        :ret ::mutable-state)
 (defn initialize-mutable-state!
   [{:keys [::shared/my-keys
-           ::server-security]
+           ::server-security
+           ::log2/logger
+           ::msg-specs/message-loop-name]
     :as this}]
-  (let [log-state (log2/init ["client" (util/random-uuid)])
+  (let [log-state (log2/init message-loop-name)
         server-long-term-pk (::specs/public-long server-security)]
     (when-not server-long-term-pk
       (throw (ex-info (str "Missing ::specs/public-long among"
@@ -539,13 +488,13 @@ Which at least implies that the agent approach should go away."
           ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)
           long-shared  (crypto/box-prepare
                         server-long-term-pk
-                        (.getSecretKey long-pair))]
-      (log/info (str "Server long-term public key:\n"
-                     (b-t/->string server-long-term-pk)
-                     "My long-term public key:\n"
-                     (b-t/->string (.getPublicKey long-pair))
-                     "Combined, they produced this shared secret:\n"
-                     (b-t/->string long-shared)))
+                        (.getSecretKey long-pair))
+          log-state (log2/info log-state
+                               ::initialize-mutable-state!
+                               "Combined keys"
+                               {::srvr-long-pk (b-t/->string server-long-term-pk)
+                                ::my-long-pk (b-t/->string (.getPublicKey long-pair))
+                                ::shared-key (b-t/->string long-shared)})]
       (into this
             {::child-packets []
              ::client-extension-load-time 0
@@ -618,6 +567,7 @@ Which at least implies that the agent approach should go away."
                       {::state this})))
     (log/warn "That response to Initiate was a failure")))
 
+(declare current-timeout)
 (defn final-wait
   "We've received the cookie and responded with a vouch.
   Now waiting for the server's first real message
@@ -694,6 +644,82 @@ nor subject to timing attacks because it just won't be called very often."
     (assoc this
            ::client-extension-load-time client-extension-load-time
            ::shared/extension extension)))
+
+(s/fdef fork!
+        :args (s/cat :wrapper ::state-agent)
+        :ret ::state)
+(defn fork!
+  "This has to 'fork' a child with access to the agent, and update the agent state
+
+So, yes, it *is* weird.
+
+It happens in the agent processing thread pool, during a send operation.
+
+Although send-off might seem more appropriate, it probably isn't.
+
+TODO: Need to ask around about that.
+
+Bigger TODO: This really should be identical to the server implementation.
+
+Which at least implies that the agent approach should go away."
+  [{:keys [::msg-specs/->child
+           ::log2/logger
+           ::msg-specs/message-loop-name]
+    initial-msg-state ::msg-specs/state
+    log-state ::log2/state
+    :as this}
+   wrapper]
+  {:pre [message-loop-name]}
+  (when-not log-state
+    (throw (ex-info (str "Missing log state among "
+                         (keys this))
+                    this)))
+  (let [log-state (log2/info log-state ::fork "Spawning child!!")
+        child (message/initial-state message-loop-name
+                                     false
+                                     (assoc initial-msg-state
+                                            ::log2/state log-state)
+                                     logger)
+        child->srvr (fn [^bytes message-block]
+                      ;; FIXME: This really needs to write
+                      ;; packet to our UDP socket instance.
+                      ;; But first we need to bundle it into a message
+                      ;; packet and encrypt it.
+                      ;; Q: Use logger to log what's happening?
+                      (let [message-packet (throw (RuntimeException. "build this"))
+                            bundle {:host "unknown"
+                                    :port nil
+                                    :message message-packet}]
+                        (throw (RuntimeException. "Write this"))))
+        ;; FIXME: Message child really should fork its logs from ours to
+        ;; start with our lamport clock.
+        ;; This interaction between the two layers is quite desirable
+        {:keys [::msg-specs/io-handle]
+         log-state ::log2/state} (message/start! child
+                                                 logger
+                                                 child->srvr
+                                                 ->child)]
+    (let [log-state (log2/info log-state
+                               ::fork
+                               (str "Setting up initial read against the agent")
+                               {::this this
+                                ::child child})]
+    (log/debug "Child spawned")
+    ;; Should do the flush! through the child's logger.
+    ;; Assuming that start! hasn't done so already.
+    ;; OTOH, I shouldn't touch that part of child's io-handle.
+    ;; This should be a black box.
+    (throw (RuntimeException. "Need to flush child-start logs"))
+      ;; Q: Do these all *really* belong at the top level?
+      ;; I'm torn between the basic fact that flat data structures
+      ;; are easier (simpler?) and the fact that namespacing this
+      ;; sort of thing makes collisions much less likely.
+      ;; Not to mention the whole "What did I mean for this thing
+      ;; to be?" question.
+      (assoc this
+             ::child child
+             ::log2/state log-state
+             ::msg-specs/io-handle io-handle))))
 
 (defn send-vouch!
   "Send the Vouch/Initiate packet (along with an initial Message sub-packet)

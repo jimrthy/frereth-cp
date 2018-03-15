@@ -66,21 +66,22 @@
                                           #(= (count %) K/extension-length)))
         :ret ::client-state/state-agent)
 (defn raw-client
-  ([message-loop-name logger srvr-pk-long]
+  ([message-loop-name logger-init log-state srvr-pk-long]
    (raw-client message-loop-name
-               logger
+               logger-init
+               log-state
                srvr-pk-long
                [0x01 0x02 0x03 0x04
                 0x05 0x06 0x07 0x08
                 0x09 0x0a 0x0b 0x0c
                 0x0d 0x0e 0x0f 0x10]))
-  ([message-loop-name logger srvr-pk-long srvr-xtn-vec]
+  ([message-loop-name logger-init log-state srvr-pk-long srvr-xtn-vec]
    (let [server-extension (byte-array srvr-xtn-vec)
          server-name (shared/encode-server-name "hypothet.i.cal")
          long-pair (crypto/random-key-pair)
-         result (clnt/ctor {::msg-specs/->child (strm/stream)
-                            ::client-state/chan->server (strm/stream)
-                            ::log/logger logger
+         result (clnt/ctor {::msg-specs/->child (strm/stream)  ; This seems wrong. Q: Is it?
+                            ::client-state/chan<-server (strm/stream)
+                            ::log/state log-state
                             ::msg-specs/message-loop-name message-loop-name
                             ::shared/my-keys {::shared/keydir "client-test"
                                               ::shared/long-pair long-pair
@@ -88,6 +89,6 @@
                             ::client-state/server-extension server-extension
                             ::client-state/server-security {::K/server-name server-name
                                                             ::shared-specs/public-long srvr-pk-long}}
-                           #(log/init message-loop-name))]
+                           logger-init)]
      (clnt/start! result)
      result)))

@@ -360,8 +360,14 @@ like a timing attack."
     (log/error (str err "\nTODO: Is there any way to recover well enough to release the Packet Manager?\n"
                     (util/show-stack-trace err)))
     (send wrapper
-          (fn [this]
-            (shared/release-packet-manager! (::shared/packet-management this))))))
+          (fn [{:keys [::chan->server
+                       ::shared/packet-management]
+                :as this}]
+            (shared/release-packet-manager! packet-management)
+            (strm/close! chan->server)
+            (assoc this
+                   ::chan->server nil
+                   ::shared/packet-management nil)))))
 
 (s/fdef ctor
         :args (s/cat :opts (s/keys :req [::msg-specs/->child
@@ -380,8 +386,9 @@ like a timing attack."
       (assoc
        ;; This seems very cheese-ball, but they
        ;; *do* need to be part of the agent.
+       ;; Assuming the agent just doesn't go completely away.
        ;; We definitely don't want multiple threads
-       ;; messing with them
+       ;; messing with them.
        ::shared/packet-management (shared/default-packet-manager)
        ::shared/work-area (shared/default-work-area))
       ;; Using a core.async go-loop is almost guaranteed

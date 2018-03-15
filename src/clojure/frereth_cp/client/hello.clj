@@ -7,6 +7,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as util])
   (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair))
@@ -73,7 +74,7 @@
                    "Description:\n\t" (util/pretty K/hello-packet-dscr)
                    "\nRaw:\n\t" (util/pretty raw-hello)
                    "\nPacket:\n\t" packet))
-    (shared/compose K/hello-packet-dscr raw-hello packet)))
+    (serial/compose K/hello-packet-dscr raw-hello packet)))
 
 (defn do-build-hello
   "Puts plain-text hello packet into packet-management

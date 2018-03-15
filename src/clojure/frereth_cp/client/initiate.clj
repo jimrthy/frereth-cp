@@ -6,8 +6,11 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto])
-  (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
+            [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.util :as utils])
+  (:import clojure.lang.ExceptionInfo
+           com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
 
 (set! *warn-on-reflection* true)
@@ -128,7 +131,7 @@ This is destructive in the sense that it reads from msg-byte-buf"
       ;; Partial Answer: original version is geared toward converting
       ;; existing apps that pipe data over STDIN/OUT so they don't
       ;; have to be changed at all.
-      (send wrapper state/fork wrapper)
+      (send wrapper state/fork! wrapper)
 
       ;; Once that that's ready to start doing its own thing,
       ;; cope with the cookie we just received.
@@ -154,9 +157,13 @@ This is destructive in the sense that it reads from msg-byte-buf"
             (if-let [ex (agent-error wrapper)]
               (do
                 (log/error ex "Agent failed while we were waiting")
+                (if (instance? ExceptionInfo ex)
+                  (let [^ExceptionInfo ex ex]
+                    (log/warn ex (utils/pretty (.getData ex))))
+                  (log/warn "No more details available"))
                 ;; Actual error:
                 ;; RuntimeException about flushing the start logs from
-                ;; client.state/fork.
+                ;; client.state/fork!
                 ;; Craziness: The failed assertion isn't interrupting my test.
                 ;; FIXME: Actually, something like this does need to be
                 ;; fatal. At least for this client.
