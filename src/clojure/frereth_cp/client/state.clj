@@ -355,17 +355,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (try
     ;; outer try is to make sure I .release the incoming message
     (try
-      (let [^ByteBuf packet (get-in this
+      (let [^bytes packet (get-in this
                                     [::shared/packet-management
                                      ::shared/packet])]
         (assert packet)
         (assert cookie-packet)
         ;; Don't even try to pretend that this approach is thread-safe
-        (.clear packet)
         (.readBytes message packet 0 K/cookie-packet-length)
         ;; That doesn't modify the ByteBuf to let it know it has bytes
         ;; available
         ;; So force it.
+        ;; This is doomed, since packet is most definitely bytes.
+        ;; Q: So...what's the best way to make this work?
         (.writerIndex packet K/cookie-packet-length))
       (catch NullPointerException ex
         (throw (ex-info "Error trying to copy cookie packet"
@@ -699,17 +700,11 @@ Which at least implies that the agent approach should go away."
                                                  logger
                                                  child->srvr
                                                  ->child)]
-    (let [log-state (log2/info log-state
+    (let [log-state (log2/debug log-state
                                ::fork
-                               (str "Setting up initial read against the agent")
+                               "Child spawned"
                                {::this this
                                 ::child child})]
-    (log/debug "Child spawned")
-    ;; Should do the flush! through the child's logger.
-    ;; Assuming that start! hasn't done so already.
-    ;; OTOH, I shouldn't touch that part of child's io-handle.
-    ;; This should be a black box.
-    (throw (RuntimeException. "Need to flush child-start logs"))
       ;; Q: Do these all *really* belong at the top level?
       ;; I'm torn between the basic fact that flat data structures
       ;; are easier (simpler?) and the fact that namespacing this
@@ -718,7 +713,7 @@ Which at least implies that the agent approach should go away."
       ;; to be?" question.
       (assoc this
              ::child child
-             ::log2/state log-state
+             ::log2/state (log2/flush-logs! logger log-state)
              ::msg-specs/io-handle io-handle))))
 
 (defn send-vouch!

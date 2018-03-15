@@ -7,6 +7,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as util])
@@ -62,19 +63,18 @@
                      :working-nonce bytes?)
         :ret ::state/state)
 (defn build-actual-packet
-  [{:keys [::shared/packet-management]
+  [{log-state ::log2/state
     :as this}
    short-term-nonce
    working-nonce]
-  (assert packet-management)
   (let [raw-hello (build-raw this short-term-nonce working-nonce)
-        {packet ::shared/packet} packet-management]
-    (assert packet)
-    (log/info (str "Building Hello based on\n"
-                   "Description:\n\t" (util/pretty K/hello-packet-dscr)
-                   "\nRaw:\n\t" (util/pretty raw-hello)
-                   "\nPacket:\n\t" packet))
-    (serial/compose K/hello-packet-dscr raw-hello packet)))
+        log-state (log2/info log-state
+                             ::build-actual-packet
+                             "Building Hello"
+                             {::description (util/pretty K/hello-packet-dscr)
+                              ::raw (util/pretty raw-hello)})]
+    {::shared/packet (serial/compose K/hello-packet-dscr raw-hello)
+     ::log2/state log-state}))
 
 (defn do-build-hello
   "Puts plain-text hello packet into packet-management
@@ -89,6 +89,7 @@
   ;; it possibly be worth the trouble?
   [{:keys [::shared/packet-management
            ::shared/work-area]
+    log-state ::log2/state
     :as this}]
   (let [this (state/clientextension-init this) ; There's a good chance this updates my extension
         working-nonce (::shared/working-nonce work-area)
@@ -96,15 +97,23 @@
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)]
     (b-t/byte-copy! working-nonce shared/hello-nonce-prefix)
     (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length short-term-nonce)
-    (log/info (str "Short term nonce: " short-term-nonce " packed into\n"
-                   (b-t/->string working-nonce)))
 
-    (let [packet (build-actual-packet this
-                                      short-term-nonce
-                                      working-nonce)]
-      (log/info "hello packet built inside the agent. Returning/updating")
-      (update this ::shared/packet-management
-              (fn [current]
-                (assoc current
-                       ::shared/packet-nonce short-term-nonce
-                       ::shared/packet (b-s/convert packet io.netty.buffer.ByteBuf)))))))
+    (let [log-state (log2/info log-state
+                               ::do-build-hello
+                               "Packed short-term- into working- -nonces"
+                               {::short-term-nonce short-term-nonce
+                                ::shared/working-nonce (b-t/->string working-nonce)})
+          {:keys [::shared/packet]
+           log-state ::log2/state} (build-actual-packet (assoc this ::log2/state log-state)
+                                                        short-term-nonce
+                                                        working-nonce)
+          log-state (log2/info log-state
+                               ::do-build-hello
+                               "hello packet built inside the agent. Returning/updating")]
+      (-> this
+          (update ::shared/packet-management
+                  (fn [current]
+                    (assoc current
+                           ::shared/packet-nonce short-term-nonce
+                           ::shared/packet (b-s/convert packet io.netty.buffer.ByteBuf))))
+          (assoc ::log2/state log-state)))))

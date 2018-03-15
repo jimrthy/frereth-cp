@@ -598,9 +598,6 @@
          last-block-time
          flow-control
          n-sec-per-block]}
-  ;; Verified that I am getting here.
-  ;; Twice in a pretty quick row.
-  (println "This isn't showing up in the logs, but top of choose-next-scheduled-time")
   ;;; This amounts to lines 286-305
 
   ;; I should be able to just completely bypass this if there's
