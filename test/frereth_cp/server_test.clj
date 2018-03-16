@@ -66,9 +66,13 @@
             client-port 48816
             log-state (log/init ::shake-hands)
             srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
-            client-agent (factory/raw-client "client-hand-shaker" log/std-out-log-factory log-state srvr-pk-long)]
+            server-ip [127 0 0 1]
+            server-port 65000
+            client-agent (factory/raw-client "client-hand-shaker" log/std-out-log-factory log-state server-ip server-port srvr-pk-long)
+            log-state (log/debug log-state
+                                 ::top
+                                 "Sending HELLO")]
         (try
-          (println "Sending HELLO")
           (let [client->server (::client-state/chan->server @client-agent)
                 taken (strm/try-take! client->server ::drained 1000 ::timeout)
                 hello @taken]
@@ -76,10 +80,7 @@
             (if (not (or (= hello ::drained)
                          (= hello ::timeout)))
               (let [->srvr (get-in started [::state/client-read-chan ::state/chan])
-                    msg {:host client-host
-                         :port client-port
-                         :message hello}
-                    success (deref (strm/try-put! ->srvr msg 1000 ::timed-out))]
+                    success (deref (strm/try-put! ->srvr hello 1000 ::timed-out))]
                 (if (not= ::timed-out success)
                   (let [srvr-> (get-in started [::state/client-write-chan ::state/chan])
                         ;; From the aleph docs:
@@ -95,36 +96,29 @@
                         ;; minimize copying for writes (this may or may not mean
                         ;; rewriting compose to return B] instead)
                         ;; Note that I didn't need to do this for the Hello packet.
-                        cookie-buffer (:message @(strm/try-take! srvr-> ::drained 1000 ::timeout))]
-                    (println "FIXME: Make packet sends more consistent")
-                    (if (and (not= ::drained cookie-buffer)
-                             (not= ::timeout cookie-buffer))
-                      (let [cookie (byte-array (.readableBytes cookie-buffer))]
-                        (.readBytes cookie-buffer cookie)
-                        (.release cookie-buffer)
-                        (if-let [client<-server (::client-state/chan<-server @client-agent)]
-                          (let [server-name "server"
-                                server-port 65000
-                                ;; This is throwing a NPE.
-                                ;; Almost definitely because I'm not setting up chan<-server
-                                put @(strm/try-put! client<-server
-                                                    {:host server-name
-                                                     :message cookie
-                                                     :port server-port}
-                                                    1000
-                                                    ::timeout)]
-                            (if (not= ::timeout put)
-                              (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                                (if-not (or (= initiate ::drained)
-                                            (= initiate ::timeout))
-                                  (throw (RuntimeException. "Don't stop here"))
-                                  (throw (ex-info "Failed to take Initiate/Vouch from Client"
-                                                  {::problem initiate}))))
-                              (throw (RuntimeException. "Timed out putting Cookie to Client"))))
-                          (throw (ex-info "I know I have a mechanism for writing from server to client among"
-                                          {::keys (keys @client-agent)
-                                           ::grand-scheme @client-agent}))))
-                      (throw (RuntimeException. (str cookie-buffer " reading Cookie from Server")))))
+                        packet @(strm/try-take! srvr-> ::drained 1000 ::timeout)
+                        cookie (:message packet)]
+                    (if (and (not= ::drained cookie)
+                             (not= ::timeout cookie))
+                      (if-let [client<-server (::client-state/chan<-server @client-agent)]
+                        (let [put @(strm/try-put! client<-server
+                                                  {:host server-ip
+                                                   :message cookie
+                                                   :port server-port}
+                                                  1000
+                                                  ::timeout)]
+                          (if (not= ::timeout put)
+                            (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                              (if-not (or (= initiate ::drained)
+                                          (= initiate ::timeout))
+                                (throw (RuntimeException. "Don't stop here"))
+                                (throw (ex-info "Failed to take Initiate/Vouch from Client"
+                                                {::problem initiate}))))
+                            (throw (RuntimeException. "Timed out putting Cookie to Client"))))
+                        (throw (ex-info "I know I have a mechanism for writing from server to client among"
+                                        {::keys (keys @client-agent)
+                                         ::grand-scheme @client-agent})))
+                      (throw (RuntimeException. (str cookie " reading Cookie from Server")))))
                   (throw (RuntimeException. "Timed out putting Hello to Server"))))
               (throw (RuntimeException. (str hello " taking Hello from Client")))))
           (finally

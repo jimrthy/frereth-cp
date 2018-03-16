@@ -16,7 +16,7 @@
       (assoc-in [:com.frereth.common.curve.server.state/current-client
                  :com.frereth.common.curve.server.state/message] "...")
       (assoc-in [::shared/packet-management ::shared/packet] "...")
-      (assoc-in [::shared/my-keys ::K/server-name] "...decode this...")
+      (assoc-in [::shared/my-keys ::K/srvr-nme] "...decode this...")
       (assoc #_[::message "..."]
              ::shared/working-area "...")))
 

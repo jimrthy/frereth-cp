@@ -295,8 +295,8 @@ To be fair, this layer *is* pretty special."
         :ret boolean?)
 (defn validate-server-name
   [state inner-client-box]
-  (let [^bytes rcvd-name (::K/server-name inner-client-box)
-        my-name (get-in state [::shared/my-keys ::K/server-name])
+  (let [^bytes rcvd-name (::shared-specs/srvr-name inner-client-box)
+        my-name (get-in state [::shared/my-keys ::shared-specs/srvr-name])
         match (b-t/bytes= rcvd-name my-name)]
     (when-not match
       (log/warn (str "Message was intended for another server\n"

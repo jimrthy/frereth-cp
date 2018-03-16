@@ -63,7 +63,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; the Vouch?
 (s/def ::server-cookie any?)
 (s/def ::server-security (s/merge ::specs/peer-keys
-                                  (s/keys :req [::shared/server-name]
+                                  (s/keys :req [::specs/srvr-name
+                                                ::shared/srvr-port]
                                           ;; Q: Is there a valid reason for this to live here?
                                           ;; Q: I can discard it after sending the vouch, can't I?
                                           ;; A: Yes.
@@ -99,6 +100,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::mutable-state (s/keys :req [::client-extension-load-time
                                      ::shared/extension
                                      ::log2/logger
+                                     ;; If we track ::msg-specs/state here,
+                                     ;; then ::log2/state is, honestly, redundant.
+                                     ;; Except that trying to keep them synchronized
+                                     ;; is a path to madness, as is tracking
+                                     ;; a snapshot of ::msg-specs/state.
                                      ::log2/state
                                      ;; Q: Does this really make any sense?
                                      ::outgoing-message
@@ -106,9 +112,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ::shared/recent
                                      ::server-security
                                      ::shared-secrets
-                                     ;; If we track ::msg-specs/state here,
-                                     ;; then ::log2/state is, honestly, redundant.
-                                     ::log2/state
                                      ;; FIXME: Tracking this here doesn't really make
                                      ;; any sense at all.
                                      ;; It's really a member variable of the IOLoop
@@ -121,6 +124,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; there that tracks this secretly.
                                      ;; Whatever. It doesn't really make any
                                      ;; sense here.
+                                     ;; FIXME: Make it go away.
                                      ::msg-specs/state
                                      ::shared/work-area]
                                :opt [::child
@@ -180,10 +184,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 ;;; Q: Does this really make sense here rather than client.cookie?
 (defn decrypt-actual-cookie
-  [{:keys [::shared/packet-management
+  [{:keys [::shared/packet
+           ;; Having a shared work-area is probably
+           ;; important for avoiding GC.
+           ;; At the same time, the mutable state
+           ;; causes a lot of trouble.
+           ;; Q: Is it worth it?
+           ;; A: Need benchmarks!
            ::shared/work-area
-           ::shared-secrets
-           ::server-security]
+           ::server-security
+           ::shared-secrets]
     log-state ::log2/state
     :as this}
    {:keys [::K/header
@@ -192,102 +202,104 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ^ByteBuf client-nonce-suffix ::K/client-nonce-suffix
     ^ByteBuf cookie ::K/cookie
     :as rcvd}]
-  (log/info "Getting ready to try to extract cookie from" cookie)
-  (let [{^bytes text ::shared/text
+  (let [log-state (log2/info log-state
+                             ::decrypt-actual-cookie
+                             "Getting ready to try to extract cookie"
+                             {::raw-cookie cookie
+                              ::human-readable (shared/bytes->string cookie)})
+        {^bytes text ::shared/text
          ^bytes working-nonce ::shared/working-nonce} work-area]
-    (when-not working-nonce
-      (log/error (str "Missing nonce buffer amongst\n"
-                      (keys work-area)
-                      "\nin\n"
-                      (keys this)))
-      (assert working-nonce))
-    (log/info (str "Copying nonce prefix from\n"
-                    K/cookie-nonce-prefix
-                    "\ninto\n"
-                    working-nonce))
-    (b-t/byte-copy! working-nonce K/cookie-nonce-prefix)
-    (.readBytes client-nonce-suffix
-                working-nonce
-                K/server-nonce-prefix-length
-                K/server-nonce-suffix-length)
-
-    (log/info "Copying encrypted cookie into " text "from" (keys this))
-    ;; Q: What's up with the 144?
-    (.readBytes cookie text 0 K/cookie-frame-length)
-    (let [shared (::client-short<->server-long shared-secrets)]
-      (log/info (str "Trying to decrypt\n"
-                      (with-out-str (b-s/print-bytes text))
-                      "using nonce\n"
-                      (with-out-str (b-s/print-bytes working-nonce))
-                      "and shared secret\n"
-                      (with-out-str (b-s/print-bytes shared))))
-      ;; TODO: If/when an exception is thrown here, it would be nice
-      ;; to notify callers immediately
-      (try
-        (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
-              {server-short-pk ::K/s'
-               server-cookie ::K/black-box
-               :as extracted} (serial/decompose K/cookie decrypted)
-              server-security (assoc (::server-security this)
-                                     ::specs/public-short server-short-pk,
-                                     ::server-cookie server-cookie)]
-          (assoc this ::server-security server-security))
-        (catch ExceptionInfo ex
-          (log/error ex (str "Decryption failed:\n"
-                             (util/pretty (.getData ex)))))))))
+    (assert working-nonce (str "Missing nonce buffer amongst\n"
+                               (keys work-area)
+                               "\nin\n"
+                               (keys this)))
+    (let [log-state (log2/info log-state
+                               ::decrypt-actual-cookie
+                               "Copying nonce prefix"
+                               {::src K/cookie-nonce-prefix
+                                ::dst working-nonce})]
+      (b-t/byte-copy! working-nonce K/cookie-nonce-prefix)
+      (.readBytes client-nonce-suffix
+                  working-nonce
+                  K/server-nonce-prefix-length
+                  K/server-nonce-suffix-length)
+      (let [log-state (log2/info log-state
+                                 ::decrypt-actual-cookie
+                                 "Copying encrypted cookie"
+                                 {::target text
+                                  ::this this
+                                  ::my-keys (keys this)})]
+        (.readBytes cookie text 0 K/cookie-frame-length)
+        (let [shared (::client-short<->server-long shared-secrets)
+              log-state (log2/info log-state
+                                   ::decrypt-actual-cookie
+                                   "Trying to decrypt"
+                                   {::shared/text  (b-s/print-bytes text)
+                                    ::shared/working-nonce (b-s/print-bytes working-nonce)
+                                    ::client-short<->server-long (b-s/print-bytes shared)})]
+          ;; TODO: If/when an exception is thrown here, it would be nice
+          ;; to notify callers immediately
+          (try
+            (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
+                  {server-short-pk ::K/s'
+                   server-cookie ::K/black-box
+                   :as extracted} (serial/decompose K/cookie decrypted)
+                  server-security (assoc (::server-security this)
+                                         ::specs/public-short server-short-pk,
+                                         ::server-cookie server-cookie)]
+              (assoc this
+                     ::server-security server-security
+                     ::log2/state log-state))
+            (catch ExceptionInfo ex
+              (assoc this
+                     ::log2/state (log2/exception log-state
+                                                  ex
+                                                  ::decrypt-actual-cookie
+                                                  "Decryption failed"
+                                                  (.getData ex))))))))))
 
 (defn decrypt-cookie-packet
   [{:keys [::shared/extension
-           ::shared/packet-management
+           ::shared/packet
            ::server-extension]
     log-state ::log2/state
     :as this}]
-  (let [^ByteBuf packet (::shared/packet packet-management)]
-    ;; Q: How does packet length actually work?
-    ;; A: We used to have the full length of the byte array here
-    ;; Now that we don't, what's the next step?
-    (when-not (= (.readableBytes packet) K/cookie-packet-length)
-      (let [err {::expected-length K/cookie-packet-length
-                 ::actual-length (.readableBytes packet)
-                 ::packet packet
-                 ;; Because the stack trace hides
-                 ::where 'shared.curve.client/decrypt-cookie-packet}]
-        (throw (ex-info "Incoming cookie packet illegal" err))))
-    (log/debug (str "Incoming packet that looks like it might be a cookie:\n"
-                   (with-out-str (shared/bytes->string packet))))
-    (let [{:keys [::K/header
-                  ::K/client-extension
-                  ::K/server-extension]
-           :as rcvd} (serial/decompose K/cookie-frame packet)]
-      ;; Reference implementation starts by comparing the
-      ;; server IP and port vs. what we received.
-      ;; Which we don't have here.
-      ;; Q: Do we?
-      ;; A: Not really. The original incoming message did have them,
-      ;; under :host and :port, though.
-      ;; TODO: Need to feed those down to here
-      ;; That info's pretty unreliable/meaningless, but the server
-      ;; address probably won't change very often.
-      ;; Unless we're communicating with a server on someone's cell
-      ;; phone.
-      ;; Which, if this is successful, will totally happen.
-      (log/warn "TODO: Verify that this packet came from the appropriate server")
-      ;; Q: How accurate/useful is this approach?
-      ;; (i.e. mostly comparing byte array hashes)
-      ;; A: Not at all.
-      ;; Well, it's slightly better than nothing.
-      ;; But it's trivial to forge.
-      ;; Q: How does the reference implementation handle this?
-      ;; Well, the proof *is* in the pudding.
-      ;; The most important point is whether the other side sent
-      ;; us a cookie we can decrypt using our shared key.
-      (log/info (str "Verifying that "
-                     header
-                     " looks like it belongs to a Cookie packet"))
-      (when (and (b-t/bytes= K/cookie-header header)
-                 (b-t/bytes= extension client-extension)
-                 (b-t/bytes= server-extension server-extension))
-        (decrypt-actual-cookie this rcvd)))))
+  (when-not (= (count packet) K/cookie-packet-length)
+    (let [err {::expected-length K/cookie-packet-length
+               ::actual-length (count packet)
+               ::packet packet
+               ;; Because the stack trace hides
+               ::where 'shared.curve.client/decrypt-cookie-packet}]
+      (throw (ex-info "Incoming cookie packet illegal" err))))
+  (let [log-state (log2/debug log-state
+                              ::decrypt-cookie-packet
+                              "Incoming packet that looks like it might be a cookie"
+                              {::raw-packet packet
+                               ::human-readable (shared/bytes->string packet)})
+        {:keys [::K/header
+                ::K/client-extension
+                ::K/server-extension]
+         :as rcvd} (serial/decompose K/cookie-frame packet)
+        log-state (log2/info log-state
+                             ::decrypt-cookie-packet
+                             "Verifying that decrypted packet looks like a Cookie"
+                             {::raw-header header
+                              ::human-readable (shared/bytes->string header)})]
+    ;; Q: How accurate/useful is this approach?
+    ;; (i.e. mostly comparing byte array hashes)
+    ;; A: Not at all.
+    ;; Well, it's slightly better than nothing.
+    ;; But it's trivial to forge.
+    ;; Q: How does the reference implementation handle this?
+    ;; Well, the proof *is* in the pudding.
+    ;; The most important point is whether the other side sent
+    ;; us a cookie we can decrypt using our shared key.
+    (when (and (b-t/bytes= K/cookie-header header)
+               (b-t/bytes= extension client-extension)
+               (b-t/bytes= server-extension server-extension))
+      (decrypt-actual-cookie (assoc this
+                                    ::log2/state log-state)
+                             rcvd))))
 
 (defn build-vouch
   [{:keys [::shared/packet-management
@@ -345,80 +357,68 @@ The fact that this is so big says a lot about needing to re-think my approach"
   make this purely functional instead?
 
   Handling an agent (send), which means `this` is already dereferenced"
-  [this
+  [{log-state ::log2/state
+    :as this}
    {:keys [:host :port]
-    ^ByteBuf message :message
+    ^bytes message :message
     :as cookie-packet}]
-  (log/info (str "Getting ready to convert cookie\n"
-                 (with-out-str (b-s/print-bytes message))
-                 "into a Vouch"))
-  (try
-    ;; outer try is to make sure I .release the incoming message
-    (try
-      (let [^bytes packet (get-in this
-                                    [::shared/packet-management
-                                     ::shared/packet])]
-        (assert packet)
-        (assert cookie-packet)
-        ;; Don't even try to pretend that this approach is thread-safe
-        (.readBytes message packet 0 K/cookie-packet-length)
-        ;; That doesn't modify the ByteBuf to let it know it has bytes
-        ;; available
-        ;; So force it.
-        ;; This is doomed, since packet is most definitely bytes.
-        ;; Q: So...what's the best way to make this work?
-        (.writerIndex packet K/cookie-packet-length))
-      (catch NullPointerException ex
-        (throw (ex-info "Error trying to copy cookie packet"
-                        {::source cookie-packet
-                         ::source-type (type cookie-packet)
-                         ::packet-manager (::shared/packet-management this)
-                         ::members (keys this)
-                         ::this this
-                         ::failure ex}))))
-    (if-let [this (decrypt-cookie-packet this)]
-      (let [{:keys [::shared/my-keys]} this
+  {:pre [cookie-packet]}
+  (let [log-state (log2/info log-state
+                             ::cookie->vouch
+                             "Getting ready to convert cookie into a Vouch"
+                             {::raw-cookie message
+                              ::human-readable (b-s/print-bytes message)})]
+    (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
+                                                                  ::shared/extension
+                                                                  ::shared/work-area
+                                                                  ::server-extension
+                                                                  ::server-security
+                                                                  ::shared-secrets)
+                                                     ::log2/state log-state
+                                                     ::shared/packet message))]
+      (let [this (into this decrypted)
+            {:keys [::shared/my-keys]} this
             server-short (get-in this
                                  [::server-security
-                                  ::specs/public-short])]
-        (log/debug "Managed to decrypt the cookie")
-        (if server-short
-          (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
-                this (assoc-in this
-                               [::shared-secrets ::client-short<->server-short]
-                               (crypto/box-prepare
-                                server-short
-                                (.getSecretKey my-short-pair)))]
-            (log/debug "Prepared shared short-term secret")
-            ;; Note that this supplies new state
-            ;; Though whether it should is debatable.
-            ;; Q: why would I put this into ::vouch?
-            ;; A: In case we need to resend it.
-            ;; It's perfectly legal to send as many Initiate
-            ;; packets as the client chooses.
-            ;; This is especially important before the Server
-            ;; has responded with its first Message so the client
-            ;; can switch to sending those.
-            (into this (build-vouch this)))
-          (do
-            (log/error (str "Missing ::specs/public-short among\n"
-                            (keys (::server-security this))
-                            "\namong bigger-picture\n"
-                            (keys this)))
-            (assert server-short))))
+                                  ::specs/public-short])
+            log-state (log2/debug log-state
+                                  ::cookie->vouch
+                                  "Managed to decrypt the cookie")]
+        ;; Next step for reference implementation is to compare the
+        ;; server IP and port vs. what we received.
+        ;; That info's pretty unreliable/meaningless, but the server
+        ;; address probably won't change very often.
+        ;; Unless we're communicating with a server on someone's cell
+        ;; phone.
+        ;; Which, if this is successful, will totally happen.
+        ;; FIXME: Verify that
+        (assert server-short (str "Missing ::specs/public-short among\n"
+                                  (keys (::server-security this))
+                                  "\namong bigger-picture\n"
+                                  (keys this)))
+        (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
+              this (assoc-in this
+                             [::shared-secrets ::client-short<->server-short]
+                             (crypto/box-prepare
+                              server-short
+                              (.getSecretKey my-short-pair)))
+              log-state (log2/debug log-state
+                                    ::cookie->vouch
+                                    "Prepared shared short-term secret")]
+          ;; Note that this supplies new state
+          ;; Though whether it should is debatable.
+          ;; Q: why would I put this into ::vouch?
+          ;; A: In case we need to resend it.
+          ;; It's perfectly legal to send as many Initiate
+          ;; packets as the client chooses.
+          ;; This is especially important before the Server
+          ;; has responded with its first Message so the client
+          ;; can switch to sending those.
+          (into this (build-vouch (assoc this
+                                         ::log2/state log-state)))))
       (throw (ex-info
               "Unable to decrypt server cookie"
-              this)))
-    (finally
-      (if message
-        ;; Can't do this until I'm really done with its contents.
-        ;; Doing a .readBytes into a ByteBuf seems to just creates
-        ;; another reference without increasing the reference count.
-        ;; This seems incredibly brittle.
-        (comment (.release message))
-        (log/error "False-y message in\n"
-                   cookie-packet
-                   "\nQ: What happened?")))))
+              (assoc this ::log2/state log-state))))))
 
 (s/fdef load-keys
         :args (s/cat :logger ::log2/state

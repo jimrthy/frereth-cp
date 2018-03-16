@@ -25,7 +25,6 @@
 (def server-key-length key-length)
 (def ^Integer server-nonce-prefix-length 8)
 (def ^Integer server-nonce-suffix-length 16)
-(def server-name-length 256)
 (def shared-key-length key-length)
 
 ;; Using an ordinary ^bytes type-hint here caused an
@@ -69,12 +68,6 @@
 ;; FIXME: Add a ::constant-bytes type that just
 ;; hard-codes the magic.
 (s/def ::prefix ::specs/prefix)
-
-;; This is a name suitable for submitting a DNS query.
-;; 1. Its encoder starts with an array of zeros
-;; 2. Each name segment is prefixed with the number of bytes
-;; 3. No name segment is longer than 63 bytes
-(s/def ::server-name (s/and bytes #(= (count %) server-name-length)))
 
 ;;;; FIXME: Move these definitions somewhere more suitable.
 ;;;; Maybe a packet-definitions ns?
@@ -230,7 +223,7 @@
                              server-nonce-suffix-length ; 16
                              vouch-length ; 48
                              ;; 256
-                             server-name-length))
+                             specs/server-name-length))
 (defn initiate-message-length-filter
   "The maximum length for the message associated with an Initiate packet is 640 bytes.
 
@@ -245,7 +238,7 @@
                            ::length client-key-length}
    ::inner-i-nonce {::type ::bytes ::length server-nonce-suffix-length}
    ::inner-vouch {::type ::bytes ::length vouch-length}
-   ::server-name {::type ::bytes ::length server-name-length}
+   ::server-name {::type ::bytes ::length specs/server-name-length}
    ;; Q: Do I want to allow compose to accept parameters for things like this?
    ::child-message {::type ::bytes ::length '?child-message-length}})
 
@@ -305,14 +298,16 @@ TODO: Rename this to something like initiate-client-vouch-message"
              ::hidden-client-short-pk {::type ::bytes
                                        ::length (+ client-key-length box-zero-bytes)}
              ::server-name {::type ::bytes
-                            ::length server-name-length}
+                            ::length specs/server-name-length}
              ::message {::type ::bytes
                         ::length '*}))
 (s/def ::initiate-client-vouch-wrapper
   (s/keys :req [::long-term-public-key
                 ::inner-i-nonce
                 ::hidden-client-short-pk
-                ::server-name
+                ;; FIXME: I don't think mixing namespaces like this will fly
+                ;; If it doesn't, just add an alias and hope for the best.
+                ::specs/srvr-name
                 ::message]))
 
 (defn zero-bytes

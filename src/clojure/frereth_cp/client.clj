@@ -94,7 +94,7 @@
                                    {:cause (str ex)})))))]
     (-> this
         ;; TODO: Write a mirror image version of dns-encode to just show this
-        (assoc-in [::server-security ::shared/server-name] "name")
+        (assoc-in [::server-security ::specs/srvr-name] "name")
         (assoc-in [::shared/packet-management ::shared/packet] "...packet bytes...")
         (assoc-in [::shared/work-area ::shared/working-nonce] "...FIXME: Decode nonce bytes")
         (assoc-in [::shared/work-area ::shared/text] "...plain/cipher text"))))
@@ -176,8 +176,8 @@ implementation. This is code that I don't understand yet"
                           (b-t/byte-copy! text 64 64 vouch)
                           (b-t/byte-copy! text
                                           128
-                                          K/server-name-length
-                                          (::K/server-name server-security))
+                                          specs/server-name-length
+                                          (::specs/srvr-name server-security))
                           ;; First byte is a magical length marker
                           ;; TODO: Double-check the original.
                           ;; This doesn't look right at all.
@@ -258,10 +258,16 @@ implementation. This is code that I don't understand yet"
 
 (defn cope-with-successful-hello-creation
   [wrapper chan->server timeout]
-  (let [raw-packet (get-in @wrapper
-                           [::shared/packet-management
-                            ::shared/packet])]
-    (log/debug "client/start! Putting" raw-packet "onto" chan->server)
+  (let [{:keys [::shared/packet-management
+                ::state/server-security]
+         log-state ::log2/state
+         :as this} @wrapper
+        raw-packet (::shared/packet this)
+        log-state (log2/debug log-state
+                              ::cope-with-successful-hello-creation
+                              "Putting hello onto ->server channel"
+                              {::raw-hello raw-packet
+                               ::state/chan->server chan->server})]
     ;; There's still an important break
     ;; with the reference implementation
     ;; here: this should be sending the
@@ -278,13 +284,17 @@ implementation. This is code that I don't understand yet"
     ;; it probably makes more sense to handle that
     ;; sort of detail closer to the network boundary.
     (let [d (strm/try-put! chan->server
-                           raw-packet
+                           {:host (::specs/srvr-name server-security)
+                            :message raw-packet
+                            :port (::shared/srvr-port server-security)}
                            timeout
                            ::sending-hello-timed-out)]
       ;; FIXME: use dfrd/chain instead of manually building
       ;; up the chain using on-realized.
       ;; Although being explicit about the failure
       ;; modes is nice.
+      ;; And it's not like this is much of a chain
+      ;; ...is it?
       (deferred/on-realized d
         (partial cookie/wait-for-cookie wrapper)
         (partial hello-failed! wrapper)))))

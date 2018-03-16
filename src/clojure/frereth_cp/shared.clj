@@ -66,7 +66,7 @@
 ;; with the long-/short-pairs.
 ;; TODO: Split this up.
 (s/def ::my-keys (s/keys :req [::keydir
-                               ::K/server-name]
+                               ::K/srvr-name]
                          :opt [::long-pair
                                ::short-pair]))
 
@@ -89,10 +89,7 @@
 
 (s/def ::host string?)
 (s/def ::message bytes?)
-(s/def ::port (s/and int?
-                     pos?
-                     #(< % 65536)))
-(s/def ::network-packet (s/keys :req-un [::host ::message ::port]))
+(s/def ::network-packet (s/keys :req-un [::host ::message ::specs/port]))
 
 (comment
   ;; Q: Why aren't I using this?
@@ -118,7 +115,7 @@
 ;;; use in cljeromq. This seems like a reasonable
 ;;; starting point.
 ;;; Q: Is port really part of it?
-(s/def ::url (s/keys :req [::K/server-name
+(s/def ::url (s/keys :req [::specs/srvr-name
                            ::extension
                            ::port]))
 
@@ -201,7 +198,7 @@ allocated using default-packet-manager"
 ;;; TODO: Verify that and then eliminate it
 (s/fdef encode-server-name
         :args (s/cat :name ::dns-string)
-        :ret ::K/server-name)
+        :ret ::specs/srvr-name)
 (defn encode-server-name
   [name]
   (let [result (byte-array 256 (repeat 0))

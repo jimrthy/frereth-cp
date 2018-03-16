@@ -57,3 +57,15 @@ This really seems like a bad road to go down."
                           #(= (count %) extension-length)))
 (s/def ::srvr-xtn ::extension)
 (s/def ::clnt-xtn ::extension)
+
+(def server-name-length 256)
+;; This is a name suitable for submitting a DNS query.
+;; 1. Its encoder starts with an array of zeros
+;; 2. Each name segment is prefixed with the number of bytes
+;; 3. No name segment is longer than 63 bytes
+;; FIXME: Rename this to ::srvr-name
+(s/def ::srvr-name (s/and bytes #(= (count %) server-name-length)))
+(s/def ::port (s/and int?
+                     pos?
+                     #(< % 65536)))
+(s/def ::srvr-port ::port)

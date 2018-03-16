@@ -8,6 +8,7 @@
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as utils])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
@@ -23,14 +24,14 @@
   (let [msg-length (count msg)
         _ (assert (< 0 msg-length))
         tmplt (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)
-        server-name (get-in this [::shared/my-keys ::K/server-name])
-        _ (assert server-name)
+        srvr-name (get-in this [::shared/my-keys ::specs/srvr-name])
+        _ (assert srvr-name)
         inner-nonce-suffix (::state/inner-i-nonce this)
         ^TweetNaclFast$Box$KeyPair long-pair (get-in this [::shared/my-keys ::shared/long-pair])
         src {::K/client-long-term-key (.getPublicKey long-pair)
              ::K/inner-i-nonce inner-nonce-suffix
              ::K/inner-vouch (::state/vouch this)
-             ::K/server-name server-name
+             ::specs/srvr-name srvr-name
              ::K/child-message msg}
         work-area (::shared/work-area this)
         secret (get-in this [::state/shared-secrets ::state/client-short<->server-short])]

@@ -300,7 +300,7 @@
          (::state/chan client-read-chan)
          client-write-chan
          (::state/chan client-write-chan)
-         (::K/server-name my-keys)
+         (::K/srvr-name my-keys)
          (::shared/keydir my-keys)
          extension
          ;; Actually, the rule is that it must be
