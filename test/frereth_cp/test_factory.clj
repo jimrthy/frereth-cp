@@ -29,7 +29,7 @@
 (defn server-options
   []
   {::cp-server {::shared/extension server-extension
-                ::shared/my-keys #::shared{::K/server-name server-name
+                ::shared/my-keys #::shared{::K/srvr-name server-name
                                            :keydir "curve-test"}}})
 
 (defn build-server
@@ -77,7 +77,7 @@
                 0x05 0x06 0x07 0x08
                 0x09 0x0a 0x0b 0x0c
                 0x0d 0x0e 0x0f 0x10]))
-  ([message-loop-name logger-init log-state srvr-pk-long srvr-ip srvr-port srvr-xtn-vec]
+  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long srvr-xtn-vec]
    (let [server-extension (byte-array srvr-xtn-vec)
          ;; FIXME: Honestly, we need to cope with multiple servers.
          ;; Each could be listening on a different port with a different

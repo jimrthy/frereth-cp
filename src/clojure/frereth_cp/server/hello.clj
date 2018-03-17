@@ -81,61 +81,59 @@
 (defn open-packet
   [{:keys [::state/current-client]
     :as state}
-   ;; FIXME: This really should be bytes
-   ;; That has broader implications, since it really means updating
-   ;; serialization/decompose again. So maybe not.
-   ^ByteBuf message]
-  (if (= (.readableBytes message) shared/hello-packet-length)
-    (do
-      (log/info "This is the correct size")
-      (let [;; Q: Is the convenience here worth the [hypothetical] performance hit of using decompose?
-            {:keys [::K/clnt-xtn
-                    ::K/crypto-box
-                    ::K/client-nonce-suffix
-                    ::K/srvr-xtn]
-             ^bytes clnt-short-pk ::K/clnt-short-pk
-             :as decomposed} (serial/decompose K/hello-packet-dscr message)
-            ;; We're keeping a ByteArray around for storing the key received by the current message.
-            ;; The reference implementation just stores it in a global.
-            ;; This undeniably has some impact on GC.
-            ;; Q: Is it enough to justify doing something this unusual?
-            ;; (it probably makes a lot more sense in C where you don't have a lot of great alternatives)
-            ;; TODO: Get benchmarks both ways.
-            ;; I'm very skeptical that this is worth the wonkiness, but I'm also
-            ;; very skeptical about messing around with the reference implementation.
-            ^bytes client-short-pk (get-in state [::state/current-client ::state/client-security ::shared/short-pk])]
-        (when (not client-short-pk)
-          (if current-client
-            (if-let [sec (::state/client-security current-client)]
-              (if-let [short-pk (::shared/short-pk sec)]
-                (log/error (str "Don't understand why we're about to have a problem. It's right here:\n"
-                                (util/pretty (helpers/hide-long-arrays state))))
-                (log/error (str "Missing short-term public-key array among\n"
-                                (util/pretty sec))))
-              (log/error (str "Missing :client-security among\n"
-                              (util/pretty current-client))))
-            (log/error (str "Missing :current-client among\n"
-                            (util/pretty state))))
-          (throw (ex-info "Missing spot for client short-term public key" state)))
-        (when (not clnt-short-pk)
-          (throw (ex-info "HELLO packet missed client short-term pk" decomposed)))
-        ;; Q: Is there any real point to this?
-        (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
-        ;; Destructively overwriting the contents of the destination B] absolutely reeks.
-        ;; It seems like it would be much better to just assoc in the new B] containing
-        ;; the key and move along.
-        ;; Then again, this entire giant side-effecting mess is awful.
-        (b-t/byte-copy! client-short-pk clnt-short-pk)
-        (assoc
-         (open-hello-crypto-box (assoc state
-                                       ::client-short-pk client-short-pk
-                                       ::nonce-suffix client-nonce-suffix)
-                                message
-                                crypto-box)
-         ::K/hello-spec decomposed)))
-    (throw (ex-info "Wrong size for a HELLO packet"
-                    {::actual (.readableBytes message)
-                     ::expected shared/hello-packet-length}))))
+   ^bytes message]
+  (let [length (count message)]
+    (if (= length shared/hello-packet-length)
+      (do
+        (log/info "This is the correct size")
+        (let [;; Q: Is the convenience here worth the [hypothetical] performance hit of using decompose?
+              {:keys [::K/clnt-xtn
+                      ::K/crypto-box
+                      ::K/client-nonce-suffix
+                      ::K/srvr-xtn]
+               ^bytes clnt-short-pk ::K/clnt-short-pk
+               :as decomposed} (serial/decompose K/hello-packet-dscr message)
+              ;; We're keeping a ByteArray around for storing the key received by the current message.
+              ;; The reference implementation just stores it in a global.
+              ;; This undeniably has some impact on GC.
+              ;; Q: Is it enough to justify doing something this unusual?
+              ;; (it probably makes a lot more sense in C where you don't have a lot of great alternatives)
+              ;; TODO: Get benchmarks both ways.
+              ;; I'm very skeptical that this is worth the wonkiness, but I'm also
+              ;; very skeptical about messing around with the reference implementation.
+              ^bytes client-short-pk (get-in state [::state/current-client ::state/client-security ::shared/short-pk])]
+          (when (not client-short-pk)
+            (if current-client
+              (if-let [sec (::state/client-security current-client)]
+                (if-let [short-pk (::shared/short-pk sec)]
+                  (log/error (str "Don't understand why we're about to have a problem. It's right here:\n"
+                                  (util/pretty (helpers/hide-long-arrays state))))
+                  (log/error (str "Missing short-term public-key array among\n"
+                                  (util/pretty sec))))
+                (log/error (str "Missing :client-security among\n"
+                                (util/pretty current-client))))
+              (log/error (str "Missing :current-client among\n"
+                              (util/pretty state))))
+            (throw (ex-info "Missing spot for client short-term public key" state)))
+          (when (not clnt-short-pk)
+            (throw (ex-info "HELLO packet missed client short-term pk" decomposed)))
+          ;; Q: Is there any real point to this?
+          (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
+          ;; Destructively overwriting the contents of the destination B] absolutely reeks.
+          ;; It seems like it would be much better to just assoc in the new B] containing
+          ;; the key and move along.
+          ;; Then again, this entire giant side-effecting mess is awful.
+          (b-t/byte-copy! client-short-pk clnt-short-pk)
+          (assoc
+           (open-hello-crypto-box (assoc state
+                                         ::client-short-pk client-short-pk
+                                         ::nonce-suffix client-nonce-suffix)
+                                  message
+                                  crypto-box)
+           ::K/hello-spec decomposed)))
+      (throw (ex-info "Wrong size for a HELLO packet"
+                      {::actual (count message)
+                       ::expected shared/hello-packet-length})))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public

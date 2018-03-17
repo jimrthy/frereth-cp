@@ -89,7 +89,7 @@
 (defn box-prepare
   "Set up shared secret so I can avoid the if logic to see whether it's been done.
   At least, I think that's the point."
-  [public secret]
+  [^bytes public ^bytes secret]
   (let [shared (byte-array K/shared-key-length)]
     (TweetNaclFast/crypto_box_beforenm shared public secret)
     shared))

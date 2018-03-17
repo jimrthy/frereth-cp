@@ -4,13 +4,15 @@
             [frereth-cp.client.state :as client-state]
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.test-factory :as factory]
-            [manifold.stream :as strm]))
+            [manifold.stream :as strm])
+  (:import io.netty.buffer.ByteBuf))
 
 (defn build-hello
   [srvr-xtn
@@ -80,46 +82,58 @@
             (if (not (or (= hello ::drained)
                          (= hello ::timeout)))
               (let [->srvr (get-in started [::state/client-read-chan ::state/chan])
-                    success (deref (strm/try-put! ->srvr hello 1000 ::timed-out))]
-                (if (not= ::timed-out success)
-                  (let [srvr-> (get-in started [::state/client-write-chan ::state/chan])
-                        ;; From the aleph docs:
-                        ;; "The stream will accept any messages which can be coerced into
-                        ;; a binary representation."
-                        ;; It's perfectly legit for the Server to send either B] or
-                        ;; ByteBuf instances here.
-                        ;; (Whether socket instances emit ByteBuf or B] depends on a
-                        ;; parameter to their ctor. The B] approach is slower due to
-                        ;; copying, but recommended for any but advanced users,
-                        ;; to avoid needing to cope with reference counts).
-                        ;; TODO: See which format aleph works with natively to
-                        ;; minimize copying for writes (this may or may not mean
-                        ;; rewriting compose to return B] instead)
-                        ;; Note that I didn't need to do this for the Hello packet.
-                        packet @(strm/try-take! srvr-> ::drained 1000 ::timeout)
-                        cookie (:message packet)]
-                    (if (and (not= ::drained cookie)
-                             (not= ::timeout cookie))
-                      (if-let [client<-server (::client-state/chan<-server @client-agent)]
-                        (let [put @(strm/try-put! client<-server
-                                                  {:host server-ip
-                                                   :message cookie
-                                                   :port server-port}
-                                                  1000
-                                                  ::timeout)]
-                          (if (not= ::timeout put)
-                            (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                              (if-not (or (= initiate ::drained)
-                                          (= initiate ::timeout))
-                                (throw (RuntimeException. "Don't stop here"))
-                                (throw (ex-info "Failed to take Initiate/Vouch from Client"
-                                                {::problem initiate}))))
-                            (throw (RuntimeException. "Timed out putting Cookie to Client"))))
-                        (throw (ex-info "I know I have a mechanism for writing from server to client among"
-                                        {::keys (keys @client-agent)
-                                         ::grand-scheme @client-agent})))
-                      (throw (RuntimeException. (str cookie " reading Cookie from Server")))))
-                  (throw (RuntimeException. "Timed out putting Hello to Server"))))
+                    ;; Currently, this arrives as a ByteBuf.
+                    ;; Anything that can be converted to a direct ByteBuf is legal.
+                    ;; So this part is painfully implementation-dependent.
+                    ;; Q: Is it worth generalizing?
+                    ^ByteBuf hello-buffer (:message hello)
+                    hello-length (.readableBytes hello-buffer)
+                    hello-packet (byte-array hello-length)]
+                (.readBytes hello-buffer hello-packet)
+                (let [success (deref (strm/try-put! ->srvr
+                                                    (assoc hello
+                                                           :message hello-packet)
+                                                    1000
+                                                    ::timed-out))]
+                  (if (not= ::timed-out success)
+                    (let [srvr-> (get-in started [::state/client-write-chan ::state/chan])
+                          ;; From the aleph docs:
+                          ;; "The stream will accept any messages which can be coerced into
+                          ;; a binary representation."
+                          ;; It's perfectly legit for the Server to send either B] or
+                          ;; ByteBuf instances here.
+                          ;; (Whether socket instances emit ByteBuf or B] depends on a
+                          ;; parameter to their ctor. The B] approach is slower due to
+                          ;; copying, but recommended for any but advanced users,
+                          ;; to avoid needing to cope with reference counts).
+                          ;; TODO: See which format aleph works with natively to
+                          ;; minimize copying for writes (this may or may not mean
+                          ;; rewriting compose to return B] instead)
+                          ;; Note that I didn't need to do this for the Hello packet.
+                          packet @(strm/try-take! srvr-> ::drained 1000 ::timeout)
+                          cookie (:message packet)]
+                      (if (and (not= ::drained packet)
+                               (not= ::timeout packet))
+                        (if-let [client<-server (::client-state/chan<-server @client-agent)]
+                          (let [put @(strm/try-put! client<-server
+                                                    packet
+                                                    1000
+                                                    ::timeout)]
+                            (is (= server-ip (:host packet)))
+                            (is (= server-port (:port packet)))
+                            (if (not= ::timeout put)
+                              (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                (if-not (or (= initiate ::drained)
+                                            (= initiate ::timeout))
+                                  (throw (RuntimeException. "Don't stop here"))
+                                  (throw (ex-info "Failed to take Initiate/Vouch from Client"
+                                                  {::problem initiate}))))
+                              (throw (RuntimeException. "Timed out putting Cookie to Client"))))
+                          (throw (ex-info "I know I have a mechanism for writing from server to client among"
+                                          {::keys (keys @client-agent)
+                                           ::grand-scheme @client-agent})))
+                        (throw (RuntimeException. (str cookie " reading Cookie from Server")))))
+                    (throw (RuntimeException. "Timed out putting Hello to Server")))))
               (throw (RuntimeException. (str hello " taking Hello from Client")))))
           (finally
             (println "Stopping client")

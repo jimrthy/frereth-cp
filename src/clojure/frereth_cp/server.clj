@@ -78,15 +78,16 @@
         :ret boolean?)
 (defn check-packet-length
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
-  [^ByteBuf packet]
+  [^bytes packet]
   ;; So far, for unit tests, I'm getting the [B I expect
   (log/debug (str "Incoming: " packet ", a " (class packet)))
   ;; For now, retain the name r for compatibility/historical reasons
-  (let [r (.readableBytes packet)]
+  (let [r (count packet)]
     (log/info (str "Incoming packet contains " r " bytes"))
-    (and (>= r 80)
-         (<= r 1184)
-         (= (bit-and r 0xf)))))
+    (and (<= 80 r 1184)
+         ;; i.e. (= (rem r 16) 0)
+         ;; TODO: Keep an eye out for potential benchmarks
+         (= (bit-and r 0xf) 0))))
 
 (defn handle-hello!
   [state
@@ -189,21 +190,17 @@
            :port]
     ;; Q: How much performance do we really use if we
     ;; set up the socket to send a B] rather than a ByteBuf?
-    ^ByteBuf message :message
+    ^bytes message :message
     :as packet}]
   (log/debug "Incoming")
+  (when-not message
+    (throw (ex-info "Missing message in incoming packet"
+                    {::problem packet})))
   (if (check-packet-length message)
     (let [header (byte-array K/header-length)
-          server-extension (byte-array K/extension-length)
-          current-reader-index (.readerIndex message)]
-      (.readBytes message header)
-      (.readBytes message server-extension)
-      ;; This means that I'll wind up reading the header/extension
-      ;; again in the individual handlers.
-      ;; Which seems wasteful.
-      ;; TODO: Set up alternative reader templates which
-      ;; exclude those fields so I don't need to do this.
-      (.readerIndex message current-reader-index)
+          server-extension (byte-array K/extension-length)]
+      (b-t/byte-copy! header 0 K/header-length message)
+      (b-t/byte-copy! server-extension 0 K/extension-length message K/header-length)
       (if (verify-my-packet state header server-extension)
         (do
           (log/debug "This packet really is for me")

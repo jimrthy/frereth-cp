@@ -19,7 +19,7 @@
             [frereth-cp.shared.logging :as log2]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
-            [manifold.deferred :as deferred]
+            [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
@@ -35,42 +35,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(comment
-  ;; Q: More sensible to check for strm/source and sink protocols?
-
-  (s/def ::reader (s/keys :req [::state/chan<-child]))
-  (s/def ::writer (s/keys :req [::state/chan->child]))
-  ;; This stream is for sending ByteBufs back to the child when we're done
-  ;; Tracking them in a thread-safe pool seems like a better approach.
-  ;; Especially when we're talking about the server.
-  ;; But I have to get a first draft written before I can worry about details
-  ;; like that.
-  ;; Actually, I pretty much have to have access to that pool now, so messages
-  ;; can go the other way.
-  ;; I could try to get clever and try to reuse buffers when we have a basic
-  ;; request/response scenario. But that idea totally falls apart if the
-  ;; communication is mostly one-sided.
-  ;; It's available as a potential optimization, but it probably only
-  ;; makes sense from the "child" perspective, where we have more knowledge
-  ;; about the expected traffic patterns.
-  ;; TODO: Switch to PooledByteBufAllocator
-  ;; Instead of mucking around with this release-notifier nonsense
-  ;; FIXME: Actually, make this go away completely.
-  ;; We *do* get a ByteBuf at this layer. But it really needs to get
-  ;; extracted to a B] (for decrypting) and then released.
-  ;; So, honestly, it makes more sense to just let the networking
-  ;; layer do that translation for us so we don't have to mess
-  ;; around with reference counting the ByteBuf.
-  (s/def ::release ::writer)
-  ;; Accepts the agent that owns "this" and returns
-  ;; 1) a writer channel we can use to send messages to the child.
-  ;; 2) a reader channel that the child will use to send byte
-  ;; arrays/bufs to us
-  (s/def ::child-spawner (s/fspec :args (s/cat :this ::state/state-agent)
-                                  :ret (s/keys :req [::state/child
-                                                     ::reader
-                                                     ::release
-                                                     ::writer]))))
+(s/def ::deferrable dfrd/deferrable?)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -256,13 +221,19 @@ implementation. This is code that I don't understand yet"
   [this msg]
   (throw (RuntimeException. "Not translated")))
 
-(defn cope-with-successful-hello-creation
+(s/fdef cope-with-successfullo-creation!
+        :args (s/cat :this ::state/agent-wrapper
+                     :chan->server strm/stream?
+                     :timeout nat-int?)
+        :ret (s/keys :req [::deferrable
+                           ::log2/state]))
+(defn cope-with-successful-hello-creation!
   [wrapper chan->server timeout]
   (let [{:keys [::shared/packet-management
                 ::state/server-security]
          log-state ::log2/state
          :as this} @wrapper
-        raw-packet (::shared/packet this)
+        raw-packet (::shared/packet packet-management)
         log-state (log2/debug log-state
                               ::cope-with-successful-hello-creation
                               "Putting hello onto ->server channel"
@@ -289,15 +260,16 @@ implementation. This is code that I don't understand yet"
                             :port (::shared/srvr-port server-security)}
                            timeout
                            ::sending-hello-timed-out)]
-      ;; FIXME: use dfrd/chain instead of manually building
-      ;; up the chain using on-realized.
-      ;; Although being explicit about the failure
-      ;; modes is nice.
-      ;; And it's not like this is much of a chain
-      ;; ...is it?
-      (deferred/on-realized d
-        (partial cookie/wait-for-cookie wrapper)
-        (partial hello-failed! wrapper)))))
+      {::log2/state log-state
+       ;; FIXME: use dfrd/chain instead of manually building
+       ;; up the chain using on-realized.
+       ;; Although being explicit about the failure
+       ;; modes is nice.
+       ;; And it's not like this is much of a chain
+       ;; ...is it?
+       ::deferrable (dfrd/on-realized d
+                                      (partial cookie/wait-for-cookie wrapper)
+                                      (partial hello-failed! wrapper))})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -336,7 +308,8 @@ like a timing attack."
     (throw (ex-info "Agent failed before we started"
                     {:problem failure})))
 
-  (let [{:keys [::state/chan->server]} @wrapper
+  (let [{:keys [::state/chan->server]
+         :as this} @wrapper
         timeout (state/current-timeout wrapper)]
     (strm/on-drained chan->server
                      (fn []
@@ -356,10 +329,17 @@ like a timing attack."
     ;; the idea of using an agent for this).
     (send wrapper hello/do-build-hello)
     (if (await-for timeout wrapper)
-      (cope-with-successful-hello-creation wrapper chan->server timeout)
-      (throw (ex-info (str "Timed out after " timeout
-                           " milliseconds waiting to build HELLO packet")
-                      {:problem (agent-error wrapper)})))))
+      (let [{log-state ::log2/state}
+            (cope-with-successful-hello-creation! wrapper chan->server timeout)]
+        (assoc this ::log2/state log-state))
+      (let [problem (agent-error wrapper)
+            {log-state ::log2/state
+                            logger ::log2/logger
+                            :as this} @wrapper]
+        (throw (ex-info (str "Timed out after " timeout
+                             " milliseconds waiting to build HELLO packet")
+                        {::problem problem
+                         ::failed-state #(update this ::log2/state % (log2/flush-logs! logger log-state))}))))))
 
 (s/fdef stop!
         :args (s/cat :state-agent ::state/state-agent)

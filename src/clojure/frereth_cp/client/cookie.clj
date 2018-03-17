@@ -45,7 +45,7 @@
                              " bytes. Got "
                              (count message)
                              " in\n"
-                             (b-t/->string cookie)))
+                             (b-t/->string message)))
                 (log/info "Building/sending Vouch")
                 (initiate/build-and-send-vouch wrapper cookie))
               (log/error "Server didn't respond to HELLO.")))
