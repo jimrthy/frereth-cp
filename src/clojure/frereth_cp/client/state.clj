@@ -193,8 +193,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
    {:keys [::K/header
            ::K/client-extension
            ::K/server-extension]
-    ^ByteBuf client-nonce-suffix ::K/client-nonce-suffix
-    ^ByteBuf cookie ::K/cookie
+    ^bytes client-nonce-suffix ::K/client-nonce-suffix
+    ^bytes cookie ::K/cookie
     :as rcvd}]
   (let [log-state (log2/info log-state
                              ::decrypt-actual-cookie
@@ -213,17 +213,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                {::src K/cookie-nonce-prefix
                                 ::dst working-nonce})]
       (b-t/byte-copy! working-nonce K/cookie-nonce-prefix)
-      (.readBytes client-nonce-suffix
-                  working-nonce
-                  K/server-nonce-prefix-length
-                  K/server-nonce-suffix-length)
+      (b-t/byte-copy! working-nonce K/server-nonce-prefix-length K/server-nonce-suffix-length client-nonce-suffix)
       (let [log-state (log2/info log-state
                                  ::decrypt-actual-cookie
                                  "Copying encrypted cookie"
                                  {::target text
                                   ::this this
                                   ::my-keys (keys this)})]
-        (.readBytes cookie text 0 K/cookie-frame-length)
+        (b-t/byte-copy! text 0 K/cookie-frame-length cookie)
         (let [shared (::client-short<->server-long shared-secrets)
               log-state (log2/info log-state
                                    ::decrypt-actual-cookie
