@@ -18,10 +18,6 @@
 ;;; Magic constants
 ;;; TODO: Pretty much all of these should move into constants
 
-(def hello-header (.getBytes (str K/client-header-prefix "H")))
-(def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
-(def hello-packet-length 224)
-
 (def cookie-position-in-packet 80)
 
 (def max-unsigned-long -1)

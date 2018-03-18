@@ -1,5 +1,9 @@
 (ns frereth-cp.shared.bit-twiddling-test
-  (:require [clojure.test :refer (are deftest is testing)]
+  (:require [clojure.spec.alpha :as s]
+            [clojure.test :refer (are deftest is testing)]
+            [clojure.test.check.clojure-test :as c-t]
+            [clojure.test.check.generators :as lo-gen]
+            [clojure.test.check.properties :as props]
             [frereth-cp.shared.bit-twiddling :as b-t]))
 
 (deftest complement-2s
@@ -20,6 +24,12 @@
     127 127
     -1 0xff
     -128 0x80))
+
+(c-t/defspec check-uint16-unpack
+  (props/for-all [n (s/gen (s/int-in 0 65536))]
+                 (is (= n (-> n
+                              b-t/uint16-pack
+                              b-t/uint16-unpack)))))
 
 (deftest byte-1-uint64-pack
   ;; This is really just a circular truism.

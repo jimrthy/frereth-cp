@@ -95,7 +95,7 @@
         working-nonce (::shared/working-nonce work-area)
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)]
-    (b-t/byte-copy! working-nonce shared/hello-nonce-prefix)
+    (b-t/byte-copy! working-nonce K/hello-nonce-prefix)
     (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length short-term-nonce)
 
     (let [log-state (log2/info log-state

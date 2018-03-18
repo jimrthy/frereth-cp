@@ -160,7 +160,13 @@ Thanks, java, for having a crippled numeric stack."
        (aset-byte dst i (-> x
                             (unsigned-bit-shift-right bits-to-shift)
                             (bit-and K/max-8-uint)
-                            possibly-2s-complement-8)))))
+                            possibly-2s-complement-8))))
+  dst)
+
+(defn uint16-pack
+  [^Short x]
+  (let [dst (byte-array 2)]
+    (uint16-pack! dst 0 x)))
 
 (defn uint32-pack!
   "Sets 4 bytes in dst (starting at offset n) to x"
@@ -205,31 +211,47 @@ So stick with this translation.
 ;; TODO: redo these as a macro to avoid the code
 ;; duplication.
 (s/fdef uint16-unpack
-        :args (s/cat :src bytes?)
-        ;; TODO: Validate range?
-        :ret (s/and int?))
+        :args (s/or :arity-1 (s/cat :src bytes?)
+                    :arity-2 (s/and (s/cat :src bytes?
+                                           :offset (comp int? pos?))
+                                    #(> (count (:src %)) (inc (:offset %)))))
+        :ret (s/and int?
+                    #(<= 0 % 65535)))
 (defn uint16-unpack
   "Unpack an array of 2 bytes into a 16-bit short"
   ([^bytes src offset]
-   (reduce (fn [acc n]
-             (-> acc
-                 (bit-shift-left Byte/SIZE)
-                 (bit-or (->> n
-                              (+ offset)
-                              (aget src)
-                              possibly-2s-uncomplement-8
-                              ;; This next line should be redundant
-                              (bit-and 0xff)))))
-           0
-           (range 1 -1 -1)))
+   (let [uchar-1 (possibly-2s-uncomplement-8 (aget src 1))
+         uchar-2 (possibly-2s-uncomplement-8 (aget src 0))]
+     (bit-or
+      (bit-shift-left uchar-1 Byte/SIZE)
+      uchar-2)))
   ([^bytes src]
    (uint16-unpack src 0)))
+
+(s/fdef uint32-unpack
+        :args (s/cat :src (and bytes?
+                               #(= (count %) 4)))
+        ;; TODO: Validate range?
+        :ret int?)
+(defn uint32-unpack
+  "Unpack an array of 32 bytes into a 32-bit long"
+  [^bytes src]
+  (reduce (fn [acc n]
+            (-> acc
+                (bit-shift-left Byte/SIZE)
+                (bit-or (->> n
+                             (aget src)
+                             possibly-2s-uncomplement-8
+                             ;; This next line should be redundant
+                             (bit-and 0xff)))))
+          0
+          (range 3 -1 -1)))
 
 (s/fdef uint64-unpack
         :args (s/cat :src (and bytes?
                                #(= (count %) 8)))
         ;; TODO: Validate range?
-        :ret (s/and int?))
+        :ret int?)
 (defn uint64-unpack
   "Unpack an array of 8 bytes into a 64-bit long"
   [^bytes src]

@@ -30,6 +30,18 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
+(s/fdef decompose!
+        :args (s/cat :message (s/and bytes?
+                                     #(= (count %) K/hello-packet-length)))
+        :ret ::K/hello-spec)
+(defn decompose!
+  [^bytes message]
+  ;; This was my original approach.
+  ;; It's now doomed because my serialization
+  ;; code was written for ByteBuf instances.
+  (comment (serial/decompose K/hello-packet-dscr message))
+  (throw (RuntimeException. "Q: What to do?")))
+
 (s/fdef open-hello-crypto-box
         :args (s/cat :state ::state/state
                      :message any?
@@ -69,7 +81,7 @@
                    (with-out-str (b-s/print-bytes client-short-pk)))]
       (log/debug msg))
     {::opened (crypto/open-crypto-box
-               shared/hello-nonce-prefix
+               K/hello-nonce-prefix
                nonce-suffix
                crypto-box
                shared-secret)
@@ -83,7 +95,7 @@
     :as state}
    ^bytes message]
   (let [length (count message)]
-    (if (= length shared/hello-packet-length)
+    (if (= length K/hello-packet-length)
       (do
         (log/info "This is the correct size")
         (let [;; Q: Is the convenience here worth the [hypothetical] performance hit of using decompose?
@@ -92,7 +104,7 @@
                       ::K/client-nonce-suffix
                       ::K/srvr-xtn]
                ^bytes clnt-short-pk ::K/clnt-short-pk
-               :as decomposed} (serial/decompose K/hello-packet-dscr message)
+               :as decomposed} (decompose! message)
               ;; We're keeping a ByteArray around for storing the key received by the current message.
               ;; The reference implementation just stores it in a global.
               ;; This undeniably has some impact on GC.
@@ -133,7 +145,7 @@
            ::K/hello-spec decomposed)))
       (throw (ex-info "Wrong size for a HELLO packet"
                       {::actual (count message)
-                       ::expected shared/hello-packet-length})))))
+                       ::expected K/hello-packet-length})))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public

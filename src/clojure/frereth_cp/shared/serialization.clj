@@ -12,7 +12,8 @@ FIXME: Rename for better semantics before this progresses any further."
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util])
-  (:import [io.netty.buffer ByteBuf Unpooled]))
+  (:import [io.netty.buffer ByteBuf Unpooled]
+           java.util.Arrays))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -120,7 +121,85 @@ Needing to declare these things twice is annoying."
     ::K/int-64 8
     ::K/zeroes (::K/length dscr)))
 
-(defn read-byte-array
+(s/fdef extract-byte-array-subset
+        :args (s/and (s/cat :offset nat-int?
+                            ;; Q: Is there a way to spec the relationship
+                            ;; between offset, length, and src?
+                            :src bytes?
+                            :length nat-int?)
+                     #((> (count (:src %)) (+ (:offset %) (:length %)))))
+        :fn #(= (count (:ret %)) (-> % :args :length))
+        :ret bytes?)
+(defn extract-byte-array-subset
+  [offset src length]
+  (let [dst (byte-array length)]
+    (b-t/byte-copy! dst 0 length src offset)
+    dst))
+
+(s/fdef decompose-array-field
+        :args (s/cat :src ::bytes?
+                     ;; FIXME: find or write a spec for this
+                     :tmplt map?
+                     ;; FIXME: find or write a spec for this
+                     :acc map?
+                     ;; Really, it's a function for pulling the
+                     ;; appropriate field out of tmplt.
+                     ;; In practice, it's a keyword
+                     :k keyword?)
+        ;; Q: Can I write anything meaningful in the functional
+        ;; part of the spec?
+        ;; A: Well, :k should be in :ret, but not [:args :acc],
+        ;; and those maps really should otherwise be the same.
+        ;; Don't really have a way to check the before/after
+        ;; (.tell src)
+        ;; Q: Are there any other possibilities?
+        :ret (s/map-of keyword? (s/or :bytes bytes?
+                                      :number integer?)))
+(defn decompose-array-field
+  "Refactored from inside a reduce"
+  [^bytes src
+   tmplt
+   {:keys [::index]
+    :as acc}
+   k]
+  (let [dscr (k tmplt)
+        field-length (calculate-length dscr)
+        cnvrtr (::K/type dscr)]
+    (assoc acc k (case cnvrtr
+                   ::K/bytes (extract-byte-array-subset dscr src index)
+                   ::K/const (let [contents (::K/contents dscr)
+                                   extracted (extract-byte-array-subset dscr src)]
+                               (when-not (b-t/bytes= extracted contents)
+                                 (throw (ex-info "Deserialization constant mismatched"
+                                                 {::expected (vec contents)
+                                                  ::actual (vec extracted)})))
+                               extracted)
+                   ::K/int-64 (.readLong src)
+                   ::K/int-32 (.readInt src)
+                   ::K/int-16 (.readShort src)
+                   ::K/uint-64 (let [buf (Arrays/copyOfRange src index (+ 8 index))]
+                                 (b-t/uint64-unpack buf))
+                   ::K/uint-32 (let [buf (Arrays/copyOfRange src index (+ 4 index))]
+                                 (b-t/uint32-unpack buf))
+                   ::K/uint-16 (let [buf (Arrays/copyOfRange src index (+ 2 index))]
+                                 (b-t/uint16-unpack buf))
+                   ::K/zeroes (let [dst (extract-byte-array-subset dscr src index)]
+                                (when-not (every? zero? dst)
+                                  (throw (ex-info "Corrupted zeros field"
+                                                  {::field dscr
+                                                   ::src src
+                                                   ::tmplt tmplt})))
+                                dst)
+                   (throw (ex-info "Missing case clause"
+                                   {::failure cnvrtr
+                                    ::acc acc
+                                    ::key k
+                                    ::template tmplt
+                                    ::source src})))
+           ::index (+ index (calculate-length dscr)))))
+
+(defn read-byte-array!
+  "From a ByteBuf"
   [dscr src]
   (let [^Long len (calculate-length dscr)
         dst (byte-array len)]
@@ -151,18 +230,14 @@ Needing to declare these things twice is annoying."
   [src tmplt acc k]
   (let [dscr (k tmplt)
         cnvrtr (::K/type dscr)]
-    ;; The correct approach would be to move this (and compose)
-    ;; into its own tiny ns that everything else can use.
-    ;; helpers seems like a good choice.
-    ;; That's more work than I have time for at the moment.
     (assoc acc k (case cnvrtr
                    ;; .readBytes does not produce a derived buffer.
                    ;; The buffer that gets created here will need to be
                    ;; released separately
                    ;; Q: Would .readSlice make more sense?
-                   ::K/bytes (read-byte-array dscr src)
+                   ::K/bytes (read-byte-array! dscr src)
                    ::K/const (let [contents (::K/contents dscr)
-                                   extracted (read-byte-array dscr src)]
+                                   extracted (read-byte-array! dscr src)]
                                (when-not (b-t/bytes= extracted contents)
                                  (throw (ex-info "Deserialization constant mismatched"
                                                  {::expected (vec contents)
@@ -174,7 +249,14 @@ Needing to declare these things twice is annoying."
                    ::K/uint-64 (b-t/possibly-2s-uncomplement-64 (.readLong src))
                    ::K/uint-32 (b-t/possibly-2s-uncomplement-32 (.readInt src))
                    ::K/uint-16 (b-t/possibly-2s-uncomplement-16 (.readShort src))
-                   ::K/zeroes (let [dst (read-byte-array dscr src)]
+                   ::K/zeroes (let [dst (read-byte-array! dscr src)]
+                                ;; Note that, aside from wasting time, this is
+                                ;; pointless:
+                                ;; the Hello packet is the only one that
+                                ;; deliberately includes 0 padding,
+                                ;; and it specifically forbids this test.
+                                ;; Those fields are available for possible future
+                                ;; expansion.
                                 (when-not (every? zero? dst)
                                   (throw (ex-info "Corrupted zeros field"
                                                   {::field dscr
@@ -230,11 +312,18 @@ Needing to declare these things twice is annoying."
                 (-> % :tmplt keys))
         :ret map?)
 (defn decompose
-  ;; Q: Is ztellman's vertigo applicable here?
   ;; TODO: Refactor rename to decompose!
-  "Read a C-style ByteBuf struct into a map, based on a template"
+  "Read a C-style struct from a ByteBuf into a map, based on template"
   [tmplt ^ByteBuf src]
   (reduce
    (partial decompose-field! src tmplt)
    {}
+   (keys tmplt)))
+
+(defn decompose-array!
+  "Read a C-style struct from a byte array into a map, based on template"
+  [tmplt ^bytes src]
+  (reduce
+   (partial decompose-array-field src tmplt)
+   {::index 0}
    (keys tmplt)))

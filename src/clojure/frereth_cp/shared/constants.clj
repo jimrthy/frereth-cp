@@ -79,10 +79,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Hello packets
 
-(def hello-header-string "QvnQ5XlH")
+(def hello-packet-length 224)
+(def hello-header-string (str client-header-prefix "H"))
 (def hello-header (.getBytes hello-header-string))
 (s/def ::hello-prefix (s/and ::specs/prefix
                              #(= hello-header-string (String. %))))
+(def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def ^Integer hello-crypto-box-length 80)
 (def ^Integer ^:const zero-box-length (- hello-crypto-box-length box-zero-bytes))
 ;; FIXME: It would be really nice to be able to generate this from the spec
