@@ -331,7 +331,7 @@
 (s/def ::executor #(instance? java.util.concurrent.ExecutorService %))
 
 ;; This is the last time we checked the clock, in nanoseconds
-(s/def ::recent int?)
+(s/def ::recent nat-int?)
 ;; deferred for next event-loop trigger
 (s/def ::next-action dfrd/deferred?)
 ;; These feed off recent, but are basically undocumented

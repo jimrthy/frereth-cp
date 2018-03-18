@@ -755,7 +755,6 @@
                                         (- mid2-time mid1-time)
                                         (- end-time mid2-time)
                                         (long alt)))]
-    (println "Made it to the bottom of choose-next-scheduled-time")
     {::next-action-time actual-next
      ::log/state log-state}))
 
@@ -1063,6 +1062,8 @@
 ;;; TODO: Definitely needs some refactoring to trim
 ;;; it down to a reasonable size.
 
+;; FIXME: Don't make this a global
+(def fast-spins (atom 0))
 ;;; TODO: Possible alt approach: use atoms with
 ;;; add-watch. That opens up a different can of
 ;;; worms, in terms of synchronizing the flow-control
@@ -1080,6 +1081,7 @@
            ::specs/stream]
     :as io-handle}
    {:keys [::specs/recent]
+    ;; Q: Do I care about this next-action?
     {:keys [::specs/next-action]
      :as flow-control} ::specs/flow-control
     {:keys [::specs/receive-eof
@@ -1151,9 +1153,7 @@
                       ;; (I keep running across bugs that have issues with this,
                       ;; and it wreaks havoc with my REPL)
                       delta-nanos (max 0 scheduled-delay)
-                      delta (if (< delta-nanos 0)
-                              0
-                              (inc (utils/nanos->millis delta-nanos)))
+                      delta (inc (utils/nanos->millis delta-nanos))
                       ;; For printing
                       delta_f (float delta)
                       log-state (log/debug log-state
@@ -1165,6 +1165,15 @@
                                             ::actual-delay delta_f
                                             ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
                                             ::stream stream})]
+                  (if (= delta 1)
+                    (do
+                      (swap! fast-spins inc)
+                      (when (> @fast-spins 5)
+                        ;; Q: Does this ever happen if nothing's broken?
+                        (println "FIXME: Debug only")
+                        (throw (ex-info "Exiting to avoid fast-spin lock"
+                                        state))))
+                    (reset! fast-spins 0))
                   {::delta_f delta_f
                    ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
                    ::log/state log-state})
@@ -1195,7 +1204,7 @@
                                      ;; It seems like a very screw-ball choice.
                                      ;; TODO: Remember why I did this and either document
                                      ;; the screwiness or roll it back out.
-                                     (atom #_forked-logs log-state))
+                                     (atom forked-logs #_log-state))
                             (fn [failure]
                               (log/flush-logs! logger
                                                (log/error forked-logs

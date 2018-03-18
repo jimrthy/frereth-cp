@@ -31,11 +31,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-;; FIXME: These should all go away.
-(comment
-  (s/def ::chan->child strm/stream?)
-  (s/def ::chan<-child strm/stream?)
-  (s/def ::release->child strm/stream?))
+(s/def ::msg-bytes bytes?)
+
 ;; Q: Do these make sense?
 ;; Realistically, this is how we should be communicating with aleph.
 ;; Although it might be worth dropping down to a lower-level approach
@@ -43,9 +40,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::chan->server strm/stream?)
 (s/def ::chan<-server strm/stream?)
 
-;; This is shared with the same sort of thing in messaging.
-;; FIXME: Eliminate the duplication
-(s/def ::recent nat-int?)
 ;; Periodically pull the client extension from...wherever it comes from.
 ;; Q: Why?
 ;; A: Has to do with randomizing and security, like sending from a random
@@ -109,7 +103,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; Q: Does this really make any sense?
                                      ::outgoing-message
                                      ::shared/packet-management
-                                     ::shared/recent
+                                     ::msg-specs/recent
                                      ::server-security
                                      ::shared-secrets
                                      ;; FIXME: Tracking this here doesn't really make
@@ -279,7 +273,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
         {:keys [::K/header
                 ::K/client-extension
                 ::K/server-extension]
-         :as rcvd} (serial/decompose K/cookie-frame packet)
+         :as rcvd} (serial/decompose-array K/cookie-frame packet)
         log-state (log2/info log-state
                              ::decrypt-cookie-packet
                              "Verifying that decrypted packet looks like a Cookie"
@@ -301,6 +295,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                     ::log2/state log-state)
                              rcvd))))
 
+(s/fdef build-vouch
+  :args (s/cat :this ::state)
+  :ret (s/keys :req [::inner-i-nonce
+                     ::log2/state
+                     ::vouch]))
 (defn build-vouch
   [{:keys [::shared/packet-management
            ::shared/my-keys
@@ -313,8 +312,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
         keydir (::shared/keydir my-keys)
         nonce-suffix (byte-array K/server-nonce-suffix-length)]
     (if working-nonce
-      (do
-        (log/info "Setting up working nonce " working-nonce)
+      (let [log-state (log2/info log-state
+                                 ::build-vouch
+                                 "Setting up working nonce"
+                                 {::shared/working-nonce working-nonce})]
         (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
         (crypto/safe-nonce nonce-suffix keydir 0)
         (b-t/byte-copy! working-nonce
@@ -331,17 +332,19 @@ The fact that this is so big says a lot about needing to re-think my approach"
               ;; term key's we're claiming for this session.
               encrypted (crypto/box-after shared-secret
                                           text K/key-length working-nonce)
-              vouch (byte-array K/vouch-length)]
-          (log/info (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
-                         "Nonce:\n"
-                         (b-t/->string working-nonce)
-                         "Shared long-long secret (FIXME: Don't log this):\n"
-                         (b-t/->string shared-secret)))
+              vouch (byte-array K/vouch-length)
+              log-state (log2/info log-state
+                                   ::build-vouch
+                                   (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
+                                        "(FIXME: Don't log the shared secret)")
+                                   {::shared/working-nonce (b-t/->string working-nonce)
+                                    ::shared-secret (b-t/->string shared-secret)})]
           (b-t/byte-copy! vouch
                           0
                           (+ K/box-zero-bytes K/key-length)
                           encrypted)
           {::inner-i-nonce nonce-suffix
+           ::log2/state log-state
            ::vouch vouch}))
       (assert false (str "Missing nonce in packet-management:\n"
                          (keys packet-management))))))
@@ -369,11 +372,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
                              {::raw-cookie message
                               ::human-readable (b-s/print-bytes message)})]
     (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
-                                                                  ::shared/extension
-                                                                  ::shared/work-area
-                                                                  ::server-extension
-                                                                  ::server-security
-                                                                  ::shared-secrets)
+                                                                  [::shared/extension
+                                                                   ::shared/work-area
+                                                                   ::server-extension
+                                                                   ::server-security
+                                                                   ::shared-secrets])
                                                      ::log2/state log-state
                                                      ::shared/packet message))]
       (let [this (into this decrypted)
@@ -429,9 +432,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
   [log-state my-keys]
   (let [key-dir (::shared/keydir my-keys)
         long-pair (crypto/do-load-keypair key-dir)
-        short-pair (crypto/random-key-pair)]
-    (log/info (str "Loaded long-term client key pair from '"
-                   key-dir "'"))
+        short-pair (crypto/random-key-pair)
+        log-state (log2/info log-state
+                             ::load-keys
+                             "Loaded leng-term client key pair"
+                             {::shared/keydir key-dir})]
     {::shared/my-keys (assoc my-keys
                              ::shared/long-pair long-pair
                              ::shared/short-pair short-pair)
@@ -499,7 +504,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
       (into this
             {::child-packets []
              ::client-extension-load-time 0
-             ::recent (System/nanoTime)
+             ::msg-specs/recent (System/nanoTime)
              ;; This seems like something that we should be able to set here.
              ;; djb's docs say that it's a security matter, like connecting
              ;; from a random port.
@@ -574,8 +579,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
   Now waiting for the server's first real message
   packet so we can switch into the message exchange
   loop"
-  [this wrapper sent]
-  (log/info "Entering [penultimate] final-wait")
+  [{:keys [::log2/logger]
+    log-state ::log2/state
+    :as this} wrapper sent]
+  (log2/flush-logs! logger
+                    (log2/warn log-state
+                               ::final-wait
+                               "Entering [penultimate] final-wait"))
   (if (not= sent ::sending-vouch-timed-out)
     (let [timeout (current-timeout wrapper)
           chan<-server (::chan<-server this)
@@ -607,12 +617,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (-> wrapper deref ::timeout
       (or default-timeout)))
 
+(s/fdef clientextension-init
+        :args (s/cat :this ::state)
+        :ret ::state)
 (defn clientextension-init
   "Starting from the assumption that this is neither performance critical
 nor subject to timing attacks because it just won't be called very often."
   [{:keys [::client-extension-load-time
            ::shared/extension
-           ::recent]
+           ::msg-specs/recent]
+    log-state ::log2/state
     :as this}]
   {:pre [(and client-extension-load-time recent)]}
   (let [reload (>= recent client-extension-load-time)
@@ -734,7 +748,11 @@ It would be very easy to just wait
 for its minute key to definitely time out, though that seems
 like a naive approach with a terrible user experience.
 "
-  [this wrapper packet]
+  [{log-state ::log2/state
+    :keys [::log2/logger]
+    :as this}
+   wrapper
+   packet]
   (let [chan->server (::chan->server this)
         d (strm/try-put!
            chan->server
@@ -746,12 +764,25 @@ like a naive approach with a terrible user experience.
     ;; Mixing these two paradigms was probably a bad idea.
     (deferred/on-realized d
       (fn [success]
-        (log/info (str "Initiate packet sent: " success ".\nWaiting for 1st message"))
+        (log2/flush-logs! logger
+                          (log2/info log-state
+                                     ::send-vouch!
+                                     "Initiate packet sent.\nWaiting for 1st message"
+                                     {::success success}))
         (send-off wrapper final-wait wrapper success))
       (fn [failure]
         ;; Extremely unlikely, but
         ;; just for the sake of paranoia
-        (log/error (str "Sending Initiate packet failed!\n" failure))
+        (log2/flush-logs! logger
+                          (log2/exception log-state
+                                          ;; Q: Am I absolutely positive that this will
+                                          ;; always be an exception?
+                                          ;; A: Even if it isn't the logger needs to be
+                                          ;; able to cope with other problems
+                                          failure
+                                          ::send-vouch!
+                                          "Sending Initiate packet failed!"
+                                          {::problem failure}))
         (throw (ex-info "Timed out sending cookie->vouch response"
                         (assoc this
                                :problem failure)))))
@@ -769,11 +800,15 @@ like a naive approach with a terrible user experience.
 
 (defn wait-for-initial-child-bytes
   [{reader ::chan<-child
+    log-state ::log2/state
     :as this}]
-  (log/info (str "wait-for-initial-child-bytes: " reader))
-  ;; The redundant log message seems weird, but sometimes these
-  ;; things look different
-  (log/info "a.k.a." reader)
+  (let [log-state (log2/info log-state
+                             ::wait-for-initial-child-bytes
+                             "Top"
+                             ;; The redundant data seems weird, but sometimes these
+                             ;; things look different
+                             {::chan<-child reader
+                              ::aka (str reader)})])
   (when-not reader
     (throw (ex-info "Missing chan<-child" {::keys (keys this)})))
 
@@ -786,16 +821,20 @@ like a naive approach with a terrible user experience.
                                                  ::drained
                                                  (util/minute)
                                                  ::timed-out)]
-     (log/info "waiting for initial-child-bytes returned" available)
-     (if-not (keyword? available)
-       available   ; i.e. success
-       (if-not (= available ::drained)
-         (if (= available ::timed-out)
-           (throw (RuntimeException. "Timed out waiting for child"))
-           (throw (RuntimeException. (str "Unknown failure: " available))))
-         ;; I have a lot of interaction-test/handshake runs failing because
-         ;; of this.
-         ;; Q: What's going on?
-         ;; (I can usually re-run the test and have it work the next
-         ;; time through...it almost seems like a 50/50 thing)
-         (throw (RuntimeException. "Stream from child closed"))))))
+     (let [log-state (log2/info log-state
+                                ::wait-for-initial-child-bytes
+                                "Waiting for initial-child-bytes returned"
+                                {::available available})]
+       (if-not (keyword? available)
+         {::log2/state log-state
+          ::msg-bytes available}   ; i.e. success
+         (if-not (= available ::drained)
+           (if (= available ::timed-out)
+             (throw (RuntimeException. "Timed out waiting for child"))
+             (throw (RuntimeException. (str "Unknown failure: " available))))
+           ;; I have a lot of interaction-test/handshake runs failing because
+           ;; of this.
+           ;; Q: What's going on?
+           ;; (I can usually re-run the test and have it work the next
+           ;; time through...it almost seems like a 50/50 thing)
+           (throw (RuntimeException. "Stream from child closed")))))))

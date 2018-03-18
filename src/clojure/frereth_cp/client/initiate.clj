@@ -147,7 +147,8 @@ This is destructive in the sense that it reads from msg-byte-buf"
         ;; the incoming cookie converted into a Vouch
         (if (await-for timeout wrapper)
           (let [this @wrapper
-                initial-bytes (state/wait-for-initial-child-bytes this)
+                {log-state ::log2/state
+                 initial-bytes ::state/msg-bytes} (state/wait-for-initial-child-bytes this)
                 vouch (build-initiate-packet! wrapper initial-bytes)]
             (log/info "send-off send-vouch!")
             (send-off wrapper state/send-vouch! wrapper vouch))

@@ -16,46 +16,55 @@
 
 (set! *warn-on-reflection* true)
 
+(s/fdef build-raw
+        :args (s/cat :this ::state/state
+                      :short-term-nonce any?
+                      :working-nonce ::shared/working-nonce)
+        :ret (s/keys :req [::K/hello-spec ::log2/state]))
 (defn build-raw
   [{:keys [::state/server-extension
            ::shared/extension
            ::shared/my-keys
            ::state/shared-secrets]
+    log-state ::log2/state
     :as this}
    short-term-nonce
    working-nonce]
-  (if-let [{:keys [::state/server-security]} this]
-    (log/debug "server-security for raw-hello:" server-security)
-    (log/warn "Missing server-security among" (keys this)
-              "\nin\n" this))
-
-  (let [my-short<->their-long (::state/client-short<->server-long shared-secrets)
+  (let [log-state
+        (if-let [{:keys [::state/server-security]} this]
+          (log2/debug log-state
+                      ::build-raw
+                      "server-security for raw-hello:" server-security)
+          (log2/warn log-state
+                     ::build-raw
+                     "Missing server-security"
+                     {::keys (keys this)
+                      ::state/state this}))
+        my-short<->their-long (::state/client-short<->server-long shared-secrets)
         _ (assert my-short<->their-long)
         ;; Note that this definitely inserts the 16-byte prefix for me
         boxed (crypto/box-after my-short<->their-long
                                 K/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes) working-nonce)
         ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
-        msg (str "Hello crypo-box:\n"
-                 (b-t/->string boxed)
-                 "\nencrypted with nonce\n"
-                 (b-t/->string working-nonce)
-                 "\nfrom\n"
-                 (-> my-short-pair
-                     .getPublicKey
-                     b-t/->string)
-                 "\nto\n"
-                 (b-t/->string (get-in this [::state/server-security
-                                             ::shared-specs/public-long]))
-                 "\nshared\n"
-                 (b-t/->string my-short<->their-long))]
-    (log/info msg)
-    {::K/hello-prefix nil
-     ::K/srvr-xtn server-extension
-     ::K/clnt-xtn extension
-     ::K/clnt-short-pk (.getPublicKey my-short-pair)
-     ::K/zeros nil
-     ::K/client-nonce-suffix (b-t/sub-byte-array working-nonce K/client-nonce-prefix-length)
-     ::K/crypto-box boxed}))
+        log-state (log2/info log-state
+                             ::build-raw
+                             "Details"
+                             {::crypto-box (b-t/->string boxed)
+                              ::shared/working-nonce (b-t/->string working-nonce)
+                              ::my-short-pk (-> my-short-pair
+                                                .getPublicKey
+                                                b-t/->string)
+                              ::server-long-pk (b-t/->string (get-in this [::state/server-security
+                                                                           ::shared-specs/public-long]))
+                              ::state/client-short<->server-long (b-t/->string my-short<->their-long)})]
+    {::template {::K/hello-prefix nil  ; This is a constant, so there's no associated value
+                 ::K/srvr-xtn server-extension
+                 ::K/clnt-xtn extension
+                 ::K/clnt-short-pk (.getPublicKey my-short-pair)
+                 ::K/zeros nil
+                 ::K/client-nonce-suffix (b-t/sub-byte-array working-nonce K/client-nonce-prefix-length)
+                 ::K/crypto-box boxed}
+     ::log2/state log-state}))
 
 (s/fdef build-actual-hello-packet
         :args (s/cat :this ::state/state
@@ -68,7 +77,8 @@
     :as this}
    short-term-nonce
    working-nonce]
-  (let [raw-hello (build-raw this short-term-nonce working-nonce)
+  (let [{raw-hello ::template
+         log-state ::log2/state} (build-raw this short-term-nonce working-nonce)
         log-state (log2/info log-state
                              ::build-actual-packet
                              "Building Hello"
