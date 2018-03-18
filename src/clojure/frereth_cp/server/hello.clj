@@ -156,13 +156,12 @@
                  ::K/crypto-box]
           :as fields} ::K/hello-spec
          :as unboxed} (open-packet state message)]
+    (log/info "box opened successfully")
     ;; We don't actually care about the contents of the bytes we just decrypted.
     ;; They should be all zeroes for now, but that's really an area for possible future
     ;; expansion.
     ;; For now, the point is that they unboxed correctly, so the client has our public
     ;; key and the short-term private key so it didn't just send us random garbage.
-    (log/info "box opened successfully")
-    (.release message)
     (if clear-text
       (let [minute-key (get-in state [::state/cookie-cutter ::state/minute-key])
             {:keys [::shared/text

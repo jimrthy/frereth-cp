@@ -110,29 +110,32 @@
                           ;; minimize copying for writes (this may or may not mean
                           ;; rewriting compose to return B] instead)
                           ;; Note that I didn't need to do this for the Hello packet.
-                          packet @(strm/try-take! srvr-> ::drained 1000 ::timeout)
-                          cookie (:message packet)]
+                          packet @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
                       (if (and (not= ::drained packet)
                                (not= ::timeout packet))
                         (if-let [client<-server (::client-state/chan<-server @client-agent)]
-                          (let [put @(strm/try-put! client<-server
-                                                    packet
-                                                    1000
-                                                    ::timeout)]
+                          (let [cookie-buffer (:message packet)
+                                cookie (byte-array (.readableBytes cookie-buffer))]
+                            (.readBytes cookie-buffer cookie)
                             (is (= server-ip (:host packet)))
                             (is (= server-port (:port packet)))
-                            (if (not= ::timeout put)
-                              (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                                (if-not (or (= initiate ::drained)
-                                            (= initiate ::timeout))
-                                  (throw (RuntimeException. "Don't stop here"))
-                                  (throw (ex-info "Failed to take Initiate/Vouch from Client"
-                                                  {::problem initiate}))))
-                              (throw (RuntimeException. "Timed out putting Cookie to Client"))))
+                            (let [put @(strm/try-put! client<-server
+                                                      (assoc packet
+                                                             :message cookie)
+                                                      1000
+                                                      ::timeout)]
+                              (if (not= ::timeout put)
+                                (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                  (if-not (or (= initiate ::drained)
+                                              (= initiate ::timeout))
+                                    (throw (RuntimeException. "Don't stop here"))
+                                    (throw (ex-info "Failed to take Initiate/Vouch from Client"
+                                                    {::problem initiate}))))
+                                (throw (RuntimeException. "Timed out putting Cookie to Client")))))
                           (throw (ex-info "I know I have a mechanism for writing from server to client among"
                                           {::keys (keys @client-agent)
                                            ::grand-scheme @client-agent})))
-                        (throw (RuntimeException. (str cookie " reading Cookie from Server")))))
+                        (throw (RuntimeException. (str packet " reading Cookie from Server")))))
                     (throw (RuntimeException. "Timed out putting Hello to Server")))))
               (throw (RuntimeException. (str hello " taking Hello from Client")))))
           (finally

@@ -175,9 +175,9 @@ Needing to declare these things twice is annoying."
         field-length (calculate-length dscr)
         cnvrtr (::K/type dscr)]
     (assoc acc k (case cnvrtr
-                   ::K/bytes (extract-byte-array-subset dscr src index)
+                   ::K/bytes (extract-byte-array-subset index src field-length)
                    ::K/const (let [contents (::K/contents dscr)
-                                   extracted (extract-byte-array-subset dscr src)]
+                                   extracted (extract-byte-array-subset index src field-length)]
                                (when-not (b-t/bytes= extracted contents)
                                  (throw (ex-info "Deserialization constant mismatched"
                                                  {::expected (vec contents)
@@ -193,7 +193,7 @@ Needing to declare these things twice is annoying."
                                  (b-t/uint32-unpack buf))
                    ::K/uint-16 (let [buf (Arrays/copyOfRange src index (+ 2 index))]
                                  (b-t/uint16-unpack buf))
-                   ::K/zeroes (let [dst (extract-byte-array-subset dscr src index)]
+                   ::K/zeroes (let [dst (extract-byte-array-subset index src field-length)]
                                 (when-not (every? zero? dst)
                                   (throw (ex-info "Corrupted zeros field"
                                                   {::field dscr
