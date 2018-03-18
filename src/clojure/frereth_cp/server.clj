@@ -192,7 +192,7 @@
     ;; set up the socket to send a B] rather than a ByteBuf?
     ^bytes message :message
     :as packet}]
-  (log/debug "Incoming")
+  (log/debug "Top of Incoming handler")
   (when-not message
     (throw (ex-info "Missing message in incoming packet"
                     {::problem packet})))

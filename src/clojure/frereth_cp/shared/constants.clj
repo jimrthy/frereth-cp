@@ -27,10 +27,11 @@
 (def ^Integer server-nonce-suffix-length 16)
 (def shared-key-length key-length)
 
+(def client-header-prefix-string "QvnQ5Xl")
 ;; Using an ordinary ^bytes type-hint here caused an
 ;; IllegalArgumentException at compile-time elsewhere
 ;; with the message "Unable to resolve classname: clojure.core$bytes@4efdc044"
-(def ^{:tag 'bytes} client-header-prefix (.getBytes "QvnQ5Xl"))
+(def ^{:tag 'bytes} client-header-prefix (.getBytes client-header-prefix-string))
 
 (def send-child-message-timeout
   "in milliseconds"
@@ -80,7 +81,8 @@
 ;;; Hello packets
 
 (def hello-packet-length 224)
-(def hello-header-string (str client-header-prefix "H"))
+(def hello-header-string (str client-header-prefix-string "H"))
+(comment (vec hello-header-string))
 (def hello-header (.getBytes hello-header-string))
 (s/def ::hello-prefix (s/and ::specs/prefix
                              #(= hello-header-string (String. %))))

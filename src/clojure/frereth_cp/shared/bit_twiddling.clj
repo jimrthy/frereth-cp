@@ -152,16 +152,22 @@ Thanks, java, for having a crippled numeric stack."
   (let [^:const k (inc K/max-64-uint)]
     (possibly-2s-uncomplement-n n k)))
 
-(defn uint16-pack!
-  "Sets 2 bytes in dst (starting at offset n) to x"
-  [^bytes dst ^Long n ^Short x]
-  (doseq [i (range n (+ n Short/BYTES))]
-     (let [bits-to-shift (* (- i n) Byte/SIZE)]
-       (aset-byte dst i (-> x
+(defn uint-pack!
+  [^bytes dst ^Long index src ^Integer size]
+  (doseq [i (range index (+ index size))]
+     (let [bits-to-shift (* (- i index) Byte/SIZE)]
+       (aset-byte dst i (-> src
                             (unsigned-bit-shift-right bits-to-shift)
                             (bit-and K/max-8-uint)
+                            ;; Doing this seems wrong.
+                            ;; TODO: Verify against some other implementation.
                             possibly-2s-complement-8))))
   dst)
+
+(defn uint16-pack!
+  "Sets 2 bytes in dst (starting at offset n) to x"
+  [^bytes dst ^Long index ^Short src]
+  (uint-pack! dst index src Short/BYTES))
 
 (defn uint16-pack
   [^Short x]
@@ -170,13 +176,8 @@ Thanks, java, for having a crippled numeric stack."
 
 (defn uint32-pack!
   "Sets 4 bytes in dst (starting at offset n) to x"
-  [^bytes dst ^Long n ^Integer x]
-  (doseq [i (range n (+ n Integer/BYTES))]
-     (let [bits-to-shift (* (- i n) Byte/SIZE)]
-       (aset-byte dst i (-> x
-                            (unsigned-bit-shift-right bits-to-shift)
-                            (bit-and 0xff)
-                            possibly-2s-complement-8)))))
+  [^bytes dst ^Long index ^Integer src]
+  (uint-pack! dst index src Integer/BYTES))
 
 (defn uint64-pack!
   "Sets 8 bytes in dst (starting at offset n) to x
@@ -189,24 +190,22 @@ buried inside a class.
 
 So stick with this translation.
 "
-  ([^bytes dst ^Long n ^Long x]
-   ;; Note that returning a value doesn't make any sense for
-   ;; this arity.
-   ;; Well, until I can return a sub-array cleanly.
-   (doseq [i (range n (+ n Long/BYTES))]
-     (let [bits-to-shift (* (- i n) Byte/SIZE)]
-       (aset-byte dst i (-> x
-                            (unsigned-bit-shift-right bits-to-shift)
-                            (bit-and 0xff)
-                            possibly-2s-complement-8)))))
+  ([^bytes dst ^Long index ^Long src]
+   (uint-pack! dst index src Long/BYTES))
   ([x]
+   ;; FIXME: This arity should go away.
+   (log/warn "Deprecation: use uint64-pack instead")
    (let [dst (byte-array 8)]
      (uint64-pack! dst 0 x)
      dst)))
+
+(defn uint64-pack
+  [x]
+  (let [dst (byte-array 8)]
+     (uint64-pack! dst 0 x)
+     dst))
 (comment
-  ;; There's a bug with this implementation.
-  ;; FIXME: Sort that out.
-  (vec (uint64-pack! 180)))
+  (vec (uint64-pack 180)))
 
 ;; TODO: redo these as a macro to avoid the code
 ;; duplication.

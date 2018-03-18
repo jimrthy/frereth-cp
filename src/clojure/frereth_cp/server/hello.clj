@@ -30,18 +30,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
-(s/fdef decompose!
-        :args (s/cat :message (s/and bytes?
-                                     #(= (count %) K/hello-packet-length)))
-        :ret ::K/hello-spec)
-(defn decompose!
-  [^bytes message]
-  ;; This was my original approach.
-  ;; It's now doomed because my serialization
-  ;; code was written for ByteBuf instances.
-  (comment (serial/decompose K/hello-packet-dscr message))
-  (throw (RuntimeException. "Q: What to do?")))
-
 (s/fdef open-hello-crypto-box
         :args (s/cat :state ::state/state
                      :message any?
@@ -104,7 +92,7 @@
                       ::K/client-nonce-suffix
                       ::K/srvr-xtn]
                ^bytes clnt-short-pk ::K/clnt-short-pk
-               :as decomposed} (decompose! message)
+               :as decomposed} (serial/decompose-array K/hello-packet-dscr message)
               ;; We're keeping a ByteArray around for storing the key received by the current message.
               ;; The reference implementation just stores it in a global.
               ;; This undeniably has some impact on GC.

@@ -90,7 +90,16 @@ Needing to declare these things twice is annoying."
                                          ::source-class (class v)
                                          ::description dscr
                                          ::error ex})))))
-        ::K/const (.writeBytes dst (::K/contents dscr))
+        ::K/const (let [contents (::K/contents dscr)]
+                    (log/debug (str "Writing "
+                                    (::K/length dscr)
+                                    " constant bytes "
+                                    contents
+                                    " to "
+                                    dst
+                                    " based on "
+                                    (util/pretty dscr)))
+                    (.writeBytes dst contents))
         ::K/int-64 (.writeLong dst v)
         ::K/zeroes (let [n (::K/length dscr)]
                      (log/debug "Getting ready to write " n " zeros to " dst " based on "
@@ -174,6 +183,7 @@ Needing to declare these things twice is annoying."
                                                  {::expected (vec contents)
                                                   ::actual (vec extracted)})))
                                extracted)
+                   ;; FIXME: Write these next 3
                    ::K/int-64 (.readLong src)
                    ::K/int-32 (.readInt src)
                    ::K/int-16 (.readShort src)
@@ -320,7 +330,7 @@ Needing to declare these things twice is annoying."
    {}
    (keys tmplt)))
 
-(defn decompose-array!
+(defn decompose-array
   "Read a C-style struct from a byte array into a map, based on template"
   [tmplt ^bytes src]
   (reduce

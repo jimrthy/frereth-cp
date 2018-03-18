@@ -91,9 +91,7 @@ Since it really isn't secure, that might be a terrible idea"
         long)))
 
 (deftest random-uint64-pack-unpack
-  ;; Generative testing clearly seems appropriate/required here
-  ;; TODO: as soon as I figure out why the basic implementation's
-  ;; broken
+  ;; TODO: Generative testing clearly seems appropriate/required here
   (testing "Get random 64-bit int"
     (let [n (rand64)]
       (if (not= n 0)

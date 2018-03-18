@@ -11,7 +11,8 @@
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as util])
-  (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair))
+  (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
+           io.netty.buffer.ByteBuf))
 
 (set! *warn-on-reflection* true)
 
@@ -72,8 +73,14 @@
                              ::build-actual-packet
                              "Building Hello"
                              {::description (util/pretty K/hello-packet-dscr)
-                              ::raw (util/pretty raw-hello)})]
-    {::shared/packet (serial/compose K/hello-packet-dscr raw-hello)
+                              ::raw (util/pretty raw-hello)})
+        ^ByteBuf result (serial/compose K/hello-packet-dscr raw-hello)
+        n (.readableBytes result)]
+    (when (not= K/hello-packet-length n)
+      (throw (ex-info "Built a bad HELLO"
+                      {::expected-length K/hello-packet-length
+                       ::actual n})))
+    {::shared/packet result
      ::log2/state log-state}))
 
 (defn do-build-hello
