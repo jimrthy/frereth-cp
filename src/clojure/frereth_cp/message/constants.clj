@@ -7,7 +7,7 @@
 (dec (pow 2 60)): this allows > 200 GB/second continuously for a year"
   1152921504606846976)
 
-;; These seem like they'd make more sense under shared.constants
+;;; FIXME: move these to shared.constants
 
 (def ^:const k-div8
   "aka 1/8 k"

@@ -12,18 +12,135 @@
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
-           [io.netty.buffer ByteBuf Unpooled]))
+           [io.netty.buffer ByteBuf Unpooled]
+           [java.io File RandomAccessFile]
+           java.nio.channels.FileChannel
+           java.security.SecureRandom
+           java.security.spec.AlgorithmParameterSpec
+           [javax.crypto Cipher KeyGenerator SecretKey]
+           [javax.crypto.spec IvParameterSpec SecretKeySpec]))
 
 (set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;; Magic constants
 
+;;; 192 bits
+;;; It seems a little silly to encrypt a 128-bit
+;;; block with a 256-bit key, but 128-bit keys don't
+;;; have a lot of room for undiscovered vulnerabilities
+(def nonce-key-length 24)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Specs
+
+;; 16 bytes is 128 bits.
+;; Which is a single block for AES.
+(s/def ::data (s/and bytes?
+                     #(= (count %) 16)))
+(s/def ::legal-key-algorithms #{"AES"})
 (s/def ::long-short #{::long ::short})
 (s/def ::unboxed #(instance? ByteBuf %))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;; Internal
+
+(s/fdef build-random-iv
+        :args (s/cat :n nat-int?)
+        :ret #(instance? IvParameterSpec %))
+(declare random-array)
+(defn build-random-iv
+  [n]
+  (let [iv-bytes (random-array n)]
+    (IvParameterSpec. iv-bytes)))
+
+(s/fdef generate-symmetric-key
+        :args (s/or :aes-default (s/cat :bit-size ::aes-key-bit-size)
+                    :general (s/cat :argorithm ::legal-key-algorithms
+                                    :bit-size ::aes-key-bit-size))
+        :ret #(instance? SecretKeySpec %))
+(defn generate-symmetric-key
+  (^SecretKeySpec [algorithm
+                   ^Long bit-size]
+   (let [generator (KeyGenerator/getInstance algorithm)]
+     (.init generator bit-size)
+     (.generateKey generator)))
+  (^SecretKeySpec [bit-size]
+   (generate-symmetric-key "AES" bit-size)))
+(comment
+  (let [k (generate-symmetric-key "AES" (* Byte/SIZE nonce-key-length))]
+    (count (.getEncoded k))
+    (class k))
+  )
+
+(defn load-nonce-key
+  [this
+   key-dir]
+  (with-open [key-file (io/input-stream (str key-dir
+                                              "/.expertsonly/noncekey"))]
+    (let [raw-nonce-key nonce-key-length
+          bytes-read (.read key-file raw-nonce-key)]
+      (when (not= bytes-read K/key-length)
+        (throw (ex-info "Key too short"
+                        {::expected K/key-length
+                         ::actual bytes-read})))
+      (let [nonce-key (SecretKeySpec. raw-nonce-key "AES")]
+        (assoc this ::nonce-key nonce-key)))))
+
+(declare encrypt-block)
+(defn obscure-nonce
+  "More side effects. Encrypt the nonce counter"
+  [{:keys [::counter-low
+           ::data
+           ::nonce-key]
+    :as this}
+   random-portion]
+  (b-t/uint64-pack! data 8 random-portion)
+  (let [secret-key (generate-symmetric-key "AES" 192)
+        encrypted-nonce (encrypt-block nonce-key data)]
+    ;; This means that I need a destination for storing that
+    ;; crypto block
+    (assoc
+     (update this ::counter-low inc)
+     ::encrypted-nonce encrypted-nonce)))
+
+(defn reload-nonce
+  "Do this inside an agent for thread safety"
+  [{:keys [::counter-low
+           ::counter-high]
+    ^bytes data ::data
+    :as this}
+   key-dir
+   long-term?]
+  (let [path (str key-dir "/.expertsonly/")]
+    (let [f (File. (str path "lock"))
+          channel (.getChannel (RandomAccessFile. f "rw"))]
+      (try
+        (let [lock (.lock channel 0 Long/MAX_VALUE false)]
+          (try
+            (let [counter-file-name (str path "noncecounter")]
+              (with-open [counter (io/reader counter-file-name)]
+                (let [bytes-read (.read counter data 0 8)]
+                  (when (not= bytes-read 8)
+                    (throw (ex-info "Nonce counter file too small"
+                                    {::contents (b-t/->string data)
+                                     ::length bytes-read})))))
+              (let [counter-low (b-t/uint64-unpack data)
+                    counter-high (+ counter-low (if long-term?
+                                                  K/m-1
+                                                  1))]
+                (b-t/uint64-pack! data 0 counter-high))
+              (with-open [counter (io/writer counter-file-name)]
+                (.write counter (String. data))))
+            (finally
+              ;; Closing the channel should release the lock,
+              ;; but being explicit about this doesn't hurt
+              (.release lock))))
+        (finally
+          (.close channel))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
 
 (s/fdef box-after
         :args (s/or :offset-0 (s/cat :shared-key (s/and bytes?
@@ -113,6 +230,25 @@ But it depends on compose, which would set up circular dependencies"
                       (count nonce-suffix)
                       nonce-suffix)
       (box-after key-pair dst n nonce))))
+
+(defn encrypt-block
+  "Block-encrypt a byte-array"
+  ;; Reference implementation includes these TODO items
+  ;; XXX: Switch to crypto_block_aes256
+  ;; XXX: Build crypto_stream_aes256 on top of crypto_block_aes256
+  ;; I'm going to break with the reference implementation on
+  ;; this choice. Rather than translating what it's doing, I'm
+  ;; just going to use the built-in AES encryption
+  [^SecretKey secret-key
+   ^bytes clear-text]
+  ;; Q: Which cipher mode is appropriate here?
+  (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
+        rng (SecureRandom.)
+        ^AlgorithmParameterSpec iv (build-random-iv 16)]
+    ;; Q: Does it make sense to create and init a new
+    ;; Cipher each time?
+    (.init cipher Cipher/ENCRYPT_MODE secret-key iv rng)
+    (.doFinal cipher clear-text)))
 
 (s/fdef random-key-pair
         :args (s/cat)
@@ -305,6 +441,7 @@ which I'm really not qualified to touch."
 (defn random-array
   "Returns an array of n random bytes"
   ^bytes [^Long n]
+  ;; Q:
   (TweetNaclFast/randombytes n))
 
 (defn random-bytes!
@@ -367,18 +504,57 @@ Or maybe that's (dec n)"
   []
   (long (random-mod K/max-random-nonce)))
 
-(defn safe-nonce
-  "Produce a nonce that's theoretically safe.
+(defn new-nonce-key
+  "Generates a new secret nonce key and stores it under key-dir"
+  [key-dir]
+  (let [k (generate-symmetric-key (* Byte/SIZE nonce-key-length))
+        raw (.getEncoded k)]
+    (with-open [f (io/writer (str key-dir "/.expertsonly/noncekey"))]
+      (spit f raw))))
 
-Either based upon one previously stashed in keydir or random"
-  [dst keydir offset]
-  (if keydir
-    ;; Read the last saved version from something in keydir
-    (throw (RuntimeException. "Get real safe-nonce implementation translated"))
-    (let [n (- (count dst) offset)
-          tmp (byte-array n)]
-      (random-bytes! tmp)
-      (b-t/byte-copy! dst offset n tmp))))
+(s/fdef safe-nonce!
+        :args (s/cat :dst (and bytes?
+                               #(<= K/key-length (count %)))
+                     :key-dir (s/nilable string?)
+                     :offset (complement neg-int?)
+                     :long-term? boolean?))
+(let [key-loaded? (promise)
+      nonce-writer (agent {::counter-low 0
+                           ::counter-high 0
+                           ::data (byte-array 16)
+                           ::nonce-key (byte-array K/key-length)})
+      random-portion (byte-array 8)]
+  (defn safe-nonce
+    "Produce a nonce that's theoretically safe.
+
+  Either based upon one previously stashed in keydir or random"
+    [dst key-dir offset long-term?]
+    ;; It's tempting to try to set this up to allow multiple
+    ;; nonce trackers. It seems like having a single shared
+    ;; one risks leaking information to attackers.
+    ;; This current implementation absolutely cannot
+    ;; handle that sort of thing.
+    ;; Right now, we have one agent with a single nonce key
+    ;; (along with counters).
+    ;; Maybe it doesn't matter.
+    (if key-dir
+      (do
+        ;; Read the last saved version from keydir
+        (when-not (realized? key-loaded?)
+          (send nonce-writer load-nonce-key key-dir)
+          (deliver key-loaded? true))
+
+        (let [{:keys [::counter-low
+                      ::counter-high]} @nonce-writer]
+          (when (>= counter-low counter-high)
+            (send nonce-writer reload-nonce key-dir long-term?)))
+        (random-bytes! random-portion)
+        (send nonce-writer obscure-nonce random-portion)
+        (throw (RuntimeException. "Finish this")))
+      (let [n (- (count dst) offset)
+            tmp (byte-array n)]
+        (random-bytes! tmp)
+        (b-t/byte-copy! dst offset n tmp)))))
 
 (defn secret-box
   "Symmetric encryption
