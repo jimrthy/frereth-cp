@@ -65,7 +65,7 @@ Except that it doesn't seem to do that at all."
       (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
 
       (b-t/byte-copy! working-nonce K/cookie-nonce-minute-prefix)
-      (crypto/safe-nonce working-nonce nil K/server-nonce-prefix-length)
+      (crypto/safe-nonce! working-nonce nil K/server-nonce-prefix-length)
 
       ;; Reference implementation is really doing pointer math with the array
       ;; to make this work.

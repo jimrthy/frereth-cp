@@ -1,5 +1,5 @@
 (ns frereth-cp.shared.crypto-test
-  (:require [clojure.test :refer (deftest is)]
+  (:require [clojure.test :refer (deftest is testing)]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]))
@@ -41,3 +41,32 @@
           dst (byte-array length)]
       (.getBytes decrypted 0 dst)
       (is (b-t/bytes= dst plain-text)))))
+
+(deftest check-persistent-safe-nonce
+  (let [key-dir "curve-test"]
+    (testing "Same size"
+      (let [nonce (byte-array K/key-length)]
+        (crypto/safe-nonce! nonce key-dir 0 false)
+        (is nonce "Just getting here was a win")))
+    (testing "Leave padding at end"
+      (let [nonce (byte-array (* 2 K/key-length))]
+        (crypto/safe-nonce! nonce key-dir 0 false)
+        (let [tail (drop K/key-length nonce)]
+          (is (every? zero? tail)))))
+    (testing "Leave padding at beginning"
+      (let [nonce (byte-array (* 2 K/key-length))]
+        (crypto/safe-nonce! nonce key-dir K/key-length false)
+        (let [head (take K/key-length nonce)]
+          (is (every? zero? head)))))))
+
+(deftest check-random-safe-nonce
+  (testing "Leave padding at end"
+    (let [nonce (byte-array (* 2 K/key-length))]
+      (crypto/safe-nonce! nonce 0)
+      (let [tail (drop K/key-length nonce)]
+        (is (every? zero? tail)))))
+  (testing "Leave padding at beginning"
+    (let [nonce (byte-array (* 2 K/key-length))]
+      (crypto/safe-nonce! nonce K/key-length)
+      (let [head (take K/key-length nonce)]
+        (is (every? zero? head))))))

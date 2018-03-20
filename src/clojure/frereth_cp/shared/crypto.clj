@@ -70,26 +70,36 @@
 (comment
   (let [k (generate-symmetric-key "AES" (* Byte/SIZE nonce-key-length))]
     (count (.getEncoded k))
-    (class k))
-  )
+    (class k)))
+
+(defn initial-nonce-agent-state
+  []
+  {::counter-low 0
+   ::counter-high 0
+   ::data (byte-array 16)
+   ::key-loaded? (promise)
+   ::nonce-key (byte-array K/key-length)})
 
 (defn load-nonce-key
-  [this
+  [{:keys [::key-loaded?]
+    :as this}
    key-dir]
-  (with-open [key-file (io/input-stream (str key-dir
-                                              "/.expertsonly/noncekey"))]
-    (let [raw-nonce-key nonce-key-length
+  (println "Opening file")
+  (with-open [key-file (io/input-stream (io/resource (str key-dir
+                                                          "/.expertsonly/noncekey")))]
+    (let [raw-nonce-key (byte-array nonce-key-length)
           bytes-read (.read key-file raw-nonce-key)]
       (when (not= bytes-read K/key-length)
         (throw (ex-info "Key too short"
                         {::expected K/key-length
                          ::actual bytes-read})))
       (let [nonce-key (SecretKeySpec. raw-nonce-key "AES")]
+        (deliver key-loaded? true)
         (assoc this ::nonce-key nonce-key)))))
 
 (declare encrypt-block)
 (defn obscure-nonce
-  "More side effects. Encrypt the nonce counter"
+  "More side effects. Encrypt and increment the nonce counter"
   [{:keys [::counter-low
            ::data
            ::nonce-key]
@@ -97,6 +107,17 @@
    random-portion]
   (b-t/uint64-pack! data 8 random-portion)
   (let [secret-key (generate-symmetric-key "AES" 192)
+        ;; Note that this is never(?) decrypted.
+        ;; Q: Is there any reason for using this instead
+        ;; of something like a SHA-256?
+        ;; Obvious A: An attacker that recognizes a single
+        ;; nonce hash should be able to predict the next
+        ;; ones pretty easily.
+        ;; Which doesn't really matter for the attacker's
+        ;; data stream, but might provide useful hints
+        ;; about other users and the rest of the system.
+        ;; This seems like a good reason to implement seperate
+        ;; nonce handlers for each connection.
         encrypted-nonce (encrypt-block nonce-key data)]
     ;; This means that I need a destination for storing that
     ;; crypto block
@@ -311,6 +332,18 @@ But it depends on compose, which would set up circular dependencies"
     (util/spit-bytes "$HOME/projects/snowcrash/cp/test/client-test/.expertsonly/secretkey"
                      secret)))
 
+(defn new-nonce-key!
+  "Generates a new secret nonce key and stores it under key-dir"
+  [key-dir]
+  (let [k (generate-symmetric-key (* Byte/SIZE nonce-key-length))
+        raw (.getEncoded k)]
+    (with-open [f (io/writer (str key-dir "/.expertsonly/noncekey"))]
+      (spit f raw))))
+(comment
+  (let [url (io/resource "curve-test")
+        path (.getPath url)])
+  (new-nonce-key! path))
+
 (s/fdef open-after
         :args (s/cat :box bytes?
                      :box-offset integer?
@@ -504,57 +537,58 @@ Or maybe that's (dec n)"
   []
   (long (random-mod K/max-random-nonce)))
 
-(defn new-nonce-key
-  "Generates a new secret nonce key and stores it under key-dir"
-  [key-dir]
-  (let [k (generate-symmetric-key (* Byte/SIZE nonce-key-length))
-        raw (.getEncoded k)]
-    (with-open [f (io/writer (str key-dir "/.expertsonly/noncekey"))]
-      (spit f raw))))
-
 (s/fdef safe-nonce!
-        :args (s/cat :dst (and bytes?
-                               #(<= K/key-length (count %)))
-                     :key-dir (s/nilable string?)
-                     :offset (complement neg-int?)
-                     :long-term? boolean?))
-(let [key-loaded? (promise)
-      nonce-writer (agent {::counter-low 0
-                           ::counter-high 0
-                           ::data (byte-array 16)
-                           ::nonce-key (byte-array K/key-length)})
+        :args (s/or :persistent (s/cat :dst (and bytes?
+                                                 #(<= K/key-length (count %)))
+                                       :key-dir (s/nilable string?)
+                                       :offset (complement neg-int?)
+                                       :long-term? boolean?)
+                    :transient (s/cat :dst (and bytes?
+                                                #(<= K/key-length (count %)))
+                                      :offset (complement neg-int?)))
+        :ret any?)
+(let [nonce-writer (agent (initial-nonce-agent-state))
       random-portion (byte-array 8)]
-  (defn safe-nonce
+  (defn get-nonce-agent-state
+    []
+    @nonce-writer)
+  (defn reset-safe-nonce-state!
+    []
+    (restart-agent nonce-writer (initial-nonce-agent-state)))
+  (defn safe-nonce!
     "Produce a nonce that's theoretically safe.
 
   Either based upon one previously stashed in keydir or random"
-    [dst key-dir offset long-term?]
-    ;; It's tempting to try to set this up to allow multiple
-    ;; nonce trackers. It seems like having a single shared
-    ;; one risks leaking information to attackers.
-    ;; This current implementation absolutely cannot
-    ;; handle that sort of thing.
-    ;; Right now, we have one agent with a single nonce key
-    ;; (along with counters).
-    ;; Maybe it doesn't matter.
-    (if key-dir
-      (do
-        ;; Read the last saved version from keydir
-        (when-not (realized? key-loaded?)
-          (send nonce-writer load-nonce-key key-dir)
-          (deliver key-loaded? true))
+    ([dst key-dir offset long-term?]
+     ;; It's tempting to try to set this up to allow multiple
+     ;; nonce trackers. It seems like having a single shared
+     ;; one risks leaking information to attackers.
+     ;; This current implementation absolutely cannot
+     ;; handle that sort of thing.
+     ;; Right now, we have one agent with a single nonce key
+     ;; (along with counters).
+     ;; Maybe it doesn't matter.
 
-        (let [{:keys [::counter-low
-                      ::counter-high]} @nonce-writer]
-          (when (>= counter-low counter-high)
-            (send nonce-writer reload-nonce key-dir long-term?)))
-        (random-bytes! random-portion)
-        (send nonce-writer obscure-nonce random-portion)
-        (throw (RuntimeException. "Finish this")))
-      (let [n (- (count dst) offset)
-            tmp (byte-array n)]
-        (random-bytes! tmp)
-        (b-t/byte-copy! dst offset n tmp)))))
+     (when-let [ex (agent-error nonce-writer)]
+       (throw ex))
+
+     ;; Read the last saved version from keydir
+     (when-not (-> nonce-writer deref ::key-loaded? realized?)
+       (send nonce-writer load-nonce-key key-dir))
+
+     (let [{:keys [::counter-low
+                   ::counter-high]} @nonce-writer]
+       (when (>= counter-low counter-high)
+         (send nonce-writer reload-nonce key-dir long-term?)))
+     (random-bytes! random-portion)
+     (send nonce-writer obscure-nonce random-portion))
+    ([dst offset]
+     (let [tmp (byte-array K/key-length)]
+       (random-bytes! tmp)
+       (b-t/byte-copy! dst offset K/key-length tmp)))))
+(comment
+  (get-nonce-agent-state)
+  (reset-safe-nonce-state!))
 
 (defn secret-box
   "Symmetric encryption
