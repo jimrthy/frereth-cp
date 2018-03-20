@@ -314,7 +314,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                  "Setting up working nonce"
                                  {::shared/working-nonce working-nonce})]
         (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
-        (crypto/safe-nonce! nonce-suffix keydir 0)
+        (if keydir
+          (crypto/safe-nonce! nonce-suffix keydir 0 false)
+          (crypto/safe-nonce! nonce-suffix 0))
         (b-t/byte-copy! working-nonce
                         K/server-nonce-prefix-length
                         K/server-nonce-suffix-length nonce-suffix)

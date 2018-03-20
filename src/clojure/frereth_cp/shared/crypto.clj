@@ -556,9 +556,9 @@ Or maybe that's (dec n)"
     []
     (restart-agent nonce-writer (initial-nonce-agent-state)))
   (defn safe-nonce!
-    "Produce a nonce that's theoretically safe.
-
-  Either based upon one previously stashed in keydir or random"
+    "Shoves a theoretically safe 16-byte nonce suffix into dst at offset"
+    ;; Note that this is extremely brittle.
+    ;; It's only called from 2 places, but it's still a bit worrisome.
     ([dst key-dir offset long-term?]
      ;; It's tempting to try to set this up to allow multiple
      ;; nonce trackers. It seems like having a single shared
@@ -583,9 +583,11 @@ Or maybe that's (dec n)"
      (random-bytes! random-portion)
      (send nonce-writer obscure-nonce random-portion))
     ([dst offset]
-     (let [tmp (byte-array K/key-length)]
+     ;; The 16-byte nonce length is very implementation
+     ;; dependent and brittle
+     (let [tmp (byte-array K/server-nonce-suffix-length)]
        (random-bytes! tmp)
-       (b-t/byte-copy! dst offset K/key-length tmp)))))
+       (b-t/byte-copy! dst offset K/server-nonce-suffix-length tmp)))))
 (comment
   (get-nonce-agent-state)
   (reset-safe-nonce-state!))
