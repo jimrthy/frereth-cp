@@ -315,11 +315,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                  {::shared/working-nonce working-nonce})]
         (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
         (if keydir
-          (crypto/safe-nonce! nonce-suffix keydir 0 false)
-          (crypto/safe-nonce! nonce-suffix 0))
-        (b-t/byte-copy! working-nonce
-                        K/server-nonce-prefix-length
-                        K/server-nonce-suffix-length nonce-suffix)
+          (crypto/safe-nonce! working-nonce keydir K/server-nonce-prefix-length false)
+          (crypto/safe-nonce! working-nonce K/server-nonce-prefix-length))
 
         (let [^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
           (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
@@ -801,6 +798,10 @@ like a naive approach with a terrible user experience.
   [{reader ::chan<-child
     log-state ::log2/state
     :as this}]
+  ;; Really need to wait for child callback instead.
+  ;; Which really means no waiting.
+  ;; Q: Right?
+  (throw (RuntimeException. "Deprecated approach"))
   (let [log-state (log2/info log-state
                              ::wait-for-initial-child-bytes
                              "Top"

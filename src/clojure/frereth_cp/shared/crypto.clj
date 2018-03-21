@@ -84,18 +84,22 @@
   [{:keys [::key-loaded?]
     :as this}
    key-dir]
-  (println "Opening file")
-  (with-open [key-file (io/input-stream (io/resource (str key-dir
-                                                          "/.expertsonly/noncekey")))]
-    (let [raw-nonce-key (byte-array nonce-key-length)
-          bytes-read (.read key-file raw-nonce-key)]
-      (when (not= bytes-read K/key-length)
-        (throw (ex-info "Key too short"
-                        {::expected K/key-length
-                         ::actual bytes-read})))
-      (let [nonce-key (SecretKeySpec. raw-nonce-key "AES")]
-        (deliver key-loaded? true)
-        (assoc this ::nonce-key nonce-key)))))
+  (println "Opening file in" key-dir)
+  (if-let [file-resource (io/resource (str key-dir
+                                           "/.expertsonly/noncekey"))]
+    (with-open [key-file (io/input-stream file-resource)]
+      (let [raw-nonce-key (byte-array nonce-key-length)
+            bytes-read (.read key-file raw-nonce-key)]
+        (when (not= bytes-read nonce-key-length)
+          (throw (ex-info "Key too short"
+                          {::expected K/key-length
+                           ::actual bytes-read
+                           ::path file-resource})))
+        (let [nonce-key (SecretKeySpec. raw-nonce-key "AES")]
+          (deliver key-loaded? true)
+          (assoc this ::nonce-key nonce-key))))
+    (throw (ex-info "Missing noncekey file"
+                    {::searching-in key-dir}))))
 
 (declare encrypt-block)
 (defn obscure-nonce
@@ -337,8 +341,15 @@ But it depends on compose, which would set up circular dependencies"
   [key-dir]
   (let [k (generate-symmetric-key (* Byte/SIZE nonce-key-length))
         raw (.getEncoded k)]
-    (with-open [f (io/writer (str key-dir "/.expertsonly/noncekey"))]
-      (spit f raw))))
+    (when-not (io/resource key-dir)
+      (throw (ex-info (str "Missing folder on CLASSPATH: " key-dir))))
+    (let [nonce-key-folder-path (str key-dir "/.expertsonly")
+          nonce-key-folder (io/resource nonce-key-folder-path)]
+      (when-not nonce-key-folder
+          (io/make-parents nonce-key-folder-path)))
+    (let [directory (.getPath (io/resource (str key-dir "/.expertsonly")))]
+      (with-open [f (io/output-stream (io/file (str directory "/noncekey")))]
+        (.write f raw)))))
 (comment
   (let [url (io/resource "curve-test")
         path (.getPath url)])

@@ -329,8 +329,20 @@ like a timing attack."
     ;; the idea of using an agent for this).
     (send wrapper hello/do-build-hello)
     (if (await-for timeout wrapper)
-      (let [{log-state ::log2/state}
+      (let [{log-state ::log2/state
+             result ::deferrable}
             (cope-with-successful-hello-creation! wrapper chan->server timeout)]
+        (dfrd/catch result
+            (fn [ex]
+              ;; I've seen the deferrable returned by cope-with-successful-hello-creation!
+              ;; be an exception at least once.
+              ;; Adding this error report seems to have made that problem disapper.
+              ;; Maybe I've somehow managed to introduce a race condition.
+              (send wrapper (fn [_]
+                              (throw (ex-info
+                                      "Sending our hello packet to server"
+                                      {::this @wrapper}
+                                      ex))))))
         (assoc this ::log2/state log-state))
       (let [problem (agent-error wrapper)
             {log-state ::log2/state

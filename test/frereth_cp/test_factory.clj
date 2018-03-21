@@ -1,6 +1,7 @@
 (ns frereth-cp.test-factory
   "Build common pieces that the tests share"
-  (:require [clojure.spec.alpha :as s]
+  (:require [clojure.java.io :as io]
+            [clojure.spec.alpha :as s]
             [frereth-cp.client :as clnt]
             [frereth-cp.client.state :as client-state]
             [frereth-cp.message.specs :as msg-specs]
@@ -78,24 +79,31 @@
                 0x09 0x0a 0x0b 0x0c
                 0x0d 0x0e 0x0f 0x10]))
   ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long srvr-xtn-vec]
-   (let [server-extension (byte-array srvr-xtn-vec)
-         ;; FIXME: Honestly, we need to cope with multiple servers.
-         ;; Each could be listening on a different port with a different
-         ;; long-term-pk
-         srvr-name (shared/encode-server-name "hypothet.i.cal")
-         long-pair (crypto/random-key-pair)
-         result (clnt/ctor {::msg-specs/->child (strm/stream)  ; This seems wrong. Q: Is it?
-                            ::client-state/chan<-server (strm/stream)
-                            ::log/state log-state
-                            ::msg-specs/message-loop-name message-loop-name
-                            ::shared/my-keys {::shared/keydir "client-test"
-                                              ::shared/long-pair long-pair
-                                              ::K/server-name server-name}
-                            ::client-state/server-extension server-extension
-                            ::client-state/server-security {::K/server-name srvr-name
-                                                            ::K/server-ip srvr-ip
-                                                            ::K/server-port srvr-port
-                                                            ::shared-specs/public-long srvr-pk-long}}
-                           logger-init)]
-     (clnt/start! result)
-     result)))
+   (let [key-dir "client-test"
+         nonce-key-resource (io/resource (str key-dir
+                                              "/.expertsonly/noncekey"))]
+     (when-not nonce-key-resource
+       (println "Building a new nonce-key")
+       (crypto/new-nonce-key! key-dir))
+
+     (let [server-extension (byte-array srvr-xtn-vec)
+           ;; FIXME: Honestly, we need to cope with multiple servers.
+           ;; Each could be listening on a different port with a different
+           ;; long-term-pk
+           srvr-name (shared/encode-server-name "hypothet.i.cal")
+           long-pair (crypto/random-key-pair)
+           result (clnt/ctor {::msg-specs/->child (strm/stream)  ; This seems wrong. Q: Is it?
+                              ::client-state/chan<-server (strm/stream)
+                              ::log/state log-state
+                              ::msg-specs/message-loop-name message-loop-name
+                              ::shared/my-keys {::shared/keydir key-dir
+                                                ::shared/long-pair long-pair
+                                                ::K/server-name server-name}
+                              ::client-state/server-extension server-extension
+                              ::client-state/server-security {::K/server-name srvr-name
+                                                              ::K/server-ip srvr-ip
+                                                              ::K/server-port srvr-port
+                                                              ::shared-specs/public-long srvr-pk-long}}
+                             logger-init)]
+       (clnt/start! result)
+       result))))
