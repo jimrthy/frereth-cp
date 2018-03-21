@@ -729,32 +729,11 @@
                          (cl-format nil
                                     "\nAfter adjusting for closed/ignored child watcher: ~:d"
                                     (long based-on-closed-child)))
-        mid2-time (System/nanoTime)
-        alt (condensed-choose-next-scheduled-time state to-child-done?)
         end-time (System/nanoTime)
         log-state (log/debug log-state
                              ::choose-next-scheduled-time
                              (str "Scheduling considerations\n"
-                                  log-message))
-        log-state (if (= actual-next alt)
-                    log-state
-                    (log/warn log-state
-                              ::choose-next-scheduled-time
-                              "Scheduling Mismatch!"))
-        log-state (log/debug log-state
-                             ::choose-next-scheduled-time
-                             ;; alt approach seems ~4 orders of magnitude
-                             ;; faster.
-                             ;; Q: Is that due to reduced logging?
-                             (cl-format nil (str "Calculating next scheduled time took"
-                                                 " ~:d nanoseconds and calculated ~:d."
-                                                 "\nBuilding the messages about this took ~:d nanoseconds"
-                                                 "\nAlt approach took ~:d and calculated ~:d")
-                                        (- mid1-time now)
-                                        (long actual-next)
-                                        (- mid2-time mid1-time)
-                                        (- end-time mid2-time)
-                                        (long alt)))]
+                                  log-message))]
     {::next-action-time actual-next
      ::log/state log-state}))
 
@@ -1104,7 +1083,8 @@
                              {::now now})]
     (if (not (strm/closed? stream))
       (let [{actual-next ::next-action-time
-             log-state ::log/state}
+             log-state ::log/state
+             :as original-scheduled}
             ;; TODO: Reframe this logic around
             ;; whether child-input-loop and
             ;; child-output-loop have been realized
@@ -1129,10 +1109,31 @@
               (choose-next-scheduled-time (assoc state
                                                  ::log/state
                                                  log-state)
-                                          to-child-done?))]
-        ;; This part doesn't really seem to be the problem.
-        (println "Made it back from choosing next scheduled time. actual-next:"
-                 actual-next)
+                                          to-child-done?))
+            mid-time (System/nanoTime)
+            ;; TODO: Try calling this one first, on the off-chance that ordering
+            ;; makes a difference in performance. It's quite possible that the
+            ;; first pass does something that sets the CPU cache up to blaze through
+            ;; the second.
+            {alt-next ::next-action-time
+             alt-log-state ::log/state} (condensed-choose-next-scheduled-time (assoc state
+                                                                                     ::log/state log-state)
+                                                                              to-child-done?)
+            scheduling-finished (System/nanoTime)]
+        (when (not= alt-next actual-next)
+          ;; This will get duplicate garbage entries into the logs, but it really
+          ;; shouldn't ever happen.
+          ;; It's really just here as a guard before I ditch the original
+          ;; slow implementation completely.
+          (log/flush-logs! logger (log/warn log-state
+                                            ::schedule-next-timeout
+                                            "Scheduler mismatch"
+                                            {::original actual-next
+                                             ::fast-alternative alt-next
+                                             ::original-ns (- mid-time now)
+                                             ::alt-ns (- scheduling-finished mid-time)
+                                             ::state (dissoc state ::log/state
+                                                            ::to-child-done? to-child-done?)})))
         (let [{:keys [::delta_f
                       ::next-action]
                log-state ::log/state}
