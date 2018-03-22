@@ -353,11 +353,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
   as the response.
 
   Q: How much of a performance hit am I looking at if I
-  make this purely functional instead?
-
-  Handling an agent (send), which means `this` is already dereferenced"
+  make this purely functional instead?"
   [{log-state ::log2/state
-    :as this}
+    :as this} ; Handling an agent (send), which means `this` is already dereferenced
    {:keys [:host :port]
     ^bytes message :message
     :as cookie-packet}]
@@ -620,22 +618,23 @@ The fact that this is so big says a lot about needing to re-think my approach"
   "Starting from the assumption that this is neither performance critical
 nor subject to timing attacks because it just won't be called very often."
   [{:keys [::client-extension-load-time
-           ::shared/extension
-           ::msg-specs/recent]
+           ::log2/logger
+           ::msg-specs/recent
+           ::shared/extension]
     log-state ::log2/state
     :as this}]
   {:pre [(and client-extension-load-time recent)]}
-  (let [reload (>= recent client-extension-load-time)
-        _ (log/debug (str "curve.client/clientextension-init: "
-                          reload
-                          " (currently: "
-                          extension
-                          ") in\n"
-                          (keys this)))
-        client-extension-load-time (if reload
+  (let [reload? (>= recent client-extension-load-time)
+        log-state (log2/debug log-state
+                              ::clientextension-init
+                              ""
+                              {::reload? reload?
+                               ::shared/extension extension
+                               ::this this})
+        client-extension-load-time (if reload?
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
-        extension (if reload
+        extension (if reload?
                     (try (-> "/etc/curvecpextension"
                              ;; This is pretty inefficient...we really only want 16 bytes.
                              ;; Should be good enough for a starting point, though
@@ -647,7 +646,10 @@ nor subject to timing attacks because it just won't be called very often."
                            ;; The original goal/dream was to get CurveCP
                            ;; added as a standard part of every operating
                            ;; system's network stack
-                           (log/warn "Missing extension file /etc/curvecpextension")
+                           (log2/flush-logs! logger (log2/warn (log2/clean-fork log-state
+                                                                                ::clientextension-init)
+                                                               ::clientextension-init
+                                                               "no /etc/curvecpextension file"))
                            (K/zero-bytes 16)))
                     extension)]
     (assert (= (count extension) K/extension-length))

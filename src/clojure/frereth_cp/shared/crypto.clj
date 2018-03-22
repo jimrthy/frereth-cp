@@ -137,7 +137,8 @@
     :as this}
    key-dir
    long-term?]
-  (let [path (str key-dir "/.expertsonly/")]
+  (let [raw-path (str key-dir "/.expertsonly/")
+        path (io/resource raw-path)]
     (let [f (File. (str path "lock"))
           channel (.getChannel (RandomAccessFile. f "rw"))]
       (try

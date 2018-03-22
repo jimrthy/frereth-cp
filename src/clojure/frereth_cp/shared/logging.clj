@@ -383,20 +383,42 @@
     [(debug lhs ::synchronized "")
      (debug rhs ::synchronized "")]))
 
-(s/fdef fork
+(s/fdef clean-fork
         :args (s/cat :source ::state
                      :child-context ::context)
+        :ret ::state)
+(defn clean-fork
+  "Fork the context/lamport clock without the logs.
+
+Main use-case is exception handlers in weird side-effecty places
+where it isn't convenient to propagate a log line or 2 that will
+show up later."
+  [src child-context]
+  (let [parent-ctx (::context src)
+        combiner (if (seq? parent-ctx)
+                   conj
+                   list)]
+    (init (combiner parent-ctx child-context)
+          (inc (::lamport src)))))
+
+(s/fdef fork
+        :args (s/or :with-child-ctx (s/cat :source ::state
+                                           :child-context ::context)
+                    :without-child-ctx (s/cat :source ::state))
         ;; Note that the return value really depends
-        ;; on the caller arity
+        ;; on the caller arity.
+        ;; TODO: Need to write the :fn arity to reflect this.
         :ret (s/or :with-nested-context (s/tuple ::state ::state)
                    :keep-parent-context ::state))
 (defn fork
   ([src child-context]
-   (let [src-ctx (::context src)
-         combiner (if (seq? src-ctx)
+   (let [parent-ctx (::context src)
+         ;; Q: Am I really not using this at all?
+         ;; Where did src-ctx come from?
+         combiner (if (seq? parent-ctx)
                     conj
                     list)
-         forked (init (combiner src-ctx child-context)
+         forked (init (combiner parent-ctx child-context)
                       (::lamport src))]
      (synchronize src forked)))
   ([src]
