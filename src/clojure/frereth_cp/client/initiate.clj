@@ -86,7 +86,7 @@ This is destructive in the sense that it reads from msg-byte-buf"
 
 (defn build-and-send-vouch
   "param wrapper: the agent that's managing the state
-  param cookie-packet: what arrived over the stream
+  param cookie-packet: first response from the server
 
   The current implementation is based on the assumption that cookie-packet
   is either a byte stream or a byte array.
@@ -106,8 +106,6 @@ This is destructive in the sense that it reads from msg-byte-buf"
   That's what I've set up the server side to send, so that's what I'm
   currently receiving here.
 
-  TODO: Need to validate that assumption.
-
   To make matters worse, this entire premise is built around side-effects.
 
   We send a request to the agent in wrapper to update its state with the
@@ -117,68 +115,80 @@ This is destructive in the sense that it reads from msg-byte-buf"
   This matches the original implementation, but it seems like a really
   terrible approach in an environment that's intended to multi-thread."
   [wrapper cookie-packet]
-  (if (and (not= cookie-packet ::hello-response-timed-out)
-           (not= cookie-packet ::drained))
-    (do
-      (assert cookie-packet)
-      (log/info "Received cookie in\n" wrapper "\nForking child")
-      ;; Got a Cookie response packet from server.
-      ;; Theory in the reference implementation is that this is
-      ;; a good signal that it's time to spawn the child to do
-      ;; the real work.
-      ;; That really seems to complect the concerns.
-      ;; Q: Why not set up the child in its own thread and start
-      ;; listening for its activity now?
-      ;; Partial Answer: original version is geared toward converting
-      ;; existing apps that pipe data over STDIN/OUT so they don't
-      ;; have to be changed at all.
-      (send wrapper state/fork! wrapper)
+  (let [{log-state ::log2/state
+         :as state} @wrapper]
+    (if (and (not= cookie-packet ::hello-response-timed-out)
+             (not= cookie-packet ::drained))
+      (let [log-state (log2/info log-state
+                                 ::build-and-send-vouch
+                                 ""
+                                 {::cause "Received cookie"
+                                  ::effect "Forking child"
+                                  ::state/state state
+                                  ::state/state-agent wrapper})]
+        (assert cookie-packet)
+        ;; Got a Cookie response packet from server.
+        ;; Theory in the reference implementation is that this is
+        ;; a good signal that it's time to spawn the child to do
+        ;; the real work.
+        ;; That really seems to complect the concerns.
+        ;; Q: Why not set up the child in its own thread and start
+        ;; listening for its activity now?
+        ;; Partial Answer: original version is geared toward converting
+        ;; existing apps that pipe data over STDIN/OUT so they don't
+        ;; have to be changed at all.
+        ;; Full Answer: That's actually what I want to do here.
+        ;; Except that "listening" doesn't really make any sense.
+        (send wrapper state/fork! wrapper)
 
-      ;; Once that that's ready to start doing its own thing,
-      ;; cope with the cookie we just received.
-      ;; Doing this statefully seems like a terrible
-      ;; idea, but I don't want to go back and rewrite it
-      ;; until I have a working prototype
-      (log/info "send cookie->vouch")
-      (send wrapper state/cookie->vouch cookie-packet)
-      (log/info "sent cookie->vouch")
-      (let [timeout (state/current-timeout wrapper)]
-        ;; Give the other thread(s) a chance to catch up and get
-        ;; the incoming cookie converted into a Vouch
-        (if (await-for timeout wrapper)
-          (let [this @wrapper
-                {log-state ::log2/state
-                 initial-bytes ::state/msg-bytes} (state/wait-for-initial-child-bytes this)
-                vouch (build-initiate-packet! wrapper initial-bytes)]
-            (log/info "send-off send-vouch!")
-            (send-off wrapper state/send-vouch! wrapper vouch))
-          (do
-            (log/error (str "Converting cookie to vouch took longer than "
-                            timeout
-                            " milliseconds."))
-            (if-let [ex (agent-error wrapper)]
+        ;; Once we've signaled the child to start doing its own thing,
+        ;; cope with the cookie we just received.
+        ;; Doing this statefully seems like a terrible
+        ;; idea, but I don't want to go back and rewrite it
+        ;; until I have a working prototype.
+        (let [log-state (log2/info log-state
+                                   ::build-and-send-vouch
+                                   "send cookie->vouch")]
+          (send wrapper state/cookie->vouch cookie-packet)
+          ;; Stop these shenanigans.
+          (throw (RuntimeException. "That's wonky enough."))
+          (let [timeout (state/current-timeout wrapper)]
+            ;; Give the other thread(s) a chance to catch up and get
+            ;; the incoming cookie converted into a Vouch
+            (if (await-for timeout wrapper)
+              (let [this @wrapper
+                    {log-state ::log2/state
+                     initial-bytes ::state/msg-bytes} (state/wait-for-initial-child-bytes this)
+                    vouch (build-initiate-packet! wrapper initial-bytes)]
+                (log/info "send-off send-vouch!")
+                (send-off wrapper state/send-vouch! wrapper vouch))
               (do
-                (log/error ex "Agent failed while we were waiting")
-                (if (instance? ExceptionInfo ex)
-                  (let [^ExceptionInfo ex ex]
-                    (log/warn ex (utils/pretty (.getData ex))))
-                  (log/warn "No more details available"))
-                ;; Actual error:
-                ;; RuntimeException about flushing the start logs from
-                ;; client.state/fork!
-                ;; Craziness: The failed assertion isn't interrupting my test.
-                ;; FIXME: Actually, something like this does need to be
-                ;; fatal. At least for this client.
-                ;; It's tempting to just call (System/exit) here, but
-                ;; I'd really prefer to avoid killing the JVM.
-                (println "FIXME: Start back here.")
-                (assert (not ex) "This should probably only be fatal for the sake of debugging"))
-              (do
-                (log/warn "Switching agent into an error state")
-                (send wrapper
-                      #(throw (ex-info "cookie->vouch timed out" %)))))))))
-    (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
-                                   (assoc %
-                                          :problem (if (= cookie-packet ::drained)
-                                                     ::server-closed
-                                                     ::response-timeout)))))))
+                (log/error (str "Converting cookie to vouch took longer than "
+                                timeout
+                                " milliseconds."))
+                (if-let [ex (agent-error wrapper)]
+                  (do
+                    (log/error ex "Agent failed while we were waiting")
+                    (if (instance? ExceptionInfo ex)
+                      (let [^ExceptionInfo ex ex]
+                        (log/warn ex (utils/pretty (.getData ex))))
+                      (log/warn "No more details available"))
+                    ;; Actual error:
+                    ;; RuntimeException about flushing the start logs from
+                    ;; client.state/fork!
+                    ;; Craziness: The failed assertion isn't interrupting my test.
+                    ;; FIXME: Actually, something like this does need to be
+                    ;; fatal. At least for this client.
+                    ;; It's tempting to just call (System/exit) here, but
+                    ;; I'd really prefer to avoid killing the JVM.
+                    (println "FIXME: Start back here.")
+                    (assert (not ex) "This should probably only be fatal for the sake of debugging"))
+                  (do
+                    (log/warn "Switching agent into an error state")
+                    (send wrapper
+                          #(throw (ex-info "cookie->vouch timed out" %))))))))))
+      (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
+                                     (assoc %
+                                            :problem (if (= cookie-packet ::drained)
+                                                       ::server-closed
+                                                       ::response-timeout))))))))
