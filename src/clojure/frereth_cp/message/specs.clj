@@ -215,6 +215,12 @@
 ;; to just control that directly without the obscurity
 ;; that this creates.
 (s/def ::max-block-length nat-int?)
+;; This is really a promise that is fulfilled when the
+;; server sends a response packet back.
+;; As implemented, an ACK works fine.
+;; Until that point, the client is limited to sending Initiate
+;; packets, which means the child is limited to 640-byte
+;; message blocks.
 (s/def ::client-waiting-on-response #(instance? IDeref %))
 
 ;; circular queue beyond receivewritten; size must be power of 2 --DJB

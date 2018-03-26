@@ -15,7 +15,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
-            [manifold.deferred :as deferred]
+            [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
@@ -37,8 +37,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; Realistically, this is how we should be communicating with aleph.
 ;; Although it might be worth dropping down to a lower-level approach
 ;; for the sake of netty.
-(s/def ::chan->server strm/stream?)
-(s/def ::chan<-server strm/stream?)
+(s/def ::chan->server strm/sinkable?)
+(s/def ::chan<-server strm/sourceable?)
 
 ;; Periodically pull the client extension from...wherever it comes from.
 ;; Q: Why?
@@ -79,9 +79,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; c.f. client/extract-child-message
 (s/def ::outgoing-message any?)
 
+;; The circular reference involved here is a red flag.
+;; ::state-agent depends on ::state depends on ::mutable-state depends on ::packet-builder
+;; This seems like the best option available in a bad situation, but just
+;; using a boolean flag and an if check might be better.
+(s/def ::packet-builder (s/fspec :args (s/cat :wrapper ::state-agent
+                                              :msg-packet bytes?)
+                                 :ret ::msg-specs/buf))
+
 ;; Because, for now, I need somewhere to hang onto the future
 ;; Q: So...what is this? a Future?
 (s/def ::child any?)
+
 ;; The parts that change really need to be stored in a mutable
 ;; data structure.
 ;; An agent really does seem like it was specifically designed
@@ -91,7 +100,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; I could also handle this with refs, but combining STM with
 ;; mutable byte arrays (which is where the "real work"
 ;; happens) seems like a recipe for disaster.
-(s/def ::mutable-state (s/keys :req [::client-extension-load-time
+(s/def ::mutable-state (s/keys :req [::client-extension-load-time  ; not really mutable
+                                     ;; This isn't mutable
+                                     ;; Q: Is it?
                                      ::shared/extension
                                      ::log2/logger
                                      ;; If we track ::msg-specs/state here,
@@ -101,10 +112,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; a snapshot of ::msg-specs/state.
                                      ::log2/state
                                      ;; Q: Does this really make any sense?
+                                     ;; A: Not in any sane reality.
                                      ::outgoing-message
+                                     ::packet-builder
                                      ::shared/packet-management
                                      ::msg-specs/recent
+                                     ;; The only thing mutable about this is that I don't have it all in beginning
                                      ::server-security
+                                     ;; The only thing mutable about this is that I don't have it all in beginning
                                      ::shared-secrets
                                      ;; FIXME: Tracking this here doesn't really make
                                      ;; any sense at all.
@@ -130,6 +145,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::immutable-value (s/keys :req [::msg-specs/->child
                                        ::shared/my-keys
                                        ::msg-specs/message-loop-name
+                                       ;; UDP packets arrive over this
                                        ::chan<-server
                                        ::server-extension
                                        ::timeout]
@@ -591,7 +607,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
       ;; below correct? (The code doesn't look like it, but the behavior I'm
       ;; seeing implies a bug)
       ;; Or is the docstring above?
-      (deferred/on-realized taken
+      (dfrd/on-realized taken
         ;; Using send-off here because it potentially has to block to wait
         ;; for the child's initial message.
         ;; That really should have been ready to go quite a while before,
@@ -601,6 +617,76 @@ The fact that this is so big says a lot about needing to re-think my approach"
           (send wrapper #(throw (ex-info "Server vouch response failed"
                                          (assoc % :problem ex)))))))
     (send wrapper #(throw (ex-info "Timed out trying to send vouch" %)))))
+
+;;; This namespace is too big, and I hate to add this next
+;;; function to it.
+;;; But there's a circular reference if I try to
+;;; add it anywhere else.
+;;; fork! needs access to it, while it needs access
+;;; to the ::state-agent spec.
+;;; Which is a strong argument for refactoring specs like
+;;; that into their own namespace.
+(s/fdef child->
+        :args (s/cat :wrapper ::state-agent
+                     :message bytes?)
+        ;; Q: What does this return?
+        ;; Note that it's called from the child.
+        ;; So we really can't count on anything safe happening
+        ;; with the return value.
+        ;; Although in this case the "child" is the message ioloop,
+        ;; so we can couple it as tightly as we like
+        :ret dfrd/deferrable?)
+(defn child->
+  "Handle packets streaming out of child"
+  [wrapper
+   ^bytes message-block]
+  (let [{log-state ::log2/state
+         :keys [::chan->server
+                ::msg-specs/io-handle
+                ::packet-builder
+                ::server-security]
+         :as state} @wrapper
+        {:keys [::specs/srvr-name ::shared/srvr-port]} server-security]
+    ;; This flag is stored in the child state.
+    ;; I can retrieve that from the io-handle, but that's
+    ;; terribly inefficient.
+    ;; I could update the API here. Just have the child indicate
+    ;; whether it's received a packet back from the server or not.
+    ;; That seems like a mistake, but it's probably my simplest
+    ;; option.
+    ;; Or I could track the basic fact in here.
+    ;; That violates DRY, and makes everything more error prone.
+    ;; I could totally see a race condition where a packet
+    ;; arrives, gets dispatched to the child, and the child starts
+    ;; sending back bigger message blocks before the agent here
+    ;; has been notified that it needs to switch to sending Message
+    ;; packets rather than Initiate ones.
+    ;; The reference implementation maintains this flag in both places.
+    ;; It just avoids the possibility of race conditions by running
+    ;; in a single thread.
+
+    ;; N.B. What gets built very much depends on the current connection
+    ;; state.
+    ;; According to the spec, the child can send as many Initiate packets as
+    ;; it likes, whenever it wants.
+    ;; In general, it should only send them up until the point that we
+    ;; receive the server's first message packet in response.
+    ;; FIXME: When the child receives its first response packet from the
+    ;; server (this will be a Message in response to a Vouch), we need to
+    ;; swap packet-builder from initiate/build-initiate-packet! to
+    ;; ...what?
+    (let [message-packet (packet-builder wrapper message-block)
+          bundle {:host srvr-name
+                  :port srvr-port
+                  :message message-packet}
+          result (strm/put! chan->server bundle)
+          msg-log-state-atom (::log2/state-atom io-handle)
+          ;; Actually, this would be a good time to use refs inside a
+          ;; transaction.
+          [my-log-state msg-log-state] (log2/synchronize log-state @msg-log-state-atom)]
+      (throw (RuntimeException. "This might be a good time to flush! my logs"))
+      (swap! msg-log-state-atom update ::log2/lamport max (::log2/lamport msg-log-state))
+      result)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -693,17 +779,7 @@ Which at least implies that the agent approach should go away."
                                      (assoc initial-msg-state
                                             ::log2/state log-state)
                                      logger)
-        child->srvr (fn [^bytes message-block]
-                      ;; FIXME: This really needs to write
-                      ;; packet to our UDP socket instance.
-                      ;; But first we need to bundle it into a message
-                      ;; packet and encrypt it.
-                      ;; Q: Use logger to log what's happening?
-                      (let [message-packet (throw (RuntimeException. "build this"))
-                            bundle {:host "unknown"
-                                    :port nil
-                                    :message message-packet}]
-                        (throw (RuntimeException. "Write this"))))
+        child->srvr (partial child-> wrapper)
         ;; FIXME: Message child really should fork its logs from ours to
         ;; start with our lamport clock.
         ;; This interaction between the two layers is quite desirable
@@ -760,7 +836,7 @@ like a naive approach with a terrible user experience.
     ;; Note that this returns a deferred.
     ;; We're inside an agent's send.
     ;; Mixing these two paradigms was probably a bad idea.
-    (deferred/on-realized d
+    (dfrd/on-realized d
       (fn [success]
         (log2/flush-logs! logger
                           (log2/info log-state
@@ -819,10 +895,10 @@ like a naive approach with a terrible user experience.
   ;; Half a second seems far too long for the child to
   ;; build its initial message bytes.
   ;; Reference implementation just waits forever.
-  @(deferred/let-flow [available (strm/try-take! reader
-                                                 ::drained
-                                                 (util/minute)
-                                                 ::timed-out)]
+  @(dfrd/let-flow [available (strm/try-take! reader
+                                             ::drained
+                                             (util/minute)
+                                             ::timed-out)]
      (let [log-state (log2/info log-state
                                 ::wait-for-initial-child-bytes
                                 "Waiting for initial-child-bytes returned"

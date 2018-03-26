@@ -90,16 +90,17 @@ implementation. This is code that I don't understand yet"
                     (when (bit-and length-code 0x80)
                       (throw (ex-info "done" {})))
                     (if (= msg-len (inc (* 16 length-code)))
-                      (let [{:keys [extension
-                                    my-keys
-                                    packet-management
-                                    server-extension
-                                    shared-secrets
-                                    server-security
-                                    text
-                                    vouch
-                                    work-area]
+                      (let [{:keys [::shared/extension
+                                    ::shared/my-keys
+                                    ::shared/packet-management
+                                    ::state/server-extension
+                                    ::state/shared-secrets
+                                    ::state/server-security
+                                    ::state/vouch
+                                    ::shared/work-area]
                              :as this} (state/clientextension-init this)
+                            {:keys [::shared/text]} work-area
+
                             {:keys [::shared/packet
                                     ::shared/packet-nonce]} packet-management
                             _ (throw (RuntimeException. "this Component nonce isn't updated"))

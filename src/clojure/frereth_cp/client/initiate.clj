@@ -156,6 +156,7 @@ This is destructive in the sense that it reads from msg-byte-buf"
             ;; Give the other thread(s) a chance to catch up and get
             ;; the incoming cookie converted into a Vouch
             (if (await-for timeout wrapper)
+              ;; The basic idea here is wrong.
               (let [this @wrapper
                     {log-state ::log2/state
                      initial-bytes ::state/msg-bytes} (state/wait-for-initial-child-bytes this)

@@ -368,7 +368,7 @@
                          (ret second ::lamport)
                          (max (::lamport lhs)
                               (::lamport rhs)))))
-        :ret (s/tuple ::log-state ::state))
+        :ret (s/tuple ::state ::state))
 (defn synchronize
   "Fix 2 clocks that have probably drifted apart"
   [{l-clock ::lamport
