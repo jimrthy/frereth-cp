@@ -475,6 +475,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
     (-> this
         (assoc ::log2/logger logger)
         (assoc ::chan->server (strm/stream))
+        ;; Can't do this: it involves a circular import
+        #_(assoc ::packet-builder initiate/build-initiate-packet!)
         ;; FIXME: This is a cheeseball way to do this.
         ;; Honestly, to follow the "proper" (i.e. established)
         ;; pattern, load-keys should just operate on the full
@@ -642,6 +644,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
    ^bytes message-block]
   (let [{log-state ::log2/state
          :keys [::chan->server
+                ::log2/logger
                 ::msg-specs/io-handle
                 ::packet-builder
                 ::server-security]
@@ -674,7 +677,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; FIXME: When the child receives its first response packet from the
     ;; server (this will be a Message in response to a Vouch), we need to
     ;; swap packet-builder from initiate/build-initiate-packet! to
-    ;; ...what?
+    ;; some function that I don't think I've written yet that should
+    ;; live in client.message.
     (let [message-packet (packet-builder wrapper message-block)
           bundle {:host srvr-name
                   :port srvr-port
@@ -684,7 +688,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
           ;; Actually, this would be a good time to use refs inside a
           ;; transaction.
           [my-log-state msg-log-state] (log2/synchronize log-state @msg-log-state-atom)]
-      (throw (RuntimeException. "This might be a good time to flush! my logs"))
+      (send wrapper #(update % ::log2/state
+                             (fn [log-sate]
+                               (log2/flush-logs! logger log-state))))
       (swap! msg-log-state-atom update ::log2/lamport max (::log2/lamport msg-log-state))
       result)))
 
@@ -701,8 +707,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :args (s/cat :this ::state)
         :ret ::state)
 (defn clientextension-init
-  "Starting from the assumption that this is neither performance critical
-nor subject to timing attacks because it just won't be called very often."
+  ""
+  ;; Started from the assumptions that this is neither
+  ;; a) performance critical nor
+  ;; b)  subject to timing attacks
+  ;; because it just won't be called very often.
+  ;; Those assumptions are false. This actually gets called
+  ;; before pretty much every packet that gets sent.
+  ;; However: it only does the reload once every 30 seconds.
   [{:keys [::client-extension-load-time
            ::log2/logger
            ::msg-specs/recent
@@ -779,14 +791,10 @@ Which at least implies that the agent approach should go away."
                                      (assoc initial-msg-state
                                             ::log2/state log-state)
                                      logger)
-        child->srvr (partial child-> wrapper)
-        ;; FIXME: Message child really should fork its logs from ours to
-        ;; start with our lamport clock.
-        ;; This interaction between the two layers is quite desirable
         {:keys [::msg-specs/io-handle]
          log-state ::log2/state} (message/start! child
                                                  logger
-                                                 child->srvr
+                                                 (partial child-> wrapper)
                                                  ->child)]
     (let [log-state (log2/debug log-state
                                ::fork
@@ -805,61 +813,64 @@ Which at least implies that the agent approach should go away."
              ::msg-specs/io-handle io-handle))))
 
 (defn send-vouch!
-  "Send the Vouch/Initiate packet (along with an initial Message sub-packet)
+  "Send a Vouch/Initiate packet (along with a Message sub-packet)"
+  ;; We may have to send this multiple times, because it could
+  ;; very well get dropped.
 
-We may have to send this multiple times, because it could
-very well get dropped.
+  ;; Actually, if that happens, we probably need to start over
+  ;; from the initial HELLO.
 
-Actually, if that happens, we probably need to start over
-from the initial HELLO.
+  ;; Depending on how much time we want to spend waiting for the
+  ;; initial server message
+  ;; (this is one of the big reasons the
+  ;; reference implementation starts out trying to contact
+  ;; multiple servers).
 
-Depending on how much time we want to spend waiting for the
-initial server message (this is one of the big reasons the
-reference implementation starts out trying to contact
-multiple servers).
-
-It would be very easy to just wait
-for its minute key to definitely time out, though that seems
-like a naive approach with a terrible user experience.
-"
+  ;; It would be very easy to just wait
+  ;; for its minute key to definitely time out, though that seems
+  ;; like a naive approach with a terrible user experience.
   [{log-state ::log2/state
-    :keys [::log2/logger]
+    :keys [::chan->server
+           ::log2/logger]
     :as this}
    wrapper
    packet]
-  (let [chan->server (::chan->server this)
-        d (strm/try-put!
+  ;; Q: Does it make any sense for this to be different than sending
+  ;; any other packet?
+  ;; A: No, not really.
+  (throw (RuntimeException. "This really shouldn't be special"))
+  (let [d (strm/try-put!
            chan->server
            packet
            (current-timeout wrapper)
            ::sending-vouch-timed-out)]
     ;; Note that this returns a deferred.
     ;; We're inside an agent's send.
-    ;; Mixing these two paradigms was probably a bad idea.
+    ;; Mixing these two paradigms was a bad idea.
     (dfrd/on-realized d
-      (fn [success]
-        (log2/flush-logs! logger
-                          (log2/info log-state
-                                     ::send-vouch!
-                                     "Initiate packet sent.\nWaiting for 1st message"
-                                     {::success success}))
-        (send-off wrapper final-wait wrapper success))
-      (fn [failure]
-        ;; Extremely unlikely, but
-        ;; just for the sake of paranoia
-        (log2/flush-logs! logger
-                          (log2/exception log-state
-                                          ;; Q: Am I absolutely positive that this will
-                                          ;; always be an exception?
-                                          ;; A: Even if it isn't the logger needs to be
-                                          ;; able to cope with other problems
-                                          failure
-                                          ::send-vouch!
-                                          "Sending Initiate packet failed!"
-                                          {::problem failure}))
-        (throw (ex-info "Timed out sending cookie->vouch response"
-                        (assoc this
-                               :problem failure)))))
+                      (fn [success]
+                        (log2/flush-logs! logger
+                                          (log2/info log-state
+                                                     ::send-vouch!
+                                                     "Initiate packet sent.\nWaiting for 1st message"
+                                                     {::success success}))
+                        (send-off wrapper final-wait wrapper success))
+                      (fn [failure]
+                        ;; Extremely unlikely, but
+                        ;; just for the sake of paranoia
+                        (log2/flush-logs! logger
+                                          (log2/exception log-state
+                                                          ;; Q: Am I absolutely positive that this will
+                                                          ;; always be an exception?
+                                                          ;; A: Even if it isn't the logger needs to be
+                                                          ;; able to cope with other problems
+                                                          failure
+                                                          ::send-vouch!
+                                                          "Sending Initiate packet failed!"
+                                                          {::problem failure}))
+                        (throw (ex-info "Timed out sending cookie->vouch response"
+                                        (assoc this
+                                               :problem failure)))))
     ;; Q: Do I need to hang onto that?
     this))
 
@@ -872,47 +883,48 @@ like a naive approach with a terrible user experience.
                       {:must "End communication immediately"})))
     result))
 
-(defn wait-for-initial-child-bytes
-  [{reader ::chan<-child
-    log-state ::log2/state
-    :as this}]
-  ;; Really need to wait for child callback instead.
-  ;; Which really means no waiting.
-  ;; Q: Right?
-  (throw (RuntimeException. "Deprecated approach"))
-  (let [log-state (log2/info log-state
-                             ::wait-for-initial-child-bytes
-                             "Top"
-                             ;; The redundant data seems weird, but sometimes these
-                             ;; things look different
-                             {::chan<-child reader
-                              ::aka (str reader)})])
-  (when-not reader
-    (throw (ex-info "Missing chan<-child" {::keys (keys this)})))
+(comment
+  (defn wait-for-initial-child-bytes
+    [{reader ::chan<-child
+      log-state ::log2/state
+      :as this}]
+    ;; Really need to wait for child callback instead.
+    ;; Which really means no waiting.
+    ;; Q: Right?
+    (throw (RuntimeException. "Deprecated approach"))
+    (let [log-state (log2/info log-state
+                               ::wait-for-initial-child-bytes
+                               "Top"
+                               ;; The redundant data seems weird, but sometimes these
+                               ;; things look different
+                               {::chan<-child reader
+                                ::aka (str reader)})])
+    (when-not reader
+      (throw (ex-info "Missing chan<-child" {::keys (keys this)})))
 
-  ;; The timeout here is a vital detail here, in terms of
-  ;; UX responsiveness.
-  ;; Half a second seems far too long for the child to
-  ;; build its initial message bytes.
-  ;; Reference implementation just waits forever.
-  @(dfrd/let-flow [available (strm/try-take! reader
-                                             ::drained
-                                             (util/minute)
-                                             ::timed-out)]
-     (let [log-state (log2/info log-state
-                                ::wait-for-initial-child-bytes
-                                "Waiting for initial-child-bytes returned"
-                                {::available available})]
-       (if-not (keyword? available)
-         {::log2/state log-state
-          ::msg-bytes available}   ; i.e. success
-         (if-not (= available ::drained)
-           (if (= available ::timed-out)
-             (throw (RuntimeException. "Timed out waiting for child"))
-             (throw (RuntimeException. (str "Unknown failure: " available))))
-           ;; I have a lot of interaction-test/handshake runs failing because
-           ;; of this.
-           ;; Q: What's going on?
-           ;; (I can usually re-run the test and have it work the next
-           ;; time through...it almost seems like a 50/50 thing)
-           (throw (RuntimeException. "Stream from child closed")))))))
+    ;; The timeout here is a vital detail here, in terms of
+    ;; UX responsiveness.
+    ;; Half a second seems far too long for the child to
+    ;; build its initial message bytes.
+    ;; Reference implementation just waits forever.
+    @(dfrd/let-flow [available (strm/try-take! reader
+                                               ::drained
+                                               (util/minute)
+                                               ::timed-out)]
+       (let [log-state (log2/info log-state
+                                  ::wait-for-initial-child-bytes
+                                  "Waiting for initial-child-bytes returned"
+                                  {::available available})]
+         (if-not (keyword? available)
+           {::log2/state log-state
+            ::msg-bytes available}   ; i.e. success
+           (if-not (= available ::drained)
+             (if (= available ::timed-out)
+               (throw (RuntimeException. "Timed out waiting for child"))
+               (throw (RuntimeException. (str "Unknown failure: " available))))
+             ;; I have a lot of interaction-test/handshake runs failing because
+             ;; of this.
+             ;; Q: What's going on?
+             ;; (I can usually re-run the test and have it work the next
+             ;; time through...it almost seems like a 50/50 thing)
+             (throw (RuntimeException. "Stream from child closed"))))))))

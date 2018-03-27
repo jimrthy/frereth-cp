@@ -1298,100 +1298,100 @@
     logger]
    {:pre [log-state]}
     ;; FIXME: Really also needs an initial log-state I can fork from that instead
-   (let [log-state (log/debug (log/init human-name 0)
+   (let [log-state (log/debug (log/fork log-state human-name)
                               ::initialization
                               "Building state for initial loop based around options"
                               (assoc opts ::overrides {::->child-size pipe-to-child-size
-                                                       ::child->size pipe-from-child-size}))]
-     (let [pending-client-response (promise)]
-       (when server?
-         (deliver pending-client-response ::never-waited))
-       {::specs/flow-control {::specs/client-waiting-on-response pending-client-response
-                              ::specs/last-doubling (long 0)
-                              ::specs/last-edge (long 0)
-                              ::specs/last-speed-adjustment (long 0)
-                              ::specs/n-sec-per-block K/sec->n-sec
-                              ::specs/rtt (long 0)
-                              ::specs/rtt-average (long 0)
-                              ::specs/rtt-deviation (long 0)
-                              ::specs/rtt-highwater (long 0)
-                              ::specs/rtt-lowwater (long 0)
-                              ::specs/rtt-phase false
-                              ::specs/rtt-seen-older-high false
-                              ::specs/rtt-seen-older-low false
-                              ::specs/rtt-seen-recent-high false
-                              ::specs/rtt-seen-recent-low false
-                              ::specs/rtt-timeout K/sec->n-sec}
-        ::specs/incoming {::specs/->child-buffer []
-                          ::specs/contiguous-stream-count 0
-                          ::specs/gap-buffer (to-child/build-gap-buffer)
-                          ::specs/pipe-to-child-size pipe-to-child-size
-                          ::specs/receive-eof ::specs/false
-                          ::specs/receive-total-bytes 0
-                          ::specs/receive-written 0
-                          ;; Note that the reference implementation
-                          ;; tracks receivebytes instead of the
-                          ;; address.
-                          ::specs/strm-hwm -1}
-        ::specs/outgoing {::specs/ackd-addr 0
-                          ::specs/earliest-time 0
-                          ;; Start with something that's vaguely sane to
-                          ;; avoid 1-ms idle spin waiting for first
-                          ;; incoming message
-                          ::specs/last-block-time (System/nanoTime)
-                          ;; FIXME: Move this to flow-control
-                          ::specs/last-panic 0
-                          ;; Peers started as servers start out
-                          ;; with standard-max-block-length instead.
-                          ;; TODO: This needs to be replaced with a
-                          ;; promise named client-waiting-on-response
-                          ;; (used in message/start-child-monitor!)
-                          ;; that we can use as a flag to control this
-                          ;; directly instead of handling the state
-                          ;; management this way.
-                          ::specs/max-block-length (if server?
-                                                     K/standard-max-block-length
-                                                     ;; TODO: Refactor/rename this to
-                                                     ;; initial-client-max-block-length
-                                                     K/max-bytes-in-initiate-message)
-                          ::specs/next-message-id 1
-                          ::specs/pipe-from-child-size pipe-from-child-size
-                          ;; Q: Does this make any sense at all?
-                          ;; It isn't ever going to change, so I might
-                          ;; as well just use the hard-coded value
-                          ;; in constants and not waste the extra time/space
-                          ;; sticking it in here.
-                          ;; That almost seems like premature optimization,
-                          ;; but this approach seems like serious YAGNI.
-                          ::specs/send-buf-size K/send-byte-buf-size
-                          ::specs/send-eof ::specs/false
-                          ::specs/send-eof-acked false
-                          ::specs/strm-hwm 0
-                          ::specs/total-blocks 0
-                          ::specs/total-block-transmissions 0
-                          ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
-                                                                        ::log/state log-state})
-                          ::specs/un-sent-blocks PersistentQueue/EMPTY
-                          ::specs/want-ping (if server?
-                                              ::specs/false
-                                              ;; TODO: Add option for a
-                                              ;; client that started before the
-                                              ;; server, meaning that it waits
-                                              ;; for 1 second at a time before
-                                              ;; trying to send the next
-                                              ;; message
-                                              ::specs/immediate)}
-        ::log/state log-state
-        ::specs/message-loop-name human-name
-        ;; In the original, this is a local in main rather than a global
-        ;; Q: Is there any difference that might matter to me, other
-        ;; than being allocated on the stack instead of the heap?
-        ;; (Assuming globals go on the heap. TODO: Look that up)
-        ;; Ironically, this may be one of the few pieces that counts
-        ;; as "global", since it really is involved whether we're
-        ;; talking about incoming/outgoing buffer management or
-        ;; flow control.
-        ::specs/recent 0})))
+                                                       ::child->size pipe-from-child-size}))
+         pending-client-response (promise)]
+     (when server?
+       (deliver pending-client-response ::never-waited))
+     {::specs/flow-control {::specs/client-waiting-on-response pending-client-response
+                            ::specs/last-doubling (long 0)
+                            ::specs/last-edge (long 0)
+                            ::specs/last-speed-adjustment (long 0)
+                            ::specs/n-sec-per-block K/sec->n-sec
+                            ::specs/rtt (long 0)
+                            ::specs/rtt-average (long 0)
+                            ::specs/rtt-deviation (long 0)
+                            ::specs/rtt-highwater (long 0)
+                            ::specs/rtt-lowwater (long 0)
+                            ::specs/rtt-phase false
+                            ::specs/rtt-seen-older-high false
+                            ::specs/rtt-seen-older-low false
+                            ::specs/rtt-seen-recent-high false
+                            ::specs/rtt-seen-recent-low false
+                            ::specs/rtt-timeout K/sec->n-sec}
+      ::specs/incoming {::specs/->child-buffer []
+                        ::specs/contiguous-stream-count 0
+                        ::specs/gap-buffer (to-child/build-gap-buffer)
+                        ::specs/pipe-to-child-size pipe-to-child-size
+                        ::specs/receive-eof ::specs/false
+                        ::specs/receive-total-bytes 0
+                        ::specs/receive-written 0
+                        ;; Note that the reference implementation
+                        ;; tracks receivebytes instead of the
+                        ;; address.
+                        ::specs/strm-hwm -1}
+      ::specs/outgoing {::specs/ackd-addr 0
+                        ::specs/earliest-time 0
+                        ;; Start with something that's vaguely sane to
+                        ;; avoid 1-ms idle spin waiting for first
+                        ;; incoming message
+                        ::specs/last-block-time (System/nanoTime)
+                        ;; FIXME: Move this to flow-control
+                        ::specs/last-panic 0
+                        ;; Peers started as servers start out
+                        ;; with standard-max-block-length instead.
+                        ;; TODO: This needs to be replaced with a
+                        ;; promise named client-waiting-on-response
+                        ;; (used in message/start-child-monitor!)
+                        ;; that we can use as a flag to control this
+                        ;; directly instead of handling the state
+                        ;; management this way.
+                        ::specs/max-block-length (if server?
+                                                   K/standard-max-block-length
+                                                   ;; TODO: Refactor/rename this to
+                                                   ;; initial-client-max-block-length
+                                                   K/max-bytes-in-initiate-message)
+                        ::specs/next-message-id 1
+                        ::specs/pipe-from-child-size pipe-from-child-size
+                        ;; Q: Does this make any sense at all?
+                        ;; It isn't ever going to change, so I might
+                        ;; as well just use the hard-coded value
+                        ;; in constants and not waste the extra time/space
+                        ;; sticking it in here.
+                        ;; That almost seems like premature optimization,
+                        ;; but this approach seems like serious YAGNI.
+                        ::specs/send-buf-size K/send-byte-buf-size
+                        ::specs/send-eof ::specs/false
+                        ::specs/send-eof-acked false
+                        ::specs/strm-hwm 0
+                        ::specs/total-blocks 0
+                        ::specs/total-block-transmissions 0
+                        ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
+                                                                      ::log/state log-state})
+                        ::specs/un-sent-blocks PersistentQueue/EMPTY
+                        ::specs/want-ping (if server?
+                                            ::specs/false
+                                            ;; TODO: Add option for a
+                                            ;; client that started before the
+                                            ;; server, meaning that it waits
+                                            ;; for 1 second at a time before
+                                            ;; trying to send the next
+                                            ;; message
+                                            ::specs/immediate)}
+      ::log/state log-state
+      ::specs/message-loop-name human-name
+      ;; In the original, this is a local in main rather than a global
+      ;; Q: Is there any difference that might matter to me, other
+      ;; than being allocated on the stack instead of the heap?
+      ;; (Assuming globals go on the heap. TODO: Look that up)
+      ;; Ironically, this may be one of the few pieces that counts
+      ;; as "global", since it really is involved whether we're
+      ;; talking about incoming/outgoing buffer management or
+      ;; flow control.
+      ::specs/recent 0}))
   ([human-name logger]
    (initial-state human-name {} false logger)))
 

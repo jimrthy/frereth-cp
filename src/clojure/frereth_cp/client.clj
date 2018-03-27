@@ -229,6 +229,8 @@ implementation. This is code that I don't understand yet"
         :ret (s/keys :req [::deferrable
                            ::log2/state]))
 (defn cope-with-successful-hello-creation!
+  "This name dates back to a time when building a hello packet was problematic"
+  ;; FIXME: Refactor to one that's less pessimistic
   [wrapper chan->server timeout]
   (let [{:keys [::shared/packet-management
                 ::state/server-security]
@@ -240,7 +242,7 @@ implementation. This is code that I don't understand yet"
                               "Putting hello onto ->server channel"
                               {::raw-hello raw-packet
                                ::state/chan->server chan->server})]
-    ;; There's still an important break
+    ;; There's an important break
     ;; with the reference implementation
     ;; here: this should be sending the
     ;; HELLO packet to multiple server
@@ -255,6 +257,7 @@ implementation. This is code that I don't understand yet"
     ;; There's an interesting conundrum here:
     ;; it probably makes more sense to handle that
     ;; sort of detail closer to the network boundary.
+    ;; Except that this really *is* the network boundary.
     (let [d (strm/try-put! chan->server
                            {:host (::specs/srvr-name server-security)
                             :message raw-packet
@@ -314,7 +317,12 @@ like a timing attack."
         timeout (state/current-timeout wrapper)]
     (strm/on-drained chan->server
                      (fn []
-                       (log/warn "Channel->server closed")
+                       (send wrapper (fn [{:keys [::log2/logger]
+                                           :as this}]
+                                       (update this ::log2/state
+                                               (log2/flush-logs! logger #(log2/warn %
+                                                                                    ::start!
+                                                                                    "Channel->server closed")))))
                        (send wrapper server-closed!)))
     ;; This feels inside-out and backwards.
     ;; But it probably should, since this is very
@@ -385,6 +393,11 @@ like a timing attack."
   [opts logger-initializer]
   (-> opts
       (state/initialize-immutable-values logger-initializer)
+      ;; This really belongs in state/initialize-immutable-values
+      ;; But that would create circular imports.
+      ;; This is a red flag.
+      ;; FIXME: Come up with a better place for it to live.
+      (assoc ::packet-builder initiate/build-initiate-packet!)
       state/initialize-mutable-state!
       (assoc
        ;; This seems very cheese-ball, but they

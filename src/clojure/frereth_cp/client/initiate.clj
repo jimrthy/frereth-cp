@@ -150,44 +150,49 @@ This is destructive in the sense that it reads from msg-byte-buf"
                                    ::build-and-send-vouch
                                    "send cookie->vouch")]
           (send wrapper state/cookie->vouch cookie-packet)
-          ;; Stop these shenanigans.
-          (throw (RuntimeException. "That's wonky enough."))
           (let [timeout (state/current-timeout wrapper)]
             ;; Give the other thread(s) a chance to catch up and get
             ;; the incoming cookie converted into a Vouch
-            (if (await-for timeout wrapper)
-              ;; The basic idea here is wrong.
-              (let [this @wrapper
-                    {log-state ::log2/state
-                     initial-bytes ::state/msg-bytes} (state/wait-for-initial-child-bytes this)
-                    vouch (build-initiate-packet! wrapper initial-bytes)]
-                (log/info "send-off send-vouch!")
-                (send-off wrapper state/send-vouch! wrapper vouch))
-              (do
-                (log/error (str "Converting cookie to vouch took longer than "
-                                timeout
-                                " milliseconds."))
-                (if-let [ex (agent-error wrapper)]
-                  (do
-                    (log/error ex "Agent failed while we were waiting")
-                    (if (instance? ExceptionInfo ex)
-                      (let [^ExceptionInfo ex ex]
-                        (log/warn ex (utils/pretty (.getData ex))))
-                      (log/warn "No more details available"))
-                    ;; Actual error:
-                    ;; RuntimeException about flushing the start logs from
-                    ;; client.state/fork!
-                    ;; Craziness: The failed assertion isn't interrupting my test.
-                    ;; FIXME: Actually, something like this does need to be
-                    ;; fatal. At least for this client.
-                    ;; It's tempting to just call (System/exit) here, but
-                    ;; I'd really prefer to avoid killing the JVM.
-                    (println "FIXME: Start back here.")
-                    (assert (not ex) "This should probably only be fatal for the sake of debugging"))
-                  (do
-                    (log/warn "Switching agent into an error state")
-                    (send wrapper
-                          #(throw (ex-info "cookie->vouch timed out" %))))))))))
+            (when-not (await-for timeout wrapper)
+              (let [log-updates [#(log2/error %
+                                               ::build-and-send-vouch
+                                               (str "Converting cookie to vouch took longer than "
+                                                    timeout
+                                                    " milliseconds."))]
+                    log-updates (conj log-updates
+                                      (if-let [ex (agent-error wrapper)]
+                                        (let [log-update #(log2/exception %
+                                                                          ex
+                                                                          ::build-and-send-vouch
+                                                                          "Agent failed while we were waiting")]
+                                          ;; Craziness: The failed assertion isn't interrupting my test.
+                                          ;; FIXME: Actually, something like this does need to be
+                                          ;; fatal. At least for this client.
+                                          ;; It's tempting to just call (System/exit) here, but
+                                          ;; I'd really prefer to avoid killing the JVM.
+
+                                          (println "FIXME: Start back here.")
+                                          (assert (not ex) "This should probably only be fatal for the sake of debugging"))
+                                        (let [log-update
+                                              #(log2/warn %
+                                                          ::build-and-send-vouch
+                                                          "Switching agent into an error state")]
+                                          (send wrapper
+                                                #(throw (ex-info "cookie->vouch timed out" %)))
+                                          log-update)))]
+                (send wrapper (fn [{log-state ::log2/state
+                                    logger ::log2/logger
+                                    :as this}]
+                                ;; This is pretty obnoxious.
+                                ;; FIXME: Figure out a way to move it into
+                                ;; logging
+                                (let [log-state (reduce (fn [log-state log-fn]
+                                                          (log-fn log-state))
+                                                        log-state
+                                                        log-updates)]
+                                  (assoc this
+                                         ::log2/state
+                                         (log2/flush-logs! logger log-state))))))))))
       (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
                                      (assoc %
                                             :problem (if (= cookie-packet ::drained)
