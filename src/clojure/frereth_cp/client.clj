@@ -10,6 +10,7 @@
             [clojure.tools.logging :as log]
             [frereth-cp.client.cookie :as cookie]
             [frereth-cp.client.hello :as hello]
+            [frereth-cp.client.initiate :as initiate]
             [frereth-cp.client.state :as state]
             [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.shared :as shared]

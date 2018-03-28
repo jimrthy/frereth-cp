@@ -1297,8 +1297,11 @@
      :as opts}
     logger]
    {:pre [log-state]}
-    ;; FIXME: Really also needs an initial log-state I can fork from that instead
-   (let [log-state (log/debug (log/fork log-state human-name)
+   ;; This version throws away the updated parent-logs.
+   ;; That's a mistake.
+   ;; It doesn't seem like one that's worth rectifying
+   (let [[child-logs parent-logs] (log/fork log-state human-name)
+         child-logs (log/debug child-logs
                               ::initialization
                               "Building state for initial loop based around options"
                               (assoc opts ::overrides {::->child-size pipe-to-child-size
@@ -1381,7 +1384,7 @@
                                             ;; trying to send the next
                                             ;; message
                                             ::specs/immediate)}
-      ::log/state log-state
+      ::log/state child-logs
       ::specs/message-loop-name human-name
       ;; In the original, this is a local in main rather than a global
       ;; Q: Is there any difference that might matter to me, other

@@ -184,8 +184,13 @@ This is destructive in the sense that it reads from msg-byte-buf"
                                     logger ::log2/logger
                                     :as this}]
                                 ;; This is pretty obnoxious.
+                                ;; I want to apply the functions that
+                                ;; I just accumulated all at once.
+                                ;; This violates one of the major points
+                                ;; behind including timestamps everywhere,
+                                ;; but this is really a pretty nasty situation
                                 ;; FIXME: Figure out a way to move it into
-                                ;; logging
+                                ;; the logging ns
                                 (let [log-state (reduce (fn [log-state log-fn]
                                                           (log-fn log-state))
                                                         log-state
