@@ -82,8 +82,7 @@
         log-state (log2/info log-state
                              ::build-actual-packet
                              "Building Hello"
-                             {::description (util/pretty K/hello-packet-dscr)
-                              ::raw (util/pretty raw-hello)})
+                             {::raw raw-hello})
         ^ByteBuf result (serial/compose K/hello-packet-dscr raw-hello)
         n (.readableBytes result)]
     (when (not= K/hello-packet-length n)

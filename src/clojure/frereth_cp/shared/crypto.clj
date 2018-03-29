@@ -7,6 +7,7 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util])
   (:import clojure.lang.ExceptionInfo
@@ -357,7 +358,8 @@ But it depends on compose, which would set up circular dependencies"
   (new-nonce-key! path))
 
 (s/fdef open-after
-        :args (s/cat :box bytes?
+        :args (s/cat :log-state ::log2/state
+                     :box bytes?
                      :box-offset integer?
                      :box-length integer?
                      :nonce bytes?
@@ -375,7 +377,8 @@ But it depends on compose, which would set up circular dependencies"
                        (- (+ (-> % :args :box-offset)
                              (-> % :args :box-length))
                           K/nonce-length)))
-        :ret ::unboxed)
+        :ret (s/keys :req [::log2/state
+                           ::unboxed]))
 (defn open-after
   "Low-level direct crypto box opening
 
@@ -403,16 +406,23 @@ array destination that could just be reused without GC.
 
 That looks like it would get into the gory implementation details
 which I'm really not qualified to touch."
-  [^bytes box box-offset box-length nonce shared-key]
+  [log-state
+   ^bytes box
+   box-offset
+   box-length
+   nonce
+   shared-key]
   {:pre [(bytes? shared-key)]}
   (if (and (not (nil? box))
            (>= (count box) (+ box-offset box-length))
            (>= box-length K/box-zero-bytes))
-    (do
-      (log/debug "Box is large enough")
+    (let [log-state (log2/debug log-state
+                                ::open-after
+                                "Box is large enough")]
       (let [n (+ box-length K/box-zero-bytes)
             cipher-text (byte-array n)
             plain-text (byte-array n)]
+        ;; Q: Is this worth being smarter about the array copies?
         (doseq [i (range box-length)]
           (aset-byte cipher-text
                      (+ K/box-zero-bytes i)
@@ -435,9 +445,10 @@ which I'm really not qualified to touch."
           (comment (-> plain-text
                        vec
                        (subvec K/decrypt-box-zero-bytes)))
-          (Unpooled/wrappedBuffer plain-text
-                                  K/decrypt-box-zero-bytes
-                                  ^Long (- box-length K/box-zero-bytes)))))
+          {::log2/state log-state
+           ::unboxed (Unpooled/wrappedBuffer plain-text
+                                             K/decrypt-box-zero-bytes
+                                             ^Long (- box-length K/box-zero-bytes))})))
     (throw (ex-info "Box too small" {::box box
                                      ::offset box-offset
                                      ::length box-length
@@ -445,7 +456,8 @@ which I'm really not qualified to touch."
                                      ::shared-key shared-key}))))
 
 (s/fdef open-crypto-box
-        :args (s/cat :prefix-bytes (s/and bytes?
+        :args (s/cat :log-state ::log2/state
+                     :prefix-bytes (s/and bytes?
                                           #(let [n (count %)]
                                              (or (= K/client-nonce-prefix-length n)
                                                  (= K/server-nonce-prefix-length n))))
@@ -462,10 +474,11 @@ which I'm really not qualified to touch."
         ;; whichever spec is wrong.
         ;; Although having both return (s/nilable bytes?) is
         ;; starting to look like the best option.
-        :ret (s/nilable ::unboxed))
+        :ret (s/keys :req [::log2/state]
+                     :opt [::unboxed]))
 (defn open-crypto-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
-  [prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
+  [log-state prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
   (let [nonce (byte-array K/nonce-length)
         crypto-length (count crypto-box)]
     (b-t/byte-copy! nonce prefix-bytes)
@@ -475,13 +488,12 @@ which I'm really not qualified to touch."
                       ^Long (- K/nonce-length prefix-length)
                       suffix-bytes))
     (try
-      (open-after crypto-box 0 crypto-length nonce shared-key)
+      (open-after log-state crypto-box 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
-        (log/error ex
-                   (str "Failed to open box\n"
-                        (util/pretty (.getData ex))))
-        ;; Be explicit about this
-        nil))))
+        {::log2/state (log2/exception ex
+                                      ::open-crypto-box
+                                      (str "Failed to open box\n")
+                                      (.getData ex))}))))
 
 (defn random-array
   "Returns an array of n random bytes"

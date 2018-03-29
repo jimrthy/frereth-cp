@@ -1304,8 +1304,10 @@
          child-logs (log/debug child-logs
                               ::initialization
                               "Building state for initial loop based around options"
-                              (assoc opts ::overrides {::->child-size pipe-to-child-size
-                                                       ::child->size pipe-from-child-size}))
+                              (dissoc
+                               (assoc opts ::overrides {::->child-size pipe-to-child-size
+                                                        ::child->size pipe-from-child-size})
+                               ::log/state))
          pending-client-response (promise)]
      (when server?
        (deliver pending-client-response ::never-waited))
