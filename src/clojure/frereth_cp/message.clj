@@ -470,6 +470,12 @@
                                                 "I/O triggered by timer"
                                                 {::specs/message-loop-name message-loop-name}))))
 
+(s/fdef condensed-choose-next-scheduled-time
+        :args (s/cat :outgoing ::specs/outgoing
+                     :state ::specs/state
+                     :to-child-done? ::specs/to-child-done?)
+        :ret (s/keys :req [::next-action-time
+                           ::log/state]))
 (defn condensed-choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
             ::specs/rtt-timeout]} ::specs/flow-control
@@ -485,6 +491,7 @@
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name
            ::specs/recent]
+    log-state ::log/state
     :as state}
    to-child-done?]
   ;;; This amounts to lines 286-305
@@ -568,10 +575,12 @@
            ;; to be based around closed gaps
            (not (realized? to-child-done?))) 0
       ;; Lines 302-305
-      true (max recent))))
+      true {::next-action-time (max recent)
+            ::log/state log-state})))
 
 (s/fdef choose-next-scheduled-time
-        :args (s/cat :state ::specs/state
+        :args (s/cat :outgoing ::specs/outgoing
+                     :state ::specs/state
                      :to-child-done? ::specs/to-child-done?)
         :ret (s/keys :req [::next-action-time
                            ::log/state]))

@@ -85,7 +85,14 @@
      ::shared-secret shared-secret}))
 
 (s/fdef open-packet
-        :args (s/cat :state ::state/state :message ::specs/byte-buf)
+        ;; The thing about this approach is that, realistically,
+        ;; we also need all the pieces in ::state/state
+        ;; that open-hello-crypto-box needs.
+        ;; Q: Would s/and make sense to emphasize that we
+        ;; really want to be positive that we have log-state here?
+        :args (s/cat :state (s/keys :req [::log2/state
+                                          ::state/current-client])
+                     :message bytes?)
         :ret (s/keys :req [::K/hello-spec ::log2/state ::opened ::shared-secret]))
 (defn open-packet
   [{:keys [::state/current-client]
@@ -159,6 +166,8 @@
 ;;;; Public
 
 (s/fdef do-handle
+        ;; Passing around ::state/state everywhere was lazy/dumb.
+        ;; TODO: Be more explicit about which keys we really and truly need.
         :args (s/cat :state ::state/state
                      :packet ::shared/message)
         :ret (s/keys :req [::K/hello-spec ::srvr-specs/cookie-components]))

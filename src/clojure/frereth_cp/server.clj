@@ -89,6 +89,10 @@
          ;; TODO: Keep an eye out for potential benchmarks
          (= (bit-and r 0xf) 0))))
 
+(s/fdef handle-hello!
+        :args (s/cat :state any?
+                     :packet any?)
+        :ret any?)
 (defn handle-hello!
   [state
    {:keys [:message]
