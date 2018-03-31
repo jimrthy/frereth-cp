@@ -170,9 +170,11 @@
         ;; TODO: Be more explicit about which keys we really and truly need.
         :args (s/cat :state ::state/state
                      :packet ::shared/message)
-        :ret (s/keys :req [::K/hello-spec ::srvr-specs/cookie-components]))
+        :ret (s/keys :opt [::K/hello-spec ::srvr-specs/cookie-components]
+                     :req [::log2/state]))
 (defn do-handle
   [{:keys [::shared/working-area]
+    log-state ::log2/state
     :as state}
    ;; TODO: Evaluate the impact of just using bytes instead
    ^ByteBuf message]
@@ -184,8 +186,10 @@
                  ::K/srvr-xtn
                  ::K/crypto-box]
           :as fields} ::K/hello-spec
-         :as unboxed} (open-packet state message)]
-    (log/info "box opened successfully")
+         :as unboxed} (open-packet state message)
+        log-state (log2/info log-state
+                             ::do-handle
+                             "box opened successfully")]
     ;; We don't actually care about the contents of the bytes we just decrypted.
     ;; They should be all zeroes for now, but that's really an area for possible future
     ;; expansion.
@@ -203,7 +207,8 @@
                                          ::srvr-specs/clear-text clear-text
                                          ::shared/text text
                                          ::shared/working-nonce working-nonce}
-         ::K/hello-spec fields})
-      (do
-        (log/warn "Unable to open the HELLO crypto-box: dropping")
-        nil))))
+         ::K/hello-spec fields
+         ::log2/state log-state})
+      {::log2/state (log2/warn log-state
+                               ::do-handle
+                               "Unable to open the HELLO crypto-box: dropping")})))

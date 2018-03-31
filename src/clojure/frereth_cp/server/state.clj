@@ -7,6 +7,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.shared.specs :as shared-specs]
             [manifold.stream :as strm]))
 
@@ -90,20 +91,45 @@
 (s/def ::child-spawner (s/fspec :args (s/cat)
                                 :ret ::child-interaction))
 
+;; This is almost copypasta from ::server/handle.
+;; But that's really about putting the pieces together in
+;; order to build this, which is what gets shared
+;; everywhere.
+;; The dichotomy illustrates a big part of my current (2018-MAR-30)
+;; conundrum:
+;; I think I want to be explicit about what fields each function
+;; really and truly needs.
+;; But the calls are really a very tightly coupled chain that I
+;; refactored from a single gigantic C function that takes advantage
+;; of a bunch of globals.
+;; The function at the bottom of the call stack uses most of this
+;; state. Which means that everything that leads up to it
+;; also requires it. The differences are minor enough that it
+;; it doesn't seem worth the book-keeping effort to try to
+;; keep them sorted out.
 (s/def ::state (s/keys :req [::active-clients
                              ::child-spawner
                              ::client-read-chan
                              ::client-write-chan
+                             ::max-active-clients
+                             ::log2/logger
+                             ::log2/state
+                             ::shared/extension
+                             ;; Q: Does this make any sense here?
+                             ;; A: Probably not
+                             #_::shared/keydir
+                             ::shared/working-area
+
+                             ;; Worth calling out for the compare/
+                             ;; contrast
+                             ;; These fields are optional in
+                             ;; server/handle
                              ::cookie-cutter
                              ;; This doesn't particularly belong here
                              ::current-client
                              ::event-loop-stopper
-                             ::max-active-clients
-                             ::shared/extension
-                             ::shared/keydir
                              ::shared/my-keys
-                             ::shared/packet-management
-                             ::shared/working-area]))
+                             ::shared/packet-management]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

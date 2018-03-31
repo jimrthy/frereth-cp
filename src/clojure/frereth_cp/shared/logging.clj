@@ -35,6 +35,14 @@
   (flush! [this] "Some loggers need to do this at the end of a batch"))
 (s/def ::logger #(satisfies? Logger %))
 
+;; It's tempting to pass around this instead of a ::logger
+;; instance directly.
+;; To create Logger instances on demand and then discard them.
+;; The temptation seems dumb.
+;; Q: So why am I still tempted?
+(s/def ::log-builder (s/fspec :args nil
+                              :ret ::logger))
+
 ;;; TODO: I need a map of these keys to numeric values to make
 ;;; things like removing unwanted messages trivial.
 (def log-levels #{::trace

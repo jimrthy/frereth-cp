@@ -12,7 +12,8 @@
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as shared-specs]
-            [manifold.stream :as strm]))
+            [manifold.stream :as strm])
+  (:import clojure.lang.ExceptionInfo))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants
@@ -28,19 +29,33 @@
 ;;;; Helpers
 
 (defn server-options
-  []
-  {::cp-server {::shared/extension server-extension
+  [logger log-state]
+  {::cp-server {::log/logger logger
+                ::log/state log-state
+                ::shared/extension server-extension
                 ::shared/my-keys #::shared{::K/srvr-name server-name
                                            :keydir "curve-test"}}})
 
 (defn build-server
-  []
-  {::cp-server (server/ctor (::cp-server (server-options)))
-   ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
-   ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}})
+  [logger log-state]
+  (try
+    (let [server (server/ctor (::cp-server (server-options logger log-state)))]
+      {::cp-server server
+       ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
+       ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}})
+    (catch ExceptionInfo ex
+      (log/flush-logs! logger (log/exception log-state
+                                             ex
+                                             ::build-server
+                                             ""))
+      (throw ex))))
 
 (defn start-server
   [inited]
+  ;; I feel like I have a weird circular dependency in here.
+  ;; I don't.
+  ;; inited is not what (build-server) returned directly.
+  ;; Actually, that seems pretty broken.
   (let [client-write-chan (::srvr-state/client-write-chan inited)
         client-read-chan (::srvr-state/client-read-chan inited)]
     {::cp-server (server/start! (assoc (::cp-server inited)

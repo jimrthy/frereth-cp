@@ -14,6 +14,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.util :as util]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -58,17 +59,41 @@
 
 (s/def ::stopper dfrd/deferrable?)
 
-(s/def ::handle (s/keys :req [::max-active-clients
-                              ::shared/extension
-                              ::shared/my-keys
-                              ::shared/working-area
-                              ::state/active-clients
-                              ::state/current-client
-                              ::state/client-read-chan
-                              ::state/client-write-chan]
-                        :opt [::event-loop-stopper
-                              ::shared/packet-management
-                              ::state/cookie-cutter]))
+;; Note that this really only exists as an intermediate step for the
+;; sake of producing a ::state/state.
+(s/def ::pre-state (s/keys :req [::state/active-clients
+                                 ::state/child-spawner
+                                 ::state/client-read-chan
+                                 ::state/client-write-chan
+                                 ::state/max-active-clients
+                                 ::log2/logger
+                                 ::log2/state
+                                 ::shared/extension
+                                 ;; Note that this really only makes sense
+                                 ;; in terms of loading up my-keys.
+                                 ;; And, really, it seems like there are
+                                 ;; cleaner/better ways to handle that.
+                                 ;; Like storing them in a database that
+                                 ;; can handle expirations/rotations
+                                 ;; and passing them directly to the constructor
+                                 ::shared/keydir
+
+                                 ::shared/working-area]
+                           :opt [::state/cookie-cutter
+                                 ::state/current-client
+                                 ::state/event-loop-stopper
+                                 ::shared/my-keys
+                                 ::shared/packet-management]))
+
+;; These are the pieces that are used to put together the pre-state
+(s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]
+                                   :req [::log2/logger
+                                         ::log2/state
+                                         ::shared/extension
+                                         ::shared/keydir
+                                         ::state/child-spawner
+                                         ::state/client-read-chan
+                                         ::state/client-write-chan]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -90,16 +115,20 @@
          (= (bit-and r 0xf) 0))))
 
 (s/fdef handle-hello!
-        :args (s/cat :state any?
-                     :packet any?)
-        :ret any?)
+        :args (s/cat :state ::state/state
+                     :packet ::shared/network-packet)
+        :ret ::state/state)
 (defn handle-hello!
-  [state
+  [{:keys [::log2/logger]
+    :as state}
    {:keys [:message]
     :as packet}]
-  (when-let [cookie-recipe (hello/do-handle state message)]
-    (let [^ByteBuf cookie (cookie/do-build-cookie-response state cookie-recipe)]
-      (log/info (str "Cookie packet built. Sending it."))
+  (when-let [{log-state ::log2/state
+              :as cookie-recipe} (hello/do-handle state message)]
+    (let [^ByteBuf cookie (cookie/do-build-cookie-response state cookie-recipe)
+          log-state (log2/info log-state
+                               ::handle-hello!
+                               (str "Cookie packet built. Sending it."))]
       (try
         (if-let [dst (get-in state [::state/client-write-chan ::state/chan])]
           ;; And this is why I need to refactor this. There's so much going
@@ -114,32 +143,43 @@
                                           ;; TODO: This really needs to be part of
                                           ;; state so it can be tuned while running
                                           send-timeout
-                                          ::timed-out)]
-            (log/info "Cookie packet scheduled to send")
+                                          ::timed-out)
+                log-state (log2/info log-state
+                                     ::handle-hello!
+                                     "Cookie packet scheduled to send")
+                forked-log-state (log2/clean-fork log-state
+                                                  ::hello-processed)]
+
             (dfrd/on-realized put-future
                               (fn [success]
-                                (if success
-                                  (log/info "Sending Cookie succeeded")
-                                  (log/error "Sending Cookie failed"))
-                                ;; TODO: Make sure this does get released!
-                                ;; The caller has to handle that, though.
-                                ;; It can't be released until after it's been put
-                                ;; on the socket.
-                                ;; Actually, aleph should release it after it
-                                ;; puts it in the socket
-                                (comment (.release cookie)))
+                                (log2/flush-logs! logger
+                                                   (if success
+                                                     (log2/info forked-log-state
+                                                                ::handle-hello!
+                                                                "Sending Cookie succeeded")
+                                                     (log2/error forked-log-state
+                                                                 ::handle-hello!
+                                                                 "Sending Cookie failed"))))
                               (fn [err]
-                                (log/error "Sending Cookie failed:" err)
-                                (.release cookie)))
-            state)
+                                (log2/flush-logs! logger
+                                                  (log2/error forked-log-state
+                                                              ::handle-hello!
+                                                              "Sending Cookie failed:" err))))
+            (assoc state
+                   ::log2/state log-state))
           (throw (ex-info "Missing destination"
                           (or (::state/client-write-chan state)
                               {::problem "No client-write-chan"
                                ::keys (keys state)
                                ::actual state}))))
         (catch Exception ex
-          (log/error ex "Failed to send Cookie response")
-          state)))))
+
+          (assoc state
+                 ::log2/state
+                 (log2/exception log-state
+                                 ex
+                                 ::handle-hello!
+                                 "Failed to send Cookie response")))))))
 
 (s/fdef verify-my-packet
         :args (s/cat :packet bytes?)
@@ -184,12 +224,12 @@
                     {:what "Interesting part: incoming message"}))))
 
 (s/fdef handle-incoming!
-        :args (s/cat :state ::state/state
-                     :msg bytes?)
+        :args (s/cat :this ::handle
+                     :msg ::shared/network-packet)
         :ret ::state/state)
 (defn handle-incoming!
   "Packet arrived from client. Do something with it."
-  [state
+  [this
    {:keys [:host
            :port]
     ;; Q: How much performance do we really use if we
@@ -205,29 +245,48 @@
           server-extension (byte-array K/extension-length)]
       (b-t/byte-copy! header 0 K/header-length message)
       (b-t/byte-copy! server-extension 0 K/extension-length message K/header-length)
-      (if (verify-my-packet state header server-extension)
+      (if (verify-my-packet this header server-extension)
         (do
           (log/debug "This packet really is for me")
           (let [packet-type-id (char (aget header (dec K/header-length)))]
             (log/info "Incoming packet-type-id: " packet-type-id)
             (try
+              ;; FIXME: Here's a glaring mismatch.
+              ;; These and everything downstream from them
+              ;; expect ::state/state.
+              ;; But we're supplying ::handle.
+              ;; Which is just different enough to break things
+              ;; when I try to start logging.
+              ;; But has limped along fine until this point.
+              ;; Hypothesis: the two are basically copy/pasted.
+              ;; I think I want to branch before I head any further down
+              ;; this rabbit hole.
+              (when-let [problem (s/explain-data ::state/state this)]
+                (throw (ex-info "Type mismatch"
+                                problem)))
               (case packet-type-id
-                \H (handle-hello! state packet)
-                \I (initiate/handle! state packet)
-                \M (handle-message! state packet))
+                \H (handle-hello! this packet)
+                \I (initiate/handle! this packet)
+                \M (handle-message! this packet))
               (catch Exception ex
                 (let [trace (.getStackTrace ex)]
                   (log/error ex (str "Failed handling packet type: "
                                      packet-type-id
                                      "\n"
                                      (util/show-stack-trace ex))))
-                state))))
+                this))))
         (do (log/info "Ignoring packet intended for someone else")
-            state)))
+            this)))
     (do
       (log/debug "Ignoring packet of illegal length")
-      state)))
+      this)))
 
+(s/fdef input-reducer
+        :args (s/cat :this ::handle)
+        :message (s/or :stop-signal #{::drained
+                                      ::rotate
+                                      ::stop}
+                       :message ::shared/network-packet))
 (defn input-reducer
   "Convert input into the next state"
   [{:keys [::state/client-read-chan]
@@ -288,8 +347,8 @@
 ;;; Public
 
 (s/fdef start!
-         :args (s/cat :this ::handle)
-         :ret ::handle)
+         :args (s/cat :this ::pre-state)
+         :ret ::state/state)
 (defn start!
   "Start the server"
   [{:keys [::state/client-read-chan
@@ -322,7 +381,7 @@
         almost (assoc this ::state/cookie-cutter (state/randomized-cookie-cutter))]
     (log/info "Kicking off event loop. packet-management:" (::shared/packet-management almost))
     (assoc almost
-           ::event-loop-stopper (begin! almost)
+           ::state/event-loop-stopper (begin! almost)
            ::shared/packet-management (shared/default-packet-manager))))
 
 (s/fdef stop!
@@ -330,7 +389,7 @@
         :ret ::handle)
 (defn stop!
   "Stop the ioloop (but not the read/write channels: we don't own them)"
-  [{:keys [::event-loop-stopper
+  [{:keys [::state/event-loop-stopper
            ::shared/packet-management]
     :as this}]
   (log/warn "Stopping server state")
@@ -355,22 +414,37 @@
                      ;; TODO: This really should be fatal.
                      ;; Make the error-handling go away once hiding secrets actually works
                      this))
-                 ::event-loop-stopper nil)]
+                 ::state/event-loop-stopper nil)]
       (log/warn "Secrets hidden")
       outcome)
     (finally
       (shared/release-packet-manager! packet-management))))
 
 (s/fdef ctor
-        :args (s/cat :cfg (s/keys :opt [::max-active-clients]))
-        :ret ::handle)
+        :args (s/cat :cfg ::pre-state-options)
+        :ret ::pre-state)
 (defn ctor
   "Just like in the Component lifecycle, this is about setting up a value that's ready to start"
-  [{:keys [::max-active-clients]
+  [{:keys [::state/max-active-clients]
+    log-state ::log2/state
     :or {max-active-clients default-max-clients}
     :as cfg}]
-  (-> cfg
-      (assoc ::state/active-clients (atom {})
-             ::state/current-client (state/alloc-client)  ; Q: What's the point?
-             ::max-active-clients max-active-clients
-             ::shared/working-area (shared/default-work-area))))
+  (when-let [problem (s/explain-data ::pre-state-options cfg)]
+    (throw (ex-info "Invalid state construction attempt" problem)))
+
+  (let [log-state (log2/clean-fork log-state ::server)]
+    (-> cfg
+        (assoc ::state/active-clients (atom {})
+               ;; Q: What's the point?
+               ;; A: It makes some sense in C, when we're dealing with
+               ;; a single block of memory.
+               ;; It avoids a pointer dereference.
+               ;; Here...not so much.
+               ;; We aren't going to overwrite the memory block
+               ;; holding the struct with a copy of the struct
+               ;; currently being considered
+               ;; FIXME: This is an optimization that's screaming
+               ;; to be pruned.
+               ::state/current-client (state/alloc-client)
+               ::state/max-active-clients max-active-clients
+               ::shared/working-area (shared/default-work-area)))))
