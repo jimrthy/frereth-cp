@@ -39,23 +39,21 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-;;; This is probably too restrictive. And it seems a little
+#_[;;; This is probably too restrictive. And it seems a little
 ;;; pointless. But we have to have *some* way to identify
 ;;; them. Especially if I'm coping with address/port at a
 ;;; higher level.
-(s/def ::child-id integer?)
-;;; Note that this is probably too broad, assuming I choose to
-;;; go with this model.
-;;; From this perspective, from-child is really just sourceable?
-;;; while to-child is just sinkable?
-(s/def ::from-child (s/and strm/sinkable?
-                           strm/sourceable?))
-(s/def ::to-child (s/and strm/sinkable?
-                         strm/sourceable?))
+   (s/def ::child-id integer?)
 
-(s/def ::child-interaction (s/keys :req [::child-id
-                                         ::to-child
-                                         ::from-child]))
+
+   (s/def ::read<-child (s/and strm/sinkable?
+                               strm/sourceable?))
+   (s/def ::write->child (s/and strm/sinkable?
+                                strm/sourceable?))
+
+   (s/def ::child-interaction (s/keys :req [::child-id
+                                            ::read<-child
+                                            ::write->child]))]
 
 (s/def ::stopper dfrd/deferrable?)
 
@@ -86,14 +84,24 @@
                                  ::shared/packet-management]))
 
 ;; These are the pieces that are used to put together the pre-state
-(s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]
-                                   :req [::log2/logger
-                                         ::log2/state
-                                         ::shared/extension
-                                         ::shared/keydir
-                                         ::state/child-spawner
-                                         ::state/client-read-chan
-                                         ::state/client-write-chan]))
+(s/def ::pre-state-options (s/merge (s/keys :opt [::state/max-active-clients]
+                                            :req [::log2/logger
+                                                  ::log2/state
+                                                  ::shared/extension
+                                                  ;; Q: How well does this next approach work?
+                                                  ;; A: Not at all
+                                                  #_(s/or :key-dir ::shared/keydir
+                                                          :direct-keys ::shared/my-keys)
+                                                  ::state/child-spawner
+                                                  ;; Remember the distinction between these and
+                                                  ;; the callbacks for sharing bytes with the child
+                                                  ::state/client-read-chan
+                                                  ::state/client-write-chan])
+                                    ;; Honestly, this should be an xor.
+                                    ;; Alex Miller claimed on stack overflow that this
+                                    ;; works.
+                                    ;; FIXME: Verify.
+                                    (s/keys :req [(or ::shared/keydir ::shared/my-keys)])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal

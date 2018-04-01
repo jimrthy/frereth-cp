@@ -30,19 +30,25 @@
 
 (defn server-options
   [logger log-state]
-  {::cp-server {::log/logger logger
-                ::log/state log-state
-                ::shared/extension server-extension
-                ::shared/my-keys #::shared{::K/srvr-name server-name
-                                           :keydir "curve-test"}}})
+  (let [client-write-chan (strm/stream)
+        client-read-chan (strm/stream)]
+    {::cp-server {::log/logger logger
+                  ::log/state log-state
+                  ::shared/extension server-extension
+                  ::shared/my-keys #::shared{::K/srvr-name server-name
+                                             :keydir "curve-test"}
+                  ::srvr-state/client-read-chan client-read-chan
+                  ::srvr-state/client-write-chan client-write-chan
+                  ::srvr-state/child-spawner (fn []
+                                               (throw (RuntimeException. "Not Implemented")))}}))
 
 (defn build-server
   [logger log-state]
   (try
     (let [server (server/ctor (::cp-server (server-options logger log-state)))]
       {::cp-server server
-       ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
-       ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}})
+       ::srvr-state/client-read-chan {::srvr-state/chan (::srvr-state/client-read-chan server)}
+       ::srvr-state/client-write-chan {::srvr-state/chan (::srvr-state/client-write-chan server)}})
     (catch ExceptionInfo ex
       (log/flush-logs! logger (log/exception log-state
                                              ex
@@ -54,15 +60,19 @@
   [inited]
   ;; I feel like I have a weird circular dependency in here.
   ;; I don't.
-  ;; inited is not what (build-server) returned directly.
-  ;; Actually, that seems pretty broken.
-  (let [client-write-chan (::srvr-state/client-write-chan inited)
-        client-read-chan (::srvr-state/client-read-chan inited)]
-    {::cp-server (server/start! (assoc (::cp-server inited)
-                                       ::srvr-state/client-read-chan client-read-chan
-                                       ::srvr-state/client-write-chan client-write-chan))
-     ::srvr-state/client-read-chan client-read-chan
-     ::srvr-state/client-write-chan client-write-chan}))
+  ;; inited is not what (server/ctor) returned directly.
+  ;; That's because my original plan was to
+  ;; a) Set up the server component skeleton using the ctor
+  ;; b) Inject the client interaction channels for communicating
+  ;; with the network
+  ;; c) Call start with that
+  ;; From one perspective, that makes sense. We don't really want
+  ;; to start receiving packets before we can start handling them.
+  ;; OTOH, avoiding nonsens like this would be nice.
+  #_{::cp-server (server/start! (assoc (::cp-server inited)))
+   ::srvr-state/client-read-chan client-read-chan
+     ::srvr-state/client-write-chan client-write-chan}
+  (update inited ::cp-server server/start!))
 
 (defn stop-server
   [started]

@@ -270,6 +270,8 @@ But it depends on compose, which would set up circular dependencies"
    ^bytes clear-text]
   ;; Q: Which cipher mode is appropriate here?
   (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
+        ;; FIXME: Read https://www.synopsys.com/blogs/software-security/proper-use-of-javas-securerandom/
+        ;; This is almost definitely wrong.
         rng (SecureRandom.)
         ^AlgorithmParameterSpec iv (build-random-iv 16)]
     ;; Q: Does it make sense to create and init a new

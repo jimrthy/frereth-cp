@@ -1,8 +1,10 @@
 (ns frereth-cp.server-test
-  (:require [clojure.test :refer (deftest is testing)]
+  (:require [clojure.spec.alpha :as s]
+            [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as client]
             [frereth-cp.client.state :as client-state]
-            [frereth-cp.server.state :as state]
+            [frereth-cp.server :as server]
+            [frereth-cp.server.state :as srvr-state]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
@@ -53,9 +55,48 @@
   (alter-var-root #'test-sys cpt/stop-server)
   )
 
+(deftest verify-ctor-spec
+  (testing "Does the spec really work as intended?"
+    (let [base-options {::log/logger (log/std-out-log-factory)
+                        ::log/state (log/init ::verify-ctor-spec)
+                        ::shared/extension factory/server-extension
+                        ::srvr-state/child-spawner (fn []
+                                                     {::srvr-state/child-id 8
+                                                      ::srvr-state/read<-child (strm/stream)
+                                                      ::srvr-state/write->child (strm/stream)})
+                        ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
+                        ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}}]
+      ;; Honestly, this is just testing the clause that chooses between these two possibilities.
+      ;; FIXME: Since that really should be an xor, add another test that verifies that you
+      ;; can't legally have both.
+      ;; That very much flies in the face of the way specs were intended to work,
+      ;; but this is an extremely special case.
+      (is (not (s/explain-data ::server/pre-state-options (assoc base-options
+                                                                 ::shared/keydir "somewhere"))))
+      (is (not (s/explain-data ::server/pre-state-options (assoc base-options
+                                                                 ;; The fact that keydir is stored here is worse than annoying.
+                                                                 ;; It's wasteful and pointless.
+                                                                 ;; Actually, both of these really point out the basic fact that
+                                                                 ;; I should be smarter about this translation.
+                                                                 ;; Pass these parameters into a function, get back the associated
+                                                                 ;; long/short key-pair.
+                                                                 ;; The shared ns has more comments about the problems involved
+                                                                 ;; here.
+                                                                 ;; One of the true ironies is that, if I'm using this approach,
+                                                                 ;; the long/short key pairs are really what I want/need here.
+                                                                 ;; And I don't needs the parts I've required.
+                                                                 ;; FIXME: Switch to a smarter implementation.
+                                                                 ::shared/my-keys {::shared/keydir "somewhere"
+                                                                                   ::K/srvr-name factory/server-name})))))))
+
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two
-  (let [init (factory/build-server)
+  (let [logger (log/std-out-log-factory)
+        ;; FIXME: Honestly, I've had much better luck keeping
+        ;; separate logs for both client and server
+        ;; And flushing their output to separate files.
+        log-state (log/init ::shake-hands)
+        init (factory/build-server logger log-state)
         started (factory/start-server init)]
     (println "Server should be started now")
     ;; Which means it's time to start the client
@@ -66,7 +107,6 @@
             ;; Then again, the extra 2 bytes of memory involved here really don't
             ;; matter.
             client-port 48816
-            log-state (log/init ::shake-hands)
             srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
             server-ip [127 0 0 1]
             server-port 65000
@@ -81,7 +121,7 @@
             (is (:host hello) "This layer doesn't know where to send anything")
             (if (not (or (= hello ::drained)
                          (= hello ::timeout)))
-              (let [->srvr (get-in started [::state/client-read-chan ::state/chan])
+              (let [->srvr (get-in started [::srvr-state/client-read-chan ::srvr-state/chan])
                     ;; Currently, this arrives as a ByteBuf.
                     ;; Anything that can be converted to a direct ByteBuf is legal.
                     ;; So this part is painfully implementation-dependent.
@@ -96,7 +136,7 @@
                                                     1000
                                                     ::timed-out))]
                   (if (not= ::timed-out success)
-                    (let [srvr-> (get-in started [::state/client-write-chan ::state/chan])
+                    (let [srvr-> (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])
                           ;; From the aleph docs:
                           ;; "The stream will accept any messages which can be coerced into
                           ;; a binary representation."

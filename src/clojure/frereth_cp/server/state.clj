@@ -41,16 +41,22 @@
 (s/def ::client-read-chan (s/keys :req [::chan]))
 (s/def ::client-write-chan (s/keys :req [::chan]))
 
+;;; Note that this has really changed drastically.
+;;; These are now really side-effecting functions
+;;; that accept byte-arrays to pass back and forth.
+;;; But I haven't had a chance to even start refactoring
+;;; the server side of this.
+;;; Right now, I'm still hip-deep in the client side.
+;;; I'm very hopeful that I'll be able to refactor that
+;;; implementation to shared to avoid duplication.
 ;; OK, now life starts getting interesting.
 ;; What, exactly, do we need to do here?
 (s/def ::child-id int?)
-(s/def ::write->child strm/stream?)
-;; Note that the frereth-cp.server ns also has one of
-;; these. That seems like a mistake.
+(s/def ::read<-child strm/sourceable?)
+(s/def ::write->child strm/sinkable?)
 (s/def ::child-interaction (s/keys :req [::child-id
                                          ::read<-child
-                                         ::write->child]
-                                   :opt [::reader-consumed]))
+                                         ::write->child]))
 
 (s/def ::client-short<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-short ::shared/shared-secret)
