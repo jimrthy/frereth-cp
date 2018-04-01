@@ -61,7 +61,7 @@
 ;; Until they're loaded, we don't have anything to associate
 ;; with the long-/short-pairs.
 ;; TODO: Split this up.
-(s/def ::my-keys (s/keys :req [::keydir
+(s/def ::my-keys (s/keys :req [::keydir  ; Note that ::state/state may need to change when this stops being here
                                ::K/srvr-name]
                          :opt [::long-pair
                                ::short-pair]))

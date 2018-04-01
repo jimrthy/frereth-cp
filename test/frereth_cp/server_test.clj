@@ -103,7 +103,8 @@
     (try
       (let [client-host "cp-client.nowhere.org"
             ;; This is another example of java's unsigned integer stupidity.
-            ;; This really should be a short.
+            ;; This really should be a short, but can't without handling my own
+            ;; 2s-complement bit twiddling.
             ;; Then again, the extra 2 bytes of memory involved here really don't
             ;; matter.
             client-port 48816

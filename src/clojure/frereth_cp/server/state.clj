@@ -33,13 +33,26 @@
                                        ::shared-specs/public-short
                                        ::server-short-sk]))
 
+;; Yes, this seems silly. And will probably cause plenty of
+;; trouble/confusion. I'm not sure about alternatives for specing
+;; out client-read-chan/client-write chan.
+;; Actually, this demonstrates a poor design decision.
+;; Different channels used for different purposes should
+;; have different keys. Which is the purpose behind having
+;; ::client-read-chan distinct from ::client-write-chan.
+;; However:
+;; I remember thinking I had a good reason for the indirection
+;; that leaves each pointing to another map.
+;; FIXME: Revisit that reason and decide whether it's still
+;; valid.
+(s/def ::chan #(= % ::chan))
 ;; These definitions seem dubious.
 ;; Originally, I expected them to be core.async channels.
 ;; They should probably be manifold streams, in which
 ;; case read-chan seems like it should be a source?
 ;; and write-chan seems like it should be a sink?
-(s/def ::client-read-chan (s/keys :req [::chan]))
-(s/def ::client-write-chan (s/keys :req [::chan]))
+(s/def ::client-read-chan (s/map-of ::chan strm/sourceable?))
+(s/def ::client-write-chan (s/map-of ::chan strm/sinkable?))
 
 ;;; Note that this has really changed drastically.
 ;;; These are now really side-effecting functions
@@ -122,7 +135,12 @@
                              ::log2/state
                              ::shared/extension
                              ;; Q: Does this make any sense here?
-                             ;; A: Probably not
+                             ;; A: Definitely not.
+                             ;; Especially since, given the current
+                             ;; implementation, it's also a part of
+                             ;; ::shared/my-keys
+                             ;; FIXME: Revisit this decision if/when
+                             ;; that stops being the case.
                              #_::shared/keydir
                              ::shared/working-area
 
@@ -132,6 +150,9 @@
                              ;; server/handle
                              ::cookie-cutter
                              ;; This doesn't particularly belong here
+                             ;; (Or, for that matter, make much sense
+                             ;; as anything except a reference. And
+                             ;; even that seems questionable)
                              ::current-client
                              ::event-loop-stopper
                              ::shared/my-keys

@@ -84,24 +84,19 @@
                                  ::shared/packet-management]))
 
 ;; These are the pieces that are used to put together the pre-state
-(s/def ::pre-state-options (s/merge (s/keys :opt [::state/max-active-clients]
-                                            :req [::log2/logger
-                                                  ::log2/state
-                                                  ::shared/extension
-                                                  ;; Q: How well does this next approach work?
-                                                  ;; A: Not at all
-                                                  #_(s/or :key-dir ::shared/keydir
-                                                          :direct-keys ::shared/my-keys)
-                                                  ::state/child-spawner
-                                                  ;; Remember the distinction between these and
-                                                  ;; the callbacks for sharing bytes with the child
-                                                  ::state/client-read-chan
-                                                  ::state/client-write-chan])
-                                    ;; Honestly, this should be an xor.
-                                    ;; Alex Miller claimed on stack overflow that this
-                                    ;; works.
-                                    ;; FIXME: Verify.
-                                    (s/keys :req [(or ::shared/keydir ::shared/my-keys)])))
+(s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]
+                                   :req [::log2/logger
+                                         ::log2/state
+                                         ::shared/extension
+                                         ;; Honestly, this should be an xor.
+                                         ;; It makes sense for the caller to
+                                         ;; supply one or the other, but not both.
+                                         (or ::shared/keydir ::shared/my-keys)
+                                         ::state/child-spawner
+                                         ;; Remember the distinction between these and
+                                         ;; the callbacks for sharing bytes with the child
+                                         ::state/client-read-chan
+                                         ::state/client-write-chan]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal

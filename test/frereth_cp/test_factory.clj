@@ -40,6 +40,11 @@
                   ::srvr-state/client-read-chan client-read-chan
                   ::srvr-state/client-write-chan client-write-chan
                   ::srvr-state/child-spawner (fn []
+                                               ;; This needs to do something
+                                               ;; Then again, that "something" very much depends
+                                               ;; on the changes I'm currently making to the client
+                                               ;; child fork mechanism.
+                                               ;; FIXME: Get back to this once that is done.
                                                (throw (RuntimeException. "Not Implemented")))}}))
 
 (defn build-server
@@ -58,20 +63,6 @@
 
 (defn start-server
   [inited]
-  ;; I feel like I have a weird circular dependency in here.
-  ;; I don't.
-  ;; inited is not what (server/ctor) returned directly.
-  ;; That's because my original plan was to
-  ;; a) Set up the server component skeleton using the ctor
-  ;; b) Inject the client interaction channels for communicating
-  ;; with the network
-  ;; c) Call start with that
-  ;; From one perspective, that makes sense. We don't really want
-  ;; to start receiving packets before we can start handling them.
-  ;; OTOH, avoiding nonsens like this would be nice.
-  #_{::cp-server (server/start! (assoc (::cp-server inited)))
-   ::srvr-state/client-read-chan client-read-chan
-     ::srvr-state/client-write-chan client-write-chan}
   (update inited ::cp-server server/start!))
 
 (defn stop-server
