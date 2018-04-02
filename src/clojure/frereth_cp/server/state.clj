@@ -110,6 +110,9 @@
 (s/def ::child-spawner (s/fspec :args (s/cat)
                                 :ret ::child-interaction))
 
+(s/def ::event-loop-stopper! (s/fspec :args (s/cat)
+                                     :ret any?))
+
 ;; This is almost copypasta from ::server/handle.
 ;; But that's really about putting the pieces together in
 ;; order to build this, which is what gets shared
@@ -154,7 +157,7 @@
                              ;; as anything except a reference. And
                              ;; even that seems questionable)
                              ::current-client
-                             ::event-loop-stopper
+                             ::event-loop-stopper!
                              ::shared/my-keys
                              ::shared/packet-management]))
 
