@@ -152,14 +152,14 @@
                              ;; These fields are optional in
                              ;; server/handle
                              ::cookie-cutter
-                             ;; This doesn't particularly belong here
-                             ;; (Or, for that matter, make much sense
-                             ;; as anything except a reference. And
-                             ;; even that seems questionable)
-                             ::current-client
                              ::event-loop-stopper!
                              ::shared/my-keys
-                             ::shared/packet-management]))
+                             ::shared/packet-management]
+                       ;; This doesn't particularly belong here
+                       ;; (Or, for that matter, make much sense
+                       ;; as anything except a reference. And
+                       ;; even that seems questionable)
+                       :opt [::current-client]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

@@ -97,6 +97,8 @@
     (and (<= 80 r 1184)
          ;; i.e. (= (rem r 16) 0)
          ;; TODO: Keep an eye out for potential benchmarks
+         ;; The compiler really should be smart enough so the
+         ;; two are equivalent.
          (= (bit-and r 0xf) 0))))
 
 (s/fdef handle-hello!
@@ -108,6 +110,7 @@
     :as state}
    {:keys [:message]
     :as packet}]
+  (println "Top of handle-hello!")
   (when-let [{log-state ::log2/state
               :as cookie-recipe} (hello/do-handle state message)]
     (let [^ByteBuf cookie (cookie/do-build-cookie-response state cookie-recipe)
@@ -223,6 +226,7 @@
     ;; set up the socket to send a B] rather than a ByteBuf?
     ^bytes message :message
     :as packet}]
+  (println "Handling incoming <---------------")
   (let [log-state (log2/debug log-state
                               ::handle-incoming!
                               "Top")]
@@ -244,10 +248,13 @@
                                      ""
                                      {::packet-type-id packet-type-id})
                 this (assoc this ::log2/state log-state)]
+            (println "My packet")
             (try
               (when-let [problem (s/explain-data ::state/state this)]
+                (println "No bueno" problem)
                 (throw (ex-info "Type mismatch"
                                 problem)))
+              (println "Sending a" packet-type-id " to the handler")
               (case packet-type-id
                 \H (handle-hello! this packet)
                 \I (initiate/handle! this packet)
@@ -259,10 +266,12 @@
                                                     ::handle-incoming!
                                                     "Failed handling packet"
                                                     {::packet-type-id packet-type-id})))))
-          (assoc this
-                 ::log2/state (log2/info log-state
-                                         ::handle-incoming!
-                                         "Ignoring packet intended for someone else"))))
+          (do
+            (println "Someone else's packet")
+            (assoc this
+                   ::log2/state (log2/info log-state
+                                           ::handle-incoming!
+                                           "Ignoring packet intended for someone else")))))
       (assoc this
              ::log2/state (log2/debug log-state
                                       ::handle-incoming!
@@ -419,10 +428,9 @@
                                {::shared/packet-management (::shared/packet-management almost)})
           ;; Q: What are the odds that the next two piece needs to do logging?
           result (assoc almost
-                        ::state/event-loop-stopper! (build-event-loop-stopper almost))
-          log-state (log2/flush-logs! logger log-state)]
+                        ::state/event-loop-stopper! (build-event-loop-stopper almost))]
       (begin! result)
-      (assoc result ::log2/state log-state))))
+      (assoc result ::log2/state (log2/flush-logs! logger log-state)))))
 
 (s/fdef stop!
         :args (s/cat :this ::state/state)
@@ -477,22 +485,17 @@
     log-state ::log2/state
     :or {max-active-clients default-max-clients}
     :as cfg}]
+  ;; Note that this is going to call the child state spawner.
+  ;; Which really isn't what I want to have happen here at all.
+  ;; Then again, I'm in the process of completely and totally
+  ;; rethinking how this works, so it isn't worth addressing
+  ;; until after I'm happy with the way the client approach
+  ;; works.
   (when-let [problem (s/explain-data ::pre-state-options cfg)]
     (throw (ex-info "Invalid state construction attempt" problem)))
 
   (let [log-state (log2/clean-fork log-state ::server)]
     (-> cfg
         (assoc ::state/active-clients (atom {})
-               ;; Q: What's the point?
-               ;; A: It makes some sense in C, when we're dealing with
-               ;; a single block of memory.
-               ;; It avoids a pointer dereference.
-               ;; Here...not so much.
-               ;; We aren't going to overwrite the memory block
-               ;; holding the struct with a copy of the struct
-               ;; currently being considered
-               ;; FIXME: This is an optimization that's screaming
-               ;; to be pruned.
-               ::state/current-client (state/alloc-client)
                ::state/max-active-clients max-active-clients
                ::shared/working-area (shared/default-work-area)))))

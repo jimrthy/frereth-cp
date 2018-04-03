@@ -12,6 +12,7 @@
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as shared-specs]
+            [manifold.executor :as exec]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo))
 
@@ -31,29 +32,34 @@
 (defn server-options
   [logger log-state]
   (let [client-write-chan (strm/stream)
-        client-read-chan (strm/stream)]
+        client-read-chan (strm/stream)
+        child-id-atom (atom 0)
+        executor (exec/fixed-thread-executor 4)]
     {::cp-server {::log/logger logger
                   ::log/state log-state
                   ::shared/extension server-extension
                   ::shared/my-keys #::shared{::K/srvr-name server-name
                                              :keydir "curve-test"}
-                  ::srvr-state/client-read-chan client-read-chan
-                  ::srvr-state/client-write-chan client-write-chan
+                  ::srvr-state/client-read-chan {::srvr-state/chan client-read-chan}
+                  ::srvr-state/client-write-chan {::srvr-state/chan client-write-chan}
                   ::srvr-state/child-spawner (fn []
+                                               (println "FIXME: Server child state spawned")
                                                ;; This needs to do something
                                                ;; Then again, that "something" very much depends
                                                ;; on the changes I'm currently making to the client
                                                ;; child fork mechanism.
                                                ;; FIXME: Get back to this once that is done.
-                                               (throw (RuntimeException. "Not Implemented")))}}))
+                                               {::srvr-state/child-id (swap! child-id-atom inc)
+                                                ::srvr-state/read<-child (strm/stream 2 nil executor)
+                                                ::srvr-state/write->child (strm/stream 2 nil executor)})}}))
 
 (defn build-server
   [logger log-state]
   (try
     (let [server (server/ctor (::cp-server (server-options logger log-state)))]
       {::cp-server server
-       ::srvr-state/client-read-chan {::srvr-state/chan (::srvr-state/client-read-chan server)}
-       ::srvr-state/client-write-chan {::srvr-state/chan (::srvr-state/client-write-chan server)}})
+       ::srvr-state/client-read-chan (::srvr-state/client-read-chan server)
+       ::srvr-state/client-write-chan (::srvr-state/client-write-chan server)})
     (catch ExceptionInfo ex
       (log/flush-logs! logger (log/exception log-state
                                              ex
@@ -68,6 +74,7 @@
 (defn stop-server
   [started]
   (let [ch (get-in started [::srvr-state/client-read-chan ::srvr-state/chan])]
+    (println "Closing" ch)
     (strm/close! ch))
   (let [ch (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])]
     (strm/close! ch))

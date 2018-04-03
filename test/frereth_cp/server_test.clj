@@ -131,12 +131,38 @@
                     hello-length (.readableBytes hello-buffer)
                     hello-packet (byte-array hello-length)]
                 (.readBytes hello-buffer hello-packet)
-                (let [success (deref (strm/try-put! ->srvr
-                                                    (assoc hello
-                                                           :message hello-packet)
-                                                    1000
-                                                    ::timed-out))]
-                  (if (not= ::timed-out success)
+                (println "Trying to put hello packet,"
+                         hello-packet
+                         "a"
+                         (class hello-packet)
+                         "onto server channel"
+                         ->srvr
+                         "a"
+                         (class ->srvr))
+                ;; There's something strange going on here. The try-put! is
+                ;; blocking.
+                ;; I've added a spec check in the handler. It's throwing an
+                ;; exception. I created this stream using an executor, but it
+                ;; still acts as though that exception breaks the try-put!
+                (let [put-success #_(strm/try-put! ->srvr
+                                                 (assoc hello
+                                                        :message hello-packet)
+                                                 1000
+                                                 ::timed-out)
+                      ;; That version blocks.
+                      ;; This version fails, because there's no such method for a default Stream
+                      #_(.put ->srvr (assoc hello :message hello-packet) 1000 ::timed-out)
+                      ;; This fails because we can't cast a default Stream to an IObj
+                      ;; Even if I require the manifold.stream.core ns
+                      #_(.put (with-meta ->srvr {:tag "manifold.stream.core.IEventSink"}) (assoc hello :message hello-packet) 1000 ::timed-out)
+                      (throw (RuntimeException. "What on earth is going on here?"))
+                      _ (println "Trying to deref the put")
+                      success (deref put-success
+                                     1000
+                                     ::deref-try-put!-timed-out)]
+                  (println "put attempt result:" success)
+                  (if (and (not= ::timed-out success)
+                           (not= ::deref-try-put!-timed-out success))
                     (let [srvr-> (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])
                           ;; From the aleph docs:
                           ;; "The stream will accept any messages which can be coerced into
@@ -151,9 +177,12 @@
                           ;; minimize copying for writes (this may or may not mean
                           ;; rewriting compose to return B] instead)
                           ;; Note that I didn't need to do this for the Hello packet.
-                          packet @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
+                          packet-take (strm/try-take! srvr-> ::drained 1000 ::timeout)
+                          packet (deref packet-take 1000 ::take-timeout)]
+                      (println "Server response to hello:" packet)
                       (if (and (not= ::drained packet)
-                               (not= ::timeout packet))
+                               (not= ::timeout packet)
+                               (not= ::take-timeout packet))
                         (if-let [client<-server (::client-state/chan<-server @client-agent)]
                           (let [cookie-buffer (:message packet)
                                 cookie (byte-array (.readableBytes cookie-buffer))]
