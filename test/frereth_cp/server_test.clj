@@ -1,5 +1,6 @@
 (ns frereth-cp.server-test
-  (:require [clojure.spec.alpha :as s]
+  (:require [clojure.pprint :refer (pprint)]
+            [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as client]
             [frereth-cp.client.state :as client-state]
@@ -73,21 +74,42 @@
       ;; but this is an extremely special case.
       (is (not (s/explain-data ::server/pre-state-options (assoc base-options
                                                                  ::shared/keydir "somewhere"))))
-      (is (not (s/explain-data ::server/pre-state-options (assoc base-options
-                                                                 ;; The fact that keydir is stored here is worse than annoying.
-                                                                 ;; It's wasteful and pointless.
-                                                                 ;; Actually, both of these really point out the basic fact that
-                                                                 ;; I should be smarter about this translation.
-                                                                 ;; Pass these parameters into a function, get back the associated
-                                                                 ;; long/short key-pair.
-                                                                 ;; The shared ns has more comments about the problems involved
-                                                                 ;; here.
-                                                                 ;; One of the true ironies is that, if I'm using this approach,
-                                                                 ;; the long/short key pairs are really what I want/need here.
-                                                                 ;; And I don't needs the parts I've required.
-                                                                 ;; FIXME: Switch to a smarter implementation.
-                                                                 ::shared/my-keys {::shared/keydir "somewhere"
-                                                                                   ::K/srvr-name factory/server-name})))))))
+      (let [pre-state-options (assoc base-options
+                                     ;; The fact that keydir is stored here is worse than annoying.
+                                     ;; It's wasteful and pointless.
+                                     ;; Actually, both of these really point out the basic fact that
+                                     ;; I should be smarter about this translation.
+                                     ;; Pass these parameters into a function, get back the associated
+                                     ;; long/short key-pair.
+                                     ;; The shared ns has more comments about the problems involved
+                                     ;; here.
+                                     ;; One of the true ironies is that, if I'm using this approach,
+                                     ;; the long/short key pairs are really what I want/need here.
+                                     ;; And I don't needs the parts I've required.
+                                     ;; FIXME: Switch to a smarter implementation.
+                                     ::shared/my-keys {::shared/keydir "curve-test"
+                                                       ::K/srvr-name factory/server-name})]
+        (println "Checking pre-state spec")
+        (is (not (s/explain-data ::server/pre-state-options pre-state-options)))
+        (println "pre-state spec passed")
+        (testing
+            "Start/Stop"
+            (let [pre-state (server/ctor pre-state-options)
+                  state (server/start! pre-state)]
+              (try
+                (println "Server started. Looks like:  <------------")
+                ;; Q: Do I want to do this dissoc?
+                (pprint (dissoc state ::log/state))
+                ;; This is blocking
+                (is (not (s/explain-data ::srvr-state/state state)))
+                ;; Sending a SIGINT kills a thread that's blocking execution and
+                ;; allows this line to print.
+                (println "Spec checked")
+                (finally (let [stopped (server/stop! state)]
+                           ;; Not getting here, though
+                           (println "Server stopped")
+                           (is (not (s/explain-data ::server/pre-state-options stopped)))
+                           (println "pre-state checked"))))))))))
 
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two
@@ -144,7 +166,7 @@
                 ;; I've added a spec check in the handler. It's throwing an
                 ;; exception. I created this stream using an executor, but it
                 ;; still acts as though that exception breaks the try-put!
-                (let [put-success #_(strm/try-put! ->srvr
+                (let [put-success (strm/try-put! ->srvr
                                                  (assoc hello
                                                         :message hello-packet)
                                                  1000
@@ -155,7 +177,7 @@
                       ;; This fails because we can't cast a default Stream to an IObj
                       ;; Even if I require the manifold.stream.core ns
                       #_(.put (with-meta ->srvr {:tag "manifold.stream.core.IEventSink"}) (assoc hello :message hello-packet) 1000 ::timed-out)
-                      (throw (RuntimeException. "What on earth is going on here?"))
+                      #_(throw (RuntimeException. "What on earth is going on here?"))
                       _ (println "Trying to deref the put")
                       success (deref put-success
                                      1000

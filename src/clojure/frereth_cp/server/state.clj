@@ -130,7 +130,7 @@
 ;; it doesn't seem worth the book-keeping effort to try to
 ;; keep them sorted out.
 (s/def ::state (s/keys :req [::active-clients
-                             ::child-spawner
+                             #_::child-spawner
                              ::client-read-chan
                              ::client-write-chan
                              ::max-active-clients
@@ -152,7 +152,12 @@
                              ;; These fields are optional in
                              ;; server/handle
                              ::cookie-cutter
-                             ::event-loop-stopper!
+                             ;; Checkin the spec on this means calling
+                             ;; it. Which really hoses the entire system
+                             ;; if it happens more than once.
+                             ;; OTOH, commenting it out doesn't fix my problem
+                             ;; with the spec check just hanging
+                             #_::event-loop-stopper!
                              ::shared/my-keys
                              ::shared/packet-management]
                        ;; This doesn't particularly belong here

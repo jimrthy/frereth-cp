@@ -248,18 +248,31 @@
                                      ""
                                      {::packet-type-id packet-type-id})
                 this (assoc this ::log2/state log-state)]
-            (println "My packet")
+            (println "My packet" this)
             (try
+              ;; This is what's blocking my try-put.
+              ;; What on earth is going on here?
+              ;; Note that I really don't want to check the schema for this.
+              ;; That doesn't make any sense at all.
+              ;; We're most definitely at a system boundary, but my
+              ;; state shouldn't cause any problems.
+              ;; Unfortunately, it is.
+              ;; There has to be some screwy functional spec involved
+              ;; that's deadlocking.
+              (throw (RuntimeException. "Start back here."))
               (when-let [problem (s/explain-data ::state/state this)]
-                (println "No bueno" problem)
+                (println "No bueno" #_problem)
+                (.flush System/out)
                 (throw (ex-info "Type mismatch"
                                 problem)))
               (println "Sending a" packet-type-id " to the handler")
+              (.flush System/out)
               (case packet-type-id
                 \H (handle-hello! this packet)
                 \I (initiate/handle! this packet)
                 \M (handle-message! this packet))
               (catch Exception ex
+                (println "failed:" ex)
                 (assoc this
                        ::log2/state (log2/exception log-state
                                                     ex
@@ -434,7 +447,7 @@
 
 (s/fdef stop!
         :args (s/cat :this ::state/state)
-        :ret ::state/state)
+        :ret ::pre-state-options)
 (defn stop!
   "Stop the ioloop (but not the read/write channels: we don't own them)"
   [{:keys [::log2/logger
@@ -446,33 +459,57 @@
                                                       ::stop!
                                                       "Stopping server state"))]
     (try
-      (when event-loop-stopper!
-        (log/info "Sending stop signal to event loop")
-        ;; The caller needs to close the client-read-chan,
-        ;; which will effectively stop the ioloop by draining
-        ;; the reduce's source.
-        ;; This will signal it to stop directly.
-        ;; It's probably redudant, but feels safer.
-        (event-loop-stopper!))
-      (let [log-state (log2/flush-logs! logger (log2/warn log-state
+      (let [log-state
+            (if event-loop-stopper!
+              (try
+                (let [log-state (log2/flush-logs! logger (log2/info log-state
+                                                                    ::stop!
+                                                                    "Sending stop signal to event loop"))
+                      ;; The caller needs to close the client-read-chan,
+                      ;; which will effectively stop the ioloop by draining
+                      ;; the reduce's source.
+                      ;; This will signal it to stop directly.
+                      ;; It's probably redudant, but feels safer.
+                      stopped (event-loop-stopper!)]
+                  (log2/debug log-state
+                              ::stop!
+                              "stopped"
+                              {::side-effect-returned stopped}))
+                (catch Exception ex
+                  (log2/exception log-state
+                                  ex
+                                  ::stop!))
+                (catch Throwable ex
+                  (log2/exception log-state
+                                  ex
+                                  ::stop!
+                                  "This was bad")
+                  (throw ex)))
+              (log2/debug log-state
+                          ::stop!
+                          "No stop method"))
+            log-state (log2/flush-logs! logger (log2/warn log-state
                                                           ::stop!
-                                                          "Clearing secrets"))]
-        (let [outcome
-              (assoc (try
-                       (state/hide-secrets! this)
-                       (catch RuntimeException ex
-                         (log/error "ERROR: " ex)
-                         this)
-                       (catch Exception ex
-                         (log/fatal "FATAL:" ex)
-                         ;; TODO: This really should be fatal.
-                         ;; Make the error-handling go away once hiding secrets actually works
-                         this))
-                     ::state/event-loop-stopper! nil)
-              log-state (log2/warn log-state
-                                   ::stop!
-                                   "Secrets hidden")]
-          (assoc outcome ::log2/state log-state)))
+                                                          "Clearing secrets"))
+            outcome (assoc (try
+                             (state/hide-secrets! this)
+                             (catch RuntimeException ex
+                               (log/error "ERROR: " ex)
+                               this)
+                             (catch Exception ex
+                               (log/fatal "FATAL:" ex)
+                               ;; TODO: This really should be fatal.
+                               ;; Make the error-handling go away once hiding secrets actually works
+                               this))
+                           ::state/event-loop-stopper! nil)
+            log-state (log2/warn log-state
+                                 ::stop!
+                                 "Secrets hidden")]
+        (assoc outcome ::log2/state log-state))
+      (catch Exception ex
+        (log2/exception log-state
+                        ex
+                        ::stop!))
       (finally
         (shared/release-packet-manager! packet-management)))))
 
