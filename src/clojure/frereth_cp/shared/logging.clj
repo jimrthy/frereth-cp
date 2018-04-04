@@ -93,18 +93,23 @@
 ;;;; Internal
 
 (s/fdef build-log-entry
-        :args (s/cat :label ::label
-                     :lamport ::lamport
-                     :level ::level
-                     :message ::message))
+        :args (s/or :with-msg (s/cat :label ::label
+                                     :lamport ::lamport
+                                     :level ::level
+                                     :message ::message)
+                    :sans-msg (s/cat :label ::label
+                                     :lamport ::lamport
+                                     :level ::level)))
 (defn build-log-entry
-  [label lamport level message]
-  {::current-thread (utils/get-current-thread)
-   ::label label
-   ::lamport lamport
-   ::level level
-   ::time (System/currentTimeMillis)
-   ::message message})
+  ([label lamport level]
+   {::current-thread (utils/get-current-thread)
+    ::label label
+    ::lamport lamport
+    ::level level
+    ::time (System/currentTimeMillis)})
+  ([label lamport level message]
+   (assoc (build-log-entry label lamport level)
+          ::message message)))
 
 (s/fdef add-log-entry
         :args (s/cat :log-state ::state
@@ -114,7 +119,21 @@
                      :details ::details)
         :ret ::entries)
 (defn add-log-entry
-    ([{:keys [::lamport]
+  ([{:keys [::lamport]
+     :as log-state}
+    level
+    label]
+   (when-not lamport
+     (let [ex (ex-info "Desperation warning: missing clock among" (or {::problem log-state}
+                                                                      {::problem "falsey log-state"}))]
+       (s-t/print-stack-trace ex)))
+   (-> log-state
+       (update
+        ::entries
+        conj
+        (build-log-entry label lamport level))
+       (update ::lamport inc)))
+  ([{:keys [::lamport]
      :as log-state}
     level
     label
@@ -181,7 +200,10 @@
        ([log-state#
          label#
          message#]
-        (add-log-entry log-state# ~tag label# message#)))))
+        (add-log-entry log-state# ~tag label# message#))
+       ([log-state#
+         label#]
+        (add-log-entry log-state# ~tag label#)))))
 
 (defn exception-details
   [ex]
@@ -285,8 +307,10 @@
 (deflogger error)
 
 (defn exception
+  ([log-state ex label]
+   (add-log-entry log-state ::exception label))
   ([log-state ex label message]
-   (exception log-state ex label message nil))
+   (add-log-entry log-state ::exception label message))
   ([log-state ex label message original-details]
    (let [details {::original-details original-details
                   ::problem (exception-details ex)}]
