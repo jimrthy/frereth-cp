@@ -141,6 +141,7 @@
                               ::open-packet
                               "Missing :current-client among"
                               state))]
+            ;; FIXME: Start back here
             (throw (ex-info "Missing spot for client short-term public key" (assoc state ::log2/state log-state)))))
         (when (not clnt-short-pk)
           (throw (ex-info "HELLO packet missed client short-term pk" decomposed)))

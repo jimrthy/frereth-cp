@@ -102,10 +102,12 @@
 (s/def ::current-client ::client-state)
 
 ;; Q: Does this really need to be an atom?
-(s/def ::active-clients (s/and #(instance? clojure.lang.Atom %)
-                               ;; TODO: Should probably verify that this is a map of
-                               ;; public-short-term-keys to ::client-state
-                               #(map? (deref %))))
+;; A: Well, technically not. That makes it tougher
+;; to get the currently active client list, but
+;; that isn't necessarily a bad thing.
+;; TODO: Ditch the atom
+(s/def ::active-clients (s/map-of ::shared/public-key ::client-state))
+(s/def ::max-active-clients nat-int?)
 
 (s/def ::child-spawner (s/fspec :args (s/cat)
                                 :ret ::child-interaction))
@@ -113,7 +115,7 @@
 (s/def ::event-loop-stopper! (s/fspec :args (s/cat)
                                      :ret any?))
 
-;; This is almost copypasta from ::server/handle.
+;; This is almost copy/pasted straight from ::server/pre-state.
 ;; But that's really about putting the pieces together in
 ;; order to build this, which is what gets shared
 ;; everywhere.
@@ -124,47 +126,56 @@
 ;; But the calls are really a very tightly coupled chain that I
 ;; refactored from a single gigantic C function that takes advantage
 ;; of a bunch of globals.
-;; The function at the bottom of the call stack uses most of this
-;; state. Which means that everything that leads up to it
+;; The functions at the bottom of the call stack uses most of this
+;; state. Which means that everything that leads up to them
 ;; also requires it. The differences are minor enough that it
 ;; it doesn't seem worth the book-keeping effort to try to
 ;; keep them sorted out.
-(s/def ::state (s/keys :req [::active-clients
-                             #_::child-spawner
-                             ::client-read-chan
-                             ::client-write-chan
-                             ::max-active-clients
-                             ::log2/logger
-                             ::log2/state
-                             ::shared/extension
-                             ;; Q: Does this make any sense here?
-                             ;; A: Definitely not.
-                             ;; Especially since, given the current
-                             ;; implementation, it's also a part of
-                             ;; ::shared/my-keys
-                             ;; FIXME: Revisit this decision if/when
-                             ;; that stops being the case.
-                             #_::shared/keydir
-                             ::shared/working-area
+(let [fields-safe-to-validate [::active-clients
+                               ::client-read-chan
+                               ::client-write-chan
+                               ::max-active-clients
+                               ::log2/logger
+                               ::log2/state
+                               ::shared/extension
+                               ;; Q: Does this make any sense here?
+                               ;; A: Definitely not.
+                               ;; Especially since, given the current
+                               ;; implementation, it's also a part of
+                               ;; ::shared/my-keys
+                               ;; FIXME: Revisit this decision if/when
+                               ;; that stops being the case.
+                               #_::shared/keydir
+                               ::shared/working-area
 
-                             ;; Worth calling out for the compare/
-                             ;; contrast
-                             ;; These fields are optional in
-                             ;; server/handle
-                             ::cookie-cutter
-                             ;; Checkin the spec on this means calling
-                             ;; it. Which really hoses the entire system
-                             ;; if it happens more than once.
-                             ;; OTOH, commenting it out doesn't fix my problem
-                             ;; with the spec check just hanging
-                             #_::event-loop-stopper!
-                             ::shared/my-keys
-                             ::shared/packet-management]
-                       ;; This doesn't particularly belong here
-                       ;; (Or, for that matter, make much sense
-                       ;; as anything except a reference. And
-                       ;; even that seems questionable)
-                       :opt [::current-client]))
+                               ;; Worth calling out for the compare/
+                               ;; contrast
+                               ;; These fields are optional in
+                               ;; server/handle
+                               ::cookie-cutter
+                               ::shared/my-keys
+                               ::shared/packet-management]]
+  ;; This is really just for documentation.
+  ;; If you try to validate this, it will make you very sad.
+  (s/def ::state (s/keys :req (conj fields-safe-to-validate
+                                    ::child-spawner
+                                    ;; Checking the spec on this means calling
+                                    ;; it. Which really hoses the entire system
+                                    ;; if it happens more than once.
+                                    ;; OTOH, commenting it out doesn't fix my problem
+                                    ;; with the spec check just hanging
+                                    ::event-loop-stopper!)
+                         ;; This doesn't particularly belong here
+                         ;; (Or, for that matter, make much sense
+                         ;; as anything except a reference. And
+                         ;; even that seems questionable)
+                         :opt [::current-client]))
+  ;; Honestly, this is really just for documentation.
+  ;; If you want to validate a ::state, be sure to dissoc
+  ;; the unsafe function keys (because every namespaced key in
+  ;; the map that has a spec will be checked, whether it's listed
+  ;; as a key in here or not).
+  (s/def ::checkable-state (s/keys :req [fields-safe-to-validate])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -237,9 +248,10 @@
 
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
-  (let [p-m (::shared/packet-management this)]
-    (crypto/randomize-buffer! (::shared/packet p-m)))
-  (crypto/random-bytes! (-> this ::current-client ::client-security ::shared/short-pk))
+  (when-let [packet (get-in this [::shared/packet-management ::shared/packet])]
+    (crypto/randomize-buffer! packet))
+  (when-let [client (this ::current-client)]
+    (crypto/random-bytes! (get-in client [::client-security ::shared/short-pk])))
   ;; The shared secrets are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
   ;; For now, just explicitly set my versions to nil once we get past these side-effects

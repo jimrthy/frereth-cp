@@ -100,16 +100,21 @@
                 (println "Server started. Looks like:  <------------")
                 ;; Q: Do I want to do this dissoc?
                 (pprint (dissoc state ::log/state))
-                ;; This is blocking
-                (is (not (s/explain-data ::srvr-state/state state)))
+                (is (not (s/explain-data ::srvr-state/checkable-state (dissoc state
+                                                                              ::srvr-state/child-spawner
+                                                                              ::srvr-state/event-loop-stopper!))))
                 ;; Sending a SIGINT kills a thread that's blocking execution and
                 ;; allows this line to print.
                 (println "Spec checked")
                 (finally (let [stopped (server/stop! state)]
                            ;; Not getting here, though
                            (println "Server stopped")
-                           (is (not (s/explain-data ::server/pre-state-options stopped)))
+                           (is (not (s/explain-data ::server/post-state-options stopped)))
                            (println "pre-state checked"))))))))))
+(comment
+  (s/form ::srvr-state/state)
+  (s/form ::shared/packet-management)
+  )
 
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two

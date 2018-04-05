@@ -65,20 +65,23 @@
                                  ::shared/my-keys
                                  ::shared/packet-management]))
 
-;; These are the pieces that are used to put together the pre-state
-(s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]
-                                   :req [::log2/logger
-                                         ::log2/state
-                                         ::shared/extension
-                                         ;; Honestly, this should be an xor.
-                                         ;; It makes sense for the caller to
-                                         ;; supply one or the other, but not both.
-                                         (or ::shared/keydir ::shared/my-keys)
-                                         ::state/child-spawner
-                                         ;; Remember the distinction between these and
-                                         ;; the callbacks for sharing bytes with the child
-                                         ::state/client-read-chan
-                                         ::state/client-write-chan]))
+(let [common-state-option-keys [::log2/logger
+                                ::log2/state
+                                ::shared/extension
+                                ;; Honestly, this should be an xor.
+                                ;; It makes sense for the caller to
+                                ;; supply one or the other, but not both.
+                                (or ::shared/keydir ::shared/my-keys)
+                                ;; Remember the distinction between these and
+                                ;; the callbacks for sharing bytes with the child
+                                ::state/client-read-chan
+                                ::state/client-write-chan]]
+  ;; These are the pieces that are used to put together the pre-state
+  (s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]
+                                     :req (conj common-state-option-keys
+                                                ::state/child-spawner)))
+
+  (s/def ::post-state-options (s/keys :req (conj common-state-option-keys ::state/max-active-clients))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
@@ -250,41 +253,22 @@
                 this (assoc this ::log2/state log-state)]
             (println "My packet" this)
             (try
-              ;; This is what's blocking my try-put.
-              ;; What on earth is going on here?
-              ;; Note that I really don't want to check the schema for this.
-              ;; That doesn't make any sense at all.
-              ;; We're most definitely at a system boundary, but my
-              ;; state shouldn't cause any problems.
-              ;; Unfortunately, it is.
-              ;; There has to be some screwy functional spec involved
-              ;; that's deadlocking.
-              (throw (RuntimeException. "Start back here."))
-              (when-let [problem (s/explain-data ::state/state this)]
-                (println "No bueno" #_problem)
-                (.flush System/out)
-                (throw (ex-info "Type mismatch"
-                                problem)))
-              (println "Sending a" packet-type-id " to the handler")
               (.flush System/out)
               (case packet-type-id
                 \H (handle-hello! this packet)
                 \I (initiate/handle! this packet)
                 \M (handle-message! this packet))
               (catch Exception ex
-                (println "failed:" ex)
                 (assoc this
                        ::log2/state (log2/exception log-state
                                                     ex
                                                     ::handle-incoming!
                                                     "Failed handling packet"
                                                     {::packet-type-id packet-type-id})))))
-          (do
-            (println "Someone else's packet")
-            (assoc this
-                   ::log2/state (log2/info log-state
-                                           ::handle-incoming!
-                                           "Ignoring packet intended for someone else")))))
+          (assoc this
+                 ::log2/state (log2/info log-state
+                                         ::handle-incoming!
+                                         "Ignoring packet intended for someone else"))))
       (assoc this
              ::log2/state (log2/debug log-state
                                       ::handle-incoming!
@@ -440,14 +424,16 @@
                                "Kicking off event loop."
                                {::shared/packet-management (::shared/packet-management almost)})
           ;; Q: What are the odds that the next two piece needs to do logging?
+          ;; A: They're small and straight-forward enough that it doesn't really seem useful
           result (assoc almost
-                        ::state/event-loop-stopper! (build-event-loop-stopper almost))]
-      (begin! result)
-      (assoc result ::log2/state (log2/flush-logs! logger log-state)))))
+                        ::state/event-loop-stopper! (build-event-loop-stopper almost))
+          flushed-logs (log2/flush-logs! logger log-state)
+          began (begin! (assoc result ::log2/state (log2/clean-fork flushed-logs ::input-reducer)))]
+      (assoc result ::log2/state flushed-logs))))
 
 (s/fdef stop!
         :args (s/cat :this ::state/state)
-        :ret ::pre-state-options)
+        :ret ::post-state-options)
 (defn stop!
   "Stop the ioloop (but not the read/write channels: we don't own them)"
   [{:keys [::log2/logger
@@ -491,7 +477,7 @@
             log-state (log2/flush-logs! logger (log2/warn log-state
                                                           ::stop!
                                                           "Clearing secrets"))
-            outcome (assoc (try
+            outcome (-> (try
                              (state/hide-secrets! this)
                              (catch RuntimeException ex
                                (log/error "ERROR: " ex)
@@ -501,7 +487,12 @@
                                ;; TODO: This really should be fatal.
                                ;; Make the error-handling go away once hiding secrets actually works
                                this))
-                           ::state/event-loop-stopper! nil)
+                        (dissoc ::state/event-loop-stopper!
+                                ;; This doesn't make any sense here anyway.
+                                ;; But it's actually breaking my spec
+                                ;; check.
+                                ;; Somehow.
+                                ::state/current-client))
             log-state (log2/warn log-state
                                  ::stop!
                                  "Secrets hidden")]
@@ -509,9 +500,7 @@
       (catch Exception ex
         (log2/exception log-state
                         ex
-                        ::stop!))
-      (finally
-        (shared/release-packet-manager! packet-management)))))
+                        ::stop!)))))
 
 (s/fdef ctor
         :args (s/cat :cfg ::pre-state-options)
@@ -528,11 +517,12 @@
   ;; rethinking how this works, so it isn't worth addressing
   ;; until after I'm happy with the way the client approach
   ;; works.
-  (when-let [problem (s/explain-data ::pre-state-options cfg)]
+  (when-let [problem (s/explain-data ::pre-state-options (dissoc cfg
+                                                                 ::state/child-spawner))]
     (throw (ex-info "Invalid state construction attempt" problem)))
 
   (let [log-state (log2/clean-fork log-state ::server)]
     (-> cfg
-        (assoc ::state/active-clients (atom {})
+        (assoc ::state/active-clients {}
                ::state/max-active-clients max-active-clients
                ::shared/working-area (shared/default-work-area)))))
