@@ -42,7 +42,7 @@
 ;; Note that this really only exists as an intermediate step for the
 ;; sake of producing a ::state/state.
 (s/def ::pre-state (s/keys :req [::state/active-clients
-                                 ::state/child-spawner
+                                 ::state/child-spawner!
                                  ::state/client-read-chan
                                  ::state/client-write-chan
                                  ::state/max-active-clients
@@ -79,7 +79,10 @@
   ;; These are the pieces that are used to put together the pre-state
   (s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]
                                      :req (conj common-state-option-keys
-                                                ::state/child-spawner)))
+                                                ;; Can't include the child-spawner! spec,
+                                                ;; or checking it will spawn several children that we don't
+                                                ;; really want.
+                                                #_::state/child-spawner!)))
 
   (s/def ::post-state-options (s/keys :req (conj common-state-option-keys ::state/max-active-clients))))
 
@@ -518,7 +521,7 @@
   ;; until after I'm happy with the way the client approach
   ;; works.
   (when-let [problem (s/explain-data ::pre-state-options (dissoc cfg
-                                                                 ::state/child-spawner))]
+                                                                 ::state/child-spawner!))]
     (throw (ex-info "Invalid state construction attempt" problem)))
 
   (let [log-state (log2/clean-fork log-state ::server)]

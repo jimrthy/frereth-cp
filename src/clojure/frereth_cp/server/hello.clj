@@ -110,51 +110,21 @@
                     ::K/client-nonce-suffix
                     ::K/srvr-xtn]
              ^bytes clnt-short-pk ::K/clnt-short-pk
-             :as decomposed} (serial/decompose-array K/hello-packet-dscr message)
-            ;; We're keeping a ByteArray around for storing the key received by the current message.
-            ;; The reference implementation just stores it in a global.
-            ;; This undeniably has some impact on GC.
-            ;; Q: Is it enough to justify doing something this unusual?
-            ;; (it probably makes a lot more sense in C where you don't have a lot of great alternatives)
-            ;; TODO: Get benchmarks both ways.
-            ;; I'm very skeptical that this is worth the wonkiness, but I'm also
-            ;; very skeptical about messing around with the reference implementation.
-            ^bytes client-short-pk (get-in state [::state/current-client ::state/client-security ::shared/short-pk])]
-        (when (not client-short-pk)
-          (let [log-state
-                (if current-client
-                  (if-let [sec (::state/client-security current-client)]
-                    (if-let [short-pk (::shared/short-pk sec)]
-                      (log2/error log-state
-                                  ::open-packet
-                                  "Don't understand why we're about to have a problem. It's right here"
-                                  (helpers/hide-long-arrays state))
-                      (log2/error log-state
-                                  ::open-packet
-                                  "Missing short-term public-key array among"
-                                  sec))
-                    (log2/error log-state
-                                ::open-packet
-                                "Missing :client-security among"
-                                current-client))
-                  (log2/error log-state
-                              ::open-packet
-                              "Missing :current-client among"
-                              state))]
-            ;; FIXME: Start back here
-            (throw (ex-info "Missing spot for client short-term public key" (assoc state ::log2/state log-state)))))
+             :as decomposed} (serial/decompose-array K/hello-packet-dscr message)]
         (when (not clnt-short-pk)
           (throw (ex-info "HELLO packet missed client short-term pk" decomposed)))
-        ;; Q: Is there any real point to this?
-        (log/info "Copying incoming short-pk bytes from" clnt-short-pk "a" (class clnt-short-pk))
-        ;; Destructively overwriting the contents of the destination B] absolutely reeks.
-        ;; It seems like it would be much better to just assoc in the new B] containing
-        ;; the key and move along.
-        ;; Then again, this entire giant side-effecting mess is awful.
-        (b-t/byte-copy! client-short-pk clnt-short-pk)
+
+        ;; Note: The reference implementation keeps a specific memory address for the
+        ;; client-short-pk. It seems like there might be some advantage to this approach
+        ;; in terms of the CPU cache.
+        ;; And possibly also from the standpoint of malloc/free performance.
+        ;; There may also be serious implications from a crypto standpoint.
+        ;; I'm inclined to suspect that this is probably just something that
+        ;; was convenient to do in C.
+        ;; TODO: Ask a cryptographer
         (assoc
          (open-hello-crypto-box (assoc state
-                                       ::client-short-pk client-short-pk
+                                       ::client-short-pk clnt-short-pk
                                        ::nonce-suffix client-nonce-suffix)
                                 message
                                 crypto-box)
@@ -179,8 +149,10 @@
     :as state}
    ;; TODO: Evaluate the impact of just using bytes instead
    ^ByteBuf message]
-  (log/debug "Have what looks like a HELLO packet")
-  (let [{:keys [::shared-secret]
+  (let [log-state (log2/debug log-state
+                              ::do-handle
+                              "Have what looks like a HELLO packet")
+        {:keys [::shared-secret]
          clear-text ::opened
          {:keys [::K/clnt-short-pk
                  ::K/clnt-xtn

@@ -42,16 +42,16 @@
                                              :keydir "curve-test"}
                   ::srvr-state/client-read-chan {::srvr-state/chan client-read-chan}
                   ::srvr-state/client-write-chan {::srvr-state/chan client-write-chan}
-                  ::srvr-state/child-spawner (fn []
-                                               (println "FIXME: Server child state spawned")
-                                               ;; This needs to do something
-                                               ;; Then again, that "something" very much depends
-                                               ;; on the changes I'm currently making to the client
-                                               ;; child fork mechanism.
-                                               ;; FIXME: Get back to this once that is done.
-                                               {::srvr-state/child-id (swap! child-id-atom inc)
-                                                ::srvr-state/read<-child (strm/stream 2 nil executor)
-                                                ::srvr-state/write->child (strm/stream 2 nil executor)})}}))
+                  ::srvr-state/child-spawner! (fn []
+                                                (println "FIXME: Server child state spawned")
+                                                ;; This needs to do something
+                                                ;; Then again, that "something" very much depends
+                                                ;; on the changes I'm currently making to the client
+                                                ;; child fork mechanism.
+                                                ;; FIXME: Get back to this once that is done.
+                                                {::srvr-state/child-id (swap! child-id-atom inc)
+                                                 ::srvr-state/read<-child (strm/stream 2 nil executor)
+                                                 ::srvr-state/write->child (strm/stream 2 nil executor)})}}))
 
 (defn build-server
   [logger log-state]

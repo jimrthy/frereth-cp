@@ -61,10 +61,10 @@
     (let [base-options {::log/logger (log/std-out-log-factory)
                         ::log/state (log/init ::verify-ctor-spec)
                         ::shared/extension factory/server-extension
-                        ::srvr-state/child-spawner (fn []
-                                                     {::srvr-state/child-id 8
-                                                      ::srvr-state/read<-child (strm/stream)
-                                                      ::srvr-state/write->child (strm/stream)})
+                        ::srvr-state/child-spawner! (fn []
+                                                      {::srvr-state/child-id 8
+                                                       ::srvr-state/read<-child (strm/stream)
+                                                       ::srvr-state/write->child (strm/stream)})
                         ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
                         ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}}]
       ;; Honestly, this is just testing the clause that chooses between these two possibilities.

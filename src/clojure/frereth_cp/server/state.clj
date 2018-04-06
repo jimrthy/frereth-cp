@@ -109,8 +109,8 @@
 (s/def ::active-clients (s/map-of ::shared/public-key ::client-state))
 (s/def ::max-active-clients nat-int?)
 
-(s/def ::child-spawner (s/fspec :args (s/cat)
-                                :ret ::child-interaction))
+(s/def ::child-spawner! (s/fspec :args (s/cat)
+                                 :ret ::child-interaction))
 
 (s/def ::event-loop-stopper! (s/fspec :args (s/cat)
                                      :ret any?))
@@ -158,7 +158,7 @@
   ;; This is really just for documentation.
   ;; If you try to validate this, it will make you very sad.
   (s/def ::state (s/keys :req (conj fields-safe-to-validate
-                                    ::child-spawner
+                                    ::child-spawner!
                                     ;; Checking the spec on this means calling
                                     ;; it. Which really hoses the entire system
                                     ;; if it happens more than once.
