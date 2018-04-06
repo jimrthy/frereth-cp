@@ -82,9 +82,10 @@
    ::srvr-state/client-read-chan {::srvr-state/chan nil}
    ::srvr-state/client-write-chan {::srvr-state/chan nil}})
 
+;; FIXME: This spec doesn't match the function signature at all
 (s/fdef raw-client
         :args (s/cat :message-loop-name ::msg-specs/message-loop-name
-                     :child-spawner ::clnt/child-spawner
+                     :child-spawner! ::clnt/child-spawner!
                      :srvr-pk-long ::shared-specs/public-long
                      :srvr-xtn-vec (s/and vector?
                                           #(= (count %) K/extension-length)))

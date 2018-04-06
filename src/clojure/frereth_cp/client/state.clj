@@ -184,9 +184,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
                             #(s/valid? ::state (deref %))))
 
-(s/def ::child-spawner (s/fspec :args (s/cat :state-agent ::state-agent)
-                                :ret (s/keys :req [::log2/state
-                                                   ::msg-specs/io-handle])))
+(s/def ::child-spawner! (s/fspec :args (s/cat :state-agent ::state-agent)
+                                 :ret (s/keys :req [::log2/state
+                                                    ::msg-specs/io-handle])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Implementation

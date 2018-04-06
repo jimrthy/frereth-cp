@@ -446,7 +446,7 @@ Note that that includes TODOs re:
                                      ;; I'm responsible for writing to it, which means I should control
                                      ;; when it closes...but it feels more than a little silly
                                      writer (strm/stream)
-                                     spawner (::state/child-spawner state)
+                                     spawner (::state/child-spawner! state)
                                      child (spawner writer)
                                      client-with-child (assoc active-client
                                                               ::state/child-interaction (assoc child
