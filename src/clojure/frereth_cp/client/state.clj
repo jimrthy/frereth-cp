@@ -247,7 +247,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
           ;; TODO: If/when an exception is thrown here, it would be nice
           ;; to notify callers immediately
           (try
-            (let [decrypted (crypto/open-after text 0 144 working-nonce shared)
+            (let [{log-state ::log2/state
+                   decrypted ::crypto/unboxed} (crypto/open-after log-state text 0 144 working-nonce shared)
                   {server-short-pk ::K/s'
                    server-cookie ::K/black-box
                    :as extracted} (serial/decompose K/cookie decrypted)
@@ -785,7 +786,7 @@ Which at least implies that the agent approach should go away."
     (throw (ex-info (str "Missing log state among "
                          (keys this))
                     this)))
-  (let [log-state (log2/info log-state ::fork "Spawning child!!")
+  (let [log-state (log2/info log-state ::fork! "Spawning child!!")
         child (message/initial-state message-loop-name
                                      false
                                      (assoc initial-msg-state
@@ -797,9 +798,9 @@ Which at least implies that the agent approach should go away."
                                                  (partial child-> wrapper)
                                                  ->child)]
     (let [log-state (log2/debug log-state
-                               ::fork
+                               ::fork!
                                "Child spawned"
-                               {::this this
+                               {::this (dissoc this ::log2/state)
                                 ::child child})]
       ;; Q: Do these all *really* belong at the top level?
       ;; I'm torn between the basic fact that flat data structures

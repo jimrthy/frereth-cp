@@ -409,7 +409,7 @@
     :as rhs}]
   {:pre [l-clock
          r-clock]}
-  (let [synced (inc (max l-clock r-clock))
+  (let [synced (max l-clock r-clock)
         lhs (assoc lhs ::lamport synced)
         rhs (assoc rhs ::lamport synced)]
     [(debug lhs ::synchronized "")

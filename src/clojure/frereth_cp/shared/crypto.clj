@@ -43,6 +43,17 @@
 (s/def ::long-short #{::long ::short})
 (s/def ::unboxed #(instance? ByteBuf %))
 
+(s/def ::counter-low nat-int?)
+(s/def ::counter-high nat-int?)
+(s/def ::key-loaded? boolean?)
+(s/def ::nonce-key (s/and bytes?
+                          #(= (count %) nonce-key-length)))
+(s/def ::nonce-state (s/keys :req [::counter-low
+                                   ::counter-high
+                                   ::data
+                                   ::key-loaded?
+                                   ::nonce-key]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
@@ -73,19 +84,28 @@
     (count (.getEncoded k))
     (class k)))
 
+(s/fdef initial-nonce-agent-state
+        :args nil
+        :ret ::nonce-state)
 (defn initial-nonce-agent-state
   []
   {::counter-low 0
    ::counter-high 0
    ::data (byte-array 16)
    ::key-loaded? (promise)
+   ;; FIXME: Needs a log-state
    ::nonce-key (byte-array K/key-length)})
 
+(s/fdef load-nonce-key
+        :args (s/cat :this ::nonce-state
+                     :key-dir string?)
+        :ret ::nonce-state)
 (defn load-nonce-key
   [{:keys [::key-loaded?]
     :as this}
    key-dir]
-  (println "Opening file in" key-dir)
+  ;; FIXME: Need real logging
+  (log/debug "Loading nonce-key from" key-dir)
   (if-let [file-resource (io/resource (str key-dir
                                            "/.expertsonly/noncekey"))]
     (with-open [key-file (io/input-stream file-resource)]
@@ -238,6 +258,15 @@
     (TweetNaclFast/crypto_box_beforenm shared public secret)
     shared))
 
+(s/fdef build-crypto-box
+        ;; FIXME: Specify the any? args
+        :args (s/cat :template any?
+                     :source any?
+                     :dst ::specs/byte-buf
+                     :key-pair any?
+                     :nonce-prefix bytes?
+                     :nonce-suffix bytes?)
+        :ret bytes?)
 (defn build-crypto-box
   "Compose a map into bytes and encrypt it
 
@@ -573,6 +602,7 @@ Or maybe that's (dec n)"
                                                 #(<= K/key-length (count %)))
                                       :offset (complement neg-int?)))
         :ret any?)
+;; TODO: Needs ::log2/state (and a way to flush it)
 (let [nonce-writer (agent (initial-nonce-agent-state))
       random-portion (byte-array 8)]
   (defn get-nonce-agent-state

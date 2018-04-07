@@ -1,6 +1,5 @@
 (ns frereth-cp.client.initiate
   (:require [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.client.message :as message]
             [frereth-cp.client.state :as state]
             [frereth-cp.shared :as shared]
@@ -14,11 +13,28 @@
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Magic
+
 (set! *warn-on-reflection* true)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Specs
+
+(s/def ::crypto-box bytes?)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Internal
+
+(s/fdef build-initiate-interior
+        :args (s/cat :this ::state/state
+                     :msg bytes?
+                     :outer-nonce-suffix bytes?)
+        :ret (s/keys :req [::crypto-box ::log2/state]))
 (defn build-initiate-interior
   "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
-  [this msg outer-nonce-suffix]
+  [{log-state ::log2/state
+    :as this} msg outer-nonce-suffix]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   (let [msg-length (count msg)
@@ -34,18 +50,20 @@
              ::specs/srvr-name srvr-name
              ::K/child-message msg}
         work-area (::shared/work-area this)
-        secret (get-in this [::state/shared-secrets ::state/client-short<->server-short])]
-    (log/info (str "Encrypting:\n"
-                   src
-                   "\nInner Nonce Suffix:\n" (b-t/->string inner-nonce-suffix)
-                   "FIXME: Do not log this!!\n"
-                   "Shared secret:\n" (b-t/->string secret)))
-    (crypto/build-crypto-box tmplt
-                             src
-                             (::shared/text work-area)
-                             secret
-                             K/initiate-nonce-prefix
-                             outer-nonce-suffix)))
+        secret (get-in this [::state/shared-secrets ::state/client-short<->server-short])
+        log-state (log2/info log-state
+                             ::build-initiate-interior
+                             "Encrypting\nFIXME: Do not log the shared secret!"
+                             {::source src
+                              ::inner-nonce-suffix (b-t/->string inner-nonce-suffix)
+                              ::shared-secret (b-t/->string secret)})]
+    {::crypto-box (crypto/build-crypto-box tmplt
+                                           src
+                                           (::shared/text work-area)
+                                           secret
+                                           K/initiate-nonce-prefix
+                                           outer-nonce-suffix)
+     ::log2/state log-state}))
 
 ;; TODO: Surely I have a ByteBuf spec somewhere.
 (s/fdef build-initiate-packet!
@@ -53,7 +71,7 @@
                      ;; FIXME: This really should be a B]
                      :msg-byte-buf #(instance? ByteBuf %))
         :fn #(= (count (:ret %)) (+ 544 (count (-> % :args :msg-byte-buf K/initiate-message-length-filter))))
-        :ret #(instance? ByteBuf %))
+        :ret ::specs/byte-buf)
 (defn build-initiate-packet!
   "Combine message buffer and client state into an Initiate packet
 
@@ -66,23 +84,25 @@ This is destructive in the sense that it reads from msg-byte-buf"
         ;; Legal because a) it uses a different prefix and b) it's a different number anyway
         ;; Note that this is actually for the *outer* nonce.
         nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area) K/client-nonce-prefix-length)
-        crypto-box (build-initiate-interior this msg nonce-suffix)]
-    (log/info (str "Stuffing\n"
-                   (b-t/->string crypto-box)
-                   "which is " (count crypto-box) " bytes long\n"
-                   "into the initiate packet"))
-    (let [dscr (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (count msg))
-          ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
-          fields #::K{:prefix K/initiate-header
-                      :srvr-xtn (::state/server-extension this)
-                      :clnt-xtn (::shared/extension this)
-                      :clnt-short-pk (.getPublicKey short-pair)
-                      :cookie (get-in this [::state/server-security ::state/server-cookie])
-                      :outer-i-nonce nonce-suffix
-                      :vouch-wrapper crypto-box}]
-      (shared/compose dscr
-                      fields
-                      (get-in this [::shared/packet-management ::shared/packet])))))
+        {:keys [::crypto-box]
+         log-state ::log2/state} (build-initiate-interior this msg nonce-suffix)
+        log-state (log2/info log-state
+                             ::build-initiate-packet!
+                             "Stuffing crypto-box into Initiate packet"
+                             {::crypto-box (b-t/->string crypto-box)
+                              ::message-length (count crypto-box)})
+        dscr (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (count msg))
+        ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
+        fields #::K{:prefix K/initiate-header
+                    :srvr-xtn (::state/server-extension this)
+                    :clnt-xtn (::shared/extension this)
+                    :clnt-short-pk (.getPublicKey short-pair)
+                    :cookie (get-in this [::state/server-security ::state/server-cookie])
+                    :outer-i-nonce nonce-suffix
+                    :vouch-wrapper crypto-box}]
+    (shared/compose dscr
+                    fields
+                    (get-in this [::shared/packet-management ::shared/packet]))))
 
 (defn build-and-send-vouch
   "param wrapper: the agent that's managing the state
@@ -101,10 +121,8 @@ This is destructive in the sense that it reads from msg-byte-buf"
 
   According to the Aleph docs, cookie-packet really should be a map that
   includes :address and :port keys, along with the :message value which is
-  the actual byte-array (ByteBuf?).
-
-  That's what I've set up the server side to send, so that's what I'm
-  currently receiving here.
+  something that can be easily transformed into the ByteBuf that it needs
+  to send.
 
   To make matters worse, this entire premise is built around side-effects.
 
