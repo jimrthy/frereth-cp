@@ -118,15 +118,14 @@
 
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two
-  (let [logger (log/std-out-log-factory)
-        ;; FIXME: Honestly, I've had much better luck keeping
-        ;; separate logs for both client and server
-        ;; And flushing their output to separate files.
-        log-state (log/init ::shake-hands)
-        init (factory/build-server logger log-state)
-        started (factory/start-server init)]
-    (println "Server should be started now")
-    ;; Which means it's time to start the client
+  (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log")
+        srvr-log-state (log/init ::shake-hands.server)
+        initial-server (factory/build-server srvr-logger srvr-log-state)
+        started (factory/start-server initial-server)
+        srvr-log-state (log/flush-logs! srvr-logger (log/info srvr-log-state
+                                                             ::shake-hands
+                                                             "Server should be started now"))]
+    ;; Time to start the client
     (try
       (let [client-host "cp-client.nowhere.org"
             ;; This is another example of java's unsigned integer stupidity.
@@ -138,10 +137,15 @@
             srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
             server-ip [127 0 0 1]
             server-port 65000
-            client-agent (factory/raw-client "client-hand-shaker" log/std-out-log-factory log-state server-ip server-port srvr-pk-long)
-            log-state (log/debug log-state
-                                 ::top
-                                 "Sending HELLO")]
+            clnt-log-state (log/init ::shake-hands.client)
+            clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log")
+            client-agent (factory/raw-client "client-hand-shaker"
+                                             (constantly clnt-logger)
+                                             clnt-log-state
+                                             server-ip
+                                             server-port
+                                             srvr-pk-long)]
+        (println "Sending HELLO")
         (try
           (let [client->server (::client-state/chan->server @client-agent)
                 taken (strm/try-take! client->server ::drained 1000 ::timeout)
@@ -158,36 +162,21 @@
                     hello-length (.readableBytes hello-buffer)
                     hello-packet (byte-array hello-length)]
                 (.readBytes hello-buffer hello-packet)
-                (println "Trying to put hello packet,"
-                         hello-packet
-                         "a"
-                         (class hello-packet)
-                         "onto server channel"
-                         ->srvr
-                         "a"
-                         (class ->srvr))
-                ;; There's something strange going on here. The try-put! is
-                ;; blocking.
-                ;; I've added a spec check in the handler. It's throwing an
-                ;; exception. I created this stream using an executor, but it
-                ;; still acts as though that exception breaks the try-put!
+                (println (str "Trying to put hello packet "
+                              (b-t/->string hello-packet)
+                              "\nonto server channel "
+                              ->srvr
+                              " a "
+                              (class ->srvr)))
                 (let [put-success (strm/try-put! ->srvr
                                                  (assoc hello
                                                         :message hello-packet)
                                                  1000
                                                  ::timed-out)
-                      ;; That version blocks.
-                      ;; This version fails, because there's no such method for a default Stream
-                      #_(.put ->srvr (assoc hello :message hello-packet) 1000 ::timed-out)
-                      ;; This fails because we can't cast a default Stream to an IObj
-                      ;; Even if I require the manifold.stream.core ns
-                      #_(.put (with-meta ->srvr {:tag "manifold.stream.core.IEventSink"}) (assoc hello :message hello-packet) 1000 ::timed-out)
-                      #_(throw (RuntimeException. "What on earth is going on here?"))
-                      _ (println "Trying to deref the put")
                       success (deref put-success
                                      1000
                                      ::deref-try-put!-timed-out)]
-                  (println "put attempt result:" success)
+                  (println "Result of putting hello onto server channel:" success)
                   (if (and (not= ::timed-out success)
                            (not= ::deref-try-put!-timed-out success))
                     (let [srvr-> (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])

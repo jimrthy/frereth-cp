@@ -518,65 +518,66 @@
         un-sent-count(count un-sent-blocks)
         default-next (+ recent (utils/seconds->nanos 60))  ; by default, wait 1 minute
         send-eof-processed (to-parent/send-eof-buffered? outgoing)
-        rtt-resend-time (+ earliest-time rtt-timeout)]
-    (cond-> default-next
-      ;; The first clause is weird. 1 second is always going to happen more
-      ;; quickly than the 1 minute initial default.
-      ;; Sticking with the min pattern because of the way the threading macro works
-      (= want-ping ::specs/second-1) (min (+ recent (utils/seconds->nanos 1)))
-      (= want-ping ::specs/immediate) (min min-resend-time)
-      ;; If the outgoing buffer is not full
-      ;; And:
-      ;;   If sendeof, but not sendeofprocessed
-      ;;   else (!sendeof):
-      ;;     if there are buffered bytes that have not been sent yet
+        rtt-resend-time (+ earliest-time rtt-timeout)
+        next-time
+        (cond-> default-next
+          ;; The first clause is weird. 1 second is always going to happen more
+          ;; quickly than the 1 minute initial default.
+          ;; Sticking with the min pattern because of the way the threading macro works
+          (= want-ping ::specs/second-1) (min (+ recent (utils/seconds->nanos 1)))
+          (= want-ping ::specs/immediate) (min min-resend-time)
+          ;; If the outgoing buffer is not full
+          ;; And:
+          ;;   If sendeof, but not sendeofprocessed
+          ;;   else (!sendeof):
+          ;;     if there are buffered bytes that have not been sent yet
 
-      ;; Lines 290-292
-      ;; Q: What is the actual point to this?
-      ;; (the logic seems really screwy, but that's almost definitely
-      ;; a lack of understanding on my part)
-      ;; A: There are at least 3 different moving parts involved here
-      ;; 1. Are there unsent blocks that need to be sent?
-      ;; 2. Do we have previously sent blocks that might need to re-send?
-      ;; 3. Have we sent an un-ACK'd EOF?
-      (and (< (+ un-ackd-count
-                 un-sent-count)
-              K/max-outgoing-blocks)
-           (if (not= ::specs/false send-eof)
-             (not send-eof-processed)
-             (< 0 un-sent-count))) (min min-resend-time)
-      ;; Lines 293-296
-      (and (not= 0 un-ackd-count)
-           (> rtt-resend-time
-              min-resend-time)) (min rtt-resend-time)
-      ;; There's one last caveat, from 298-300:
-      ;; It all swirls around watchtochild, which gets set up
-      ;; between lines 276-279.
-      ;; Basic point:
-      ;; If there are incoming messages, but the pipe to child is closed,
-      ;; short-circuit so we can exit.
-      ;; That seems like a fairly major error condition.
-      ;; Q: What's the justification?
-      ;; Hypothesis: It's based around the basic idea of
-      ;; being lenient about accepting garbage.
-      ;; This seems like the sort of garbage that would be
-      ;; worth capturing for future analysis.
-      ;; Then again...if extra UDP packets arrive out of order,
-      ;; it probably isn't all *that* surprising.
-      ;; Still might be worth tracking for the sake of security.
-      (and (not= 0 (+ (count gap-buffer)
-                      (count ->child-buffer)))
-           ;; This looks backward. It isn't.
-           ;; If there are bytes to forward to the
-           ;; child, and the pipe is still open, then
-           ;; try to send them.
-           ;; However, the logic *is* broken:
-           ;; The check for gap-buffer really needs
-           ;; to be based around closed gaps
-           (not (realized? to-child-done?))) 0
-      ;; Lines 302-305
-      true {::next-action-time (max recent)
-            ::log/state log-state})))
+          ;; Lines 290-292
+          ;; Q: What is the actual point to this?
+          ;; (the logic seems really screwy, but that's almost definitely
+          ;; a lack of understanding on my part)
+          ;; A: There are at least 3 different moving parts involved here
+          ;; 1. Are there unsent blocks that need to be sent?
+          ;; 2. Do we have previously sent blocks that might need to re-send?
+          ;; 3. Have we sent an un-ACK'd EOF?
+          (and (< (+ un-ackd-count
+                     un-sent-count)
+                  K/max-outgoing-blocks)
+               (if (not= ::specs/false send-eof)
+                 (not send-eof-processed)
+                 (< 0 un-sent-count))) (min min-resend-time)
+          ;; Lines 293-296
+          (and (not= 0 un-ackd-count)
+               (> rtt-resend-time
+                  min-resend-time)) (min rtt-resend-time)
+          ;; There's one last caveat, from 298-300:
+          ;; It all swirls around watchtochild, which gets set up
+          ;; between lines 276-279.
+          ;; Basic point:
+          ;; If there are incoming messages, but the pipe to child is closed,
+          ;; short-circuit so we can exit.
+          ;; That seems like a fairly major error condition.
+          ;; Q: What's the justification?
+          ;; Hypothesis: It's based around the basic idea of
+          ;; being lenient about accepting garbage.
+          ;; This seems like the sort of garbage that would be
+          ;; worth capturing for future analysis.
+          ;; Then again...if extra UDP packets arrive out of order,
+          ;; it probably isn't all *that* surprising.
+          ;; Still might be worth tracking for the sake of security.
+          (and (not= 0 (+ (count gap-buffer)
+                          (count ->child-buffer)))
+               ;; This looks backward. It isn't.
+               ;; If there are bytes to forward to the
+               ;; child, and the pipe is still open, then
+               ;; try to send them.
+               ;; However, the logic *is* broken:
+               ;; The check for gap-buffer really needs
+               ;; to be based around closed gaps
+               (not (realized? to-child-done?))) 0)]
+    ;; Lines 302-305
+    {::next-action-time (max recent next-time)
+     ::log/state log-state}))
 
 (s/fdef choose-next-scheduled-time
         :args (s/cat :outgoing ::specs/outgoing
@@ -898,7 +899,7 @@
                                                     (update state
                                                             ::log/state
                                                             #(log/debug %
-                                                                        "Re-triggering Output due to timeot"
+                                                                        "Re-triggering Output due to timeout"
                                                                         (assoc timing-details
                                                                                ::trigger-details prelog
                                                                                ::specs/message-loop-name message-loop-name))))))

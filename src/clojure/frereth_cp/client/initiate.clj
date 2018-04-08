@@ -177,27 +177,28 @@ This is destructive in the sense that it reads from msg-byte-buf"
                                                (str "Converting cookie to vouch took longer than "
                                                     timeout
                                                     " milliseconds."))]
-                    log-updates (conj log-updates
-                                      (if-let [ex (agent-error wrapper)]
-                                        (let [log-update #(log2/exception %
-                                                                          ex
-                                                                          ::build-and-send-vouch
-                                                                          "Agent failed while we were waiting")]
-                                          ;; Craziness: The failed assertion isn't interrupting my test.
-                                          ;; FIXME: Actually, something like this does need to be
-                                          ;; fatal. At least for this client.
-                                          ;; It's tempting to just call (System/exit) here, but
-                                          ;; I'd really prefer to avoid killing the JVM.
-
-                                          (println "FIXME: Start back here.")
-                                          (assert (not ex) "This should probably only be fatal for the sake of debugging"))
-                                        (let [log-update
-                                              #(log2/warn %
-                                                          ::build-and-send-vouch
-                                                          "Switching agent into an error state")]
-                                          (send wrapper
-                                                #(throw (ex-info "cookie->vouch timed out" %)))
-                                          log-update)))]
+                    log-updates (if-let [ex (agent-error wrapper)]
+                                  (let [log-state (reduce (fn [current log-fn]
+                                                            (log-fn current))
+                                                          log-state
+                                                          log-updates)]
+                                    (log2/flush-logs! (::log2/logger state)
+                                                      (log2/exception log-state
+                                                                      ex
+                                                                      ::build-and-send-vouch
+                                                                      "Agent failed while we were waiting"))
+                                    ;; It's very tempting to make this just kill the client.
+                                    ;; Then again, for all intents and purposes it's already
+                                    ;; dead.
+                                    ;; TODO: we do need to signal the message loop to exit
+                                    (assert (not ex) "Should probably be fatal for the sake of debugging"))
+                                  (let [log-update
+                                        #(log2/warn %
+                                                    ::build-and-send-vouch
+                                                    "Switching agent into an error state")]
+                                    (send wrapper
+                                          #(throw (ex-info "cookie->vouch timed out" %)))
+                                    (conj log-updates log-update)))]
                 (send wrapper (fn [{log-state ::log2/state
                                     logger ::log2/logger
                                     :as this}]

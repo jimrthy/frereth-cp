@@ -243,9 +243,10 @@
   ;; safe to use from multiple threads at once.
   (log! [{writer :writer
           :as this}
-         msg]
-    ;; TODO: Refactor this to use format-log-string
-    (.write writer (prn-str msg)))
+         entry]
+    (let [get-caller-stack (RuntimeException. "Q: Is there a cheaper way to get the call stack?")
+          formatted (format-log-string get-caller-stack entry)]
+      (.write writer formatted)))
   (flush! [{^BufferedWriter writer :writer
             :as this}]
     (.flush writer)))
@@ -259,9 +260,10 @@
   Logger
   (log! [{^OutputStream stream :stream
           :as this}
-         msg]
-    ;; TODO: Refactor this to use format-log-string
-    (.write stream (prn-str msg)))
+         entry]
+    (let [get-caller-stack (RuntimeException. "Q: Is there a cheaper way to get the call stack?")
+          formatted (format-log-string get-caller-stack entry)]
+      (.write stream formatted)))
   (flush! [{^OutputStream stream :stream
             :as this}]
     (.flush stream)))
@@ -310,7 +312,8 @@
   ([log-state ex label]
    (add-log-entry log-state ::exception label))
   ([log-state ex label message]
-   (add-log-entry log-state ::exception label message))
+   (add-log-entry log-state ::exception label message
+                  (exception-details ex)))
   ([log-state ex label message original-details]
    (let [details {::original-details original-details
                   ::problem (exception-details ex)}]

@@ -14,7 +14,7 @@
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            [io.netty.buffer ByteBuf Unpooled]
-           [java.io File RandomAccessFile]
+           [java.io File IOException RandomAccessFile]
            java.nio.channels.FileChannel
            java.security.SecureRandom
            java.security.spec.AlgorithmParameterSpec
@@ -160,31 +160,41 @@
    long-term?]
   (let [raw-path (str key-dir "/.expertsonly/")
         path (io/resource raw-path)]
-    (let [f (File. (str path "lock"))
-          channel (.getChannel (RandomAccessFile. f "rw"))]
+    (let [f (io/file (str path "lock"))]
       (try
-        (let [lock (.lock channel 0 Long/MAX_VALUE false)]
+        (.createNewFile f)
+        (let [channel (.getChannel (RandomAccessFile. f "rw"))]
           (try
-            (let [counter-file-name (str path "noncecounter")]
-              (with-open [counter (io/reader counter-file-name)]
-                (let [bytes-read (.read counter data 0 8)]
-                  (when (not= bytes-read 8)
-                    (throw (ex-info "Nonce counter file too small"
-                                    {::contents (b-t/->string data)
-                                     ::length bytes-read})))))
-              (let [counter-low (b-t/uint64-unpack data)
-                    counter-high (+ counter-low (if long-term?
-                                                  K/m-1
-                                                  1))]
-                (b-t/uint64-pack! data 0 counter-high))
-              (with-open [counter (io/writer counter-file-name)]
-                (.write counter (String. data))))
+            (let [lock (.lock channel 0 Long/MAX_VALUE false)]
+              (try
+                (let [counter-file-name (str path "noncecounter")]
+                  (with-open [counter (io/reader counter-file-name)]
+                    (let [bytes-read (.read counter data 0 8)]
+                      (when (not= bytes-read 8)
+                        (throw (ex-info "Nonce counter file too small"
+                                        {::contents (b-t/->string data)
+                                         ::length bytes-read})))))
+                  (let [counter-low (b-t/uint64-unpack data)
+                        counter-high (+ counter-low (if long-term?
+                                                      K/m-1
+                                                      1))]
+                    (b-t/uint64-pack! data 0 counter-high))
+                  (with-open [counter (io/writer counter-file-name)]
+                    (.write counter (String. data))))
+                (finally
+                  ;; Closing the channel should release the lock,
+                  ;; but being explicit about this doesn't hurt
+                  (.release lock))))
             (finally
-              ;; Closing the channel should release the lock,
-              ;; but being explicit about this doesn't hurt
-              (.release lock))))
-        (finally
-          (.close channel))))))
+              (.close channel))))
+        (catch IOException ex
+          (println "Broke!")
+          ;; Q: What's happening to this exception?
+          (throw (ex-info (str "Failed to create a new lock file "
+                               f)
+                          {::raw-path raw-path
+                           ::resource path}
+                          ex)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -631,13 +641,16 @@ Or maybe that's (dec n)"
      ;; Read the last saved version from keydir
      (when-not (-> nonce-writer deref ::key-loaded? realized?)
        (send nonce-writer load-nonce-key key-dir))
-
      (let [{:keys [::counter-low
                    ::counter-high]} @nonce-writer]
        (when (>= counter-low counter-high)
          (send nonce-writer reload-nonce key-dir long-term?)))
      (random-bytes! random-portion)
-     (send nonce-writer obscure-nonce random-portion))
+     (send nonce-writer obscure-nonce random-portion)
+     ;; Tempting to do an await here, but we're inside an
+     ;; agent action, so that isn't legal.
+     (when-let [ex (agent-error nonce-writer)]
+       (log/error ex "System is down")))
     ([dst offset]
      ;; The 16-byte nonce length is very implementation
      ;; dependent and brittle
