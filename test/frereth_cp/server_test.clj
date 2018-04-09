@@ -214,7 +214,7 @@
                                 (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
                                   (if-not (or (= initiate ::drained)
                                               (= initiate ::timeout))
-                                    (throw (RuntimeException. "Don't stop here"))
+                                    (throw (ex-info "Don't stop here" initiate))
                                     (throw (ex-info "Failed to take Initiate/Vouch from Client"
                                                     {::problem initiate}))))
                                 (throw (RuntimeException. "Timed out putting Cookie to Client")))))

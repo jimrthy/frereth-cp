@@ -93,13 +93,13 @@ This is destructive in the sense that it reads from msg-byte-buf"
                               ::message-length (count crypto-box)})
         dscr (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (count msg))
         ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
-        fields #::K{:prefix K/initiate-header
-                    :srvr-xtn (::state/server-extension this)
-                    :clnt-xtn (::shared/extension this)
-                    :clnt-short-pk (.getPublicKey short-pair)
-                    :cookie (get-in this [::state/server-security ::state/server-cookie])
-                    :outer-i-nonce nonce-suffix
-                    :vouch-wrapper crypto-box}]
+        fields #:frereth-cp.shared.constants{:prefix K/initiate-header
+                                             :srvr-xtn (::state/server-extension this)
+                                             :clnt-xtn (::shared/extension this)
+                                             :clnt-short-pk (.getPublicKey short-pair)
+                                             :cookie (get-in this [::state/server-security ::state/server-cookie])
+                                             :outer-i-nonce nonce-suffix
+                                             :vouch-wrapper crypto-box}]
     (shared/compose dscr
                     fields
                     (get-in this [::shared/packet-management ::shared/packet]))))
@@ -134,6 +134,7 @@ This is destructive in the sense that it reads from msg-byte-buf"
   terrible approach in an environment that's intended to multi-thread."
   [wrapper cookie-packet]
   (let [{log-state ::log2/state
+         logger ::log2/logger
          :as state} @wrapper]
     (if (and (not= cookie-packet ::hello-response-timed-out)
              (not= cookie-packet ::drained))
@@ -150,13 +151,8 @@ This is destructive in the sense that it reads from msg-byte-buf"
         ;; a good signal that it's time to spawn the child to do
         ;; the real work.
         ;; That really seems to complect the concerns.
-        ;; Q: Why not set up the child in its own thread and start
-        ;; listening for its activity now?
-        ;; Partial Answer: original version is geared toward converting
-        ;; existing apps that pipe data over STDIN/OUT so they don't
-        ;; have to be changed at all.
-        ;; Full Answer: That's actually what I want to do here.
-        ;; Except that "listening" doesn't really make any sense.
+        ;; But this entire function is a stateful mess.
+        ;; At least this helps it stay in one place.
         (send wrapper state/fork! wrapper)
 
         ;; Once we've signaled the child to start doing its own thing,
@@ -173,16 +169,16 @@ This is destructive in the sense that it reads from msg-byte-buf"
             ;; the incoming cookie converted into a Vouch
             (when-not (await-for timeout wrapper)
               (let [log-updates [#(log2/error %
-                                               ::build-and-send-vouch
-                                               (str "Converting cookie to vouch took longer than "
-                                                    timeout
-                                                    " milliseconds."))]
+                                              ::build-and-send-vouch
+                                              (str "Converting cookie to vouch took longer than "
+                                                   timeout
+                                                   " milliseconds."))]
                     log-updates (if-let [ex (agent-error wrapper)]
                                   (let [log-state (reduce (fn [current log-fn]
                                                             (log-fn current))
                                                           log-state
                                                           log-updates)]
-                                    (log2/flush-logs! (::log2/logger state)
+                                    (log2/flush-logs! logger
                                                       (log2/exception log-state
                                                                       ex
                                                                       ::build-and-send-vouch
@@ -191,7 +187,8 @@ This is destructive in the sense that it reads from msg-byte-buf"
                                     ;; Then again, for all intents and purposes it's already
                                     ;; dead.
                                     ;; TODO: we do need to signal the message loop to exit
-                                    (assert (not ex) "Should probably be fatal for the sake of debugging"))
+                                    (assert (not ex) (str "Should probably be fatal for the sake of debugging:\n"
+                                                          (log2/exception-details ex))))
                                   (let [log-update
                                         #(log2/warn %
                                                     ::build-and-send-vouch
@@ -216,7 +213,16 @@ This is destructive in the sense that it reads from msg-byte-buf"
                                                         log-updates)]
                                   (assoc this
                                          ::log2/state
-                                         (log2/flush-logs! logger log-state))))))))))
+                                         (log2/flush-logs! logger log-state)))))))
+            (when-let [ex (agent-error wrapper)]
+              (log2/flush-logs! logger (log2/exception log-state
+                                                       ex
+                                                       ::build-and-send-vouch))
+              (throw ex))
+            (log2/flush-logs! logger (log2/debug log-state
+                                                 ::build-and-send-vouch
+                                                 "cookie converted to vouch"))
+            (send-off wrapper state/send-vouch! wrapper))))
       (send wrapper #(throw (ex-info (str cookie-packet " waiting for Cookie")
                                      (assoc %
                                             :problem (if (= cookie-packet ::drained)

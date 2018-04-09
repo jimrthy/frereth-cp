@@ -362,6 +362,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
       (assert false (str "Missing nonce in packet-management:\n"
                          (keys packet-management))))))
 
+(s/fdef cookie->vouch
+        :args (s/cat :this ::state
+                     :packet ::shared/network-packet)
+        :ret ::state)
 (defn cookie->vouch
   "Got a cookie from the server.
 
@@ -369,7 +373,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   in our packet buffer with the vouch bytes we'll use
   as the response.
 
-  Q: How much of a performance hit am I looking at if I
+  Q: How much of a performance hit (if any) am I looking at if I
   make this purely functional instead?"
   [{log-state ::log2/state
     :as this} ; Handling an agent (send), which means `this` is already dereferenced
@@ -801,7 +805,7 @@ Which at least implies that the agent approach should go away."
                                ::fork!
                                "Child spawned"
                                {::this (dissoc this ::log2/state)
-                                ::child child})]
+                                ::child (dissoc child ::log2/state)})]
       ;; Q: Do these all *really* belong at the top level?
       ;; I'm torn between the basic fact that flat data structures
       ;; are easier (simpler?) and the fact that namespacing this
@@ -833,14 +837,16 @@ Which at least implies that the agent approach should go away."
   [{log-state ::log2/state
     :keys [::chan->server
            ::log2/logger]
+    packet ::vouch
     :as this}
-   wrapper
-   packet]
+   wrapper]
   ;; Q: Does it make any sense for this to be different than sending
   ;; any other packet?
   ;; A: No, not really.
-  (throw (RuntimeException. "This really shouldn't be special"))
-  (let [d (strm/try-put!
+  (let [log-state (log2/warn log-state
+                             ::send-vouch!
+                             "Unify client packet sending")
+        d (strm/try-put!
            chan->server
            packet
            (current-timeout wrapper)

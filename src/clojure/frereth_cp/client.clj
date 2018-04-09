@@ -368,14 +368,15 @@ like a timing attack."
         :ret any?)
 (defn stop!
   [wrapper]
-  (if-let [err (agent-error wrapper)]
-    (log/error (str err "\nTODO: Is there any way to recover well enough to release the Packet Manager?\n"
-                    (util/show-stack-trace err)))
+  (if-let [ex (agent-error wrapper)]
+    (let [logger (log2/std-out-log-factory)]
+      (log2/exception (log2/init ::failed)
+                      ex
+                      ::stop!))
     (send wrapper
           (fn [{:keys [::chan->server
                        ::shared/packet-management]
                 :as this}]
-            (shared/release-packet-manager! packet-management)
             (strm/close! chan->server)
             (assoc this
                    ::chan->server nil

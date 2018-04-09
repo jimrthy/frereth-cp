@@ -160,39 +160,47 @@
    long-term?]
   (let [raw-path (str key-dir "/.expertsonly/")
         path (io/resource raw-path)]
-    (let [f (io/file (str path "lock"))]
+    (let [f (io/file path "lock")]
       (try
         (.createNewFile f)
-        (let [channel (.getChannel (RandomAccessFile. f "rw"))]
-          (try
-            (let [lock (.lock channel 0 Long/MAX_VALUE false)]
-              (try
-                (let [counter-file-name (str path "noncecounter")]
-                  (with-open [counter (io/reader counter-file-name)]
-                    (let [bytes-read (.read counter data 0 8)]
-                      (when (not= bytes-read 8)
-                        (throw (ex-info "Nonce counter file too small"
-                                        {::contents (b-t/->string data)
-                                         ::length bytes-read})))))
-                  (let [counter-low (b-t/uint64-unpack data)
-                        counter-high (+ counter-low (if long-term?
-                                                      K/m-1
-                                                      1))]
-                    (b-t/uint64-pack! data 0 counter-high))
-                  (with-open [counter (io/writer counter-file-name)]
-                    (.write counter (String. data))))
-                (finally
-                  ;; Closing the channel should release the lock,
-                  ;; but being explicit about this doesn't hurt
-                  (.release lock))))
-            (finally
-              (.close channel))))
+        (try
+          (let [channel (.getChannel (RandomAccessFile. f "rw"))]
+            (try
+              (let [lock (.lock channel 0 Long/MAX_VALUE false)]
+                (log/debug "Lock acquired")
+                (try
+                  (let [counter-file-name (str path "/noncecounter")]
+                    (log/debug "Opening" counter-file-name)
+                    (with-open [counter (io/reader counter-file-name)]
+                      (log/debug "Nonce counter file opened")
+                      (let [bytes-read (.read counter data 0 8)]
+                        (when (not= bytes-read 8)
+                          (throw (ex-info "Nonce counter file too small"
+                                          {::contents (b-t/->string data)
+                                           ::length bytes-read})))))
+                    (let [counter-low (b-t/uint64-unpack data)
+                          counter-high (+ counter-low (if long-term?
+                                                        K/m-1
+                                                        1))]
+                      (b-t/uint64-pack! data 0 counter-high))
+                    (with-open [counter (io/writer counter-file-name)]
+                      (.write counter (String. data))))
+                  (finally
+                    ;; Closing the channel should release the lock,
+                    ;; but being explicit about this doesn't hurt
+                    (.release lock))))
+              (finally
+                (.close channel))))
+          (catch IOException ex
+            (throw (ex-info "Failed to acquire exclusive access to lock file"
+                            {::io-path f
+                             ::raw-path raw-path
+                             ::resource path}
+                            ex))))
         (catch IOException ex
-          (println "Broke!")
-          ;; Q: What's happening to this exception?
-          (throw (ex-info (str "Failed to create a new lock file "
-                               f)
-                          {::raw-path raw-path
+          (throw (ex-info "Failed to create a new lock file "
+                          {::io-path f
+                           ::raw-path raw-path
                            ::resource path}
                           ex)))))))
 
