@@ -167,12 +167,17 @@
           (let [channel (.getChannel (RandomAccessFile. f "rw"))]
             (try
               (let [lock (.lock channel 0 Long/MAX_VALUE false)]
-                (log/debug "Lock acquired")
+                (log/info "Lock acquired")
                 (try
-                  (let [counter-file-name (str path "/noncecounter")]
-                    (log/debug "Opening" counter-file-name)
-                    (with-open [counter (io/reader counter-file-name)]
-                      (log/debug "Nonce counter file opened")
+                  (let [nonce-counter (io/file path "noncecounter")]
+                    (when-not (.exists nonce-counter)
+                      (.createNewFile nonce-counter)
+                      (with-open [counter (io/output-stream nonce-counter)]
+                        ;; FIXME: What's a good initial value?
+                        (.write counter (byte-array 8))))
+                    (log/debug "Opening" nonce-counter)
+                    (with-open [counter (io/reader nonce-counter)]
+                      (log/debug "Nonce counter file opened for reading")
                       (let [bytes-read (.read counter data 0 8)]
                         (when (not= bytes-read 8)
                           (throw (ex-info "Nonce counter file too small"
@@ -183,7 +188,7 @@
                                                         K/m-1
                                                         1))]
                       (b-t/uint64-pack! data 0 counter-high))
-                    (with-open [counter (io/writer counter-file-name)]
+                    (with-open [counter (io/writer nonce-counter)]
                       (.write counter (String. data))))
                   (finally
                     ;; Closing the channel should release the lock,

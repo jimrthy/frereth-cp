@@ -212,9 +212,28 @@
                                                       ::timeout)]
                               (if (not= ::timeout put)
                                 (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                  ;; FIXME: Verify that this is a valid Initiate packet
                                   (if-not (or (= initiate ::drained)
                                               (= initiate ::timeout))
-                                    (throw (ex-info "Don't stop here" initiate))
+                                    (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
+                                      (if (not= ::timeout put)
+                                        (let [first-srvr-message @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
+                                          (if-not (or (= first-srvr-message ::drained)
+                                                      (= first-srvr-message ::timeout))
+                                            (let [put @(strm/try-put! client<-server
+                                                                      first-srvr-message
+                                                                      1000
+                                                                      ::timeout)]
+                                              (if (not= ::timeout put)
+                                                (let [first-full-clnt-message @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                                  ;; As long as we got a message back, we should be able to call
+                                                  ;; this test done.
+                                                  (when (= ::timeout first-full-clnt-message)
+                                                    (throw (ex-info "Timed out waiting for client response"))))
+                                                (throw (ex-info "Timed out writing first server Message packet to client"))))
+                                            (throw (ex-info "Failed pulling first real Message packet from Server"
+                                                            {::problem first-srvr-message}))))
+                                        (throw (ex-info "Timed out writing Initiate to Server"))))
                                     (throw (ex-info "Failed to take Initiate/Vouch from Client"
                                                     {::problem initiate}))))
                                 (throw (RuntimeException. "Timed out putting Cookie to Client")))))

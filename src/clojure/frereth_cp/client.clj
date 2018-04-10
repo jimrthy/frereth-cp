@@ -375,9 +375,19 @@ like a timing attack."
                       ::stop!))
     (send wrapper
           (fn [{:keys [::chan->server
+                       ::log2/logger
                        ::shared/packet-management]
+                log-state ::log2/state
                 :as this}]
-            (strm/close! chan->server)
+            (if chan->server
+              (strm/close! chan->server)
+              (log2/flush-logs! (log2/warn (log2/clean-fork log-state ::possible-issue)
+                                           ::stop!
+                                           "chan->server already nil"
+                                           (dissoc this ::log2/state))))
+            (log2/flush-logs! (log2/info log-state
+                                         ::stop!
+                                         "Done"))
             (assoc this
                    ::chan->server nil
                    ::shared/packet-management nil)))))
