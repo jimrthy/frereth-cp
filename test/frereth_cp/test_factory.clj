@@ -124,8 +124,8 @@
                                                 ::shared/long-pair long-pair
                                                 ::K/server-name server-name}
                               ::client-state/server-extension server-extension
+                              ::client-state/server-ips [srvr-ip]
                               ::client-state/server-security {::K/server-name srvr-name
-                                                              ::K/server-ip srvr-ip
                                                               ::K/server-port srvr-port
                                                               ::shared-specs/public-long srvr-pk-long}}
                              logger-init)]

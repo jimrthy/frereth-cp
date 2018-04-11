@@ -56,16 +56,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; Or is it the 96-byte black box that we send back as part of
 ;; the Vouch?
 (s/def ::server-cookie any?)
+(s/def ::server-ips (s/coll-of ::specs/srvr-ip))
 (s/def ::server-security (s/merge ::specs/peer-keys
                                   (s/keys :req [::specs/srvr-name
                                                 ::shared/srvr-port]
-                                          ;; Q: Is there a valid reason for this to live here?
+                                          ;; Q: Is there a valid reason for the server-cookie to live here?
                                           ;; Q: I can discard it after sending the vouch, can't I?
                                           ;; A: Yes.
                                           ;; Q: Do I want to?
                                           ;; A: Well...keeping it seems like a potential security hole
                                           ;; TODO: Make it go away
-                                          :opt [::server-cookie])))
+                                          :opt [::server-cookie
+                                                ::specs/srvr-ip])))
 
 (s/def ::client-long<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-long ::shared/shared-secret)
@@ -148,6 +150,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                        ;; UDP packets arrive over this
                                        ::chan<-server
                                        ::server-extension
+                                       ::server-ips
                                        ::timeout]
                                  ;; This isn't optional as much
                                  ;; as it's just something that isn't
@@ -465,13 +468,15 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
   [{:keys [::msg-specs/message-loop-name
+           ::chan<-server
            ::server-extension
-           ::chan<-server]
+           ::server-ips]
     log-state ::log2/state
     :as this}
    log-initializer]
   {:pre [message-loop-name
-         server-extension]}
+         server-extension
+         server-ips]}
   (when-not chan<-server
     (throw (ex-info "Missing channel from server"
                     {::keys (keys this)
@@ -817,6 +822,45 @@ Which at least implies that the agent approach should go away."
              ::log2/state (log2/flush-logs! logger log-state)
              ::msg-specs/io-handle io-handle))))
 
+(s/fdef do-send-packet
+        :args (s/cat :this ::state
+                     :on-success (s/fspec :args (s/cat :result any?)
+                                          :ret any?)
+                     :on-failure (s/fspec :args (s/cat :failure ::specs/exception-instance)
+                                          :ret any?)
+                     :chan->server strm/sinkable?
+                     :packet (s/or :bytes bytes?
+                                   ;; Honestly, an nio.ByteBuffer would probably be
+                                   ;; just fine here also
+                                   :byte-buf ::specs/byte-buf)
+                     :timeout (s/and integer?
+                                     (complement neg?))
+                     :timeout-key any?)
+        :ret ::specs/deferrable)
+(defn do-send-packet
+  [{log-state ::log2/state
+    {:keys [::specs/srvr-name
+            ::specs/srvr-port]} ::server-security
+    :keys [::chan->server]
+    :as this}
+   on-success
+   on-failure
+
+   packet
+   timeout
+   timeout-key]
+  (let [d (strm/try-put! chan->server
+                         ;; FIXME: this needs to be the server-ip,
+                         ;; which is very different
+                         {:host srvr-name
+                          :message packet
+                          :port srvr-port}
+                         timeout
+                         timeout-key)]
+    (dfrd/on-realized d
+                      on-success
+                      on-failure)))
+
 (defn send-vouch!
   "Send a Vouch/Initiate packet (along with a Message sub-packet)"
   ;; We may have to send this multiple times, because it could
@@ -835,51 +879,40 @@ Which at least implies that the agent approach should go away."
   ;; for its minute key to definitely time out, though that seems
   ;; like a naive approach with a terrible user experience.
   [{log-state ::log2/state
-    :keys [::chan->server
-           ::log2/logger]
+    :keys [::log2/logger]
     packet ::vouch
     :as this}
    wrapper]
-  ;; Q: Does it make any sense for this to be different than sending
-  ;; any other packet?
-  ;; A: No, not really.
-  (let [log-state (log2/warn log-state
-                             ::send-vouch!
-                             "Unify client packet sending")
-        d (strm/try-put!
-           chan->server
-           packet
-           (current-timeout wrapper)
-           ::sending-vouch-timed-out)]
-    ;; Note that this returns a deferred.
-    ;; We're inside an agent's send.
-    ;; Mixing these two paradigms was a bad idea.
-    (dfrd/on-realized d
-                      (fn [success]
-                        (log2/flush-logs! logger
-                                          (log2/info log-state
-                                                     ::send-vouch!
-                                                     "Initiate packet sent.\nWaiting for 1st message"
-                                                     {::success success}))
-                        (send-off wrapper final-wait wrapper success))
-                      (fn [failure]
-                        ;; Extremely unlikely, but
-                        ;; just for the sake of paranoia
-                        (log2/flush-logs! logger
-                                          (log2/exception log-state
-                                                          ;; Q: Am I absolutely positive that this will
-                                                          ;; always be an exception?
-                                                          ;; A: Even if it isn't the logger needs to be
-                                                          ;; able to cope with other problems
-                                                          failure
-                                                          ::send-vouch!
-                                                          "Sending Initiate packet failed!"
-                                                          {::problem failure}))
-                        (throw (ex-info "Timed out sending cookie->vouch response"
-                                        (assoc this
-                                               :problem failure)))))
-    ;; Q: Do I need to hang onto that?
-    this))
+  ;; Note that this returns a deferred.
+  ;; We're inside an agent's send.
+  ;; Mixing these two paradigms was a bad idea.
+  (do-send-packet log-state
+                  (fn [success]
+                    (log2/flush-logs! logger
+                                      (log2/info log-state
+                                                 ::send-vouch!
+                                                 "Initiate packet sent.\nWaiting for 1st message"
+                                                 {::success success}))
+                    (send-off wrapper final-wait wrapper success))
+                  (fn [failure]
+                    ;; Extremely unlikely, but
+                    ;; just for the sake of paranoia
+                    (log2/flush-logs! logger
+                                      (log2/exception log-state
+                                                      ;; Q: Am I absolutely positive that this will
+                                                      ;; always be an exception?
+                                                      ;; A: Even if it isn't the logger needs to be
+                                                      ;; able to cope with other problems
+                                                      failure
+                                                      ::send-vouch!
+                                                      "Sending Initiate packet failed!"
+                                                      {::problem failure}))
+                    (throw (ex-info "Failed to send cookie->vouch response"
+                                    (assoc this
+                                           :problem failure))))
+                  packet
+                  (current-timeout wrapper)
+                  ::sending-vouch-timed-out))
 
 (defn update-client-short-term-nonce
   "Note that this can loop right back to a negative number."

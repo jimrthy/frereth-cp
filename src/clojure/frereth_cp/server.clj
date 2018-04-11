@@ -228,11 +228,11 @@
     :as this}
    {:keys [:host
            :port]
-    ;; Q: How much performance do we really use if we
+    ;; Q: How much performance do we really lose if we
     ;; set up the socket to send a B] rather than a ByteBuf?
     ^bytes message :message
     :as packet}]
-  (println "Handling incoming <---------------")
+  (println "Server incoming <---------------")
   (let [log-state (log2/debug log-state
                               ::handle-incoming!
                               "Top")]

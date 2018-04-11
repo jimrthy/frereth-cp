@@ -36,8 +36,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
-(s/def ::deferrable dfrd/deferrable?)
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
@@ -227,54 +225,57 @@ implementation. This is code that I don't understand yet"
         :args (s/cat :this ::state/agent-wrapper
                      :chan->server strm/stream?
                      :timeout nat-int?)
-        :ret (s/keys :req [::deferrable
+        :ret (s/keys :req [::specs/deferrable
                            ::log2/state]))
 (defn cope-with-successful-hello-creation!
   "This name dates back to a time when building a hello packet was problematic"
   ;; FIXME: Refactor to one that's less pessimistic
-  [wrapper chan->server timeout]
+  [wrapper timeout]
   (let [{:keys [::shared/packet-management
-                ::state/server-security]
+                ::state/server-ips]
          log-state ::log2/state
          :as this} @wrapper
         raw-packet (::shared/packet packet-management)
         log-state (log2/debug log-state
                               ::cope-with-successful-hello-creation
                               "Putting hello onto ->server channel"
-                              {::raw-hello raw-packet
-                               ::state/chan->server chan->server})]
+                              {::raw-hello raw-packet})]
     ;; There's an important break
     ;; with the reference implementation
     ;; here: this should be sending the
     ;; HELLO packet to multiple server
     ;; end-points to deal with them
     ;; going down.
-    ;; I think it's supposed to happen
-    ;; in a delayed interval, to give
+    ;; It's supposed to happen
+    ;; in an increasing interval, to give
     ;; each a short time to answer before
     ;; the next, but a major selling point
     ;; is not waiting for TCP buffers
     ;; to expire.
-    ;; There's an interesting conundrum here:
-    ;; it probably makes more sense to handle that
-    ;; sort of detail closer to the network boundary.
-    ;; Except that this really *is* the network boundary.
-    (let [d (strm/try-put! chan->server
-                           {:host (::specs/srvr-name server-security)
-                            :message raw-packet
-                            :port (::shared/srvr-port server-security)}
+    (throw (RuntimeException. "Implement looping over srvr-ips"))
+    {::specs/deferrable
+     ;; FIXME: Wrap this in a second layer of deferring.
+     ;; And, honestly, move it back into hello (actually
+     ;; that's problematic because it uses a function in
+     ;; cookie. And in here. That really just means another
+     ;; indirection layer of callbacks, but it's annoying).
+     ;; TODO: Spend more time contemplating this
+     ;; Need to loop over the potential server IPs to locate
+     ;; the one that's responding.
+     ;; Give each IP address a chance to time out.
+     ;; See the schedule in curvecpclient.c hellowait
+     ;; There's another layer of urgency for this:
+     ;; The actual send should be as devoid of side-effects as possible.
+     ;; We need to pick the server-ip that worked and assign that as
+     ;; "the" real IP that we use for the rest of this session.
+     (state/do-send-packet (assoc this ::log2/state log-state)
+                           (partial cookie/wait-for-cookie wrapper)
+                           (partial hello-failed! wrapper)
+                           ;; FIXME: This is *not* the server-ip
+                           raw-packet
                            timeout
-                           ::sending-hello-timed-out)]
-      {::log2/state log-state
-       ;; FIXME: use dfrd/chain instead of manually building
-       ;; up the chain using on-realized.
-       ;; Although being explicit about the failure
-       ;; modes is nice.
-       ;; And it's not like this is much of a chain
-       ;; ...is it?
-       ::deferrable (dfrd/on-realized d
-                                      (partial cookie/wait-for-cookie wrapper)
-                                      (partial hello-failed! wrapper))})))
+                           ::sending-hello-timed-out)
+     ::log2/state log-state}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -341,7 +342,7 @@ like a timing attack."
     (if (await-for timeout wrapper)
       (let [{log-state ::log2/state
              result ::deferrable}
-            (cope-with-successful-hello-creation! wrapper chan->server timeout)]
+            (cope-with-successful-hello-creation! wrapper timeout)]
         (dfrd/catch result
             (fn [ex]
               ;; I've seen the deferrable returned by cope-with-successful-hello-creation!
