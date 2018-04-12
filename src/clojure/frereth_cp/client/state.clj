@@ -839,20 +839,17 @@ Which at least implies that the agent approach should go away."
         :ret ::specs/deferrable)
 (defn do-send-packet
   [{log-state ::log2/state
-    {:keys [::specs/srvr-name
+    {:keys [::specs/srvr-ip
             ::specs/srvr-port]} ::server-security
     :keys [::chan->server]
     :as this}
    on-success
    on-failure
-
-   packet
    timeout
-   timeout-key]
+   timeout-key
+   packet]
   (let [d (strm/try-put! chan->server
-                         ;; FIXME: this needs to be the server-ip,
-                         ;; which is very different
-                         {:host srvr-name
+                         {:host srvr-ip
                           :message packet
                           :port srvr-port}
                          timeout
@@ -886,7 +883,12 @@ Which at least implies that the agent approach should go away."
   ;; Note that this returns a deferred.
   ;; We're inside an agent's send.
   ;; Mixing these two paradigms was a bad idea.
-  (do-send-packet log-state
+
+  ;; FIXME: Instead of this, have HELLO set up a partial or lexical closure
+  ;; that we can use to send packets.
+  ;; Honestly, most of what I'm passing along in here is overkill that
+  ;; I set up for debugging.
+  (do-send-packet this
                   (fn [success]
                     (log2/flush-logs! logger
                                       (log2/info log-state
@@ -910,9 +912,9 @@ Which at least implies that the agent approach should go away."
                     (throw (ex-info "Failed to send cookie->vouch response"
                                     (assoc this
                                            :problem failure))))
-                  packet
                   (current-timeout wrapper)
-                  ::sending-vouch-timed-out))
+                  ::sending-vouch-timed-out
+                  packet))
 
 (defn update-client-short-term-nonce
   "Note that this can loop right back to a negative number."

@@ -221,15 +221,14 @@ implementation. This is code that I don't understand yet"
   [this msg]
   (throw (RuntimeException. "Not translated")))
 
-(s/fdef cope-with-successfullo-creation!
+(s/fdef poll-servers-with-hello!
         :args (s/cat :this ::state/agent-wrapper
                      :chan->server strm/stream?
                      :timeout nat-int?)
         :ret (s/keys :req [::specs/deferrable
                            ::log2/state]))
-(defn cope-with-successful-hello-creation!
-  "This name dates back to a time when building a hello packet was problematic"
-  ;; FIXME: Refactor to one that's less pessimistic
+(defn poll-servers-with-hello!
+  ""
   [wrapper timeout]
   (let [{:keys [::shared/packet-management
                 ::state/server-ips]
@@ -237,8 +236,8 @@ implementation. This is code that I don't understand yet"
          :as this} @wrapper
         raw-packet (::shared/packet packet-management)
         log-state (log2/debug log-state
-                              ::cope-with-successful-hello-creation
-                              "Putting hello onto ->server channel"
+                              ::poll-servers-with-hello!
+                              "Putting hello(s) onto ->server channel"
                               {::raw-hello raw-packet})]
     ;; There's an important break
     ;; with the reference implementation
@@ -252,30 +251,80 @@ implementation. This is code that I don't understand yet"
     ;; the next, but a major selling point
     ;; is not waiting for TCP buffers
     ;; to expire.
-    (throw (RuntimeException. "Implement looping over srvr-ips"))
-    {::specs/deferrable
-     ;; FIXME: Wrap this in a second layer of deferring.
-     ;; And, honestly, move it back into hello (actually
-     ;; that's problematic because it uses a function in
-     ;; cookie. And in here. That really just means another
-     ;; indirection layer of callbacks, but it's annoying).
-     ;; TODO: Spend more time contemplating this
-     ;; Need to loop over the potential server IPs to locate
-     ;; the one that's responding.
-     ;; Give each IP address a chance to time out.
-     ;; See the schedule in curvecpclient.c hellowait
-     ;; There's another layer of urgency for this:
-     ;; The actual send should be as devoid of side-effects as possible.
-     ;; We need to pick the server-ip that worked and assign that as
-     ;; "the" real IP that we use for the rest of this session.
-     (state/do-send-packet (assoc this ::log2/state log-state)
-                           (partial cookie/wait-for-cookie wrapper)
-                           (partial hello-failed! wrapper)
-                           ;; FIXME: This is *not* the server-ip
-                           raw-packet
-                           timeout
-                           ::sending-hello-timed-out)
-     ::log2/state log-state}))
+    (let [completion (dfrd/deferred)]
+      (dfrd/on-realized completion
+                        (fn [x]
+                          (throw (ex-info "Need to tie this back up" {::result x})))
+                        (partial hello-failed! wrapper))
+      (loop [this (-> this
+                      (assoc ::log2/state log-state))
+             timeout (util/seconds->nanos 1)
+             ;; Q: Do we really want to max out at 8?
+             ;; 8 means over 46 seconds waiting for a response,
+             ;; but what if you want the ability to try 20?
+             ;; Or don't particularly care how long it takes to get a response?
+             ;; Stick with the reference implementation version for now.
+             ips (take 8 (cycle server-ips))]
+        (let [ip (first ips)
+              {log-state ::log2/state} this
+              log-state (log2/info log-state
+                                   ::poll-servers-with-hello!
+                                   "Polling server"
+                                   {::specs/srvr-ip ip})
+              cookie-response (dfrd/deferred)
+              dfrd-success (state/do-send-packet (-> this
+                                                     (assoc ::log2/state log-state)
+                                                     (assoc-in [::state/server-security ::specs/srvr-port] ip))
+                                                 (partial cookie/wait-for-cookie! wrapper cookie-response)
+                                                 identity
+                                                 1000  ; 1 second really should be far longer than needed
+                                                 ::sending-hello-timed-out
+                                                 raw-packet)
+              send-packet-success (deref dfrd-success 1000 ::send-response-timed-out)
+              actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)]
+          ;; I don't think the value here matters much
+          (println "Sending HELLO returned:"
+                   send-packet-success
+                   "\nQ: Does it matter?")
+          (if (and (not (instance? Throwable actual-success))
+                   (not= actual-success ::sending-hello-timed-out)
+                   (not= actual-success ::awaiting-cookie-timed-out))
+            (let [{log-state ::log2/state} actual-success
+                  log-state (log2/info log-state
+                                       ::poll-servers-with-hello!
+                                       "Found a responsive server"
+                                       {::specs/srvr-ip ip})]
+              ;; This needs to trigger the vouch exchange. But there's already far
+              ;; too much happening here.
+              (dfrd/success! completion (assoc actual-success
+                                               ::log2/state log-state)))
+            (let [this (assoc this (log2/warn log-state
+                                              ::poll-servers-with-hello!
+                                              "Failed to connect"
+                                              {::specs/srvr-ip ip
+                                               ;; Actually, if this is a Throwable,
+                                               ;; we probably don't have a way
+                                               ;; to recover
+                                               ::outcome actual-success}))]
+              (if-let [remaining-ips (next ips)]
+                (recur this (* 1.5 timeout) remaining-ips)
+                (dfrd/error! completion (ex-info "Giving up" this)))))))
+      {::specs/deferrable completion
+       ;; FIXME: Wrap this in a second layer of deferring.
+       ;; And, honestly, move it back into hello (actually
+       ;; that's problematic because it uses a function in
+       ;; cookie. And in here. That really just means another
+       ;; indirection layer of callbacks, but it's annoying).
+       ;; TODO: Spend more time contemplating this
+       ;; Need to loop over the potential server IPs to locate
+       ;; the one that's responding.
+       ;; Give each IP address a chance to time out.
+       ;; See the schedule in curvecpclient.c hellowait
+       ;; There's another layer of urgency for this:
+       ;; The actual send should be as devoid of side-effects as possible.
+       ;; We need to pick the server-ip that worked and assign that as
+       ;; "the" real IP that we use for the rest of this session.
+       ::log2/state log-state})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -342,10 +391,18 @@ like a timing attack."
     (if (await-for timeout wrapper)
       (let [{log-state ::log2/state
              result ::deferrable}
-            (cope-with-successful-hello-creation! wrapper timeout)]
+            (poll-servers-with-hello! wrapper timeout)]
+        (dfrd/chain result (fn [{log-state ::log2/state
+                                 cookie ::specs/network-packet
+                                 :as this}]
+                             (let [this (dissoc this ::specs/network-packet)
+                                   log-state (log2/info log-state
+                                                        ::start!
+                                                        "Building/sending Vouch")]
+                               (initiate/build-and-send-vouch! wrapper cookie))))
         (dfrd/catch result
             (fn [ex]
-              ;; I've seen the deferrable returned by cope-with-successful-hello-creation!
+              ;; I've seen the deferrable returned by poll-servers-with-hello!
               ;; be an exception at least once.
               ;; Adding this error report seems to have made that problem disapper.
               ;; Maybe I've somehow managed to introduce a race condition.

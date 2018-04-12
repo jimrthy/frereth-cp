@@ -104,7 +104,7 @@ This is destructive in the sense that it reads from msg-byte-buf"
                     fields
                     (get-in this [::shared/packet-management ::shared/packet]))))
 
-(defn build-and-send-vouch
+(defn build-and-send-vouch!
   "param wrapper: the agent that's managing the state
   param cookie-packet: first response from the server
 
