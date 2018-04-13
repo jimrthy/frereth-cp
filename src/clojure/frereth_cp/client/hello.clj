@@ -107,7 +107,10 @@
            ::shared/work-area]
     log-state ::log2/state
     :as this}]
-  (let [this (state/clientextension-init this) ; There's a good chance this updates my extension
+  (let [;; There's a good chance this updates my extension
+        ;; That doesn't get set into stone until/unless I
+        ;; manage to handshake with a server
+        this (state/clientextension-init this)
         working-nonce (::shared/working-nonce work-area)
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)]

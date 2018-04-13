@@ -113,7 +113,12 @@
      (let [server-extension (byte-array srvr-xtn-vec)
            ;; FIXME: Honestly, we need to cope with multiple servers.
            ;; Each could be listening on a different port with a different
-           ;; long-term-pk
+           ;; long-term-pk.
+           ;; For starters, I should just add a test that tries, for example,
+           ;; 3 different addresses before it finds one that responds.
+           ;; Then again, that test should run in the background behind others,
+           ;; since it's basically just waiting for timeouts.
+           ;; Better choice: make the timeout customizable
            srvr-name (shared/encode-server-name "hypothet.i.cal")
            long-pair (crypto/random-key-pair)
            result (clnt/ctor {::msg-specs/->child (strm/stream)  ; This seems wrong. Q: Is it?
