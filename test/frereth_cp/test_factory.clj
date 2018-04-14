@@ -14,7 +14,8 @@
             [frereth-cp.shared.specs :as shared-specs]
             [manifold.executor :as exec]
             [manifold.stream :as strm])
-  (:import clojure.lang.ExceptionInfo))
+  (:import clojure.lang.ExceptionInfo
+           java.net.InetAddress))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants
@@ -84,11 +85,23 @@
 
 ;; FIXME: This spec doesn't match the function signature at all
 (s/fdef raw-client
-        :args (s/cat :message-loop-name ::msg-specs/message-loop-name
-                     :child-spawner! ::clnt/child-spawner!
-                     :srvr-pk-long ::shared-specs/public-long
-                     :srvr-xtn-vec (s/and vector?
-                                          #(= (count %) K/extension-length)))
+        :args (s/or :with-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
+                                     :logger-init (s/fspec :args nil :ret ::log/logger)
+                                     :log-state ::log/state
+                                     ;; Q: is there a built-in predicate for byte?
+                                     :server-ip (s/tuple int? int? int? int?)
+                                     :srvr-port ::shared-specs/port
+                                     :srvr-pk-long ::shared-specs/public-long
+                                     :srvr-xtn-vec (s/and vector?
+                                                          #(= (count %) K/extension-length)))
+                    :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
+                                     :logger-init (s/fspec :args nil :ret ::log/logger)
+                                     :log-state ::log/state
+                                     :server-ip (s/tuple int? int? int? int?)
+                                     :srvr-port ::shared-specs/port
+                                     :srvr-pk-long ::shared-specs/public-long
+                                     :srvr-xtn-vec (s/and vector?
+                                                          #(= (count %) K/extension-length))))
         :ret ::client-state/state-agent)
 (defn raw-client
   ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long]
@@ -129,10 +142,11 @@
                                                 ::shared/long-pair long-pair
                                                 ::K/server-name server-name}
                               ::client-state/server-extension server-extension
-                              ::client-state/server-ips [srvr-ip]
-                              ::client-state/server-security {::K/server-name srvr-name
-                                                              ::K/server-port srvr-port
+                              ::client-state/server-ips [(InetAddress/getByAddress (byte-array srvr-ip))]
+                              ::client-state/server-security {::shared-specs/srvr-name srvr-name
+                                                              ::shared-specs/port srvr-port
                                                               ::shared-specs/public-long srvr-pk-long}}
                              logger-init)]
-       (clnt/start! result)
+       (future
+         (clnt/start! result))
        result))))

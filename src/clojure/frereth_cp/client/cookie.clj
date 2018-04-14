@@ -66,15 +66,16 @@
 (s/fdef wait-for-cookie!
         :args (s/cat :wrapper ::state/agent-wrapper
                      :notifier dfrd/deferrable?
+                     ::timeout (s/and number?
+                                      (complement neg?))
                      :sent ::specs/network-packet)
         :ret any?)
 (defn wait-for-cookie!
-  [wrapper notifier sent]
+  [wrapper notifier timeout sent]
   (if (not= sent ::sending-hello-timed-out)
     (do
       (log/info "client/wait-for-cookie -- Sent to server:" sent)
       (let [chan<-server (::state/chan<-server @wrapper)
-            timeout (state/current-timeout wrapper)
             d (strm/try-take! chan<-server
                                 ::drained
                                 timeout

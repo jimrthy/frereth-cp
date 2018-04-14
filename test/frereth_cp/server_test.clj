@@ -118,6 +118,7 @@
 
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two
+  (println "Top of shake-hands")
   (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log")
         srvr-log-state (log/init ::shake-hands.server)
         initial-server (factory/build-server srvr-logger srvr-log-state)
@@ -145,11 +146,14 @@
                                              server-ip
                                              server-port
                                              srvr-pk-long)]
-        (println "Sending HELLO")
+        (println "Agent started. Sending HELLO")
         (try
           (let [client->server (::client-state/chan->server @client-agent)
                 taken (strm/try-take! client->server ::drained 1000 ::timeout)
                 hello @taken]
+            (println "Hello from client:" hello)
+            (is (not (or (= hello ::drained)
+                         (= hello ::timeout))))
             (is (:host hello) "This layer doesn't know where to send anything")
             (if (not (or (= hello ::drained)
                          (= hello ::timeout)))

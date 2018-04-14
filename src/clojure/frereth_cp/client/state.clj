@@ -838,9 +838,11 @@ Which at least implies that the agent approach should go away."
                      :timeout-key any?)
         :ret ::specs/deferrable)
 (defn do-send-packet
+  "Send a ByteBuf (et al) as UDP to the server"
   [{log-state ::log2/state
     {:keys [::specs/srvr-ip
-            ::specs/srvr-port]} ::server-security
+            ::specs/srvr-port]
+     :as server-security} ::server-security
     :keys [::chan->server]
     :as this}
    on-success
@@ -848,6 +850,7 @@ Which at least implies that the agent approach should go away."
    timeout
    timeout-key
    packet]
+  (println "do-send-packet server-security:" server-security)
   (let [d (strm/try-put! chan->server
                          {:host srvr-ip
                           :message packet

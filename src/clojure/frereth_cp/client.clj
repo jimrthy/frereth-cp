@@ -238,7 +238,7 @@ implementation. This is code that I don't understand yet"
              this))
   (let [this (dissoc this ::specs/network-packet)
         log-state (log2/info log-state
-                             ::start!
+                             ::servers-polled!
                              "Building/sending Vouch")]
     (initiate/build-and-send-vouch! wrapper cookie)))
 
@@ -310,10 +310,10 @@ implementation. This is code that I don't understand yet"
               cookie-response (dfrd/deferred)
               dfrd-success (state/do-send-packet (-> this
                                                      (assoc ::log2/state log-state)
-                                                     (assoc-in [::state/server-security ::specs/srvr-port] ip))
-                                                 (partial cookie/wait-for-cookie! wrapper cookie-response)
+                                                     (assoc-in [::state/server-security ::specs/srvr-ip] ip))
+                                                 (partial cookie/wait-for-cookie! wrapper cookie-response timeout)
                                                  identity
-                                                 1000  ; 1 second really should be far longer than needed
+                                                 timeout
                                                  ::sending-hello-timed-out
                                                  raw-packet)
               send-packet-success (deref dfrd-success 1000 ::send-response-timed-out)
@@ -381,6 +381,16 @@ implementation. This is code that I don't understand yet"
        ;; "the" real IP that we use for the rest of this session.
        ::log2/state log-state})))
 
+(defn chan->server-closed
+  [wrapper]
+  (send wrapper (fn [{:keys [::log2/logger]
+                      :as this}]
+                  (update this ::log2/state
+                          (log2/flush-logs! logger #(log2/warn %
+                                                               ::start!
+                                                               "Channel->server closed")))))
+  (send wrapper server-closed!))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -392,27 +402,30 @@ implementation. This is code that I don't understand yet"
         ;; Even though it really is just called for side-effects.
         :ret any?)
 (defn start!
-  "This almost seems like it belongs in ctor.
+  "Perform the side-effects to establish a connection with a server"
+  ;; This almost seems like it belongs in ctor.
 
-But not quite, since it's really the first in a chain of side-effects.
+  ;; But not quite, since it's really the first in a chain of side-effects.
 
-Q: Is there something equivalent I can set up using core.async?
+  ;; Q: Is there something equivalent I can set up using core.async?
 
-Actually, this seems to be screaming to be rewritten on top of manifold
-Deferreds.
+  ;; Actually, this seems to be screaming to be rewritten on top of manifold
+  ;; Deferreds.
 
-For that matter, it seems like setting up a watch on an atom that's
-specifically for something like this might make a lot more sense.
+  ;; For that matter, it seems like setting up a watch on an atom that's
+  ;; specifically for something like this might make a lot more sense.
 
-That way I wouldn't be trying to multi-purpose communications channels.
+  ;; That way I wouldn't be trying to multi-purpose communications channels.
 
-OTOH, they *are* the trigger for this sort of thing.
+  ;; OTOH, they *are* the trigger for this sort of thing.
 
-The reference implementation mingles networking with this code.
-That seems like it might make sense as an optimization,
-but not until I have convincing numbers that it's needed.
-Of course, I might also be opening things up for something
-like a timing attack."
+  ;; The reference implementation mingles networking with this code.
+  ;; That seems like it might make sense as an optimization,
+  ;; but not until I have convincing numbers that it's needed.
+  ;; Of course, I might also be opening things up for something
+  ;; like a timing attack.
+
+  ;; TODO: Ask for opinions.
   [wrapper]
   (when-let [failure (agent-error wrapper)]
     (throw (ex-info "Agent failed before we started"
@@ -422,14 +435,7 @@ like a timing attack."
          :as this} @wrapper
         timeout (state/current-timeout wrapper)]
     (strm/on-drained chan->server
-                     (fn []
-                       (send wrapper (fn [{:keys [::log2/logger]
-                                           :as this}]
-                                       (update this ::log2/state
-                                               (log2/flush-logs! logger #(log2/warn %
-                                                                                    ::start!
-                                                                                    "Channel->server closed")))))
-                       (send wrapper server-closed!)))
+                     (partial chan->server-closed wrapper))
     ;; This feels inside-out and backwards.
     ;; But it probably should, since this is very
     ;; explicitly place-oriented programming working
@@ -450,6 +456,12 @@ like a timing attack."
     (if (await-for timeout wrapper)
       (let [{log-state ::log2/state
              result ::deferrable}
+            ;; Note that this is going to block the calling
+            ;; thread. Which is annoying, but probably not
+            ;; a serious issue outside of unit tests that
+            ;; are mimicking both client and server pieces,
+            ;; which need to run this function in a separate
+            ;; thread.
             (poll-servers-with-hello! wrapper timeout)]
         (dfrd/chain result (partial servers-polled wrapper))
         (dfrd/catch result
