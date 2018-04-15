@@ -380,11 +380,14 @@
     ;; old entries anyway.
     ;; But it seems like the latter might get a minor
     ;; win by avoiding the overhead of the update call
+    ;; Note that the difference is obsolete if I don't
+    ;; increment the clock here, and it very much looks
+    ;; as though I shouldn't.
+    ;; At that point, the plain assoc really should be
+    ;; the clear winner
     (comment
-      (-> log-state
-          (update ::lamport inc)
-          (assoc ::entries [])))
-    (init context (inc lamport))))
+      (assoc log-state ::entries []))
+    (init context lamport)))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state

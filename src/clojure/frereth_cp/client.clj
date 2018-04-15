@@ -235,11 +235,15 @@ implementation. This is code that I don't understand yet"
     (println "Missing log-state among"
              (keys this)
              "\nin\n"
-             this))
+             this
+             "\nstate-agent:"
+             wrapper))
   (let [this (dissoc this ::specs/network-packet)
         log-state (log2/info log-state
                              ::servers-polled!
                              "Building/sending Vouch")]
+    ;; This is really where mixing an Agent and Manifold falls apart.
+    (throw (RuntimeException. "Need to synchronize this into wrapper"))
     (initiate/build-and-send-vouch! wrapper cookie)))
 
 (s/fdef poll-servers-with-hello!
@@ -283,12 +287,19 @@ implementation. This is code that I don't understand yet"
     ;; to expire.
     (let [completion (dfrd/deferred)]
       (dfrd/on-realized completion
-                        (fn [x]
-                          (log2/flush-logs! logger
-                                            (log2/info (log2/clean-fork log-state ::server-poll-complete)
-                                                       ::poll-servers-with-hello!
-                                                       "Polling complete. Hopefully this will trigger Initiate/Vouch"
-                                                       {::result x})))
+                        (fn [this]
+                          (as-> (::log2/state this) x
+                            (log2/info x
+                                       ::poll-servers-with-hello!
+                                       "Polling complete. Should trigger Initiate/Vouch"
+                                       {::result (dissoc this ::log2/state)})
+                            (log2/flush-logs! logger x)
+                            ;; I really shouldn't need to do this, since the
+                            ;; caller should set up its trigger on completion.
+                            ;; These two handlers should be totally independent.
+                            ;; Note that commenting this one out completely
+                            ;; does not help my missing log-state issue
+                            (assoc this ::log2/state x)))
                         (partial hello-failed! wrapper))
       (loop [this (-> this
                       (assoc ::log2/state log-state))
@@ -320,9 +331,15 @@ implementation. This is code that I don't understand yet"
               actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
               now (System/nanoTime)]
           ;; I don't think the value here matters much
-          (println "poll-servers-with-hello! Sending HELLO returned:"
+          (println "client/poll-servers-with-hello! Sending HELLO returned:"
                    send-packet-success
-                   "\nQ: Does that value matter?")
+                   "\nQ: Does that value matter?"
+                   "\nactual-success:\n"
+                   actual-success
+                   "\nTop-level keys:\n"
+                   (keys actual-success)
+                   "\nReceived:\n"
+                   (::specs/network-packet actual-success))
           (if (and (not (instance? Throwable actual-success))
                    (not= actual-success ::sending-hello-timed-out)
                    (not= actual-success ::awaiting-cookie-timed-out)
@@ -336,6 +353,7 @@ implementation. This is code that I don't understand yet"
               (if-let [{:keys [::specs/network-packet]} actual-success]
                 ;; This needs to trigger the vouch exchange. But there's already far
                 ;; too much happening here.
+                ;; So this should trigger servers-polled
                 (dfrd/success! completion (assoc actual-success
                                                  ::log2/state log-state))
                 (let [elapsed (- now start-time)
@@ -365,20 +383,11 @@ implementation. This is code that I don't understand yet"
                 (recur this now (* 1.5 timeout) remaining-ips)
                 (dfrd/error! completion (ex-info "Giving up" this)))))))
       {::specs/deferrable completion
-       ;; FIXME: Wrap this in a second layer of deferring.
-       ;; And, honestly, move it back into hello (actually
+       ;; FIXME: Move this back into hello (actually
        ;; that's problematic because it uses a function in
-       ;; cookie. And in here. That really just means another
-       ;; indirection layer of callbacks, but it's annoying).
-       ;; TODO: Spend more time contemplating this
-       ;; Need to loop over the potential server IPs to locate
-       ;; the one that's responding.
-       ;; Give each IP address a chance to time out.
-       ;; See the schedule in curvecpclient.c hellowait
-       ;; There's another layer of urgency for this:
-       ;; The actual send should be as devoid of side-effects as possible.
-       ;; We need to pick the server-ip that worked and assign that as
-       ;; "the" real IP that we use for the rest of this session.
+       ;; the cookie ns. And another in here. That really just
+       ;; means another indirection layer of callbacks, but
+       ;; it's annoying).
        ::log2/state log-state})))
 
 (defn chan->server-closed
@@ -455,7 +464,7 @@ implementation. This is code that I don't understand yet"
     (send wrapper hello/do-build-hello)
     (if (await-for timeout wrapper)
       (let [{log-state ::log2/state
-             result ::deferrable}
+             result ::specs/deferrable}
             ;; Note that this is going to block the calling
             ;; thread. Which is annoying, but probably not
             ;; a serious issue outside of unit tests that

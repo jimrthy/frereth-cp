@@ -144,7 +144,7 @@
                               ::client-state/server-extension server-extension
                               ::client-state/server-ips [(InetAddress/getByAddress (byte-array srvr-ip))]
                               ::client-state/server-security {::shared-specs/srvr-name srvr-name
-                                                              ::shared-specs/port srvr-port
+                                                              ::shared-specs/srvr-port srvr-port
                                                               ::shared-specs/public-long srvr-pk-long}}
                              logger-init)]
        (future

@@ -207,7 +207,17 @@
                           (let [cookie-buffer (:message packet)
                                 cookie (byte-array (.readableBytes cookie-buffer))]
                             (.readBytes cookie-buffer cookie)
-                            (is (= server-ip (:host packet)))
+                            (is (= server-ip (-> packet
+                                                 :host
+                                                 .getAddress
+                                                 vec)))
+                            (when-not (= server-port (:port packet))
+                              (println "Falsey port in"
+                                       packet
+                                       "based on\n"
+                                       (-> client-agent
+                                           deref
+                                           ::client-state/server-security)))
                             (is (= server-port (:port packet)))
                             (let [put @(strm/try-put! client<-server
                                                       (assoc packet
