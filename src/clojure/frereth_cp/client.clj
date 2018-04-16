@@ -243,7 +243,15 @@ implementation. This is code that I don't understand yet"
                              ::servers-polled!
                              "Building/sending Vouch")]
     ;; This is really where mixing an Agent and Manifold falls apart.
-    (throw (RuntimeException. "Need to synchronize this into wrapper"))
+    (throw (RuntimeException. "Need to synchronize `this` into wrapper"))
+    ;; Got a Cookie response packet from server.
+    ;; Theory in the reference implementation is that this is
+    ;; a good signal that it's time to spawn the child to do
+    ;; the real work.
+    ;; That really seems to complect the concerns.
+    ;; But this entire function is a stateful mess.
+    ;; At least this helps it stay in one place.
+    (send wrapper state/fork! wrapper)
     (initiate/build-and-send-vouch! wrapper cookie)))
 
 (s/fdef poll-servers-with-hello!
@@ -351,9 +359,9 @@ implementation. This is code that I don't understand yet"
                                        {::specs/srvr-ip ip})
                   log-state (log2/flush-logs! logger log-state)]
               (if-let [{:keys [::specs/network-packet]} actual-success]
-                ;; This needs to trigger the vouch exchange. But there's already far
+                ;; Need to move on to Vouch. But there's already far
                 ;; too much happening here.
-                ;; So this should trigger servers-polled
+                ;; So the deferred in completion should trigger servers-polled
                 (dfrd/success! completion (assoc actual-success
                                                  ::log2/state log-state))
                 (let [elapsed (- now start-time)

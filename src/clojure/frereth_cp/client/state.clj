@@ -690,6 +690,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; some function that I don't think I've written yet that should
     ;; live in client.message.
     (let [message-packet (packet-builder wrapper message-block)
+          ;; FIXME: Switch to using do-send-packet
           bundle {:host srvr-name
                   :port srvr-port
                   :message message-packet}
@@ -699,7 +700,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
           ;; transaction.
           [my-log-state msg-log-state] (log2/synchronize log-state @msg-log-state-atom)]
       (send wrapper #(update % ::log2/state
-                             (fn [log-sate]
+                             (fn [log-state]
                                (log2/flush-logs! logger log-state))))
       (swap! msg-log-state-atom update ::log2/lamport max (::log2/lamport msg-log-state))
       result)))
@@ -767,7 +768,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ::shared/extension extension)))
 
 (s/fdef fork!
-        :args (s/cat :wrapper ::state-agent)
+        :args (s/cat :state ::state
+                     :wrapper ::state-agent)
         :ret ::state)
 (defn fork!
   "This has to 'fork' a child with access to the agent, and update the agent state
@@ -804,23 +806,19 @@ Which at least implies that the agent approach should go away."
         {:keys [::msg-specs/io-handle]
          log-state ::log2/state} (message/start! child
                                                  logger
+                                                 ;; And this is really why
+                                                 ;; I need something stateful
                                                  (partial child-> wrapper)
-                                                 ->child)]
-    (let [log-state (log2/debug log-state
-                               ::fork!
-                               "Child spawned"
-                               {::this (dissoc this ::log2/state)
-                                ::child (dissoc child ::log2/state)})]
-      ;; Q: Do these all *really* belong at the top level?
-      ;; I'm torn between the basic fact that flat data structures
-      ;; are easier (simpler?) and the fact that namespacing this
-      ;; sort of thing makes collisions much less likely.
-      ;; Not to mention the whole "What did I mean for this thing
-      ;; to be?" question.
-      (assoc this
-             ::child child
-             ::log2/state (log2/flush-logs! logger log-state)
-             ::msg-specs/io-handle io-handle))))
+                                                 ->child)
+        log-state (log2/debug log-state
+                              ::fork!
+                              "Child spawned"
+                              {::this (dissoc this ::log2/state)
+                               ::child (dissoc child ::log2/state)})]
+    (assoc this
+           ::child child
+           ::log2/state (log2/flush-logs! logger log-state)
+           ::msg-specs/io-handle io-handle)))
 
 (s/fdef do-send-packet
         :args (s/cat :this ::state
