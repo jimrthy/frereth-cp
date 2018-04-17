@@ -232,13 +232,24 @@
                              vouch-length ; 48
                              ;; 256
                              specs/server-name-length))
-(defn initiate-message-length-filter
-  "The maximum length for the message associated with an Initiate packet is 640 bytes.
 
-  However, it must be evenly divisible by 16."
-  [n]
-  (min (* (quot n 16) 16)
-       max-vouch-message-length))
+(s/fdef legal-vouch-message-length?
+        :args (s/cat :bytes bytes?)
+        :ret boolean?)
+(defn legal-vouch-message-length?
+  "Is a byte array a legal vouch sub-message?"
+  ;; The maximum length for the message associated with an Initiate packet is 640 bytes.
+  ;; However, it must be evenly divisible by 16.
+  ;; This feels a little...odd.
+  ;; It leaves the message child tightly coupled with this implementation
+  ;; detail.
+  ;; And also tied in with the detail that the rules change after
+  ;; the server sends back a response.
+  ;; I'm not sure there's any way to avoid that.
+  [^bytes bs]
+  (let [n (count bs)]
+    (and (< n max-vouch-message-length)
+         (= 0 (quot n 16)))))
 
 (def vouch-wrapper
   "Template for composing the inner part of an Initiate Packet's Vouch that holds everything interesting"

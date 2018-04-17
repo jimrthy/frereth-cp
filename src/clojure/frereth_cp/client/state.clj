@@ -689,7 +689,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; swap packet-builder from initiate/build-initiate-packet! to
     ;; some function that I don't think I've written yet that should
     ;; live in client.message.
-    (let [message-packet (packet-builder wrapper message-block)
+    (let [message-packet (packet-builder state message-block)
           ;; FIXME: Switch to using do-send-packet
           bundle {:host srvr-name
                   :port srvr-port

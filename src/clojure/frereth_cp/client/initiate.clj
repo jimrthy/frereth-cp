@@ -65,25 +65,56 @@
                                            outer-nonce-suffix)
      ::log2/state log-state}))
 
-;; TODO: Surely I have a ByteBuf spec somewhere.
 (s/fdef build-initiate-packet!
-        :args (s/cat :this ::state/state-agent
-                     ;; FIXME: This really should be a B]
-                     :msg-byte-buf #(instance? ByteBuf %))
-        :fn #(= (count (:ret %)) (+ 544 (count (-> % :args :msg-byte-buf K/initiate-message-length-filter))))
-        :ret ::specs/byte-buf)
+        :args (s/cat :this ::state/state
+                     :msg-bytes (s/and bytes?
+                                       ;; Just be explicit about the
+                                       ;; the legal incoming length.
+                                       ;; This is mostly for the sake of
+                                       ;; documentation.
+                                       (fn [bs]
+                                         (let [{:keys [::message/possible-response]}
+                                               (K/initiate-message-length-filter bs)]
+                                           possible-response))))
+        :fn (fn [x]
+              (let [legal-to-send (-> x
+                                      :args
+                                      :msg-bytes
+                                      K/initiate-message-length-filter
+                                      ::message/possible-response)
+                    real-result (-> x
+                                    :ret
+                                    ::specs/byte-buf)]
+                (= (count real-result)
+                   (+ 544 (count legal-to-send)))
+                true))
+        :ret (s/keys :opt [::specs/byte-buf]
+                     :req [::log2/state]))
 (defn build-initiate-packet!
   "Combine message buffer and client state into an Initiate packet
 
-This is destructive in the sense that it reads from msg-byte-buf"
-  [wrapper msg-byte-buf]
-  (let [this @wrapper
-        msg (message/pull-initial-message-bytes wrapper msg-byte-buf)
-        work-area (::shared/work-area this)
-        ;; Just reuse a subset of whatever the server sent us.
-        ;; Legal because a) it uses a different prefix and b) it's a different number anyway
-        ;; Note that this is actually for the *outer* nonce.
-        nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area) K/client-nonce-prefix-length)
+This is destructive in the sense that it overwrites ::shared/work-area"
+  [this msg-bytes]
+  (let [{log-state ::log2/state
+         msg ::message/possible-response} (message/filter-initial-message-bytes this
+                                                                                msg-bytes)]
+    (if msg
+      ;; I really don't like this approach to a shared work-area.
+      ;; It kind-of made sense with the original approach, which involved
+      ;; locking down strict access from a single thread, using an agent.
+      ;; Note that this approach is worse than I thought at first glance:
+      ;; I'm really just reusing the last-used nonce.
+      ;; That seems wrong all around.
+      ;; c.f. lines 329-334.
+      (let [work-area (::shared/work-area this)
+            ;; Just reuse a subset of whatever the server sent us.
+            ;; Legal because a) it uses a different prefix and b) it's a different number anyway
+            ;; Note that this is actually for the *outer* nonce.
+            ;; and is totally incorrect.
+            ;; c.f. line 423-425
+            nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area)
+                                             K/client-nonce-prefix-length)
+            _ (throw (RuntimeException. "Start back here"))
         {:keys [::crypto-box]
          log-state ::log2/state} (build-initiate-interior this msg nonce-suffix)
         log-state (log2/info log-state
@@ -100,9 +131,12 @@ This is destructive in the sense that it reads from msg-byte-buf"
                                              :cookie (get-in this [::state/server-security ::state/server-cookie])
                                              :outer-i-nonce nonce-suffix
                                              :vouch-wrapper crypto-box}]
-    (shared/compose dscr
-                    fields
-                    (get-in this [::shared/packet-management ::shared/packet]))))
+        {::specs/byte-buf
+         (shared/compose dscr
+                         fields
+                         (get-in this [::shared/packet-management ::shared/packet]))
+         ::log2/state log-state})
+      {::log2/state log-state})))
 
 (s/fdef build-and-send-vouch!
         :args (s/cat :wrapper ::state/state-agent
