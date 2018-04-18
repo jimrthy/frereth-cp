@@ -7,6 +7,7 @@
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as utils])
   (:import clojure.lang.ExceptionInfo
@@ -93,7 +94,8 @@
 (defn build-initiate-packet!
   "Combine message buffer and client state into an Initiate packet
 
-This is destructive in the sense that it overwrites ::shared/work-area"
+This was destructive in the sense that it overwrites ::shared/work-area
+FIXME: Change that"
   [this msg-bytes]
   (let [{log-state ::log2/state
          msg ::message/possible-response} (message/filter-initial-message-bytes this
@@ -106,35 +108,34 @@ This is destructive in the sense that it overwrites ::shared/work-area"
       ;; I'm really just reusing the last-used nonce.
       ;; That seems wrong all around.
       ;; c.f. lines 329-334.
-      (let [work-area (::shared/work-area this)
+      (let [working-nonce (byte-array K/nonce-length)
             ;; Just reuse a subset of whatever the server sent us.
             ;; Legal because a) it uses a different prefix and b) it's a different number anyway
-            ;; Note that this is actually for the *outer* nonce.
-            ;; and is totally incorrect.
-            ;; c.f. line 423-425
-            nonce-suffix (b-t/sub-byte-array (::shared/working-nonce work-area)
+            ;; Note that this is actually for the *inner* vouch nonce.
+            nonce-suffix (b-t/sub-byte-array working-nonce
                                              K/client-nonce-prefix-length)
-            _ (throw (RuntimeException. "Start back here"))
-        {:keys [::crypto-box]
-         log-state ::log2/state} (build-initiate-interior this msg nonce-suffix)
-        log-state (log2/info log-state
-                             ::build-initiate-packet!
-                             "Stuffing crypto-box into Initiate packet"
-                             {::crypto-box (b-t/->string crypto-box)
-                              ::message-length (count crypto-box)})
-        dscr (update-in K/initiate-packet-dscr [::K/vouch-wrapper ::K/length] + (count msg))
-        ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
-        fields #:frereth-cp.shared.constants{:prefix K/initiate-header
-                                             :srvr-xtn (::state/server-extension this)
-                                             :clnt-xtn (::shared/extension this)
-                                             :clnt-short-pk (.getPublicKey short-pair)
-                                             :cookie (get-in this [::state/server-security ::state/server-cookie])
-                                             :outer-i-nonce nonce-suffix
-                                             :vouch-wrapper crypto-box}]
+            {:keys [::crypto-box]
+             log-state ::log2/state} (build-initiate-interior this msg nonce-suffix)
+            log-state (log2/info log-state
+                                 ::build-initiate-packet!
+                                 "Stuffing crypto-box into Initiate packet"
+                                 {::crypto-box (b-t/->string crypto-box)
+                                  ::message-length (count crypto-box)})
+            dscr (update-in K/initiate-packet-dscr
+                            [::K/vouch-wrapper ::K/length]
+                            +
+                            (count msg))
+            ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
+            fields #:frereth-cp.shared.constants{:prefix K/initiate-header
+                                                 :srvr-xtn (::state/server-extension this)
+                                                 :clnt-xtn (::shared/extension this)
+                                                 :clnt-short-pk (.getPublicKey short-pair)
+                                                 :cookie (get-in this [::state/server-security ::state/server-cookie])
+                                                 :outer-i-nonce nonce-suffix
+                                                 :vouch-wrapper crypto-box}]
         {::specs/byte-buf
-         (shared/compose dscr
-                         fields
-                         (get-in this [::shared/packet-management ::shared/packet]))
+         (serial/compose dscr
+                         fields)
          ::log2/state log-state})
       {::log2/state log-state})))
 
@@ -176,7 +177,10 @@ This is destructive in the sense that it overwrites ::shared/work-area"
         log-state (log2/info log-state
                              ::build-and-send-vouch
                              "send cookie->vouch")]
-
+    ;; This is where we decrypt the cookie.
+    ;; It needs to happen before we ever accept the cookie
+    ;; that was received.
+    (throw (RuntimeException. "FIXME: Need to do this earlier"))
     (let [state (state/cookie->vouch state cookie-packet)
           timeout (state/current-timeout wrapper)]
       ;; Give the other thread(s) a chance to catch up and return

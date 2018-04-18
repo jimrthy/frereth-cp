@@ -6,6 +6,7 @@
   on the server side. At least half the point there is
   reducing DoS."
   (:require [byte-streams :as b-s]
+            [clojure.data :as data]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.client.cookie :as cookie]
@@ -200,6 +201,21 @@ implementation. This is code that I don't understand yet"
   [this]
   (throw (ex-info "child exited" this)))
 
+(defn hello-succeeded!
+  [logger this]
+  (as-> (::log2/state this) x
+    (log2/info x
+               ::hello-succeeded!
+               "Polling complete. Should trigger Initiate/Vouch"
+               {::result (dissoc this ::log2/state)})
+    (log2/flush-logs! logger x)
+    ;; Note that the log-flush gets discarded, except
+    ;; for its side-effects.
+    ;; So this really needs a way to tie back into whichever
+    ;; state management winds up making sense
+    (println "FIXME: Need to update 'real' clock")
+    (assoc this ::log2/state x)))
+
 (defn hello-failed!
   [this failure]
   (send this #(throw (ex-info "Hello failed"
@@ -242,8 +258,14 @@ implementation. This is code that I don't understand yet"
         log-state (log2/info log-state
                              ::servers-polled!
                              "Building/sending Vouch")]
-    ;; This is really where mixing an Agent and Manifold falls apart.
-    (throw (RuntimeException. "Need to synchronize `this` into wrapper"))
+    ;; This is really where mixing an Agent and Manifold gets tricky.
+    (let [unwrapped @wrapper]
+      (when (not= unwrapped this)
+        (let [[only-a only-b both] (data/diff unwrapped this)]
+          (throw (ex-info "Need to synchronize `this` into wrapper"
+                          {::only-in-agent only-a
+                           ::only-in-this only-b
+                           ::shared both})))))
     ;; Got a Cookie response packet from server.
     ;; Theory in the reference implementation is that this is
     ;; a good signal that it's time to spawn the child to do
@@ -272,11 +294,11 @@ implementation. This is code that I don't understand yet"
   ;; to time out.
   [wrapper timeout]
   (let [{:keys [::log2/logger
-                ::shared/packet-management
                 ::state/server-ips]
          log-state ::log2/state
+         {raw-packet ::shared/packet
+          :as packet-management} ::shared/packet-management
          :as this} @wrapper
-        raw-packet (::shared/packet packet-management)
         log-state (log2/debug log-state
                               ::poll-servers-with-hello!
                               "Putting hello(s) onto ->server channel"
@@ -295,19 +317,7 @@ implementation. This is code that I don't understand yet"
     ;; to expire.
     (let [completion (dfrd/deferred)]
       (dfrd/on-realized completion
-                        (fn [this]
-                          (as-> (::log2/state this) x
-                            (log2/info x
-                                       ::poll-servers-with-hello!
-                                       "Polling complete. Should trigger Initiate/Vouch"
-                                       {::result (dissoc this ::log2/state)})
-                            (log2/flush-logs! logger x)
-                            ;; I really shouldn't need to do this, since the
-                            ;; caller should set up its trigger on completion.
-                            ;; These two handlers should be totally independent.
-                            ;; Note that commenting this one out completely
-                            ;; does not help my missing log-state issue
-                            (assoc this ::log2/state x)))
+                        (partial hello-succeeded! logger)
                         (partial hello-failed! wrapper))
       (loop [this (-> this
                       (assoc ::log2/state log-state))
@@ -327,10 +337,15 @@ implementation. This is code that I don't understand yet"
                                    "Polling server"
                                    {::specs/srvr-ip ip})
               cookie-response (dfrd/deferred)
-              dfrd-success (state/do-send-packet (-> this
-                                                     (assoc ::log2/state log-state)
-                                                     (assoc-in [::state/server-security ::specs/srvr-ip] ip))
-                                                 (partial cookie/wait-for-cookie! wrapper cookie-response timeout)
+              this (-> this
+                       (assoc ::log2/state log-state)
+                       (assoc-in [::state/server-security ::specs/srvr-ip] ip))
+              cookie-waiter (partial cookie/wait-for-cookie!
+                                     wrapper
+                                     cookie-response
+                                     timeout)
+              dfrd-success (state/do-send-packet this
+                                                 cookie-waiter
                                                  identity
                                                  timeout
                                                  ::sending-hello-timed-out

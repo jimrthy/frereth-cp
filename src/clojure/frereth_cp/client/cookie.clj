@@ -43,7 +43,6 @@
         (dfrd/success! notifier (assoc this
                                        ::log2/state log-state
                                        ::specs/network-packet cookie))
-        ;; FIXME: Retry with a timeout reduced for elapsed time
         (let [log-state (log2/warn log-state
                                    ::received-response
                                    "Invalid response. Just discard and retry"
