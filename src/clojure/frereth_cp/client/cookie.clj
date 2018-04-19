@@ -68,34 +68,37 @@
                                   ::this this
                                   ::my-keys (keys this)})]
         (b-t/byte-copy! text 0 K/cookie-frame-length cookie)
-        (let [shared (::client-short<->server-long shared-secrets)
-              log-state (log2/info log-state
-                                   ::decrypt-actual-cookie
-                                   "Trying to decrypt"
-                                   {::shared/text  (b-t/->string text)
-                                    ::shared/working-nonce (b-t/->string working-nonce)
-                                    ::client-short<->server-long (b-t/->string shared)})]
-          ;; TODO: If/when an exception is thrown here, it would be nice
-          ;; to notify callers immediately
-          (try
-            (let [{log-state ::log2/state
-                   decrypted ::crypto/unboxed} (crypto/open-after log-state text 0 144 working-nonce shared)
-                  {server-short-pk ::K/s'
-                   server-cookie ::K/black-box
-                   :as extracted} (serial/decompose K/cookie decrypted)
-                  server-security (assoc (::state/server-security this)
-                                         ::specs/public-short server-short-pk,
-                                         ::server-cookie server-cookie)]
-              (assoc this
-                     ::state/server-security server-security
-                     ::log2/state log-state))
-            (catch ExceptionInfo ex
-              (assoc this
-                     ::log2/state (log2/exception log-state
-                                                  ex
-                                                  ::decrypt-actual-cookie
-                                                  "Decryption failed"
-                                                  (.getData ex))))))))))
+        (let [shared (::state/client-short<->server-long shared-secrets)]
+          (when-not shared
+            (throw (ex-info "Missing client-short<->server-long secret"
+                            {::state/shared-secrets shared-secrets})))
+          (let [log-state (log2/info log-state
+                                     ::decrypt-actual-cookie
+                                     "Trying to decrypt"
+                                     {::shared/text  (b-t/->string text)
+                                      ::shared/working-nonce (b-t/->string working-nonce)
+                                      ::client-short<->server-long (b-t/->string shared)})]
+            ;; TODO: If/when an exception is thrown here, it would be nice
+            ;; to notify callers immediately
+            (try
+              (let [{log-state ::log2/state
+                     decrypted ::crypto/unboxed} (crypto/open-after log-state text 0 144 working-nonce shared)
+                    {server-short-pk ::K/s'
+                     server-cookie ::K/black-box
+                     :as extracted} (serial/decompose K/cookie decrypted)
+                    server-security (assoc (::state/server-security this)
+                                           ::specs/public-short server-short-pk,
+                                           ::server-cookie server-cookie)]
+                (assoc this
+                       ::state/server-security server-security
+                       ::log2/state log-state))
+              (catch ExceptionInfo ex
+                (assoc this
+                       ::log2/state (log2/exception log-state
+                                                    ex
+                                                    ::decrypt-actual-cookie
+                                                    "Decryption failed"
+                                                    (.getData ex)))))))))))
 
 (defn decrypt-cookie-packet
   [{:keys [::shared/extension
@@ -147,6 +150,7 @@
         :ret any?)
 (defn received-response
   [{log-state ::log2/state
+    :keys [::log2/logger]
     :as this}
    notifier
    {:keys [:host :message :port]
@@ -173,46 +177,74 @@
         ;; phone.
         ;; Which, if this is successful, will totally happen.
         ;; FIXME: Verify those before trying to proceed
-        ;; decrypt-cookie-packet can throw lots of exceptions
-        ;; FIXME: Catch them
-        (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
-                                                                      [::shared/extension
-                                                                       ::shared/work-area
-                                                                       ::server-extension
-                                                                       ::server-security
-                                                                       ::shared-secrets])
-                                                         ::log2/state log-state
-                                                         ::shared/packet message))]
-          (let [this (into this decrypted)
-                {:keys [::shared/my-keys]} this
-                server-short (get-in this
-                                     [::server-security
-                                      ::specs/public-short])
-                log-state (log2/debug log-state
-                                      ::cookie->vouch
-                                      "Managed to decrypt the cookie")]
-            (assert server-short (str "Missing ::specs/public-short among\n"
-                                      (keys (::server-security this))
-                                      "\namong bigger-picture\n"
-                                      (keys this)))
-            (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
-                  ;; line 327
-                  this (assoc-in this
-                                 [::shared-secrets ::client-short<->server-short]
-                                 (crypto/box-prepare
-                                  server-short
-                                  (.getSecretKey my-short-pair)))
+        (try
+          (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
+                                                                        [::shared/extension
+                                                                         ::shared/work-area
+                                                                         ::state/server-extension
+                                                                         ::state/server-security
+                                                                         ::state/shared-secrets])
+                                                           ::log2/state log-state
+                                                           ::shared/packet message))]
+            (let [this (into this decrypted)
+                  {:keys [::shared/my-keys]} this
+                  server-short (get-in this
+                                       [::state/server-security
+                                        ::specs/public-short])
                   log-state (log2/debug log-state
                                         ::cookie->vouch
-                                        "Prepared shared short-term secret")]
-              (dfrd/success! notifier (assoc this
-                                       ::log2/state log-state
-                                       ::specs/network-packet cookie))))
-          (let [log-state (log2/warn log-state
-                                     ::received-response
-                                     "Unable to decrypt server cookie"
-                                     {::problem cookie})]
-            (dfrd/success! notifier (assoc this ::log2/state log-state))))
+                                        "Managed to decrypt the cookie")]
+              (assert server-short (str "Missing ::specs/public-short among\n"
+                                        (keys (::state/server-security this))
+                                        "\namong bigger-picture\n"
+                                        (keys this)))
+              (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
+                    ;; line 327
+                    this (assoc-in this
+                                   [::state/shared-secrets ::state/client-short<->server-short]
+                                   (crypto/box-prepare
+                                    server-short
+                                    (.getSecretKey my-short-pair)))
+                    log-state (log2/debug log-state
+                                          ::cookie->vouch
+                                          "Prepared shared short-term secret")]
+                (dfrd/success! notifier (assoc this
+                                               ::log2/state log-state
+                                               ::specs/network-packet cookie))))
+            (let [log-state (log2/warn log-state
+                                       ::received-response
+                                       "Unable to decrypt server cookie"
+                                       {::problem cookie})]
+              (dfrd/success! notifier (assoc this ::log2/state log-state))))
+          ;; TODO: Look into recovering from these
+          (catch ExceptionInfo ex
+            (let [log-state (log2/exception log-state
+                                            ex
+                                            ::received-response
+                                            "High-level failure")
+                  log-state (log2/flush-logs! logger log-state)]
+              (dfrd/error! notifier (assoc this ::log2/state log-state))))
+          (catch RuntimeException ex
+            (let [log-state (log2/exception log-state
+                                            ex
+                                            ::received-response
+                                            "Unexpected failure")
+                  log-state (log2/flush-logs! logger log-state)]
+              (dfrd/error! notifier (assoc this ::log2/state log-state))))
+          (catch Exception ex
+            (let [log-state (log2/exception log-state
+                                            ex
+                                            ::received-response
+                                            "Low-level failure")
+                  log-state (log2/flush-logs! logger log-state)]
+              (dfrd/error! notifier (assoc this ::log2/state log-state))))
+          (catch Throwable ex
+            (let [log-state (log2/exception log-state
+                                            ex
+                                            ::received-response
+                                            "Serious Problem")
+                  log-state (log2/flush-logs! logger log-state)]
+              (dfrd/error! notifier (assoc this ::log2/state log-state)))))
         (let [log-state (log2/warn log-state
                                    ::received-response
                                    "Invalid response. Just discard and retry"

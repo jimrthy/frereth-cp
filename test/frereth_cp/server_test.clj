@@ -146,7 +146,7 @@
                                              server-ip
                                              server-port
                                              srvr-pk-long)]
-        (println "Agent started. Sending HELLO")
+        (println "shake-hands: Agent started. Pulling HELLO")
         (try
           (let [client->server (::client-state/chan->server @client-agent)
                 taken (strm/try-take! client->server ::drained 1000 ::timeout)
@@ -154,7 +154,11 @@
             (println "Hello from client:" hello)
             (is (not (or (= hello ::drained)
                          (= hello ::timeout))))
-            (is (:host hello) "This layer doesn't know where to send anything")
+            (let [host (:host hello)]
+              (when-not host
+                (println "shake-hands: Something went wrong with" @client-agent)
+                (throw (ex-info "This layer doesn't know where to send anything"
+                                hello))))
             (if (not (or (= hello ::drained)
                          (= hello ::timeout)))
               (let [->srvr (get-in started [::srvr-state/client-read-chan ::srvr-state/chan])
@@ -166,7 +170,7 @@
                     hello-length (.readableBytes hello-buffer)
                     hello-packet (byte-array hello-length)]
                 (.readBytes hello-buffer hello-packet)
-                (println (str "Trying to put hello packet "
+                (println (str "shake-hands: Trying to put hello packet "
                               (b-t/->string hello-packet)
                               "\nonto server channel "
                               ->srvr
@@ -180,7 +184,7 @@
                       success (deref put-success
                                      1000
                                      ::deref-try-put!-timed-out)]
-                  (println "Result of putting hello onto server channel:" success)
+                  (println "shake-hands: Result of putting hello onto server channel:" success)
                   (if (and (not= ::timed-out success)
                            (not= ::deref-try-put!-timed-out success))
                     (let [srvr-> (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])

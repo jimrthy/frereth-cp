@@ -214,6 +214,7 @@ implementation. This is code that I don't understand yet"
     ;; So this really needs a way to tie back into whichever
     ;; state management winds up making sense
     (println "FIXME: Need to update 'real' clock")
+    ;; i.e. This next line is pointless
     (assoc this ::log2/state x)))
 
 (defn hello-failed!
@@ -418,9 +419,9 @@ implementation. This is code that I don't understand yet"
   (send wrapper (fn [{:keys [::log2/logger]
                       :as this}]
                   (update this ::log2/state
-                          (log2/flush-logs! logger #(log2/warn %
-                                                               ::start!
-                                                               "Channel->server closed")))))
+                          #(log2/flush-logs! logger
+                                             (log2/warn %
+                                                        ::chan->server-closed)))))
   (send wrapper server-closed!))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

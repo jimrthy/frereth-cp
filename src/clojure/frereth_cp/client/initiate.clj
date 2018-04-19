@@ -177,10 +177,6 @@ FIXME: Change that"
         log-state (log2/info log-state
                              ::build-and-send-vouch
                              "send cookie->vouch")]
-    ;; This is where we decrypt the cookie.
-    ;; It needs to happen before we ever accept the cookie
-    ;; that was received.
-    (throw (RuntimeException. "FIXME: Need to do this earlier"))
     (let [state (state/cookie->vouch state cookie-packet)
           timeout (state/current-timeout wrapper)]
       ;; Give the other thread(s) a chance to catch up and return
