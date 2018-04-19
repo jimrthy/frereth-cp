@@ -283,6 +283,9 @@ implementation. This is code that I don't understand yet"
                      :timeout nat-int?)
         :ret (s/keys :req [::specs/deferrable
                            ::log2/state]))
+;; FIXME: This seems like it would make a lot more sense in the
+;; hello ns.
+;; And broken up into several smaller functions.
 (defn poll-servers-with-hello!
   "Send hello packet to a seq of server IPs associated with a single server name."
   ;; In a lot of ways, this amounts to an attempt at load-balancing from the client side.
@@ -354,7 +357,10 @@ implementation. This is code that I don't understand yet"
               send-packet-success (deref dfrd-success 1000 ::send-response-timed-out)
               actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
               now (System/nanoTime)]
-          ;; I don't think the value here matters much
+          ;; I don't think send-packet-success matters much
+          ;; Although...actually, ::send-response-timed-out would be a big
+          ;; deal.
+          ;; FIXME: Add error handling for that.
           (println "client/poll-servers-with-hello! Sending HELLO returned:"
                    send-packet-success
                    "\nQ: Does that value matter?"
@@ -496,7 +502,22 @@ implementation. This is code that I don't understand yet"
             ;; which need to run this function in a separate
             ;; thread.
             (poll-servers-with-hello! wrapper timeout)]
-        (dfrd/chain result (partial servers-polled wrapper))
+        (-> result
+            (dfrd/chain (partial servers-polled wrapper))
+            (dfrd/catch
+                (fn [ex]
+                  ;; Q: Does it make more sense to just tip the agent over
+                  ;; into an error state?
+                  ;; This *is* a pretty big deal
+                  (send wrapper (fn [{log-state ::log2/state
+                                      :keys [::log2/logger]
+                                      :as this}]
+                                  (let [log-state (log2/exception log-state
+                                                                  ex
+                                                                  ::start!
+                                                                  "After servers-polled")
+                                        log-state (log2/flush-logs! logger log-state)]
+                                    (assoc this ::log2/state log-state)))))))
         (dfrd/catch result
             (fn [ex]
               ;; I've seen the deferrable returned by poll-servers-with-hello!
