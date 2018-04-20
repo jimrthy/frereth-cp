@@ -641,6 +641,10 @@ Which at least implies that the agent approach should go away."
     (throw (ex-info (str "Missing log state among "
                          (keys this))
                     this)))
+  ;; This spawns the child message loop, but it doesn't look as though the
+  ;; child itself gets created.
+  ;; FIXME: Look at that more closely
+  (throw (RuntimeException. "Q: What am I missing?"))
   (let [log-state (log2/info log-state ::fork! "Spawning child!!")
         child (message/initial-state message-loop-name
                                      false
@@ -708,8 +712,15 @@ Which at least implies that the agent approach should go away."
   ;; We may have to send this multiple times, because it could
   ;; very well get dropped.
 
-  ;; Actually, if that happens, we probably need to start over
-  ;; from the initial HELLO.
+  ;; Actually, if that happens, it might make sense to just start
+  ;; over from the initial HELLO.
+  ;; Reference implementation doesn't seem to have anything along
+  ;; those lines.
+  ;; Once a Server sends back a Cookie, it looks as though the
+  ;; Client is irrevocably tied to it.
+  ;; This seems like a protocol flaw that's better addressed by
+  ;; haproxy. Especially since the child's only clue that a
+  ;; server has quit responding is that its write buffer is full.
 
   ;; Depending on how much time we want to spend waiting for the
   ;; initial server message

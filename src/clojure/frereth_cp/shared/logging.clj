@@ -372,6 +372,16 @@
                                        "flushing")]
     (doseq [message (::entries log-state)]
       (log! logger message))
+    ;; Each logger could easily handle multiple
+    ;; log-state values/threads.
+    ;; This would be a great place to synchronize
+    ;; the Lamport clocks.
+    ;; It isn't perfect, since there are places where
+    ;; we may need to create a logger out of thin
+    ;; air (esp. error handling, when it probably
+    ;; matters the most), but it's a lot better than
+    ;; no synchronization at all.
+    ;; TODO: Add a clock to the logger
     (flush! logger)
     ;; Q: Which of these next 2 options will perform
     ;; better?
@@ -386,8 +396,8 @@
     ;; At that point, the plain assoc really should be
     ;; the clear winner
     (comment
-      (assoc log-state ::entries []))
-    (init context lamport)))
+      (init context lamport))
+    (assoc log-state ::entries [])))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state

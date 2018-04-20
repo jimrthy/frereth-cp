@@ -213,7 +213,7 @@ implementation. This is code that I don't understand yet"
     ;; for its side-effects.
     ;; So this really needs a way to tie back into whichever
     ;; state management winds up making sense
-    (println "FIXME: Need to update 'real' clock")
+    (println "FIXME: hello-succeeded! Need to update 'real' clock")
     ;; i.e. This next line is pointless
     (assoc this ::log2/state x)))
 
@@ -260,6 +260,24 @@ implementation. This is code that I don't understand yet"
                              ::servers-polled!
                              "Building/sending Vouch")]
     ;; This is really where mixing an Agent and Manifold gets tricky.
+    (send wrapper (fn [current]
+                    ;; This is safe enough for a single-threaded client
+                    ;; interaction.
+                    ;; At this level, the Client effectively *is*
+                    ;; single-threaded.
+                    ;; It's its own entity, polling a Seq of servers.
+                    ;; Bigger picture, we should have a slew of mostly-
+                    ;; independent clients interacting with multiple
+                    ;; servers.
+                    ;; This is still probably safe in that world.
+                    ;; The various Client instances should regularly
+                    ;; synchronize their Clocks, possibly when calling
+                    ;; flush-logs!, but they should mostly be independent.
+                    (merge current (select-keys this [::log2/state
+                                                      ::shared/packet
+                                                      ::state/server-security
+                                                      ::state/shared-secrets]))))
+    (await wrapper)
     (let [unwrapped @wrapper]
       (when (not= unwrapped this)
         (let [[only-a only-b both] (data/diff unwrapped this)]

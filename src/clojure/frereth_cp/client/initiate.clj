@@ -167,8 +167,7 @@ FIXME: Change that"
                              ""
                              {::cause "Received cookie"
                               ::effect "Forking child"
-                              ::state/state state
-                              ::state/state-agent wrapper})
+                              ::state/state (dissoc state ::log2/state)})
         ;; Once we've signaled the child to start doing its own thing,
         ;; cope with the cookie we just received.
         ;; Doing this statefully seems like a terrible
@@ -176,7 +175,7 @@ FIXME: Change that"
         ;; until I have a working prototype.
         log-state (log2/info log-state
                              ::build-and-send-vouch
-                             "send cookie->vouch")]
+                             "Converting cookie->vouch")]
     (let [state (state/cookie->vouch state cookie-packet)
           timeout (state/current-timeout wrapper)]
       ;; Give the other thread(s) a chance to catch up and return
