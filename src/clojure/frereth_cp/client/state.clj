@@ -393,6 +393,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   [{:keys [::chan<-server
            ::chan->server
            ::msg-specs/->child]
+    log-state ::log2/state
     :as this}
    wrapper
    initial-server-response]
@@ -405,39 +406,53 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; So yes. Special things do happen here/now.
   ;; That doesn't mean that any of those special things fit with what
   ;; I've been trying so far.
-  (log/warn "->message-exchange-mode deprecated")
-  ;; I'm getting an ::interaction-test/timeout here
-  (log/info "Initial Response from server:\n" initial-server-response)
-  (if (not (keyword? (:message initial-server-response)))
-    (if (and ->child chan->server)
-      (do
-        ;; Q: Do I want to block this thread for this?
-        ;; A: As written, we can't. We're already inside an Agent$Action
-        (comment (await-for (state/current-timeout wrapper) wrapper))
+  ;; Except that, last I checked, this basically worked.
+  (let [log-state (log2/warn log-state
+                             ::->message-exchange-mode
+                             "deprecated")
+        log-state (log2/info log-state
+                             ::->message-exchange-mode
+                             "Initial Response from server"
+                             initial-server-response)
+        log-state
+        (if (not (keyword? (:message initial-server-response)))
+          (if (and ->child chan->server)
+            (do
+              ;; Q: Do I want to block this thread for this?
+              ;; A: As written, we can't. We're already inside an Agent$Action
+              (comment (await-for (state/current-timeout wrapper) wrapper))
 
-        ;; Need to wire this up to pretty much just pass messages through
-        ;; Actually, this seems totally broken from any angle, since we need
-        ;; to handle encryption, at a minimum. (Q: Don't we?)
+              ;; Need to wire this up to pretty much just pass messages through
+              ;; Actually, this seems totally broken from any angle, since we need
+              ;; to handle encryption, at a minimum. (Q: Don't we?)
 
-        (strm/consume (fn [msg]
-                        ;; as-written, we have to unwrap the message
-                        ;; bytes for the stream from the message
-                        ;; packet.
-                        #_(send wrapper chan->child %)
-                        (->child (:message msg))
-                        ;; Q: Is this approach better?
-                        ;; A: Well, at least it isn't total nonsense like what I wrote originally
-                        #_(send-off wrapper (fn [state]
-                                            (let [a
-                                                  (update state ::child-packets
-                                                          conj {:message msg})]
-                                              ;; Well...what did I have planned for this?
-                                              #_(send-messages! a)
-                                              (throw (RuntimeException. "Well, it's still mostly nonsense"))))))
-                      chan<-server))
-      (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" @this)
-                      {::state this})))
-    (log/warn "That response to Initiate was a failure")))
+              (strm/consume (fn [msg]
+                              ;; as-written, we have to unwrap the message
+                              ;; bytes for the stream from the message
+                              ;; packet.
+                              #_(send wrapper chan->child %)
+                              (->child (:message msg))
+                              ;; Q: Is this approach better?
+                              ;; A: Well, at least it isn't total nonsense like what I wrote originally
+                              #_(send-off wrapper (fn [state]
+                                                    (let [a
+                                                          (update state ::child-packets
+                                                                  conj {:message msg})]
+                                                      ;; Well...what did I have planned for this?
+                                                      #_(send-messages! a)
+                                                      (throw (RuntimeException. "Well, it's still mostly nonsense"))))))
+                            chan<-server)
+              log-state)
+            (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" @this)
+                            {::state this})))
+          (log2/warn log-state
+                                     ::->message-exchange-mode
+                                     "That response to Initiate was a failure"))]
+    ;; This is another example of things falling apart in a multi-threaded
+    ;; scenario.
+    ;; Honestly, all the log calls that happen here should be updates wrapped
+    ;; in a send.
+    (send wrapper assoc ::log2/state log-state)))
 
 (declare current-timeout)
 (defn final-wait
@@ -629,8 +644,9 @@ TODO: Need to ask around about that.
 Bigger TODO: This really should be identical to the server implementation.
 
 Which at least implies that the agent approach should go away."
-  [{:keys [::msg-specs/->child
-           ::log2/logger
+  [{:keys [::log2/logger
+           ::msg-specs/->child
+           ::msg-specs/child-spawner!
            ::msg-specs/message-loop-name]
     initial-msg-state ::msg-specs/state
     log-state ::log2/state
@@ -641,18 +657,20 @@ Which at least implies that the agent approach should go away."
     (throw (ex-info (str "Missing log state among "
                          (keys this))
                     this)))
-  ;; This spawns the child message loop, but it doesn't look as though the
-  ;; child itself gets created.
-  ;; FIXME: Look at that more closely
-  (throw (RuntimeException. "Q: What am I missing?"))
+  ;; This sets up the message loop and callback,
+  ;; but it leaves out the actual child part.
+  ;; In handshake-test, it's all kicked off by
+  ;; calling buffer-response!
+  ;; And then the server- or client- -child-processor
+  ;; functions handle the actual message exchange.
   (let [log-state (log2/info log-state ::fork! "Spawning child!!")
-        child (message/initial-state message-loop-name
-                                     false
-                                     (assoc initial-msg-state
-                                            ::log2/state log-state)
-                                     logger)
+        ioloop (message/initial-state message-loop-name
+                                      false
+                                      (assoc initial-msg-state
+                                             ::log2/state log-state)
+                                      logger)
         {:keys [::msg-specs/io-handle]
-         log-state ::log2/state} (message/start! child
+         log-state ::log2/state} (message/start! ioloop
                                                  logger
                                                  ;; And this is really why
                                                  ;; I need something stateful
@@ -660,11 +678,12 @@ Which at least implies that the agent approach should go away."
                                                  ->child)
         log-state (log2/debug log-state
                               ::fork!
-                              "Child spawned"
+                              "Child message loop initialized"
                               {::this (dissoc this ::log2/state)
-                               ::child (dissoc child ::log2/state)})]
+                               ::child (dissoc ioloop ::log2/state)})]
+    (child-spawner! ioloop)
     (assoc this
-           ::child child
+           ::child ioloop
            ::log2/state (log2/flush-logs! logger log-state)
            ::msg-specs/io-handle io-handle)))
 

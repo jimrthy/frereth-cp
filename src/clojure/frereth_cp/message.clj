@@ -1436,6 +1436,7 @@
    ;; It wouldn't be bad to write, but it doesn't seem worthwhile
    ;; just now.
    child-cb]
+  (throw (RuntimeException. "I think that the child-cb details just got much more important"))
   (let [state (update state
                       ::log/state
                       #(log/debug %

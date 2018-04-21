@@ -454,6 +454,8 @@
                 log-atom
                 ::client-child
                 "message arrived at client's child"
+                ;; This is a strm/source that streams binary
+                ;; through the decoder into the real callback
                 decode-src
                 bs))
 
@@ -465,7 +467,10 @@
   ;; Then again, this really is an integration test. It's covering
   ;; a *lot* of functionality.
   ;; And I've made it extra-complicated by refusing to consider
-  ;; adding serialization by default.
+  ;; anything like a default serialization implementation.
+  ;; There are plenty of other libraries around for that side
+  ;; of things. Using gloss for the test was bad enough.
+  ;; Pick your own poison.
   (try "Fundamental idea"
     (let [s (strm/stream)
           xfrm-node (decoder s)

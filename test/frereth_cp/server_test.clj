@@ -1,5 +1,6 @@
 (ns frereth-cp.server-test
-  (:require [clojure.pprint :refer (pprint)]
+  (:require [clojure.java.io :as jio]
+            [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as client]
@@ -119,6 +120,8 @@
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two
   (println "Top of shake-hands")
+  (jio/delete-file "/tmp/shake-hands.server.log")
+  (jio/delete-file "/tmp/shake-hands.client.log")
   (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log")
         srvr-log-state (log/init ::shake-hands.server)
         initial-server (factory/build-server srvr-logger srvr-log-state)
