@@ -1,10 +1,10 @@
+;;;; FIXME: Refactor all the log2 ns aliases to log
 (ns frereth-cp.client.state
   "Handle the inherently stateful pieces associated with the client side of things.
 
 The fact that this is so big says a lot about needing to re-think my approach"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.message :as message]
             [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.shared :as shared]
@@ -621,10 +621,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
                            (K/zero-bytes 16)))
                     extension)]
     (assert (= (count extension) K/extension-length))
-    (log/info "Loaded extension:" (vec extension))
-    (assoc this
-           ::client-extension-load-time client-extension-load-time
-           ::shared/extension extension)))
+    (let [log-state (log2/info log-state
+                               ::clientextension-init
+                               "Loaded extension"
+                               {::shared/extension (vec extension)})]
+      (assoc this
+             ::client-extension-load-time client-extension-load-time
+             ::log2/state log-state
+             ::shared/extension extension))))
 
 (s/fdef fork!
         :args (s/cat :state ::state
@@ -664,13 +668,13 @@ Which at least implies that the agent approach should go away."
   ;; And then the server- or client- -child-processor
   ;; functions handle the actual message exchange.
   (let [log-state (log2/info log-state ::fork! "Spawning child!!")
-        ioloop (message/initial-state message-loop-name
-                                      false
-                                      (assoc initial-msg-state
-                                             ::log2/state log-state)
-                                      logger)
+        startable (message/initial-state message-loop-name
+                                         false
+                                         (assoc initial-msg-state
+                                                ::log2/state log-state)
+                                         logger)
         {:keys [::msg-specs/io-handle]
-         log-state ::log2/state} (message/start! ioloop
+         log-state ::log2/state} (message/start! startable
                                                  logger
                                                  ;; And this is really why
                                                  ;; I need something stateful
@@ -680,10 +684,10 @@ Which at least implies that the agent approach should go away."
                               ::fork!
                               "Child message loop initialized"
                               {::this (dissoc this ::log2/state)
-                               ::child (dissoc ioloop ::log2/state)})]
-    (child-spawner! ioloop)
+                               ::child (dissoc io-handle ::log2/state)})]
+    (child-spawner! io-handle)
     (assoc this
-           ::child ioloop
+           ::child io-handle
            ::log2/state (log2/flush-logs! logger log-state)
            ::msg-specs/io-handle io-handle)))
 

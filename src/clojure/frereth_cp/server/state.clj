@@ -101,11 +101,6 @@
                                     ::shared-secrets]))
 (s/def ::current-client ::client-state)
 
-;; Q: Does this really need to be an atom?
-;; A: Well, technically not. That makes it tougher
-;; to get the currently active client list, but
-;; that isn't necessarily a bad thing.
-;; TODO: Ditch the atom
 (s/def ::active-clients (s/map-of ::shared/public-key ::client-state))
 (s/def ::max-active-clients nat-int?)
 

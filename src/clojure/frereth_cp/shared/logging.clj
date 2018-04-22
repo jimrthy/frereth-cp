@@ -360,21 +360,26 @@
     ;; So I can thread-first log-state through
     ;; log calls into this
     [logger
-     log-state]
+     {:keys [::context]
+      :as log-state}]
     ;; Honestly, there should be an agent that handles this
     ;; so we don't block the calling thread.
     ;; The i/o costs should be quite a bit higher than
     ;; the agent overhead...though
     ;; a go-loop would be more efficient
-    (let [{:keys [::context
-                  ::lamport]
+    (let [{:keys [::lamport]
            :as log-state} (add-log-entry log-state
                                          ::trace
                                          ::top
-                                         "flushing")]
+                                         "flushing"
+                                         {::context context})]
       (doseq [message (::entries log-state)]
         (log! logger message))
       (flush! logger)
+      ;; Sometimes it seems like I need an inc
+      ;; here. Others, it doesn't.
+      ;; TODO: Extract rhyme/reason and figure
+      ;; out the issue.
       (swap! my-lamport max lamport)
       (assoc log-state
              ::entries []
@@ -401,16 +406,18 @@
 (defn synchronize
   "Fix 2 clocks that have probably drifted apart"
   [{l-clock ::lamport
+    l-ctx ::context
     :as lhs}
    {r-clock ::lamport
+    r-ctx ::context
     :as rhs}]
   {:pre [l-clock
          r-clock]}
   (let [synced (max l-clock r-clock)
         lhs (assoc lhs ::lamport synced)
         rhs (assoc rhs ::lamport synced)]
-    [(debug lhs ::synchronized "")
-     (debug rhs ::synchronized "")]))
+    [(debug lhs ::synchronized "" {::context l-ctx})
+     (debug rhs ::synchronized "" {::context r-ctx})]))
 
 (s/fdef clean-fork
         :args (s/cat :source ::state

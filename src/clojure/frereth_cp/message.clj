@@ -1196,11 +1196,11 @@
                  ::log/state log-state})
               log-state (log/flush-logs! logger log-state)
               ;; Q: Why am I forking logs here?
-              forked-logs (log/fork log-state)]
+              [forked-logs log-state] (log/fork log-state)]
           (when-not (::specs/outgoing state)
             (println "Missing outgoing in" state)
             (throw (ex-info "Missing outgoing" state)))
-          (println "Setting up deferred to trigger on next action")
+          (println message-loop-name "Setting up deferred to trigger on next action")
           (dfrd/on-realized next-action
                             (partial action-trigger
                                      {::actual-next actual-next

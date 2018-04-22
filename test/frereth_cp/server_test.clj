@@ -71,26 +71,44 @@
   "Spawn the client-child for the handshake test and initiate the fun"
   [ch
    io-handle]
+  (println "Forking child process at" (System/currentTimeMillis))
   ;; Doing a req/rep sort of thing from server is honestly
   ;; pretty boring. But it's easy to test.
   ;; Assume the client reacts to server messages.
   ;; Pull them off the network, shove them into this
   ;; stream, and than have the handshake-client-cb
   ;; cope with them.
-  (strm/consume (partial handshake-client-cb io-handle) ch)
-  ;; TODO: Convert this to something like an HTTP request
-  ;; that's too big to fit in a single packet
-  (let [helo (-> ::helo
-                 pr-str
-                 .getBytes)]
-    (msg/child->! io-handle helo)))
+  (when-not io-handle
+    (println "Trying to spawn child with no io-handle"))
+  (try
+    (strm/consume (partial handshake-client-cb io-handle) ch)
+    ;; Q: Worth converting this to something like an HTTP request
+    ;; that's too big to fit in a single packet?
+    ;; A: Well, I've really already done that in
+    ;; message-test/bigger-outbound
+    ;; All this *should* test would be whichever means I
+    ;; use on the server side to reassemble the bytes that
+    ;; were streamed in packets.
+    ;; Which is interesting from the standpoint of example
+    ;; usage, but not so much from this angle.
+
+    (let [helo (-> ::helo
+                   pr-str
+                   .getBytes)]
+      (msg/child->! io-handle helo))
+    (println "Child HELO sent at" (System/currentTimeMillis))
+    (catch Exception ex
+      (println "Forking child failed:\n"
+               (log/exception-details ex)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Tests
 
 (deftest start-stop
   (testing "That we can start and stop successfully"
-    (let [inited (factory/build-server)
+    (let [logger (log/std-out-log-factory)
+          log-state (log/init ::verify-start-stop)
+          inited (factory/build-server logger log-state)
           started (factory/start-server inited)]
       (is started)
       (is (factory/stop-server started)))))
@@ -156,17 +174,13 @@
                            (println "Server stopped")
                            (is (not (s/explain-data ::server/post-state-options stopped)))
                            (println "pre-state checked"))))))))))
-(comment
-  (s/form ::srvr-state/state)
-  (s/form ::shared/packet-management)
-  )
 
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two
   (println "Top of shake-hands")
-  (jio/delete-file "/tmp/shake-hands.server.log")
-  (jio/delete-file "/tmp/shake-hands.client.log")
-  (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log")
+  (jio/delete-file "/tmp/shake-hands.server.log.edn" ::ignore-errors)
+  (jio/delete-file "/tmp/shake-hands.client.log.edn" ::ignore-errors)
+  (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log.edn")
         srvr-log-state (log/init ::shake-hands.server)
         initial-server (factory/build-server srvr-logger srvr-log-state)
         started (factory/start-server initial-server)
@@ -186,7 +200,7 @@
             server-ip [127 0 0 1]
             server-port 65000
             clnt-log-state (log/init ::shake-hands.client)
-            clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log")
+            clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log.edn")
             internal-client-chan (strm/stream)
             client-agent (factory/raw-client "client-hand-shaker"
                                              (constantly clnt-logger)
@@ -253,7 +267,8 @@
                           ;; Note that I didn't need to do this for the Hello packet.
                           packet-take (strm/try-take! srvr-> ::drained 1000 ::timeout)
                           packet (deref packet-take 1000 ::take-timeout)]
-                      (println "Server response to hello:" packet)
+                      (println "server-test Server response to hello:"
+                               packet)
                       (if (and (not= ::drained packet)
                                (not= ::timeout packet)
                                (not= ::take-timeout packet))

@@ -1,3 +1,4 @@
+;;;; FIXME: Refactor all the log2 ns aliases to log
 (ns frereth-cp.client
   "Implement the client half of the CurveCP protocol.
 
@@ -8,7 +9,6 @@
   (:require [byte-streams :as b-s]
             [clojure.data :as data]
             [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.client.cookie :as cookie]
             [frereth-cp.client.hello :as hello]
             [frereth-cp.client.initiate :as initiate]
@@ -383,11 +383,11 @@ implementation. This is code that I don't understand yet"
                    send-packet-success
                    "\nQ: Does that value matter?"
                    "\nactual-success:\n"
-                   actual-success
+                   (dissoc actual-success ::log2/state)
                    "\nTop-level keys:\n"
                    (keys actual-success)
-                   "\nReceived:\n"
-                   (::specs/network-packet actual-success))
+                   "\nReceived:\n")
+          (::specs/network-packet actual-success)
           (if (and (not (instance? Throwable actual-success))
                    (not= actual-success ::sending-hello-timed-out)
                    (not= actual-success ::awaiting-cookie-timed-out)
