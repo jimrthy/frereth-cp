@@ -507,13 +507,16 @@
 ;; This is a function, called for side effects, that really starts
 ;; the "bottom-level" child which is the part that clients using
 ;; this library actually care about.
-;; Honestly, this should return the callback that handles the incoming
-;; messages.
-;; But we have a chicken/egg issue with that: the message-loop
-;; io-handle needs that callback to start. And the child honestly
-;; needs the io-handle to do anything.
-;; If we could build the callback without the io-handle, then we
-;; might as well provide it as a companion to this factory and
-;; forget about trying to make its return value meaningful.
+;; It would make the API nicer if this could return the
+;; ->child callback.
+;; But that presents a chicken/egg problem.
+;; We can't build an ::io-handle without the ::->child.
+;; Well, we *could*. But it would mean additional state
+;; and an extra deref for every arriving message.
+;; Maybe avoiding the deref is premature optimization,
+;; but avoiding the extra state seems like an excellent idea.
+;; Then again, this may just push the state management problem
+;; out to the child.
+;; So the jury's still out.
 (s/def ::child-spawner! (s/fspec :args (s/cat :io-handle ::io-handle)
-                                :ret #_::->child any?))
+                                :ret any?))

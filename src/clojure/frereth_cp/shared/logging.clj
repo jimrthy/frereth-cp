@@ -350,54 +350,35 @@
         :args (s/cat :logger ::logger
                      :logs ::state)
         :ret ::state)
-(defn flush-logs!
-  "For the side-effects to write the accumulated logs.
+;; Do what I can to keep local clocks synchronized
+(let [my-lamport (atom 0)]
+  (defn flush-logs!
+    "For the side-effects to write the accumulated logs.
 
-  Returns fresh set of log entries"
-  ;; TODO: Reverse these parameters.
-  ;; So I can thread-first log-state through
-  ;; log calls into this
-  [logger
-   log-state]
-  ;; Honestly, there should be an agent that handles this
-  ;; so we don't block the calling thread.
-  ;; The i/o costs should be quite a bit higher than
-  ;; the agent overhead...though
-  ;; a go-loop would be more efficient
-  (let [{:keys [::context
-                ::lamport]
-         :as log-state} (add-log-entry log-state
-                                       ::trace
-                                       ::top
-                                       "flushing")]
-    (doseq [message (::entries log-state)]
-      (log! logger message))
-    ;; Each logger could easily handle multiple
-    ;; log-state values/threads.
-    ;; This would be a great place to synchronize
-    ;; the Lamport clocks.
-    ;; It isn't perfect, since there are places where
-    ;; we may need to create a logger out of thin
-    ;; air (esp. error handling, when it probably
-    ;; matters the most), but it's a lot better than
-    ;; no synchronization at all.
-    ;; TODO: Add a clock to the logger
-    (flush! logger)
-    ;; Q: Which of these next 2 options will perform
-    ;; better?
-    ;; It seems like it should be a toss-up, since most
-    ;; of the impact will come from garbage collecting the
-    ;; old entries anyway.
-    ;; But it seems like the latter might get a minor
-    ;; win by avoiding the overhead of the update call
-    ;; Note that the difference is obsolete if I don't
-    ;; increment the clock here, and it very much looks
-    ;; as though I shouldn't.
-    ;; At that point, the plain assoc really should be
-    ;; the clear winner
-    (comment
-      (init context lamport))
-    (assoc log-state ::entries [])))
+  Returns a fresh set of log entries"
+    ;; TODO: Reverse these parameters.
+    ;; So I can thread-first log-state through
+    ;; log calls into this
+    [logger
+     log-state]
+    ;; Honestly, there should be an agent that handles this
+    ;; so we don't block the calling thread.
+    ;; The i/o costs should be quite a bit higher than
+    ;; the agent overhead...though
+    ;; a go-loop would be more efficient
+    (let [{:keys [::context
+                  ::lamport]
+           :as log-state} (add-log-entry log-state
+                                         ::trace
+                                         ::top
+                                         "flushing")]
+      (doseq [message (::entries log-state)]
+        (log! logger message))
+      (flush! logger)
+      (swap! my-lamport max lamport)
+      (assoc log-state
+             ::entries []
+             ::lamport @my-lamport))))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state

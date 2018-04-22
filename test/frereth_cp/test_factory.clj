@@ -93,7 +93,9 @@
                                      :srvr-port ::shared-specs/port
                                      :srvr-pk-long ::shared-specs/public-long
                                      :srvr-xtn-vec (s/and vector?
-                                                          #(= (count %) K/extension-length)))
+                                                          #(= (count %) K/extension-length))
+                                     :->child ::msg-specs/->child
+                                     :child-spawner! ::msg-specs/child-spawner!)
                     :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
                                      :logger-init (s/fspec :args nil :ret ::log/logger)
                                      :log-state ::log/state
@@ -101,10 +103,12 @@
                                      :srvr-port ::shared-specs/port
                                      :srvr-pk-long ::shared-specs/public-long
                                      :srvr-xtn-vec (s/and vector?
-                                                          #(= (count %) K/extension-length))))
+                                                          #(= (count %) K/extension-length))
+                                     :->child ::msg-specs/->child
+                                     :child-spawner! ::msg-specs/child-spawner!))
         :ret ::client-state/state-agent)
 (defn raw-client
-  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long]
+  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long ->child child-spawner!]
    (raw-client message-loop-name
                logger-init
                log-state
@@ -114,8 +118,10 @@
                [0x01 0x02 0x03 0x04
                 0x05 0x06 0x07 0x08
                 0x09 0x0a 0x0b 0x0c
-                0x0d 0x0e 0x0f 0x10]))
-  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long srvr-xtn-vec]
+                0x0d 0x0e 0x0f 0x10]
+               ->child
+               child-spawner!))
+  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long srvr-xtn-vec ->child child-spawner!]
    (let [key-dir "client-test"
          nonce-key-resource (io/resource (str key-dir
                                               "/.expertsonly/noncekey"))]
@@ -134,9 +140,10 @@
            ;; Better choice: make the timeout customizable
            srvr-name (shared/encode-server-name "hypothet.i.cal")
            long-pair (crypto/random-key-pair)
-           result (clnt/ctor {::msg-specs/->child (strm/stream)  ; This seems wrong. Q: Is it?
-                              ::client-state/chan<-server (strm/stream)
+           result (clnt/ctor {::client-state/chan<-server (strm/stream)
                               ::log/state log-state
+                              ::msg-specs/->child ->child
+                              ::msg-specs/child-spawner! child-spawner!
                               ::msg-specs/message-loop-name message-loop-name
                               ::shared/my-keys {::shared/keydir key-dir
                                                 ::shared/long-pair long-pair

@@ -335,6 +335,7 @@
                                              ;;    that, in conjunction with the child->parent
                                              ;;    parent pipes, will cause the main ioloop
                                              ;;    to exit.
+                                             ;; Q: Is all that happening somewhere?
                                              (assoc result
                                                     [(+ start-byte max-k) (+ start-byte max-k)]
                                                     receive-eof))

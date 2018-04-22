@@ -57,7 +57,9 @@
                    (count ret))))
         :ret map?)
 (defn pop-map-first
-  "Really for a sorted-map"
+  ;; It seems as though pop should do this, but a map
+  ;; does not implement IPersistentStack.
+  "Pop first entry from a map. Only makes sense if sorted"
   [associative]
   (dissoc associative (first (keys associative))))
 
@@ -221,6 +223,7 @@
    #^bytes buffer]
   {:pre [buffer
          child-in]}
+  ;; TODO: Go ahead and delete this
   (throw (RuntimeException. "obsolete"))
   (let [bytes-available (.available child-in)
         max-n (count buffer)]
@@ -613,7 +616,7 @@
   ;; I *do* want to provide the option to write your own, though.
   ;; Maybe I should add an optional parameter during startup:
   ;; if you don't provide
-  ;; this, it will default to calling this.
+  ;; that, it will default to calling this.
   [{:keys [::log/logger
            ::specs/child-in
            ::specs/message-loop-name]

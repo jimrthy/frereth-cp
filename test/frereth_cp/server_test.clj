@@ -5,6 +5,7 @@
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as client]
             [frereth-cp.client.state :as client-state]
+            [frereth-cp.message :as msg]
             [frereth-cp.server :as server]
             [frereth-cp.server.state :as srvr-state]
             [frereth-cp.shared :as shared]
@@ -41,7 +42,50 @@
                     ::K/crypto-box crypto-box}]
     (serial/compose K/hello-packet-dscr hello-dscr)))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn handshake->client-child
+  "Client-child callback for bytes arriving on the message stream"
+  [ch
+   ks-or-bs]
+  (println "client-child Incoming:" ks-or-bs)
+  ;; FIXME: This has to cope with buffering.
+  ;; I really should use something like gloss again.
+  (if (bytes? ks-or-bs)
+    (strm/put! ch ks-or-bs)
+    (strm/close! ch)))
+
+(defn handshake-client-cb
+  [io-handle ^bytes bs]
+  ;; It's tempting to write another interaction test, like
+  ;; the one in message.handshake-test.
+  ;; That would be a waste of time/energy.
+  ;; This really is a straight request/response test.
+  ;; As soon as the server sends back a message packet
+  ;; response, the client quits caring.
+  ;; Except that I also need to test the transition from
+  ;; Initiate-sending mode to full-size Message packets.
+  ;; So there has to be more than this.
+  (throw (RuntimeException. "Need to send at least 1 more request"))
+  (msg/child-close! io-handle))
+
+(defn handshake-client-child-spawner!
+  "Spawn the client-child for the handshake test and initiate the fun"
+  [ch
+   io-handle]
+  ;; Doing a req/rep sort of thing from server is honestly
+  ;; pretty boring. But it's easy to test.
+  ;; Assume the client reacts to server messages.
+  ;; Pull them off the network, shove them into this
+  ;; stream, and than have the handshake-client-cb
+  ;; cope with them.
+  (strm/consume (partial handshake-client-cb io-handle) ch)
+  ;; TODO: Convert this to something like an HTTP request
+  ;; that's too big to fit in a single packet
+  (let [helo (-> ::helo
+                 pr-str
+                 .getBytes)]
+    (msg/child->! io-handle helo)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Tests
 
 (deftest start-stop
@@ -135,20 +179,23 @@
             ;; This is another example of java's unsigned integer stupidity.
             ;; This really should be a short, but can't without handling my own
             ;; 2s-complement bit twiddling.
-            ;; Then again, the extra 2 bytes of memory involved here really don't
-            ;; matter.
+            ;; Then again, the extra 2 bytes of memory involved here really
+            ;; shouldn't matter.
             client-port 48816
             srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
             server-ip [127 0 0 1]
             server-port 65000
             clnt-log-state (log/init ::shake-hands.client)
             clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log")
+            internal-client-chan (strm/stream)
             client-agent (factory/raw-client "client-hand-shaker"
                                              (constantly clnt-logger)
                                              clnt-log-state
                                              server-ip
                                              server-port
-                                             srvr-pk-long)]
+                                             srvr-pk-long
+                                             (partial handshake->client-child internal-client-chan)
+                                             (partial handshake-client-child-spawner! internal-client-chan))]
         (println "shake-hands: Agent started. Pulling HELLO")
         (try
           (let [client->server (::client-state/chan->server @client-agent)

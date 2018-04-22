@@ -1418,6 +1418,13 @@
         :ret (s/keys :req [::log/state
                            ::specs/io-handle]))
 (defn start!
+   ;; I'd like to provide the option to build your own
+   ;; input loop.
+   ;; It seems like this would really need to be a function that
+   ;; takes the PipedInputStream and builds a future that contains
+   ;; the loop.
+   ;; It wouldn't be bad to write, but it doesn't seem worthwhile
+   ;; just now.
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/pipe-from-child-size]
      :or {pipe-from-child-size K/k-64}
@@ -1428,15 +1435,7 @@
     :as state}
    logger
    parent-cb
-   ;; I'd like to provide the option to build your own
-   ;; input loop.
-   ;; It seems like this would really need to be a function that
-   ;; takes the PipedInputStream and builds a future that contains
-   ;; the loop.
-   ;; It wouldn't be bad to write, but it doesn't seem worthwhile
-   ;; just now.
    child-cb]
-  (throw (RuntimeException. "I think that the child-cb details just got much more important"))
   (let [state (update state
                       ::log/state
                       #(log/debug %
@@ -1515,7 +1514,11 @@
 
 (s/fdef get-state
         :args (s/cat :io-handle ::specs/io-handle
-                     :time-out any?)
+                     :time-out nat-int?
+                     :timed-out-value any?)
+        ;; TODO: Add a fn piece that clarifies that the
+        ;; :timed-out :ret possibility will match the
+        ;; :timed-out-value :arg
         :ret (s/or :success ::specs/state
                    :timed-out any?)
         ;; If this timed out, should return the supplied
@@ -1543,15 +1546,14 @@
                       {::specs/message-loop-name message-loop-name
                        ::specs/stream stream}))
    (let [state-holder (dfrd/deferred)
-         req (strm/try-put! stream [::query-state state-holder] timeout)]
+         req (strm/try-put! stream [::query-state state-holder] timeout failure-signal)]
      ;; FIXME: Switch to using dfrd/chain instead
      (dfrd/on-realized req
                        (fn [success]
+                         ;; FIXME: Need to cope with a put! timeout (which is not
+                         ;; a failure)
+                         ;; i.e. (if (= success failure-signal) (short-circuit))
                          (swap! log-state-atom
-                                ;; Doing this inside a swap! seems risky,
-                                ;; since it isn't purely functional, or even
-                                ;; idempotent.
-                                ;; The alternatives seem worse.
                                 #(log/flush-logs! logger
                                                   (log/debug %
                                                              ::succeeded
@@ -1559,6 +1561,7 @@
                                                              {::result success
                                                               ::specs/message-loop-name message-loop-name}))))
                        (fn [failure]
+                         ;; Q: Can this ever fail?
                          (swap! log-state-atom
                                 #(log/flush-logs! logger
                                                   (if (instance? Throwable failure)
