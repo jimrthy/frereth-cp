@@ -644,7 +644,7 @@
                           "Starting the loop watching for bytes the parent has sent toward the child")
         my-logs (log/flush-logs! logger my-logs)
         result (strm/consume (partial trigger-from-parent!
-                                      io-handle
+                                      (assoc io-handle ::log/state my-logs)
                                       buffer
                                       cb)
                              trigger-stream)

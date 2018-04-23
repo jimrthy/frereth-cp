@@ -70,36 +70,55 @@
 (defn handshake-client-child-spawner!
   "Spawn the client-child for the handshake test and initiate the fun"
   [ch
-   io-handle]
-  (println "Forking child process at" (System/currentTimeMillis))
-  ;; Doing a req/rep sort of thing from server is honestly
-  ;; pretty boring. But it's easy to test.
-  ;; Assume the client reacts to server messages.
-  ;; Pull them off the network, shove them into this
-  ;; stream, and than have the handshake-client-cb
-  ;; cope with them.
-  (when-not io-handle
-    (println "Trying to spawn child with no io-handle"))
-  (try
-    (strm/consume (partial handshake-client-cb io-handle) ch)
-    ;; Q: Worth converting this to something like an HTTP request
-    ;; that's too big to fit in a single packet?
-    ;; A: Well, I've really already done that in
-    ;; message-test/bigger-outbound
-    ;; All this *should* test would be whichever means I
-    ;; use on the server side to reassemble the bytes that
-    ;; were streamed in packets.
-    ;; Which is interesting from the standpoint of example
-    ;; usage, but not so much from this angle.
+   {log-state ::log/state
+    logger ::log/logger
+    :as io-handle}]
+  (let [log-state (log/debug log-state
+                             ::handshake-client-child-spawner!
+                             "Forking child process"
+                             {::now (System/currentTimeMillis)})
+        ;; Doing a req/rep sort of thing from server is honestly
+        ;; pretty boring. But it's easy to test.
+        ;; Assume the client reacts to server messages.
+        ;; Pull them off the network, shove them into this
+        ;; stream, and than have the handshake-client-cb
+        ;; cope with them.
 
-    (let [helo (-> ::helo
-                   pr-str
-                   .getBytes)]
-      (msg/child->! io-handle helo))
-    (println "Child HELO sent at" (System/currentTimeMillis))
-    (catch Exception ex
-      (println "Forking child failed:\n"
-               (log/exception-details ex)))))
+        log-state (if-not io-handle
+                    (log/warn log-state
+                              ::handshake-client-child-spawner!
+                              "Trying to spawn child with no io-handle")
+                    log-state)
+        log-state (log/flush-logs! logger log-state)]
+    (try
+      (strm/consume (partial handshake-client-cb
+                             (assoc io-handle
+                                    ::log/state
+                                    log-state))
+                    ch)
+      ;; Q: Worth converting this to something like an HTTP request
+      ;; that's too big to fit in a single packet?
+      ;; A: Well, I've really already done that in
+      ;; message-test/bigger-outbound
+      ;; All this *should* test would be whichever means I
+      ;; use on the server side to reassemble the bytes that
+      ;; were streamed in packets.
+      ;; Which is interesting from the standpoint of example
+      ;; usage, but not so much from this angle.
+
+      (let [helo (-> ::helo
+                     pr-str
+                     .getBytes)]
+        (msg/child->! io-handle helo))
+      (log/flush-logs! (log/debug log-state
+                                  ::handshake-client-child-spawner!
+                                  "Child HELO sent"
+                                  {::now (System/currentTimeMillis)}))
+      (catch Exception ex
+        (log/flush-logs! (log/exception log-state
+                                        ex
+                                        ::handshake-client-child-spawner!
+                                        "Forking child failed"))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Tests
@@ -328,7 +347,14 @@
               (throw (RuntimeException. (str hello " taking Hello from Client")))))
           (finally
             (println "Stopping client")
-            (client/stop! client-agent))))
+            (client/stop! client-agent)
+            (if-let [problem (agent-error client-agent)]
+              (println "Uh-oh. client-agent is in a failed state:\n"
+                       problem)
+              (await client-agent))
+            (println "client-agent stopped state:\n"
+                     (dissoc @client-agent
+                             ::log/state)))))
       (finally
         (println "Triggering server event loop exit")
         (factory/stop-server started)))))

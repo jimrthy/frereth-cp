@@ -213,7 +213,8 @@ implementation. This is code that I don't understand yet"
     ;; So this really needs a way to tie back into whichever
     ;; state management winds up making sense
     (println "FIXME: hello-succeeded! Need to update 'real' clock")
-    ;; i.e. This next line is pointless
+    ;; i.e. This next line is pointless without access to the
+    ;; agent
     (assoc this ::log/state x)))
 
 (defn hello-failed!
@@ -561,29 +562,55 @@ implementation. This is code that I don't understand yet"
         :ret any?)
 (defn stop!
   [wrapper]
+  (println "Trying to stop a client agent\nState:\n"
+           (dissoc @wrapper ::log/state))
   (if-let [ex (agent-error wrapper)]
     (let [logger (log/std-out-log-factory)]
-      (log/exception (log/init ::failed)
-                     ex
-                     ::stop!))
-    (send wrapper
-          (fn [{:keys [::chan->server
-                       ::log/logger
-                       ::shared/packet-management]
-                log-state ::log/state
-                :as this}]
-            (if chan->server
-              (strm/close! chan->server)
-              (log/flush-logs! (log/warn (log/clean-fork log-state ::possible-issue)
+      (log/flush-logs! logger
+                       (log/exception (log/init ::failed)
+                                      ex
+                                      ::stop!
+                                      "Client Agent was in error state")))
+    (try
+      ;; It seems like it might also make sense to make sure the child
+      ;; message loop (if any) exits.
+      ;; FIXME: Make sure that goes away
+      (send wrapper
+            (fn [{:keys [::chan->server
+                         ::log/logger
+                         ::shared/packet-management]
+                  log-state ::log/state
+                  :as this}]
+              (println "Made it into the real stopper")
+              (let [log-state (log/debug log-state
                                          ::stop!
-                                         "chan->server already nil"
-                                         (dissoc this ::log/state))))
-            (log/flush-logs! (log/info log-state
-                                       ::stop!
-                                       "Done"))
-            (assoc this
-                   ::chan->server nil
-                   ::shared/packet-management nil)))))
+                                         "Top of the real stopper")
+                    log-state
+                    (try
+                      (if chan->server
+                        (do
+                          (strm/close! chan->server)
+                          (log/debug log-state
+                                     ::stop!
+                                     "chan->server closed"))
+                        (log/flush-logs! (log/warn (log/clean-fork log-state ::possible-issue)
+                                                   ::stop!
+                                                   "chan->server already nil"
+                                                   (dissoc this ::log/state))))
+                      (catch Exception ex
+                        (log/exception log-state
+                                       ex
+                                       ::stop!)))
+                    log-state (log/flush-logs! (log/info log-state
+                                                         ::stop!
+                                                         "Done"))]
+                (assoc this
+                       ::chan->server nil
+                       ::log/state log-state
+                       ::shared/packet-management nil))))
+      (catch Exception ex
+        (println "(send)ing the close function to the client agent failed\n"
+                 ex)))))
 
 (s/fdef ctor
         :args (s/cat :opts (s/keys :req [::msg-specs/->child
