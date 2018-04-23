@@ -376,7 +376,7 @@
       (doseq [message (::entries log-state)]
         (log! logger message))
       (flush! logger)
-      ;; Sometimes it seems like I need an inc
+      ;; Sometimes it seems like lamport needs an inc
       ;; here. Others, it doesn't.
       ;; TODO: Extract rhyme/reason and figure
       ;; out the issue.

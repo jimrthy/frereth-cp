@@ -1,4 +1,3 @@
-;;;; FIXME: Refactor all the log2 ns aliases to log
 (ns frereth-cp.client.state
   "Handle the inherently stateful pieces associated with the client side of things.
 
@@ -11,7 +10,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
@@ -106,13 +105,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; This isn't mutable
                                      ;; Q: Is it?
                                      ::shared/extension
-                                     ::log2/logger
+                                     ::log/logger
                                      ;; If we track ::msg-specs/state here,
-                                     ;; then ::log2/state is, honestly, redundant.
+                                     ;; then ::log/state is, honestly, redundant.
                                      ;; Except that trying to keep them synchronized
                                      ;; is a path to madness, as is tracking
                                      ;; a snapshot of ::msg-specs/state.
-                                     ::log2/state
+                                     ::log/state
                                      ;; Q: Does this really make any sense?
                                      ;; A: Not in any sane reality.
                                      ::outgoing-message
@@ -188,7 +187,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                             #(s/valid? ::state (deref %))))
 
 (s/def ::child-spawner! (s/fspec :args (s/cat :state-agent ::state-agent)
-                                 :ret (s/keys :req [::log2/state
+                                 :ret (s/keys :req [::log/state
                                                     ::msg-specs/io-handle])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -199,24 +198,24 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/fdef build-vouch
   :args (s/cat :this ::state)
   :ret (s/keys :req [::inner-i-nonce
-                     ::log2/state
+                     ::log/state
                      ::vouch]))
 (defn build-vouch
   [{:keys [::shared/packet-management
            ::shared/my-keys
            ::shared-secrets
            ::shared/work-area]
-    log-state ::log2/state
+    log-state ::log/state
     :as this}]
   (let [{:keys [::shared/working-nonce
                 ::shared/text]} work-area
         keydir (::shared/keydir my-keys)
         nonce-suffix (byte-array K/server-nonce-suffix-length)]
     (if working-nonce
-      (let [log-state (log2/info log-state
-                                 ::build-vouch
-                                 "Setting up working nonce"
-                                 {::shared/working-nonce working-nonce})]
+      (let [log-state (log/info log-state
+                                ::build-vouch
+                                "Setting up working nonce"
+                                {::shared/working-nonce working-nonce})]
         (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
         (if keydir
           (crypto/safe-nonce! working-nonce keydir K/server-nonce-prefix-length false)
@@ -233,18 +232,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
               encrypted (crypto/box-after shared-secret
                                           text K/key-length working-nonce)
               vouch (byte-array K/vouch-length)
-              log-state (log2/info log-state
-                                   ::build-vouch
-                                   (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
-                                        "(FIXME: Don't log the shared secret)")
-                                   {::shared/working-nonce (b-t/->string working-nonce)
-                                    ::shared-secret (b-t/->string shared-secret)})]
+              log-state (log/info log-state
+                                  ::build-vouch
+                                  (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
+                                       "(FIXME: Don't log the shared secret)")
+                                  {::shared/working-nonce (b-t/->string working-nonce)
+                                   ::shared-secret (b-t/->string shared-secret)})]
           (b-t/byte-copy! vouch
                           0
                           (+ K/box-zero-bytes K/key-length)
                           encrypted)
           {::inner-i-nonce nonce-suffix
-           ::log2/state log-state
+           ::log/state log-state
            ::vouch vouch}))
       (assert false (str "Missing nonce in packet-management:\n"
                          (keys packet-management))))))
@@ -262,17 +261,17 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
   Q: How much of a performance hit (if any) am I looking at if I
   make this purely functional instead?"
-  [{log-state ::log2/state
+  [{log-state ::log/state
     :as this} ; Handling an agent (send), which means `this` is already dereferenced
    {:keys [:host :port]
     ^bytes message :message
     :as cookie-packet}]
   {:pre [cookie-packet]}
-  (let [log-state (log2/info log-state
-                             ::cookie->vouch
-                             "Getting ready to convert cookie into a Vouch"
-                             {::raw-cookie message
-                              ::human-readable (b-s/print-bytes message)})]
+  (let [log-state (log/info log-state
+                            ::cookie->vouch
+                            "Getting ready to convert cookie into a Vouch"
+                            {::raw-cookie message
+                             ::human-readable (b-s/print-bytes message)})]
     ;; Note that this supplies new state
     ;; Though whether it should is debatable.
     ;; Q: why would I put this into ::vouch?
@@ -283,31 +282,31 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; has responded with its first Message so the client
     ;; can switch to sending those.
     (into this (build-vouch (assoc this
-                                   ::log2/state log-state)))))
+                                   ::log/state log-state)))))
 
 (s/fdef load-keys
-        :args (s/cat :logger ::log2/state
+        :args (s/cat :logger ::log/state
                      :my-keys ::shared/my-keys)
-        :ret (s/keys :req [::log2/state
+        :ret (s/keys :req [::log/state
                            ::shared/my-keys]))
 (defn load-keys
   [log-state my-keys]
   (let [key-dir (::shared/keydir my-keys)
         long-pair (crypto/do-load-keypair key-dir)
         short-pair (crypto/random-key-pair)
-        log-state (log2/info log-state
-                             ::load-keys
-                             "Loaded leng-term client key pair"
-                             {::shared/keydir key-dir})]
+        log-state (log/info log-state
+                            ::load-keys
+                            "Loaded leng-term client key pair"
+                            {::shared/keydir key-dir})]
     {::shared/my-keys (assoc my-keys
                              ::shared/long-pair long-pair
                              ::shared/short-pair short-pair)
-     ::log2/state log-state}))
+     ::log/state log-state}))
 
 (s/fdef initialize-immutable-values
         :args (s/cat :this ::immutable-value
                      :log-initializer (s/fspec :args (s/cat)
-                                               :ret ::log2/logger))
+                                               :ret ::log/logger))
         :ret ::immutable-value)
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable agent later"
@@ -315,7 +314,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ::chan<-server
            ::server-extension
            ::server-ips]
-    log-state ::log2/state
+    log-state ::log/state
     :as this}
    log-initializer]
   {:pre [message-loop-name
@@ -327,7 +326,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                      ::big-picture this})))
   (let [logger (log-initializer)]
     (-> this
-        (assoc ::log2/logger logger)
+        (assoc ::log/logger logger)
         (assoc ::chan->server (strm/stream))
         ;; Can't do this: it involves a circular import
         #_(assoc ::packet-builder initiate/build-initiate-packet!)
@@ -347,10 +346,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (defn initialize-mutable-state!
   [{:keys [::shared/my-keys
            ::server-security
-           ::log2/logger
+           ::log/logger
            ::msg-specs/message-loop-name]
     :as this}]
-  (let [log-state (log2/init message-loop-name)
+  (let [log-state (log/init message-loop-name)
         server-long-term-pk (::specs/public-long server-security)]
     (when-not server-long-term-pk
       (throw (ex-info (str "Missing ::specs/public-long among"
@@ -361,7 +360,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
           long-shared  (crypto/box-prepare
                         server-long-term-pk
                         (.getSecretKey long-pair))
-          log-state (log2/info log-state
+          log-state (log/info log-state
                                ::initialize-mutable-state!
                                "Combined keys"
                                {::srvr-long-pk (b-t/->string server-long-term-pk)
@@ -385,7 +384,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              server-long-term-pk
                                                              (.getSecretKey short-pair))}
              ::server-security server-security
-             ::log2/state log-state}))))
+             ::log/state log-state}))))
 
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.
@@ -393,7 +392,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   [{:keys [::chan<-server
            ::chan->server
            ::msg-specs/->child]
-    log-state ::log2/state
+    log-state ::log/state
     :as this}
    wrapper
    initial-server-response]
@@ -407,13 +406,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; That doesn't mean that any of those special things fit with what
   ;; I've been trying so far.
   ;; Except that, last I checked, this basically worked.
-  (let [log-state (log2/warn log-state
-                             ::->message-exchange-mode
-                             "deprecated")
-        log-state (log2/info log-state
-                             ::->message-exchange-mode
-                             "Initial Response from server"
-                             initial-server-response)
+  (let [log-state (log/warn log-state
+                            ::->message-exchange-mode
+                            "deprecated")
+        log-state (log/info log-state
+                            ::->message-exchange-mode
+                            "Initial Response from server"
+                            initial-server-response)
         log-state
         (if (not (keyword? (:message initial-server-response)))
           (if (and ->child chan->server)
@@ -445,14 +444,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
               log-state)
             (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" @this)
                             {::state this})))
-          (log2/warn log-state
-                                     ::->message-exchange-mode
-                                     "That response to Initiate was a failure"))]
+          (log/warn log-state
+                    ::->message-exchange-mode
+                    "That response to Initiate was a failure"))]
     ;; This is another example of things falling apart in a multi-threaded
     ;; scenario.
     ;; Honestly, all the log calls that happen here should be updates wrapped
     ;; in a send.
-    (send wrapper assoc ::log2/state log-state)))
+    (send wrapper assoc ::log/state log-state)))
 
 (declare current-timeout)
 (defn final-wait
@@ -460,13 +459,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
   Now waiting for the server's first real message
   packet so we can switch into the message exchange
   loop"
-  [{:keys [::log2/logger]
-    log-state ::log2/state
+  [{:keys [::log/logger]
+    log-state ::log/state
     :as this} wrapper sent]
-  (log2/flush-logs! logger
-                    (log2/warn log-state
-                               ::final-wait
-                               "Entering [penultimate] final-wait"))
+  (log/flush-logs! logger
+                   (log/warn log-state
+                             ::final-wait
+                             "Entering [penultimate] final-wait"))
   (if (not= sent ::sending-vouch-timed-out)
     (let [timeout (current-timeout wrapper)
           chan<-server (::chan<-server this)
@@ -511,9 +510,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
   "Handle packets streaming out of child"
   [wrapper
    ^bytes message-block]
-  (let [{log-state ::log2/state
+  (let [{log-state ::log/state
          :keys [::chan->server
-                ::log2/logger
+                ::log/logger
                 ::msg-specs/io-handle
                 ::packet-builder
                 ::server-security]
@@ -554,14 +553,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
                   :port srvr-port
                   :message message-packet}
           result (strm/put! chan->server bundle)
-          msg-log-state-atom (::log2/state-atom io-handle)
+          msg-log-state-atom (::log/state-atom io-handle)
           ;; Actually, this would be a good time to use refs inside a
           ;; transaction.
-          [my-log-state msg-log-state] (log2/synchronize log-state @msg-log-state-atom)]
-      (send wrapper #(update % ::log2/state
+          [my-log-state msg-log-state] (log/synchronize log-state @msg-log-state-atom)]
+      (send wrapper #(update % ::log/state
                              (fn [log-state]
-                               (log2/flush-logs! logger log-state))))
-      (swap! msg-log-state-atom update ::log2/lamport max (::log2/lamport msg-log-state))
+                               (log/flush-logs! logger log-state))))
+      (swap! msg-log-state-atom update ::log/lamport max (::log/lamport msg-log-state))
       result)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -586,19 +585,19 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; before pretty much every packet that gets sent.
   ;; However: it only does the reload once every 30 seconds.
   [{:keys [::client-extension-load-time
-           ::log2/logger
+           ::log/logger
            ::msg-specs/recent
            ::shared/extension]
-    log-state ::log2/state
+    log-state ::log/state
     :as this}]
   {:pre [(and client-extension-load-time recent)]}
   (let [reload? (>= recent client-extension-load-time)
-        log-state (log2/debug log-state
-                              ::clientextension-init
-                              ""
-                              {::reload? reload?
-                               ::shared/extension extension
-                               ::this this})
+        log-state (log/debug log-state
+                             ::clientextension-init
+                             ""
+                             {::reload? reload?
+                              ::shared/extension extension
+                              ::this this})
         client-extension-load-time (if reload?
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
@@ -614,20 +613,20 @@ The fact that this is so big says a lot about needing to re-think my approach"
                            ;; The original goal/dream was to get CurveCP
                            ;; added as a standard part of every operating
                            ;; system's network stack
-                           (log2/flush-logs! logger (log2/warn (log2/clean-fork log-state
-                                                                                ::clientextension-init)
-                                                               ::clientextension-init
-                                                               "no /etc/curvecpextension file"))
+                           (log/flush-logs! logger (log/warn (log/clean-fork log-state
+                                                                             ::clientextension-init)
+                                                             ::clientextension-init
+                                                             "no /etc/curvecpextension file"))
                            (K/zero-bytes 16)))
                     extension)]
     (assert (= (count extension) K/extension-length))
-    (let [log-state (log2/info log-state
-                               ::clientextension-init
-                               "Loaded extension"
-                               {::shared/extension (vec extension)})]
+    (let [log-state (log/info log-state
+                              ::clientextension-init
+                              "Loaded extension"
+                              {::shared/extension (vec extension)})]
       (assoc this
              ::client-extension-load-time client-extension-load-time
-             ::log2/state log-state
+             ::log/state log-state
              ::shared/extension extension))))
 
 (s/fdef fork!
@@ -648,12 +647,12 @@ TODO: Need to ask around about that.
 Bigger TODO: This really should be identical to the server implementation.
 
 Which at least implies that the agent approach should go away."
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::msg-specs/->child
            ::msg-specs/child-spawner!
            ::msg-specs/message-loop-name]
     initial-msg-state ::msg-specs/state
-    log-state ::log2/state
+    log-state ::log/state
     :as this}
    wrapper]
   {:pre [message-loop-name]}
@@ -667,28 +666,28 @@ Which at least implies that the agent approach should go away."
   ;; calling buffer-response!
   ;; And then the server- or client- -child-processor
   ;; functions handle the actual message exchange.
-  (let [log-state (log2/info log-state ::fork! "Spawning child!!")
+  (let [log-state (log/info log-state ::fork! "Spawning child!!")
         startable (message/initial-state message-loop-name
                                          false
                                          (assoc initial-msg-state
-                                                ::log2/state log-state)
+                                                ::log/state log-state)
                                          logger)
         {:keys [::msg-specs/io-handle]
-         log-state ::log2/state} (message/start! startable
-                                                 logger
-                                                 ;; And this is really why
-                                                 ;; I need something stateful
-                                                 (partial child-> wrapper)
-                                                 ->child)
-        log-state (log2/debug log-state
-                              ::fork!
-                              "Child message loop initialized"
-                              {::this (dissoc this ::log2/state)
-                               ::child (dissoc io-handle ::log2/state)})]
+         log-state ::log/state} (message/start! startable
+                                                logger
+                                                ;; And this is really why
+                                                ;; I need something stateful
+                                                (partial child-> wrapper)
+                                                ->child)
+        log-state (log/debug log-state
+                             ::fork!
+                             "Child message loop initialized"
+                             {::this (dissoc this ::log/state)
+                              ::child (dissoc io-handle ::log/state)})]
     (child-spawner! io-handle)
     (assoc this
            ::child io-handle
-           ::log2/state (log2/flush-logs! logger log-state)
+           ::log/state (log/flush-logs! logger log-state)
            ::msg-specs/io-handle io-handle)))
 
 (s/fdef do-send-packet
@@ -708,7 +707,7 @@ Which at least implies that the agent approach should go away."
         :ret ::specs/deferrable)
 (defn do-send-packet
   "Send a ByteBuf (et al) as UDP to the server"
-  [{log-state ::log2/state
+  [{log-state ::log/state
     {:keys [::specs/srvr-ip
             ::specs/srvr-port]
      :as server-security} ::server-security
@@ -754,8 +753,8 @@ Which at least implies that the agent approach should go away."
   ;; It would be very easy to just wait
   ;; for its minute key to definitely time out, though that seems
   ;; like a naive approach with a terrible user experience.
-  [{log-state ::log2/state
-    :keys [::log2/logger]
+  [{log-state ::log/state
+    :keys [::log/logger]
     packet ::vouch
     :as this}
    wrapper]
@@ -769,25 +768,25 @@ Which at least implies that the agent approach should go away."
   ;; I set up for debugging.
   (do-send-packet this
                   (fn [success]
-                    (log2/flush-logs! logger
-                                      (log2/info log-state
-                                                 ::send-vouch!
-                                                 "Initiate packet sent.\nWaiting for 1st message"
-                                                 {::success success}))
+                    (log/flush-logs! logger
+                                     (log/info log-state
+                                               ::send-vouch!
+                                               "Initiate packet sent.\nWaiting for 1st message"
+                                               {::success success}))
                     (send-off wrapper final-wait wrapper success))
                   (fn [failure]
                     ;; Extremely unlikely, but
                     ;; just for the sake of paranoia
-                    (log2/flush-logs! logger
-                                      (log2/exception log-state
-                                                      ;; Q: Am I absolutely positive that this will
-                                                      ;; always be an exception?
-                                                      ;; A: Even if it isn't the logger needs to be
-                                                      ;; able to cope with other problems
-                                                      failure
-                                                      ::send-vouch!
-                                                      "Sending Initiate packet failed!"
-                                                      {::problem failure}))
+                    (log/flush-logs! logger
+                                     (log/exception log-state
+                                                    ;; Q: Am I absolutely positive that this will
+                                                    ;; always be an exception?
+                                                    ;; A: Even if it isn't the logger needs to be
+                                                    ;; able to cope with other problems
+                                                    failure
+                                                    ::send-vouch!
+                                                    "Sending Initiate packet failed!"
+                                                    {::problem failure}))
                     (throw (ex-info "Failed to send cookie->vouch response"
                                     (assoc this
                                            :problem failure))))
