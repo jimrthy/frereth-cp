@@ -447,7 +447,7 @@ show up later."
         :ret (s/or :with-nested-context (s/tuple ::state ::state)
                    :keep-parent-context ::state))
 (defn fork
-  "Returns [forkee forked] <- because it increments forked's clock"
+  "Return shape depends on arity"
   ([src child-context]
    (let [parent-ctx (::context src)
          ;; Q: Am I really not using this at all?

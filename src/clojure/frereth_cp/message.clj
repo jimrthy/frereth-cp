@@ -65,6 +65,7 @@
                                              ::delta_f
                                              ::scheduling-time]))
 (s/def ::next-action-time nat-int?)
+(s/def ::now nat-int?)
 (s/def ::source-tags #{::child-> ::parent-> ::query-state})
 (s/def ::input (s/tuple ::source-tags bytes?))
 (s/def ::action-tag #{::specs/child->
@@ -698,7 +699,7 @@
                                     "after last block time ~:d.\n"
                                     "Recent was ~:d ns in the past\n"
                                     "rtt-timeout: ~:d\n"
-                                    "earliest -time: ~:d")
+                                    "earliest-time: ~:d")
                                min-resend-time
                                n-sec-per-block
                                ;; I'm calculating last-block-time
@@ -1030,6 +1031,72 @@
                now
                success)))
 
+;; FIXME: Don't make this a global
+(def fast-spins (atom 0))
+(s/fdef pick-next-action
+        :args (s/cat :this ::specs/state
+               :dict (s/keys :req [::log/state
+                                         ::specs/recent
+                                         ::next-action-time
+                                         ::now]))
+        :ret (s/keys :req [::delta_f
+                           ::next-action
+                           ::log/state]))
+(defn pick-next-action
+  [this
+   {:keys [::now
+           ::specs/recent
+           ::specs/stream]
+    actual-next ::next-action-time
+    log-state ::log/state}]
+  (if actual-next
+    ;; TODO: add an optional debugging step that stores state and the
+    ;; calculated time so I can just look at exactly what I have
+    ;; when everything goes sideways
+    (let [;; It seems like it would make more sense to have the delay happen from
+          ;; "now" instead of "recent"
+          ;; Doing that throws lots of sand into the gears.
+          ;; Stick with this approach for now, because it *does*
+          ;; match the reference implementation.
+          ;; It seems very incorrect, but it also supplies an adjustment
+          ;; for the time it took this event loop iteration to process.
+          ;; Q: Is that fair/accurate?
+          scheduled-delay (- actual-next recent)
+          ;; Make sure that at least it isn't negative
+          ;; (I keep running across bugs that have issues with this,
+          ;; and it wreaks havoc with my REPL)
+          delta-nanos (max 0 scheduled-delay)
+          delta (inc (utils/nanos->millis delta-nanos))
+          ;; For printing
+          delta_f (float delta)
+          log-state (log/debug log-state
+                               ::schedule-next-timeout!
+                               "Setting timer to trigger after an initially calculated scheduled delay"
+                               {::scheduled-delay scheduled-delay  ; Q: Convert to long?
+                                ::specs/recent recent
+                                ::now now
+                                ::actual-delay delta_f
+                                ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
+                                ::stream stream})]
+      (if (= delta 1)
+        (do
+          (swap! fast-spins inc)
+          (when (> @fast-spins 5)
+            ;; Q: Does this ever happen if nothing's broken?
+            (println "FIXME: Debug only")
+            (throw (ex-info "Exiting to avoid fast-spin lock"
+                            (dissoc this ::log/state)))))
+        (reset! fast-spins 0))
+      {::delta_f delta_f
+       ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
+       ::log/state log-state})
+    ;; The i/o portion of this loop is finished.
+    ;; But we still need to wait on the caller to close the underlying stream.
+    ;; If nothing else, it may still want/need to query state.
+    {::delta_f ##Inf
+     ::next-action (strm/take! stream [::drained])
+     ::log/state log-state}))
+
 ;;; I really want to move schedule-next-timeout! to flow-control.
 ;;; But it has a circular dependency with trigger-from-timer.
 ;;; Which...honestly also belongs in there.
@@ -1051,8 +1118,6 @@
 ;;; TODO: Definitely needs some refactoring to trim
 ;;; it down to a reasonable size.
 
-;; FIXME: Don't make this a global
-(def fast-spins (atom 0))
 ;;; TODO: Possible alt approach: use atoms with
 ;;; add-watch. That opens up a different can of
 ;;; worms, in terms of synchronizing the flow-control
@@ -1143,64 +1208,21 @@
                                              ::original-ns (- mid-time now)
                                              ::alt-ns (- scheduling-finished mid-time)
                                              ::state (dissoc state ::log/state
-                                                            ::to-child-done? to-child-done?)})))
+                                                             ::to-child-done? to-child-done?)})))
         (let [{:keys [::delta_f
                       ::next-action]
-               log-state ::log/state}
-              (if actual-next
-                ;; TODO: add an optional debugging step that stores state and the
-                ;; calculated time so I can just look at exactly what I have
-                ;; when everything goes sideways
-                (let [;; It seems like it would make more sense to have the delay happen from
-                      ;; "now" instead of "recent"
-                      ;; Doing that throws lots of sand into the gears.
-                      ;; Stick with this approach for now, because it *does*
-                      ;; match the reference implementation.
-                      ;; It seems very incorrect, but it also supplies an adjustment
-                      ;; for the time it took this event loop iteration to process.
-                      ;; Q: Is that fair/accurate?
-                      scheduled-delay (- actual-next recent)
-                      ;; Make sure that at least it isn't negative
-                      ;; (I keep running across bugs that have issues with this,
-                      ;; and it wreaks havoc with my REPL)
-                      delta-nanos (max 0 scheduled-delay)
-                      delta (inc (utils/nanos->millis delta-nanos))
-                      ;; For printing
-                      delta_f (float delta)
-                      log-state (log/debug log-state
-                                           ::schedule-next-timeout!
-                                           "Setting timer to trigger after an initially calculated scheduled delay"
-                                           {::scheduled-delay scheduled-delay  ; Q: Convert to long?
-                                            ::specs/recent recent
-                                            ::now now
-                                            ::actual-delay delta_f
-                                            ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
-                                            ::stream stream})]
-                  (if (= delta 1)
-                    (do
-                      (swap! fast-spins inc)
-                      (when (> @fast-spins 5)
-                        ;; Q: Does this ever happen if nothing's broken?
-                        (println "FIXME: Debug only")
-                        (throw (ex-info "Exiting to avoid fast-spin lock"
-                                        state))))
-                    (reset! fast-spins 0))
-                  {::delta_f delta_f
-                   ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
-                   ::log/state log-state})
-                ;; The i/o portion of this loop is finished.
-                ;; But we still need to wait on the caller to close the underlying stream.
-                ;; If nothing else, it may still want/need to query state.
-                {::delta_f ##Inf
-                 ::next-action (strm/take! stream [::drained])
-                 ::log/state log-state})
+               log-state ::log/state} (pick-next-action state
+                                                        {::log/state log-state
+                                                         ::next-action-time actual-next
+                                                         ::now now
+                                                         ::specs/recent recent
+                                                         ::specs/stream stream})
               log-state (log/flush-logs! logger log-state)
               ;; Q: Why am I forking logs here?
-              [forked-logs log-state] (log/fork log-state)]
+              forked-logs (log/fork log-state)]
           (when-not (::specs/outgoing state)
             (println "Missing outgoing in" state)
             (throw (ex-info "Missing outgoing" state)))
-          (println message-loop-name "Setting up deferred to trigger on next action")
           (dfrd/on-realized next-action
                             (partial action-trigger
                                      {::actual-next actual-next

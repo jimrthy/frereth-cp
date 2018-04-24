@@ -24,7 +24,7 @@
                             {::incoming msg-bytes
                              ::incoming-class (class msg-bytes)
                              ::incoming-length (count msg-bytes)})
-        result {::log2/state log-state}]
+        result {::log/state log-state}]
     (if (and msg-bytes
              (K/legal-vouch-message-length? (count msg-bytes)))
       (assoc result ::possible-response msg-bytes)
