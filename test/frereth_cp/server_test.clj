@@ -70,55 +70,58 @@
 (defn handshake-client-child-spawner!
   "Spawn the client-child for the handshake test and initiate the fun"
   [ch
-   {log-state ::log/state
+   {log-state-atom ::log/state-atom
     logger ::log/logger
     :as io-handle}]
-  (let [log-state (log/debug log-state
-                             ::handshake-client-child-spawner!
-                             "Forking child process"
-                             {::now (System/currentTimeMillis)})
-        ;; Doing a req/rep sort of thing from server is honestly
-        ;; pretty boring. But it's easy to test.
-        ;; Assume the client reacts to server messages.
-        ;; Pull them off the network, shove them into this
-        ;; stream, and than have the handshake-client-cb
-        ;; cope with them.
+  {:pre [io-handle]}
+  (when-not log-state-atom
+    (throw (ex-info "Missing log-state-atom"
+                    {::keys (keys io-handle)
+                     ::io-handle io-handle})))
+  (swap! log-state-atom #(log/debug %
+                                    ::handshake-client-child-spawner!
+                                    "Forking child process"
+                                    {::now (System/currentTimeMillis)}))
+  (swap! log-state-atom #(log/flush-logs! logger %))
 
-        log-state (if-not io-handle
-                    (log/warn log-state
-                              ::handshake-client-child-spawner!
-                              "Trying to spawn child with no io-handle")
-                    log-state)
-        log-state (log/flush-logs! logger log-state)]
-    (try
-      (strm/consume (partial handshake-client-cb
-                             (assoc io-handle
-                                    ::log/state
-                                    log-state))
-                    ch)
-      ;; Q: Worth converting this to something like an HTTP request
-      ;; that's too big to fit in a single packet?
-      ;; A: Well, I've really already done that in
-      ;; message-test/bigger-outbound
-      ;; All this *should* test would be whichever means I
-      ;; use on the server side to reassemble the bytes that
-      ;; were streamed in packets.
-      ;; Which is interesting from the standpoint of example
-      ;; usage, but not so much from this angle.
+  ;; Doing a req/rep sort of thing from server is honestly
+  ;; pretty boring. But it's easy to test.
+  ;; Assume the client reacts to server messages.
+  ;; Pull them off the network, shove them into this
+  ;; stream, and than have the handshake-client-cb
+  ;; cope with them.
+  (try
+    (strm/consume (partial handshake-client-cb
+                           (assoc io-handle
+                                  ::log/state
+                                  @log-state-atom))
+                  ch)
+    ;; Q: Worth converting this to something like an HTTP request
+    ;; that's too big to fit in a single packet?
+    ;; A: Well, I've really already done that in
+    ;; message-test/bigger-outbound
+    ;; All this *should* test would be whichever means I
+    ;; use on the server side to reassemble the bytes that
+    ;; were streamed in packets.
+    ;; Which is interesting from the standpoint of example
+    ;; usage, but not so much from this angle.
 
-      (let [helo (-> ::helo
-                     pr-str
-                     .getBytes)]
-        (msg/child->! io-handle helo))
-      (log/flush-logs! (log/debug log-state
-                                  ::handshake-client-child-spawner!
-                                  "Child HELO sent"
-                                  {::now (System/currentTimeMillis)}))
-      (catch Exception ex
-        (log/flush-logs! (log/exception log-state
-                                        ex
+    (let [helo (-> ::helo
+                   pr-str
+                   .getBytes)]
+      (msg/child->! io-handle helo))
+    (swap! log-state-atom
+           #(log/flush-logs! (log/debug %
                                         ::handshake-client-child-spawner!
-                                        "Forking child failed"))))))
+                                        "Child HELO sent"
+                                        {::now (System/currentTimeMillis)})))
+    (catch Exception ex
+      (swap! log-state-atom
+             #(log/flush-logs! logger
+                               (log/exception %
+                                              ex
+                                              ::handshake-client-child-spawner!
+                                              "Forking child failed"))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Tests
