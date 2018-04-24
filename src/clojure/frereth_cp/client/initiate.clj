@@ -6,7 +6,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as utils])
@@ -31,10 +31,10 @@
         :args (s/cat :this ::state/state
                      :msg bytes?
                      :outer-nonce-suffix bytes?)
-        :ret (s/keys :req [::crypto-box ::log2/state]))
+        :ret (s/keys :req [::crypto-box ::log/state]))
 (defn build-initiate-interior
   "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
-  [{log-state ::log2/state
+  [{log-state ::log/state
     :as this} msg outer-nonce-suffix]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
@@ -52,19 +52,19 @@
              ::K/child-message msg}
         work-area (::shared/work-area this)
         secret (get-in this [::state/shared-secrets ::state/client-short<->server-short])
-        log-state (log2/info log-state
-                             ::build-initiate-interior
-                             "Encrypting\nFIXME: Do not log the shared secret!"
-                             {::source src
-                              ::inner-nonce-suffix (b-t/->string inner-nonce-suffix)
-                              ::shared-secret (b-t/->string secret)})]
+        log-state (log/info log-state
+                            ::build-initiate-interior
+                            "Encrypting\nFIXME: Do not log the shared secret!"
+                            {::source src
+                             ::inner-nonce-suffix (b-t/->string inner-nonce-suffix)
+                             ::shared-secret (b-t/->string secret)})]
     {::crypto-box (crypto/build-crypto-box tmplt
                                            src
                                            (::shared/text work-area)
                                            secret
                                            K/initiate-nonce-prefix
                                            outer-nonce-suffix)
-     ::log2/state log-state}))
+     ::log/state log-state}))
 
 (s/fdef build-initiate-packet!
         :args (s/cat :this ::state/state
@@ -75,13 +75,13 @@
                                        ;; documentation.
                                        (fn [bs]
                                          (let [{:keys [::message/possible-response]}
-                                               (K/initiate-message-length-filter bs)]
+                                               (message/filter-initial-message-bytes bs)]
                                            possible-response))))
         :fn (fn [x]
               (let [legal-to-send (-> x
                                       :args
                                       :msg-bytes
-                                      K/initiate-message-length-filter
+                                      message/filter-initial-message-bytes
                                       ::message/possible-response)
                     real-result (-> x
                                     :ret
@@ -90,14 +90,14 @@
                    (+ 544 (count legal-to-send)))
                 true))
         :ret (s/keys :opt [::specs/byte-buf]
-                     :req [::log2/state]))
+                     :req [::log/state]))
 (defn build-initiate-packet!
   "Combine message buffer and client state into an Initiate packet
 
 This was destructive in the sense that it overwrites ::shared/work-area
 FIXME: Change that"
   [this msg-bytes]
-  (let [{log-state ::log2/state
+  (let [{log-state ::log/state
          msg ::message/possible-response} (message/filter-initial-message-bytes this
                                                                                 msg-bytes)]
     (if msg
@@ -115,12 +115,12 @@ FIXME: Change that"
             nonce-suffix (b-t/sub-byte-array working-nonce
                                              K/client-nonce-prefix-length)
             {:keys [::crypto-box]
-             log-state ::log2/state} (build-initiate-interior this msg nonce-suffix)
-            log-state (log2/info log-state
-                                 ::build-initiate-packet!
-                                 "Stuffing crypto-box into Initiate packet"
-                                 {::crypto-box (b-t/->string crypto-box)
-                                  ::message-length (count crypto-box)})
+             log-state ::log/state} (build-initiate-interior this msg nonce-suffix)
+            log-state (log/info log-state
+                                ::build-initiate-packet!
+                                "Stuffing crypto-box into Initiate packet"
+                                {::crypto-box (b-t/->string crypto-box)
+                                 ::message-length (count crypto-box)})
             dscr (update-in K/initiate-packet-dscr
                             [::K/vouch-wrapper ::K/length]
                             +
@@ -136,8 +136,8 @@ FIXME: Change that"
         {::specs/byte-buf
          (serial/compose dscr
                          fields)
-         ::log2/state log-state})
-      {::log2/state log-state})))
+         ::log/state log-state})
+      {::log/state log-state})))
 
 (s/fdef build-and-send-vouch!
         :args (s/cat :wrapper ::state/state-agent
@@ -159,58 +159,58 @@ FIXME: Change that"
     (send wrapper (fn [_]
                     (throw (ex-info "Should have a valid cookie response packet, but do not"
                                     @wrapper)))))
-  (let [{log-state ::log2/state
-         logger ::log2/logger
+  (let [{log-state ::log/state
+         logger ::log/logger
          :as state} @wrapper
-        log-state (log2/info log-state
-                             ::build-and-send-vouch
-                             ""
-                             {::cause "Received cookie"
-                              ::effect "Forking child"
-                              ::state/state (dissoc state ::log2/state)})
+        log-state (log/info log-state
+                            ::build-and-send-vouch
+                            ""
+                            {::cause "Received cookie"
+                             ::effect "Forking child"
+                             ::state/state (dissoc state ::log/state)})
         ;; Once we've signaled the child to start doing its own thing,
         ;; cope with the cookie we just received.
         ;; Doing this statefully seems like a terrible
         ;; idea, but I don't want to go back and rewrite it
         ;; until I have a working prototype.
-        log-state (log2/info log-state
-                             ::build-and-send-vouch
-                             "Converting cookie->vouch")]
+        log-state (log/info log-state
+                            ::build-and-send-vouch
+                            "Converting cookie->vouch")]
     (let [state (state/cookie->vouch state cookie-packet)
           timeout (state/current-timeout wrapper)]
       ;; Give the other thread(s) a chance to catch up and return
       ;; from fork!
       (when-not (await-for timeout wrapper)
-        (let [log-updates [#(log2/error %
-                                        ::build-and-send-vouch
-                                        (str "Converting cookie to vouch took longer than "
-                                             timeout
-                                             " milliseconds."))]
+        (let [log-updates [#(log/error %
+                                       ::build-and-send-vouch
+                                       (str "Converting cookie to vouch took longer than "
+                                            timeout
+                                            " milliseconds."))]
               log-updates (if-let [ex (agent-error wrapper)]
                             (let [log-state (reduce (fn [current log-fn]
                                                       (log-fn current))
                                                     log-state
                                                     log-updates)]
-                              (log2/flush-logs! logger
-                                                (log2/exception log-state
-                                                                ex
-                                                                ::build-and-send-vouch
-                                                                "Agent failed while we were waiting"))
+                              (log/flush-logs! logger
+                                               (log/exception log-state
+                                                              ex
+                                                              ::build-and-send-vouch
+                                                              "Agent failed while we were waiting"))
                               ;; It's very tempting to make this just kill the client.
                               ;; Then again, for all intents and purposes it's already
                               ;; dead.
                               ;; TODO: we do need to signal the message loop to exit
                               (assert (not ex) (str "Should probably be fatal for the sake of debugging:\n"
-                                                    (log2/exception-details ex))))
+                                                    (log/exception-details ex))))
                             (let [log-update
-                                  #(log2/warn %
-                                              ::build-and-send-vouch
-                                              "Switching agent into an error state")]
+                                  #(log/warn %
+                                             ::build-and-send-vouch
+                                             "Switching agent into an error state")]
                               (send wrapper
                                     #(throw (ex-info "cookie->vouch timed out" %)))
                               (conj log-updates log-update)))]
-          (send wrapper (fn [{log-state ::log2/state
-                              logger ::log2/logger
+          (send wrapper (fn [{log-state ::log/state
+                              logger ::log/logger
                               :as this}]
                           ;; This is pretty obnoxious.
                           ;; I want to apply the functions that
@@ -225,14 +225,14 @@ FIXME: Change that"
                                                   log-state
                                                   log-updates)]
                             (assoc this
-                                   ::log2/state
-                                   (log2/flush-logs! logger log-state)))))))
+                                   ::log/state
+                                   (log/flush-logs! logger log-state)))))))
       (when-let [ex (agent-error wrapper)]
-        (log2/flush-logs! logger (log2/exception log-state
-                                                 ex
-                                                 ::build-and-send-vouch))
+        (log/flush-logs! logger (log/exception log-state
+                                               ex
+                                               ::build-and-send-vouch))
         (throw ex))
-      (log2/flush-logs! logger (log2/debug log-state
-                                           ::build-and-send-vouch
-                                           "cookie converted to vouch"))
+      (log/flush-logs! logger (log/debug log-state
+                                         ::build-and-send-vouch
+                                         "cookie converted to vouch"))
       (send-off wrapper state/send-vouch! wrapper))))
