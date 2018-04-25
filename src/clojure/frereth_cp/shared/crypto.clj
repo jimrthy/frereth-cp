@@ -130,7 +130,8 @@
            ::nonce-key]
     :as this}
    random-portion]
-  (b-t/uint64-pack! data 8 random-portion)
+  {:pre [::nonce-key]}
+  (b-t/byte-copy! data random-portion)
   (let [secret-key (generate-symmetric-key "AES" 192)
         ;; Note that this is never(?) decrypted.
         ;; Q: Is there any reason for using this instead
@@ -158,6 +159,8 @@
     :as this}
    key-dir
    long-term?]
+  (println "Reloading nonce")
+  (log/debug "Reloading nonce")
   (let [raw-path (str key-dir "/.expertsonly/")
         path (io/resource raw-path)]
     (let [f (io/file path "lock")]
@@ -167,6 +170,7 @@
           (let [channel (.getChannel (RandomAccessFile. f "rw"))]
             (try
               (let [lock (.lock channel 0 Long/MAX_VALUE false)]
+                (println "Lock acquired")
                 (log/info "Lock acquired")
                 (try
                   (let [nonce-counter (io/file path "noncecounter")]
@@ -175,10 +179,13 @@
                       (with-open [counter (io/output-stream nonce-counter)]
                         ;; FIXME: What's a good initial value?
                         (.write counter (byte-array 8))))
+                    (println "Opening" nonce-counter)
                     (log/debug "Opening" nonce-counter)
-                    (with-open [counter (io/reader nonce-counter)]
+                    (with-open [counter (io/input-stream nonce-counter)]
+                      (println "Nonce counter file opened for reading")
                       (log/debug "Nonce counter file opened for reading")
                       (let [bytes-read (.read counter data 0 8)]
+                        (println "Read the 8 bytes")
                         (when (not= bytes-read 8)
                           (throw (ex-info "Nonce counter file too small"
                                           {::contents (b-t/->string data)
@@ -320,6 +327,8 @@ But it depends on compose, which would set up circular dependencies"
   ;; just going to use the built-in AES encryption
   [^SecretKey secret-key
    ^bytes clear-text]
+  (when-not secret-key
+    (throw (RuntimeException. "Falsey secret-key. How did we get here?")))
   ;; Q: Which cipher mode is appropriate here?
   (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
         ;; FIXME: Read https://www.synopsys.com/blogs/software-security/proper-use-of-javas-securerandom/
