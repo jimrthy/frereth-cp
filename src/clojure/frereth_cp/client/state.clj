@@ -454,39 +454,51 @@ The fact that this is so big says a lot about needing to re-think my approach"
     (send wrapper assoc ::log/state log-state)))
 
 (declare current-timeout)
+;; TODO: This needs a spec
 (defn final-wait
   "We've received the cookie and responded with a vouch.
   Now waiting for the server's first real message
   packet so we can switch into the message exchange
   loop"
-  [{:keys [::log/logger]
-    log-state ::log/state
-    :as this} wrapper sent]
-  (log/flush-logs! logger
-                   (log/warn log-state
-                             ::final-wait
-                             "Entering [penultimate] final-wait"))
-  (if (not= sent ::sending-vouch-timed-out)
-    (let [timeout (current-timeout wrapper)
-          chan<-server (::chan<-server this)
-          taken (strm/try-take! chan<-server
-                                ::drained timeout
-                                ::initial-response-timed-out)]
-      ;; I have some comment rot here.
-      ;; Big Q: Is the comment about waiting for the client's response
-      ;; below correct? (The code doesn't look like it, but the behavior I'm
-      ;; seeing implies a bug)
-      ;; Or is the docstring above?
-      (dfrd/on-realized taken
-        ;; Using send-off here because it potentially has to block to wait
-        ;; for the child's initial message.
-        ;; That really should have been ready to go quite a while before,
-        ;; but "should" is a bad word.
-        #(send-off wrapper (partial ->message-exchange-mode wrapper) %)
-        (fn [ex]
-          (send wrapper #(throw (ex-info "Server vouch response failed"
-                                         (assoc % :problem ex)))))))
-    (send wrapper #(throw (ex-info "Timed out trying to send vouch" %)))))
+  [wrapper
+   sent]
+  (let [{:keys [::log/logger]
+         log-state ::log/state
+         :as this} @wrapper]
+    (when-not log-state
+      (throw (ex-info
+              "Missing log-state"
+              {::keys (keys this)
+               ::problem this})))
+    (log/flush-logs! logger
+                     (log/warn log-state
+                               ::final-wait
+                               "Entering [penultimate] final-wait"))
+    (if (not= sent ::sending-vouch-timed-out)
+      (let [timeout (current-timeout wrapper)
+            chan<-server (::chan<-server this)
+            taken (strm/try-take! chan<-server
+                                  ::drained timeout
+                                  ::initial-response-timed-out)]
+        ;; I have some comment rot here.
+        ;; Big Q: Is the comment about waiting for the client's response
+        ;; below correct? (The code doesn't look like it, but the behavior I'm
+        ;; seeing implies a bug)
+        ;; Or is the docstring above?
+        (dfrd/on-realized taken
+                          ;; Using send-off here because it potentially has to block to wait
+                          ;; for the child's initial message.
+                          ;; That really should have been ready to go quite a while before,
+                          ;; but "should" is a bad word.
+                          (fn [success]
+                            (send-off wrapper (partial ->message-exchange-mode wrapper) success))
+                          (fn [ex]
+                            (send wrapper #(throw (ex-info "Server vouch response failed"
+                                                           (assoc % :problem ex))))))
+        this)
+      (do
+        (send wrapper #(throw (ex-info "Timed out trying to send vouch" %)))
+        this))))
 
 ;;; This namespace is too big, and I hate to add this next
 ;;; function to it.
@@ -518,6 +530,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
                 ::server-security]
          :as state} @wrapper
         {:keys [::specs/srvr-name ::shared/srvr-port]} server-security]
+    (when-not packet-builder
+      (throw (ex-info "Missing packet-builder"
+                      {::existing-keys (keys state)
+                       ::problem (dissoc state ::log/state)})))
     ;; This flag is stored in the child state.
     ;; I can retrieve that from the io-handle, but that's
     ;; terribly inefficient.
@@ -557,9 +573,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
           ;; Actually, this would be a good time to use refs inside a
           ;; transaction.
           [my-log-state msg-log-state] (log/synchronize log-state @msg-log-state-atom)]
-      (send wrapper #(update % ::log/state
-                             (fn [log-state]
-                               (log/flush-logs! logger log-state))))
+      ;; Yikes.
+      (send wrapper (fn [client-state]
+                      (update client-state
+                              ::log/state-atom
+                              (fn [log-state-atom]
+                                (swap! log-state-atom
+                                       #(log/flush-logs! logger %))))))
       (swap! msg-log-state-atom update ::log/lamport max (::log/lamport msg-log-state))
       result)))
 
@@ -768,12 +788,16 @@ Which at least implies that the agent approach should go away."
   ;; I set up for debugging.
   (do-send-packet this
                   (fn [success]
-                    (log/flush-logs! logger
-                                     (log/info log-state
-                                               ::send-vouch!
-                                               "Initiate packet sent.\nWaiting for 1st message"
-                                               {::success success}))
-                    (send-off wrapper final-wait wrapper success))
+                    (send wrapper (fn [this]
+                                    (update this
+                                            ::log/state
+                                            #(log/flush-logs! logger
+                                                              (log/info %
+                                                                        ::send-vouch!
+                                                                        "Initiate packet sent.\nWaiting for 1st message"
+                                                                        {::success success})))))
+                    (await wrapper)
+                    (final-wait wrapper success))
                   (fn [failure]
                     ;; Extremely unlikely, but
                     ;; just for the sake of paranoia

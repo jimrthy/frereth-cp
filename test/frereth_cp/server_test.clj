@@ -111,10 +111,10 @@
                    .getBytes)]
       (msg/child->! io-handle helo))
     (swap! log-state-atom
-           #(log/flush-logs! (log/debug %
-                                        ::handshake-client-child-spawner!
-                                        "Child HELO sent"
-                                        {::now (System/currentTimeMillis)})))
+           #(log/flush-logs! logger (log/debug %
+                                               ::handshake-client-child-spawner!
+                                               "Child HELO sent"
+                                               {::now (System/currentTimeMillis)})))
     (catch Exception ex
       (swap! log-state-atom
              #(log/flush-logs! logger
@@ -232,7 +232,10 @@
                                              srvr-pk-long
                                              (partial handshake->client-child internal-client-chan)
                                              (partial handshake-client-child-spawner! internal-client-chan))]
-        (println "shake-hands: Agent started. Pulling HELLO")
+        (println (str "shake-hands: Agent started. Pulling HELLO from "
+                      client-agent
+                      ", a "
+                      (class client-agent)))
         (try
           (let [client->server (::client-state/chan->server @client-agent)
                 taken (strm/try-take! client->server ::drained 1000 ::timeout)
@@ -349,12 +352,22 @@
                     (throw (RuntimeException. "Timed out putting Hello to Server")))))
               (throw (RuntimeException. (str hello " taking Hello from Client")))))
           (finally
-            (println "Stopping client")
-            (client/stop! client-agent)
-            (if-let [problem (agent-error client-agent)]
-              (println "Uh-oh. client-agent is in a failed state:\n"
-                       problem)
-              (await client-agent))
+            (println "Stopping client agent" client-agent)
+            (try
+              (client/stop! client-agent)
+              (try
+                (if-let [problem (agent-error client-agent)]
+                  (println "Uh-oh. client-agent is in a failed state:\n"
+                           problem)
+                  (await client-agent))
+                (catch Exception ex
+                  ;; This should never happen.
+                  ;; But I want to be certain that it doesn't escape to the
+                  ;; outer try/catch
+                  (println "Problem waiting for client-agent to finish\n"
+                           (log/exception-details ex))))
+              (catch Exception ex
+                (println "stop! failed:\n" (log/exception-details ex))))
             (println "client-agent stopped state:\n"
                      (dissoc @client-agent
                              ::log/state)))))

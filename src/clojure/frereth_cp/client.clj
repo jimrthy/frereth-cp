@@ -562,7 +562,12 @@ implementation. This is code that I don't understand yet"
         :ret any?)
 (defn stop!
   [wrapper]
-  (println "Trying to stop a client agent\nState:\n"
+  (println "Trying to stop a client agent\nWrapper:\n"
+           wrapper)
+  (println "Current state:\n"
+           ;; The client state inside the agent is getting
+           ;; set to a deferred.
+           ;; Somewhere.
            (dissoc @wrapper ::log/state))
   (if-let [ex (agent-error wrapper)]
     (let [logger (log/std-out-log-factory)]
@@ -581,33 +586,43 @@ implementation. This is code that I don't understand yet"
                          ::shared/packet-management]
                   log-state ::log/state
                   :as this}]
-              (println "Made it into the real stopper")
-              (let [log-state (log/debug log-state
-                                         ::stop!
-                                         "Top of the real stopper")
-                    log-state
-                    (try
-                      (if chan->server
-                        (do
-                          (strm/close! chan->server)
-                          (log/debug log-state
-                                     ::stop!
-                                     "chan->server closed"))
-                        (log/flush-logs! (log/warn (log/clean-fork log-state ::possible-issue)
-                                                   ::stop!
-                                                   "chan->server already nil"
-                                                   (dissoc this ::log/state))))
-                      (catch Exception ex
-                        (log/exception log-state
-                                       ex
-                                       ::stop!)))
-                    log-state (log/flush-logs! (log/info log-state
-                                                         ::stop!
-                                                         "Done"))]
-                (assoc this
-                       ::chan->server nil
-                       ::log/state log-state
-                       ::shared/packet-management nil))))
+              (println "Made it into the real client stopper")
+              (try
+                (let [log-state (log/debug log-state
+                                           ::stop!
+                                           "Top of the real stopper")
+                      log-state
+                      (try
+                        (println "Possibly closing the channel to server" chan->server)
+                        (if chan->server
+                          (do
+                            (strm/close! chan->server)
+                            (log/debug log-state
+                                       ::stop!
+                                       "chan->server closed"))
+                          (log/warn (log/clean-fork log-state ::possible-issue)
+                                    ::stop!
+                                    "chan->server already nil"
+                                    (dissoc this ::log/state)))
+                        (catch Exception ex
+                          (log/exception log-state
+                                         ex
+                                         ::stop!)))
+                      log-state (log/flush-logs! (log/info log-state
+                                                           ::stop!
+                                                           "Done"))]
+                  (assoc this
+                         ::chan->server nil
+                         ::log/state log-state
+                         ::shared/packet-management nil))
+                (catch Exception ex
+                  (assoc this
+                         ::chan->server nil
+                         ::log/state (log/exception log-state
+                                                    ex
+                                                    ::stop!
+                                                    "Actual stop function failed")
+                         ::shared/packet-management nil)))))
       (catch Exception ex
         (println "(send)ing the close function to the client agent failed\n"
                  ex)))))
@@ -629,7 +644,7 @@ implementation. This is code that I don't understand yet"
       ;; But that would create circular imports.
       ;; This is a red flag.
       ;; FIXME: Come up with a better place for it to live.
-      (assoc ::packet-builder initiate/build-initiate-packet!)
+      (assoc ::state/packet-builder initiate/build-initiate-packet!)
       state/initialize-mutable-state!
       (assoc
        ;; This seems very cheese-ball, but they
