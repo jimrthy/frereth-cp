@@ -1432,14 +1432,14 @@
   ([human-name logger]
    (initial-state human-name {} false logger)))
 
-(s/fdef start!
+(s/fdef do-start
         :args (s/cat :state ::specs/state
                      :logger ::log/logger
                      :parent-callback ::specs/->parent
                      :child-callback ::specs/->child)
         :ret (s/keys :req [::log/state
                            ::specs/io-handle]))
-(defn start!
+(defn do-start
    ;; I'd like to provide the option to build your own
    ;; input loop.
    ;; It seems like this would really need to be a function that
@@ -1692,7 +1692,7 @@
     :as io-handle}
    array-o-bytes]
   (swap! log-state-atom
-         #(log/debug % ::child-> "Top" {::specs/message-loop-name message-loop-name}))
+         #(log/debug % ::child->! "Top" {::specs/message-loop-name message-loop-name}))
   (when-not from-child
     (let [prelog (utils/pre-log message-loop-name)]
       (throw (ex-info (str prelog "Missing PipedOutStream from child inside io-handle")
@@ -1708,7 +1708,7 @@
     ;; responses.
     (swap! log-state-atom
            #(log/debug %
-                       ::child->
+                       ::child->!
                        "Trying to send bytes from child"
                        {::message-size n
                         ::buffer-space-available buffer-space
@@ -1718,7 +1718,7 @@
             (do
               (swap! log-state-atom
                      #(log/warn %
-                                ::child->
+                                ::child->!
                                 "Not enough room to write.\nRefusing to block"))
               ;; TODO: Add an optional parameter to allow blocking.
               ;; TODO: Adjust the meaning of this return value.
@@ -1735,7 +1735,7 @@
               (.flush from-child)
               (swap! log-state-atom
                      #(log/debug %
-                                 ::child->
+                                 ::child->!
                                  "Buffered"
                                  {::specs/message-loop-name message-loop-name
                                   ::message-size n}))

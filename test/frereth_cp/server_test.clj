@@ -113,8 +113,7 @@
     (swap! log-state-atom
            #(log/flush-logs! logger (log/debug %
                                                ::handshake-client-child-spawner!
-                                               "Child HELO sent"
-                                               {::now (System/currentTimeMillis)})))
+                                               "Child HELO sent")))
     (catch Exception ex
       (swap! log-state-atom
              #(log/flush-logs! logger
@@ -323,25 +322,34 @@
                                   ;; FIXME: Verify that this is a valid Initiate packet
                                   (if-not (or (= initiate ::drained)
                                               (= initiate ::timeout))
-                                    (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
-                                      (if (not= ::timeout put)
-                                        (let [first-srvr-message @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
-                                          (if-not (or (= first-srvr-message ::drained)
-                                                      (= first-srvr-message ::timeout))
-                                            (let [put @(strm/try-put! client<-server
-                                                                      first-srvr-message
-                                                                      1000
-                                                                      ::timeout)]
-                                              (if (not= ::timeout put)
-                                                (let [first-full-clnt-message @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                                                  ;; As long as we got a message back, we should be able to call
-                                                  ;; this test done.
-                                                  (when (= ::timeout first-full-clnt-message)
-                                                    (throw (ex-info "Timed out waiting for client response"))))
-                                                (throw (ex-info "Timed out writing first server Message packet to client"))))
-                                            (throw (ex-info "Failed pulling first real Message packet from Server"
-                                                            {::problem first-srvr-message}))))
-                                        (throw (ex-info "Timed out writing Initiate to Server"))))
+                                    (do
+                                      (is (= server-ip (-> initiate
+                                                           :host
+                                                           .getAddress
+                                                           vec)))
+                                      (is (bytes? (:message initiate)))
+                                      (if-let [port (:port initiate)]
+                                        (is (= server-port port))
+                                        (is false (str "UDP packet missing port in " initiate)))
+                                      (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
+                                        (if (not= ::timeout put)
+                                          (let [first-srvr-message @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
+                                            (if-not (or (= first-srvr-message ::drained)
+                                                        (= first-srvr-message ::timeout))
+                                              (let [put @(strm/try-put! client<-server
+                                                                        first-srvr-message
+                                                                        1000
+                                                                        ::timeout)]
+                                                (if (not= ::timeout put)
+                                                  (let [first-full-clnt-message @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                                    ;; As long as we got a message back, we should be able to call
+                                                    ;; this test done.
+                                                    (when (= ::timeout first-full-clnt-message)
+                                                      (throw (ex-info "Timed out waiting for client response"))))
+                                                  (throw (ex-info "Timed out writing first server Message packet to client"))))
+                                              (throw (ex-info "Failed pulling first real Message packet from Server"
+                                                              {::problem first-srvr-message}))))
+                                          (throw (ex-info "Timed out writing Initiate to Server")))))
                                     (throw (ex-info "Failed to take Initiate/Vouch from Client"
                                                     {::problem initiate}))))
                                 (throw (RuntimeException. "Timed out putting Cookie to Client")))))

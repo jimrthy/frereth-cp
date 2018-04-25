@@ -266,13 +266,15 @@
 
 (s/fdef wait-for-cookie!
         :args (s/cat :wrapper ::state/agent-wrapper
+                     :this ::state/state
                      :notifier dfrd/deferrable?
                      ::timeout (s/and number?
                                       (complement neg?))
                      :sent ::specs/network-packet)
         :ret any?)
 (defn wait-for-cookie!
-  [wrapper notifier timeout sent]
+  ;; FIXME: Eliminate wrapper from here.
+  [wrapper this notifier timeout sent]
   (if (not= sent ::sending-hello-timed-out)
     (do
       (send wrapper
@@ -289,6 +291,6 @@
                                 ::hello-response-timed-out)]
         (await wrapper)
         (dfrd/on-realized d
-                          (partial received-response @wrapper notifier)
+                          (partial received-response this notifier)
                           (partial hello-response-failed! wrapper))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))

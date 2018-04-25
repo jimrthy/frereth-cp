@@ -42,18 +42,9 @@
            ::state/client-port
            ::state/read<-child]
     :as child}]
-  ;; I've turned this inside out by switching
-  ;; the other side to use a pure callback mechanism,
-  ;; instead of manifold. Maybe I should rethink
-  ;; that choice, since I've at least set the
-  ;; expectation here that I'd be handling incoming
-  ;; messages like this instead.
-  ;; Except that, really, this is an implementation
-  ;; detail, and I'd very much like to keep these
-  ;; implementations very distinct.
-  ;; Besides, a function callback is guaranteed
-  ;; to have less overhead than a queue insertion,
-  ;; unless I wrote this side to require that
-  ;; insertion in the callback.
+  ;; The callback approach is cleaner from pretty much
+  ;; every angle.
+  ;; TODO: Switch to it.
+  (throw (RuntimeException. "Deprecated: mimic client/fork!"))
   (strm/consume child-reader
                 read<-child))

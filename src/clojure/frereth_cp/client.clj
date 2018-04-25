@@ -207,15 +207,11 @@ implementation. This is code that I don't understand yet"
               ::hello-succeeded!
               "Polling complete. Should trigger Initiate/Vouch"
               {::result (dissoc this ::log/state)})
-    (log/flush-logs! logger x)
     ;; Note that the log-flush gets discarded, except
     ;; for its side-effects.
-    ;; So this really needs a way to tie back into whichever
-    ;; state management winds up making sense
-    (println "FIXME: hello-succeeded! Need to update 'real' clock")
-    ;; i.e. This next line is pointless without access to the
-    ;; agent
-    (assoc this ::log/state x)))
+    ;; But those side-effects *do* include updating the clock.
+    ;; So that seems good enough for rough work.
+    (log/flush-logs! logger x)))
 
 (defn hello-failed!
   [this failure]
@@ -359,11 +355,15 @@ implementation. This is code that I don't understand yet"
                                   "Polling server"
                                   {::specs/srvr-ip ip})
               cookie-response (dfrd/deferred)
+              log-state (log/warn log-state
+                                  ::poll-servers-with-hello!
+                                  "FIXME: wait-for-cookie! shouldn't need wrapper")
               this (-> this
                        (assoc ::log/state log-state)
                        (assoc-in [::state/server-security ::specs/srvr-ip] ip))
               cookie-waiter (partial cookie/wait-for-cookie!
                                      wrapper
+                                     this
                                      cookie-response
                                      timeout)
               dfrd-success (state/do-send-packet this
@@ -386,8 +386,8 @@ implementation. This is code that I don't understand yet"
                    (dissoc actual-success ::log/state)
                    "\nTop-level keys:\n"
                    (keys actual-success)
-                   "\nReceived:\n")
-          (::specs/network-packet actual-success)
+                   "\nReceived:\n"
+                   (::specs/network-packet actual-success))
           (if (and (not (instance? Throwable actual-success))
                    (not= actual-success ::sending-hello-timed-out)
                    (not= actual-success ::awaiting-cookie-timed-out)

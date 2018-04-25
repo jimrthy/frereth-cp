@@ -693,12 +693,12 @@ Which at least implies that the agent approach should go away."
                                                 ::log/state log-state)
                                          logger)
         {:keys [::msg-specs/io-handle]
-         log-state ::log/state} (message/start! startable
-                                                logger
-                                                ;; And this is really why
-                                                ;; I need something stateful
-                                                (partial child-> wrapper)
-                                                ->child)
+         log-state ::log/state} (message/do-start startable
+                                                  logger
+                                                  ;; And this is really why
+                                                  ;; I need something stateful
+                                                  (partial child-> wrapper)
+                                                  ->child)
         log-state (log/debug log-state
                              ::fork!
                              "Child message loop initialized"

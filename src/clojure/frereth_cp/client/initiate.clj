@@ -164,75 +164,76 @@ FIXME: Change that"
          :as state} @wrapper
         log-state (log/info log-state
                             ::build-and-send-vouch
-                            ""
+                            "Converting cookie->vouch"
                             {::cause "Received cookie"
                              ::effect "Forking child"
                              ::state/state (dissoc state ::log/state)})
-        ;; Once we've signaled the child to start doing its own thing,
-        ;; cope with the cookie we just received.
-        ;; Doing this statefully seems like a terrible
-        ;; idea, but I don't want to go back and rewrite it
-        ;; until I have a working prototype.
-        log-state (log/info log-state
-                            ::build-and-send-vouch
-                            "Converting cookie->vouch")]
-    (let [state (state/cookie->vouch state cookie-packet)
-          timeout (state/current-timeout wrapper)]
-      ;; Give the other thread(s) a chance to catch up and return
-      ;; from fork!
-      (when-not (await-for timeout wrapper)
-        (let [log-updates [#(log/error %
-                                       ::build-and-send-vouch
-                                       (str "Converting cookie to vouch took longer than "
-                                            timeout
-                                            " milliseconds."))]
-              log-updates (if-let [ex (agent-error wrapper)]
-                            (let [log-state (reduce (fn [current log-fn]
-                                                      (log-fn current))
-                                                    log-state
-                                                    log-updates)]
-                              (log/flush-logs! logger
-                                               (log/exception log-state
-                                                              ex
-                                                              ::build-and-send-vouch
-                                                              "Agent failed while we were waiting"))
-                              ;; It's very tempting to make this just kill the client.
-                              ;; Then again, for all intents and purposes it's already
-                              ;; dead.
-                              ;; TODO: we do need to signal the message loop to exit
-                              (assert (not ex) (str "Should probably be fatal for the sake of debugging:\n"
-                                                    (log/exception-details ex))))
-                            (let [log-update
-                                  #(log/warn %
-                                             ::build-and-send-vouch
-                                             "Switching agent into an error state")]
-                              (send wrapper
-                                    #(throw (ex-info "cookie->vouch timed out" %)))
-                              (conj log-updates log-update)))]
-          (send wrapper (fn [{log-state ::log/state
-                              logger ::log/logger
-                              :as this}]
-                          ;; This is pretty obnoxious.
-                          ;; I want to apply the functions that
-                          ;; I just accumulated all at once.
-                          ;; This violates one of the major points
-                          ;; behind including timestamps everywhere,
-                          ;; but this is really a pretty nasty situation
-                          ;; FIXME: Figure out a way to move it into
-                          ;; the logging ns
-                          (let [log-state (reduce (fn [log-state log-fn]
-                                                    (log-fn log-state))
+        state (state/cookie->vouch state cookie-packet)
+        timeout (state/current-timeout wrapper)]
+    ;; Once we've signaled the child to start doing its own thing,
+    ;; cope with the cookie we just received.
+    ;; Doing this statefully seems like a terrible
+    ;; idea, but I don't want to go back and rewrite it
+    ;; until I have a working prototype.
+
+    ;; Give the other thread(s) a chance to catch up and return
+    ;; from fork!
+    (when-not (await-for timeout wrapper)
+      ;; Log about the problem
+      (let [log-updates [#(log/error %
+                                     ::build-and-send-vouch
+                                     (str "Converting cookie to vouch took longer than "
+                                          timeout
+                                          " milliseconds."))]
+            log-updates (if-let [ex (agent-error wrapper)]
+                          (let [log-state (reduce (fn [current log-fn]
+                                                    (log-fn current))
                                                   log-state
                                                   log-updates)]
-                            (assoc this
-                                   ::log/state
-                                   (log/flush-logs! logger log-state)))))))
-      (when-let [ex (agent-error wrapper)]
-        (log/flush-logs! logger (log/exception log-state
-                                               ex
-                                               ::build-and-send-vouch))
-        (throw ex))
-      (log/flush-logs! logger (log/debug log-state
-                                         ::build-and-send-vouch
-                                         "cookie converted to vouch"))
-      (send-off wrapper state/send-vouch! wrapper))))
+                            (log/flush-logs! logger
+                                             (log/exception log-state
+                                                            ex
+                                                            ::build-and-send-vouch
+                                                            "Agent failed while we were waiting"))
+                            ;; It's very tempting to make this just kill the client.
+                            ;; Then again, for all intents and purposes it's already
+                            ;; dead.
+                            ;; TODO: we do need to signal the message loop to exit
+                            (assert (not ex) (str "Should probably be fatal for the sake of debugging:\n"
+                                                  (log/exception-details ex))))
+                          (let [log-update
+                                #(log/warn %
+                                           ::build-and-send-vouch
+                                           "Switching agent into an error state")]
+                            (send wrapper
+                                  #(throw (ex-info "cookie->vouch timed out" %)))
+                            (conj log-updates log-update)))]
+        ;; And update the agent's copy of those logs.
+        ;; This is obnoxious.
+        (send wrapper (fn [{log-state ::log/state
+                            logger ::log/logger
+                            :as this}]
+                        ;; This is pretty obnoxious.
+                        ;; I want to apply the functions that
+                        ;; I just accumulated all at once.
+                        ;; This violates one of the major points
+                        ;; behind including timestamps everywhere,
+                        ;; but this is really a pretty nasty situation
+                        ;; FIXME: Figure out a way to move it into
+                        ;; the logging ns
+                        (let [log-state (reduce (fn [log-state log-fn]
+                                                  (log-fn log-state))
+                                                log-state
+                                                log-updates)]
+                          (assoc this
+                                 ::log/state
+                                 (log/flush-logs! logger log-state)))))))
+    (when-let [ex (agent-error wrapper)]
+      (log/flush-logs! logger (log/exception log-state
+                                             ex
+                                             ::build-and-send-vouch))
+      (throw ex))
+    (log/flush-logs! logger (log/debug log-state
+                                       ::build-and-send-vouch
+                                       "cookie converted to vouch"))
+    (send-off wrapper state/send-vouch! wrapper)))
