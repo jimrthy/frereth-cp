@@ -9,7 +9,8 @@
             [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
-            [frereth-cp.util :as utils])
+            [frereth-cp.util :as utils]
+            [manifold.deferred :as dfrd])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
@@ -139,6 +140,188 @@ FIXME: Change that"
          ::log/state log-state})
       {::log/state log-state})))
 
+(s/fdef send-vouch!
+        :args (s/cat :wrapper ::state/state-agent)
+        :ret dfrd/deferrable?)
+(defn send-vouch!
+  "Send a Vouch/Initiate packet (along with a Message sub-packet)"
+  ;; We may have to send this multiple times, because it could
+  ;; very well get dropped.
+
+  ;; Actually, if that happens, it might make sense to just start
+  ;; over from the initial HELLO.
+  ;; Reference implementation doesn't seem to have anything along
+  ;; those lines.
+  ;; Once a Server sends back a Cookie, it looks as though the
+  ;; Client is irrevocably tied to it.
+  ;; This seems like a protocol flaw that's better addressed by
+  ;; haproxy. Especially since the child's only clue that a
+  ;; server has quit responding is that its write buffer is full.
+
+  ;; Depending on how much time we want to spend waiting for the
+  ;; initial server message
+  ;; (this is one of the big reasons the
+  ;; reference implementation starts out trying to contact
+  ;; multiple servers).
+
+  ;; It would be very easy to just wait
+  ;; for its minute key to definitely time out, though that seems
+  ;; like a naive approach with a terrible user experience.
+  [wrapper]
+  (when-let [ex (agent-error wrapper)]
+    (throw (ex-info "Can't send-vouch! when agent has errored out"
+                    {::problem ex})))
+  (let [{log-state ::log/state
+         :keys [::log/logger]
+         packet ::vouch
+         :as this} @wrapper]
+    ;; FIXME: Instead of this, have HELLO set up a partial or lexical closure
+    ;; that we can use to send packets.
+    ;; Honestly, most of what I'm passing along in here is overkill that
+    ;; I set up for debugging.
+    (state/do-send-packet this
+                          (fn [success]
+                            (send wrapper (fn [this]
+                                            (update this
+                                                    ::log/state
+                                                    #(log/flush-logs! logger
+                                                                      (log/info %
+                                                                                ::send-vouch!
+                                                                                "Initiate packet sent.\nWaiting for 1st message"
+                                                                                {::success success})))))
+                            (await wrapper)
+                            (state/final-wait wrapper success))
+                          (fn [failure]
+                            ;; Extremely unlikely, but
+                            ;; just for the sake of paranoia
+                            (log/flush-logs! logger
+                                             (log/exception log-state
+                                                            ;; Q: Am I absolutely positive that this will
+                                                            ;; always be an exception?
+                                                            ;; A: Even if it isn't the logger needs to be
+                                                            ;; able to cope with other problems
+                                                            failure
+                                                            ::send-vouch!
+                                                            "Sending Initiate packet failed!"
+                                                            {::problem failure}))
+                            (throw (ex-info "Failed to send cookie->vouch response"
+                                            (assoc this
+                                                   :problem failure))))
+                          (state/current-timeout wrapper)
+                          ::sending-vouch-timed-out
+                          packet)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Internal
+
+(s/fdef build-vouch
+  :args (s/cat :this ::state/state)
+  :ret (s/keys :req [::inner-i-nonce
+                     ::log/state
+                     ::state/vouch]))
+(defn build-vouch
+  [{:keys [::log/logger
+           ::shared/my-keys
+           ::shared/packet-management
+           ::shared-secrets
+           ::shared/work-area]
+    log-state ::log/state
+    :as this}]
+  (let [{:keys [::shared/working-nonce
+                ::shared/text]} work-area
+        keydir (::shared/keydir my-keys)
+        nonce-suffix (byte-array K/server-nonce-suffix-length)]
+    (if working-nonce
+      (let [log-state (log/info log-state
+                                ::build-vouch
+                                "Setting up working nonce"
+                                {::shared/working-nonce working-nonce})]
+        (try
+          (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
+          (if keydir
+            (crypto/safe-nonce! working-nonce keydir K/server-nonce-prefix-length false)
+            (crypto/safe-nonce! working-nonce K/server-nonce-prefix-length))
+
+          (let [^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
+            (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
+          (catch Exception ex
+            (log/flush-logs! logger (log/exception log-state
+                                                   ex
+                                                   ::build-vouch
+                                                   "Setting up working-nonce or short-pair"))
+            (throw ex)))
+        (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
+          (let [log-state (log/trace log-state
+                                   ::build-vouch
+                                   (str "Encrypting the inner-most Initiate Vouch\n"
+                                        "FIXME: Don't log the shared secret")
+                                   {::state/shared-secret (b-t/->string shared-secret)
+                                    ::shared/text text
+                                    ::key-length K/key-length
+                                    ::shared/working-nonce working-nonce})
+              log-state (log/flush-logs! logger log-state)
+              ;; This is the inner-most secret that the inner vouch hides.
+              ;; The point is to allow the server to verify
+              ;; that whoever sent this packet truly has access to the
+              ;; secret keys associated with both the long-term and short-
+              ;; term key's we're claiming for this session.
+              encrypted (crypto/box-after shared-secret
+                                          text K/key-length working-nonce)
+              vouch (byte-array K/vouch-length)
+              log-state (log/info log-state
+                                  ::build-vouch
+                                  (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
+                                       "(FIXME: Don't log the shared secret)")
+                                  {::shared/working-nonce (b-t/->string working-nonce)
+                                   ::state/shared-secret (b-t/->string shared-secret)})]
+            (b-t/byte-copy! vouch
+                            0
+                            (+ K/box-zero-bytes K/key-length)
+                            encrypted)
+            {::inner-i-nonce nonce-suffix
+             ::log/state log-state
+             ::state/vouch vouch})
+          (throw (ex-info "Missing long-term shared keys"
+                          {::problem shared-secrets}))))
+      (assert false (str "Missing nonce in packet-management:\n"
+                         (keys packet-management))))))
+
+(s/fdef cookie->vouch
+        :args (s/cat :this ::state/state
+                     :packet ::shared/network-packet)
+        :ret ::state/state)
+(defn cookie->vouch
+  "Got a cookie from the server.
+
+  Replace those bytes
+  in our packet buffer with the vouch bytes we'll use
+  as the response.
+
+  Q: How much of a performance hit (if any) am I looking at if I
+  make this purely functional instead?"
+  [{log-state ::log/state
+    :as this}
+   {:keys [:host :port]
+    ^bytes message :message
+    :as cookie-packet}]
+  {:pre [cookie-packet]}
+  (let [log-state (log/info log-state
+                            ::cookie->vouch
+                            "Getting ready to convert cookie into a Vouch"
+                            {::human-readable-cookie (b-t/->string message)
+                             ::shared/network-packet cookie-packet})]
+    ;; Note that this supplies new state
+    ;; Though whether it should is debatable.
+    ;; Q: why would I put this into ::vouch?
+    ;; A: In case we need to resend it.
+    ;; It's perfectly legal to send as many Initiate
+    ;; packets as the client chooses.
+    ;; This is especially important before the Server
+    ;; has responded with its first Message so the client
+    ;; can switch to sending those.
+    (into this (build-vouch (assoc this
+                                   ::log/state log-state)))))
+
 (s/fdef build-and-send-vouch!
         :args (s/cat :wrapper ::state/state-agent
                      :cookie ::specs/network-packet))
@@ -155,85 +338,28 @@ FIXME: Change that"
   This matches the original implementation, but it seems like a really
   terrible approach in an environment that's intended to multi-thread."
   [wrapper cookie-packet]
-  (when-not cookie-packet
-    (send wrapper (fn [_]
-                    (throw (ex-info "Should have a valid cookie response packet, but do not"
-                                    @wrapper)))))
-  (let [{log-state ::log/state
-         logger ::log/logger
-         :as state} @wrapper
-        log-state (log/info log-state
-                            ::build-and-send-vouch
-                            "Converting cookie->vouch"
-                            {::cause "Received cookie"
-                             ::effect "Forking child"
-                             ::state/state (dissoc state ::log/state)})
-        state (state/cookie->vouch state cookie-packet)
-        timeout (state/current-timeout wrapper)]
-    ;; Once we've signaled the child to start doing its own thing,
-    ;; cope with the cookie we just received.
-    ;; Doing this statefully seems like a terrible
-    ;; idea, but I don't want to go back and rewrite it
-    ;; until I have a working prototype.
-
-    ;; Give the other thread(s) a chance to catch up and return
-    ;; from fork!
-    (when-not (await-for timeout wrapper)
-      ;; Log about the problem
-      (let [log-updates [#(log/error %
-                                     ::build-and-send-vouch
-                                     (str "Converting cookie to vouch took longer than "
-                                          timeout
-                                          " milliseconds."))]
-            log-updates (if-let [ex (agent-error wrapper)]
-                          (let [log-state (reduce (fn [current log-fn]
-                                                    (log-fn current))
-                                                  log-state
-                                                  log-updates)]
-                            (log/flush-logs! logger
-                                             (log/exception log-state
-                                                            ex
-                                                            ::build-and-send-vouch
-                                                            "Agent failed while we were waiting"))
-                            ;; It's very tempting to make this just kill the client.
-                            ;; Then again, for all intents and purposes it's already
-                            ;; dead.
-                            ;; TODO: we do need to signal the message loop to exit
-                            (assert (not ex) (str "Should probably be fatal for the sake of debugging:\n"
-                                                  (log/exception-details ex))))
-                          (let [log-update
-                                #(log/warn %
-                                           ::build-and-send-vouch
-                                           "Switching agent into an error state")]
-                            (send wrapper
-                                  #(throw (ex-info "cookie->vouch timed out" %)))
-                            (conj log-updates log-update)))]
-        ;; And update the agent's copy of those logs.
-        ;; This is obnoxious.
-        (send wrapper (fn [{log-state ::log/state
-                            logger ::log/logger
-                            :as this}]
-                        ;; This is pretty obnoxious.
-                        ;; I want to apply the functions that
-                        ;; I just accumulated all at once.
-                        ;; This violates one of the major points
-                        ;; behind including timestamps everywhere,
-                        ;; but this is really a pretty nasty situation
-                        ;; FIXME: Figure out a way to move it into
-                        ;; the logging ns
-                        (let [log-state (reduce (fn [log-state log-fn]
-                                                  (log-fn log-state))
-                                                log-state
-                                                log-updates)]
-                          (assoc this
-                                 ::log/state
-                                 (log/flush-logs! logger log-state)))))))
-    (when-let [ex (agent-error wrapper)]
-      (log/flush-logs! logger (log/exception log-state
-                                             ex
-                                             ::build-and-send-vouch))
-      (throw ex))
-    (log/flush-logs! logger (log/debug log-state
-                                       ::build-and-send-vouch
-                                       "cookie converted to vouch"))
-    (send-off wrapper state/send-vouch! wrapper)))
+  (if cookie-packet
+    (let [{log-state ::log/state
+           logger ::log/logger
+           :as state} @wrapper
+          log-state (log/info log-state
+                              ::build-and-send-vouch
+                              "Converting cookie->vouch"
+                              {::cause "Received cookie"
+                               ::effect "Forking child"
+                               ::state/state (dissoc state ::log/state)})
+          ;; Once we've signaled the child to start doing its own thing,
+          ;; cope with the cookie we just received.
+          state (cookie->vouch state cookie-packet)]
+      (send wrapper
+            (fn [this]
+              (update this
+                      ::log/state
+                      #(log/flush-logs! logger (log/debug %
+                                                          ::build-and-send-vouch
+                                                          "cookie converted to vouch")))))
+      (send-vouch! wrapper))
+    (send wrapper
+          (fn [this]
+            (throw (ex-info "Should have a valid cookie response packet, but do not"
+                            {::state/state this}))))))

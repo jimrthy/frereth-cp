@@ -321,6 +321,7 @@
 
 (deflogger fatal)
 
+(declare get-official-clock)
 (s/fdef init
         :args (s/cat :context ::context
                      :start-time ::lamport)
@@ -331,7 +332,7 @@
     ::lamport start-clock
     ::context context})
   ([context]
-   (init context 0)))
+   (init context (get-official-clock))))
 
 (defn file-writer-factory
   [file-name]
@@ -352,6 +353,10 @@
         :ret ::state)
 ;; Do what I can to keep local clocks synchronized
 (let [my-lamport (atom 0)]
+  (defn get-official-clock
+    []
+    @my-lamport)
+  (comment (get-official-clock))
   (defn flush-logs!
     "For the side-effects to write the accumulated logs.
 

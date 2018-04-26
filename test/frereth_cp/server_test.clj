@@ -246,7 +246,7 @@
               (when-not host
                 (println "shake-hands: Something went wrong with" @client-agent)
                 (throw (ex-info "This layer doesn't know where to send anything"
-                                hello))))
+                                {::problem hello}))))
             (if (not (or (= hello ::drained)
                          (= hello ::timeout)))
               (let [->srvr (get-in started [::srvr-state/client-read-chan ::srvr-state/chan])
@@ -312,12 +312,14 @@
                                            deref
                                            ::client-state/server-security)))
                             (is (= server-port (:port packet)))
+                            ;; Send the Cookie to the client
                             (let [put @(strm/try-put! client<-server
                                                       (assoc packet
                                                              :message cookie)
                                                       1000
                                                       ::timeout)]
                               (if (not= ::timeout put)
+                                ;; Get the Initiate from the client
                                 (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
                                   ;; FIXME: Verify that this is a valid Initiate packet
                                   (if-not (or (= initiate ::drained)
@@ -327,7 +329,8 @@
                                                            :host
                                                            .getAddress
                                                            vec)))
-                                      (is (bytes? (:message initiate)))
+                                      (is (bytes? (:message initiate))
+                                          (str "Invalid byte in :message inside" initiate))
                                       (if-let [port (:port initiate)]
                                         (is (= server-port port))
                                         (is false (str "UDP packet missing port in " initiate)))

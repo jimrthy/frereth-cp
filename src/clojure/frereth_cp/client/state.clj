@@ -21,14 +21,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
            io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Magic Constants
+;;;; Magic Constants
 
 (set! *warn-on-reflection* true)
 
 (def default-timeout 2500)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;; Specs
 
 (s/def ::msg-bytes bytes?)
 
@@ -191,98 +191,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                     ::msg-specs/io-handle])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal Implementation
-;;; Q: How many (if any) of these really belong in here?
-
-;; Q: Does this make any sense here instead of vouch?
-(s/fdef build-vouch
-  :args (s/cat :this ::state)
-  :ret (s/keys :req [::inner-i-nonce
-                     ::log/state
-                     ::vouch]))
-(defn build-vouch
-  [{:keys [::shared/packet-management
-           ::shared/my-keys
-           ::shared-secrets
-           ::shared/work-area]
-    log-state ::log/state
-    :as this}]
-  (let [{:keys [::shared/working-nonce
-                ::shared/text]} work-area
-        keydir (::shared/keydir my-keys)
-        nonce-suffix (byte-array K/server-nonce-suffix-length)]
-    (if working-nonce
-      (let [log-state (log/info log-state
-                                ::build-vouch
-                                "Setting up working nonce"
-                                {::shared/working-nonce working-nonce})]
-        (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
-        (if keydir
-          (crypto/safe-nonce! working-nonce keydir K/server-nonce-prefix-length false)
-          (crypto/safe-nonce! working-nonce K/server-nonce-prefix-length))
-
-        (let [^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
-          (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
-        (let [shared-secret (::client-long<->server-long shared-secrets)
-              ;; This is the inner-most secret that the inner vouch hides.
-              ;; I think the main point is to allow the server to verify
-              ;; that whoever sent this packet truly has access to the
-              ;; secret keys associated with both the long-term and short-
-              ;; term key's we're claiming for this session.
-              encrypted (crypto/box-after shared-secret
-                                          text K/key-length working-nonce)
-              vouch (byte-array K/vouch-length)
-              log-state (log/info log-state
-                                  ::build-vouch
-                                  (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
-                                       "(FIXME: Don't log the shared secret)")
-                                  {::shared/working-nonce (b-t/->string working-nonce)
-                                   ::shared-secret (b-t/->string shared-secret)})]
-          (b-t/byte-copy! vouch
-                          0
-                          (+ K/box-zero-bytes K/key-length)
-                          encrypted)
-          {::inner-i-nonce nonce-suffix
-           ::log/state log-state
-           ::vouch vouch}))
-      (assert false (str "Missing nonce in packet-management:\n"
-                         (keys packet-management))))))
-
-(s/fdef cookie->vouch
-        :args (s/cat :this ::state
-                     :packet ::shared/network-packet)
-        :ret ::state)
-(defn cookie->vouch
-  "Got a cookie from the server.
-
-  Replace those bytes
-  in our packet buffer with the vouch bytes we'll use
-  as the response.
-
-  Q: How much of a performance hit (if any) am I looking at if I
-  make this purely functional instead?"
-  [{log-state ::log/state
-    :as this} ; Handling an agent (send), which means `this` is already dereferenced
-   {:keys [:host :port]
-    ^bytes message :message
-    :as cookie-packet}]
-  {:pre [cookie-packet]}
-  (let [log-state (log/info log-state
-                            ::cookie->vouch
-                            "Getting ready to convert cookie into a Vouch"
-                            {::raw-cookie message
-                             ::human-readable (b-s/print-bytes message)})]
-    ;; Note that this supplies new state
-    ;; Though whether it should is debatable.
-    ;; Q: why would I put this into ::vouch?
-    ;; A: In case we need to resend it.
-    ;; It's perfectly legal to send as many Initiate
-    ;; packets as the client chooses.
-    ;; This is especially important before the Server
-    ;; has responded with its first Message so the client
-    ;; can switch to sending those.
-    (into this (build-vouch (assoc this
-                                   ::log/state log-state)))))
+;;;; Internal Implementation
 
 (s/fdef load-keys
         :args (s/cat :logger ::log/state
@@ -573,18 +482,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
           ;; Actually, this would be a good time to use refs inside a
           ;; transaction.
           [my-log-state msg-log-state] (log/synchronize log-state @msg-log-state-atom)]
-      ;; Yikes.
-      (send wrapper (fn [client-state]
-                      (update client-state
-                              ::log/state-atom
-                              (fn [log-state-atom]
-                                (swap! log-state-atom
-                                       #(log/flush-logs! logger %))))))
-      (swap! msg-log-state-atom update ::log/lamport max (::log/lamport msg-log-state))
+      (swap! msg-log-state-atom #(log/flush-logs! logger %))
       result)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;; Public
 
 (defn current-timeout
   "How long should next step wait before giving up?"
@@ -748,75 +650,6 @@ Which at least implies that the agent approach should go away."
     (dfrd/on-realized d
                       on-success
                       on-failure)))
-
-(defn send-vouch!
-  "Send a Vouch/Initiate packet (along with a Message sub-packet)"
-  ;; We may have to send this multiple times, because it could
-  ;; very well get dropped.
-
-  ;; Actually, if that happens, it might make sense to just start
-  ;; over from the initial HELLO.
-  ;; Reference implementation doesn't seem to have anything along
-  ;; those lines.
-  ;; Once a Server sends back a Cookie, it looks as though the
-  ;; Client is irrevocably tied to it.
-  ;; This seems like a protocol flaw that's better addressed by
-  ;; haproxy. Especially since the child's only clue that a
-  ;; server has quit responding is that its write buffer is full.
-
-  ;; Depending on how much time we want to spend waiting for the
-  ;; initial server message
-  ;; (this is one of the big reasons the
-  ;; reference implementation starts out trying to contact
-  ;; multiple servers).
-
-  ;; It would be very easy to just wait
-  ;; for its minute key to definitely time out, though that seems
-  ;; like a naive approach with a terrible user experience.
-  [{log-state ::log/state
-    :keys [::log/logger]
-    packet ::vouch
-    :as this}
-   wrapper]
-  ;; Note that this returns a deferred.
-  ;; We're inside an agent's send.
-  ;; Mixing these two paradigms was a bad idea.
-
-  ;; FIXME: Instead of this, have HELLO set up a partial or lexical closure
-  ;; that we can use to send packets.
-  ;; Honestly, most of what I'm passing along in here is overkill that
-  ;; I set up for debugging.
-  (do-send-packet this
-                  (fn [success]
-                    (send wrapper (fn [this]
-                                    (update this
-                                            ::log/state
-                                            #(log/flush-logs! logger
-                                                              (log/info %
-                                                                        ::send-vouch!
-                                                                        "Initiate packet sent.\nWaiting for 1st message"
-                                                                        {::success success})))))
-                    (await wrapper)
-                    (final-wait wrapper success))
-                  (fn [failure]
-                    ;; Extremely unlikely, but
-                    ;; just for the sake of paranoia
-                    (log/flush-logs! logger
-                                     (log/exception log-state
-                                                    ;; Q: Am I absolutely positive that this will
-                                                    ;; always be an exception?
-                                                    ;; A: Even if it isn't the logger needs to be
-                                                    ;; able to cope with other problems
-                                                    failure
-                                                    ::send-vouch!
-                                                    "Sending Initiate packet failed!"
-                                                    {::problem failure}))
-                    (throw (ex-info "Failed to send cookie->vouch response"
-                                    (assoc this
-                                           :problem failure))))
-                  (current-timeout wrapper)
-                  ::sending-vouch-timed-out
-                  packet))
 
 (defn update-client-short-term-nonce
   "Note that this can loop right back to a negative number."

@@ -89,11 +89,14 @@
         :ret ::nonce-state)
 (defn initial-nonce-agent-state
   []
-  {::counter-low 0
+  {::log2/state (log2/init ::nonce-agent)
+   ;; FIXME: Needs a logger for flushing
+   ;; the log-state
+   ::counter-low 0
    ::counter-high 0
    ::data (byte-array 16)
+   ::encrypted-nonce nil
    ::key-loaded? (promise)
-   ;; FIXME: Needs a log-state
    ::nonce-key (byte-array K/key-length)})
 
 (s/fdef load-nonce-key
@@ -130,10 +133,10 @@
            ::nonce-key]
     :as this}
    random-portion]
-  {:pre [::nonce-key]}
+  {:pre [data
+         nonce-key]}
   (b-t/byte-copy! data random-portion)
-  (let [secret-key (generate-symmetric-key "AES" 192)
-        ;; Note that this is never(?) decrypted.
+  (let [;; Note that this is never(?) decrypted.
         ;; Q: Is there any reason for using this instead
         ;; of something like a SHA-256?
         ;; Obvious A: An attacker that recognizes a single
@@ -147,9 +150,9 @@
         encrypted-nonce (encrypt-block nonce-key data)]
     ;; This means that I need a destination for storing that
     ;; crypto block
-    (assoc
-     (update this ::counter-low inc)
-     ::encrypted-nonce encrypted-nonce)))
+    (-> this
+        (update ::counter-low inc)
+        (assoc ::encrypted-nonce encrypted-nonce))))
 
 (defn reload-nonce
   "Do this inside an agent for thread safety"
@@ -328,7 +331,12 @@ But it depends on compose, which would set up circular dependencies"
   [^SecretKey secret-key
    ^bytes clear-text]
   (when-not secret-key
-    (throw (RuntimeException. "Falsey secret-key. How did we get here?")))
+    ;; After all of Tuesday's debugging/log combingy, I'm still winding up here.
+    ;; Note that there are 2 vital questions.
+    ;; The fact that anything makes it back to the server is honestly more
+    ;; worrisome.
+    (throw (RuntimeException. "FIXME: How is anything escaping the message loop?"))
+    (throw (RuntimeException. "FIXME: What's wrong with this key?")))
   ;; Q: Which cipher mode is appropriate here?
   (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
         ;; FIXME: Read https://www.synopsys.com/blogs/software-security/proper-use-of-javas-securerandom/
@@ -634,12 +642,13 @@ Or maybe that's (dec n)"
                                                 #(<= K/key-length (count %)))
                                       :offset (complement neg-int?)))
         :ret any?)
-;; TODO: Needs ::log2/state (and a way to flush it)
+;; TODO: Needs a way to flush the log-state
 (let [nonce-writer (agent (initial-nonce-agent-state))
       random-portion (byte-array 8)]
   (defn get-nonce-agent-state
     []
     @nonce-writer)
+  (comment (get-nonce-agent-state))
   (defn reset-safe-nonce-state!
     []
     (restart-agent nonce-writer (initial-nonce-agent-state)))
@@ -662,7 +671,21 @@ Or maybe that's (dec n)"
 
      ;; Read the last saved version from keydir
      (when-not (-> nonce-writer deref ::key-loaded? realized?)
+       (log/debug "Triggering nonce-key initial load")
        (send nonce-writer load-nonce-key key-dir))
+     ;; Shouldn't need to do this.
+     ;; agent actions are guaranteed to happen sequentially,
+     ;; in the order they were send-ed.
+     ;; Besides, as noted below, we're inside an agent
+     ;; action and thus cannot.
+     ;; Actually, I'm pretty sure that's why I'm getting the NPE
+     ;; from the nonce key in obscure-nonce.
+     ;; This all has to complete before the various agent actions
+     ;; that I'm sending can take effect.
+     ;; Except that doesn't make any sense.
+     ;; Since they have to execute serially, load-nonce-key had
+     ;; to complete before we can get to obscure-nonce.
+     (comment (await nonce-writer))
      (let [{:keys [::counter-low
                    ::counter-high]} @nonce-writer]
        (when (>= counter-low counter-high)
