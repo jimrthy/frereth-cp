@@ -305,6 +305,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
     :as this}
    wrapper
    initial-server-response]
+  (when-not log-state
+    (println "Missing log-state among\n"
+             (keys this)
+             "\nin\n"
+             this)
+    (throw (ex-info "Missing log-state" this)))
   ;; Q: Does this function make any sense at all?
   ;; Up until now, we've been funneling messages from the child through
   ;; Initiate packets. Now we can extend that to full-blown Message
@@ -477,11 +483,19 @@ The fact that this is so big says a lot about needing to re-think my approach"
           bundle {:host srvr-name
                   :port srvr-port
                   :message message-packet}
+          ;; This pretty much has to be where everything gets busted
+          ;; and how I'm sending such weird gibberish to my test.
+          ;; This isn't getting converted to a Message/Initiate packet at all.
+          ;; OTOH, sometimes it looks reasonable.
+          ;; So this is really just Step One.
+          _ (println "Client sending a message packet from child->server\n"
+                     message-packet)
           result (strm/put! chan->server bundle)
           msg-log-state-atom (::log/state-atom io-handle)
           ;; Actually, this would be a good time to use refs inside a
           ;; transaction.
           [my-log-state msg-log-state] (log/synchronize log-state @msg-log-state-atom)]
+      (assert (and srvr-name srvr-port message-packet "Start back here"))
       (swap! msg-log-state-atom #(log/flush-logs! logger %))
       result)))
 
@@ -498,13 +512,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :args (s/cat :this ::state)
         :ret ::state)
 (defn clientextension-init
-  ""
+  "Initialize the client-extension"
   ;; Started from the assumptions that this is neither
   ;; a) performance critical nor
   ;; b)  subject to timing attacks
   ;; because it just won't be called very often.
   ;; Those assumptions are false. This actually gets called
   ;; before pretty much every packet that gets sent.
+  ;; Q: Really?
   ;; However: it only does the reload once every 30 seconds.
   [{:keys [::client-extension-load-time
            ::log/logger

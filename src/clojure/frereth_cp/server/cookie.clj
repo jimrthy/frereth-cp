@@ -9,6 +9,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [manifold.deferred :as dfrd]
@@ -51,7 +52,10 @@ Except that it doesn't seem to do that at all."
         ;; and encrypting things like this.
         ;; Or just use text. That's what the reference implementation
         ;; does.
-        ^ByteBuf buffer (Unpooled/buffer K/server-cookie-length)]
+        ^ByteBuf buffer (Unpooled/buffer K/server-cookie-length)
+        ;; TODO: Integrate functional logging for real
+        log-state (log2/init "pointless-cookie-prep")
+        logger (log2/std-out-log-factory)]
     (.retain buffer)
     (try
       ;; Q: Do I care whether it's an array-backed buffer?
@@ -65,7 +69,10 @@ Except that it doesn't seem to do that at all."
       (.writeBytes buffer (.getSecretKey keys) 0 K/key-length)
 
       (b-t/byte-copy! working-nonce K/cookie-nonce-minute-prefix)
-      (crypto/safe-nonce! working-nonce K/server-nonce-prefix-length)
+      (let [log-state (crypto/do-safe-nonce log-state
+                                            working-nonce
+                                            K/server-nonce-prefix-length)]
+        (log2/flush-logs! logger log-state))
 
       ;; Reference implementation is really doing pointer math with the array
       ;; to make this work.

@@ -133,8 +133,13 @@
            ::nonce-key]
     :as this}
    random-portion]
-  {:pre [data
-         nonce-key]}
+  {:pre [nonce-key]}
+  (when-not data
+    (println "No nonce to obscure among\n"
+             (keys this)
+             "\nin\n"
+             this)
+    (throw (ex-info "Missing data" this)))
   (b-t/byte-copy! data random-portion)
   (let [;; Note that this is never(?) decrypted.
         ;; Q: Is there any reason for using this instead
@@ -632,16 +637,18 @@ Or maybe that's (dec n)"
   []
   (long (random-mod K/max-random-nonce)))
 
-(s/fdef safe-nonce!
-        :args (s/or :persistent (s/cat :dst (and bytes?
+(s/fdef do-safe-nonce
+        :args (s/or :persistent (s/cat :log-state ::log2/state
+                                       :dst (and bytes?
                                                  #(<= K/key-length (count %)))
                                        :key-dir (s/nilable string?)
                                        :offset (complement neg-int?)
                                        :long-term? boolean?)
-                    :transient (s/cat :dst (and bytes?
+                    :transient (s/cat :log-state ::log2/state
+                                      :dst (and bytes?
                                                 #(<= K/key-length (count %)))
                                       :offset (complement neg-int?)))
-        :ret any?)
+        :ret ::log2/state)
 ;; TODO: Needs a way to flush the log-state
 (let [nonce-writer (agent (initial-nonce-agent-state))
       random-portion (byte-array 8)]
@@ -652,11 +659,11 @@ Or maybe that's (dec n)"
   (defn reset-safe-nonce-state!
     []
     (restart-agent nonce-writer (initial-nonce-agent-state)))
-  (defn safe-nonce!
+  (defn do-safe-nonce
     "Shoves a theoretically safe 16-byte nonce suffix into dst at offset"
     ;; Note that this is extremely brittle.
     ;; It's only called from 2 places, but it's still a bit worrisome.
-    ([dst key-dir offset long-term?]
+    ([log-state dst key-dir offset long-term?]
      ;; It's tempting to try to set this up to allow multiple
      ;; nonce trackers. It seems like having a single shared
      ;; one risks leaking information to attackers.
@@ -696,12 +703,15 @@ Or maybe that's (dec n)"
      ;; agent action, so that isn't legal.
      (when-let [ex (agent-error nonce-writer)]
        (log/error ex "System is down")))
-    ([dst offset]
+    ([log-state dst offset]
      ;; The 16-byte nonce length is very implementation
      ;; dependent and brittle
      (let [tmp (byte-array K/server-nonce-suffix-length)]
        (random-bytes! tmp)
-       (b-t/byte-copy! dst offset K/server-nonce-suffix-length tmp)))))
+       (b-t/byte-copy! dst offset K/server-nonce-suffix-length tmp)
+       (log2/debug log-state
+                   ::safe-nonce!
+                   "Picked a random nonce")))))
 (comment
   (get-nonce-agent-state)
   (reset-safe-nonce-state!))

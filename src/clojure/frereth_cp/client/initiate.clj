@@ -235,21 +235,22 @@ FIXME: Change that"
       (let [log-state (log/info log-state
                                 ::build-vouch
                                 "Setting up working nonce"
-                                {::shared/working-nonce working-nonce})]
-        (try
-          (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
-          (if keydir
-            (crypto/safe-nonce! working-nonce keydir K/server-nonce-prefix-length false)
-            (crypto/safe-nonce! working-nonce K/server-nonce-prefix-length))
-
-          (let [^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
-            (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair)))
-          (catch Exception ex
-            (log/flush-logs! logger (log/exception log-state
-                                                   ex
-                                                   ::build-vouch
-                                                   "Setting up working-nonce or short-pair"))
-            (throw ex)))
+                                {::shared/working-nonce working-nonce})
+            log-state (try
+                        (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
+                        (let [log-state
+                              (if keydir
+                                (crypto/safe-nonce! log-state working-nonce keydir K/server-nonce-prefix-length false)
+                                (crypto/safe-nonce! log-state working-nonce K/server-nonce-prefix-length))
+                              ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
+                          (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
+                          log-state)
+                        (catch Exception ex
+                          (log/flush-logs! logger (log/exception log-state
+                                                                 ex
+                                                                 ::build-vouch
+                                                                 "Setting up working-nonce or short-pair"))
+                          (throw ex)))]
         (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
           (let [log-state (log/trace log-state
                                    ::build-vouch
@@ -358,6 +359,8 @@ FIXME: Change that"
                       #(log/flush-logs! logger (log/debug %
                                                           ::build-and-send-vouch
                                                           "cookie converted to vouch")))))
+      (await wrapper)
+      (println "Client built Initiate/Vouch. Sending it")
       (send-vouch! wrapper))
     (send wrapper
           (fn [this]
