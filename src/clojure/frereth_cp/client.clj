@@ -581,7 +581,7 @@ implementation. This is code that I don't understand yet"
       ;; message loop (if any) exits.
       ;; FIXME: Make sure that goes away
       (send wrapper
-            (fn [{:keys [::chan->server
+            (fn [{:keys [::state/chan->server
                          ::log/logger
                          ::shared/packet-management]
                   log-state ::log/state
@@ -591,6 +591,8 @@ implementation. This is code that I don't understand yet"
                 (let [log-state (log/debug log-state
                                            ::stop!
                                            "Top of the real stopper")
+                      log-state (state/do-stop (assoc this
+                                                      ::log/state log-state))
                       log-state
                       (try
                         (println "Possibly closing the channel to server" chan->server)

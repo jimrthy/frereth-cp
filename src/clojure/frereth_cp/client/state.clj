@@ -612,6 +612,25 @@ Which at least implies that the agent approach should go away."
            ::log/state (log/flush-logs! logger log-state)
            ::msg-specs/io-handle io-handle)))
 
+(s/fdef stop!
+        :args (s/cat :this ::state)
+        :ret ::log/state)
+(defn do-stop
+  [{:keys [::child]
+    log-state ::log/state
+    :as this}]
+  (if child
+    (let [log-state (log/warn log-state
+                              ::do-stop
+                              "Halting child's message io-loop")]
+      (message/halt! child)
+      (log/warn log-state
+                ::do-stop
+                "Child's message io-loop halted"))
+    (log/warn log-state
+              ::do-stop
+              "No child message io-loop to stop")))
+
 (s/fdef do-send-packet
         :args (s/cat :this ::state
                      :on-success (s/fspec :args (s/cat :result any?)
