@@ -223,7 +223,7 @@ FIXME: Change that"
   [{:keys [::log/logger
            ::shared/my-keys
            ::shared/packet-management
-           ::shared-secrets
+           ::state/shared-secrets
            ::shared/work-area]
     log-state ::log/state
     :as this}]

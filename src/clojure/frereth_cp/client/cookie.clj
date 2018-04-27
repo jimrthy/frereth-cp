@@ -81,13 +81,18 @@
             ;; to notify callers immediately
             (try
               (let [{log-state ::log/state
-                     decrypted ::crypto/unboxed} (crypto/open-after log-state text 0 144 working-nonce shared)
+                     decrypted ::crypto/unboxed} (crypto/open-after log-state
+                                                                    text
+                                                                    0
+                                                                    K/cookie-frame-length
+                                                                    working-nonce
+                                                                    shared)
                     {server-short-pk ::K/s'
                      server-cookie ::K/black-box
                      :as extracted} (serial/decompose K/cookie decrypted)
                     server-security (assoc (::state/server-security this)
                                            ::specs/public-short server-short-pk,
-                                           ::server-cookie server-cookie)]
+                                           ::state/server-cookie server-cookie)]
                 (assoc this
                        ::state/server-security server-security
                        ::log/state log-state))
