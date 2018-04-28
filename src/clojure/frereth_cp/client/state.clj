@@ -483,21 +483,41 @@ The fact that this is so big says a lot about needing to re-think my approach"
           bundle {:host srvr-name
                   :port srvr-port
                   :message message-packet}
-          ;; This pretty much has to be where everything gets busted
-          ;; and how I'm sending such weird gibberish to my test.
-          ;; This isn't getting converted to a Message/Initiate packet at all.
-          ;; OTOH, sometimes it looks reasonable.
-          ;; So this is really just Step One.
-          _ (println "Client sending a message packet from child->server\n"
-                     message-packet)
-          result (strm/put! chan->server bundle)
           msg-log-state-atom (::log/state-atom io-handle)
-          ;; Actually, this would be a good time to use refs inside a
-          ;; transaction.
-          [my-log-state msg-log-state] (log/synchronize log-state @msg-log-state-atom)]
+          _ (swap! msg-log-state-atom
+                   (fn [msg-state]
+                     (update msg-state
+                             #(log/debug %
+                                         ::child->
+                                         "Client sending a message packet from child->serve"
+                                         {::shared/network-packet bundle
+                                          ::server-security server-security}))))]
       (assert (and srvr-name srvr-port message-packet "Start back here"))
-      (swap! msg-log-state-atom #(log/flush-logs! logger %))
-      result)))
+      (let [result
+            (do-send-packet @msg-log-state-atom
+                            state
+                            (fn [success]
+                              (swap! msg-log-state-atom
+                                     (fn [msg-state]
+                                       (update msg-state
+                                               #(log/debug %
+                                                           ::child->
+                                                           "Packet sent"
+                                                           {::shared/network-packet bundle
+                                                            ::server-security server-security})))))
+                            (fn [ex]
+                              (swap! msg-log-state-atom
+                                     (fn [msg-state]
+                                       (update msg-state
+                                               #(log/exception %
+                                                               ::child->
+                                                               "Sending packet failed"
+                                                               {::shared/network-packet bundle
+                                                                ::server-security server-security})))))
+                            (current-timeout wrapper)
+                            ::child->timed-out)]
+        (swap! msg-log-state-atom #(log/flush-logs! logger %))
+        result))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -647,7 +667,8 @@ Which at least implies that the agent approach should go away."
               "No child message io-loop to stop")))
 
 (s/fdef do-send-packet
-        :args (s/cat :this ::state
+        :args (s/cat :log-state ::log/state
+                     :this ::state
                      :on-success (s/fspec :args (s/cat :result any?)
                                           :ret any?)
                      :on-failure (s/fspec :args (s/cat :failure ::specs/exception-instance)

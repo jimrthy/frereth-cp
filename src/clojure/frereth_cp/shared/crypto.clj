@@ -37,6 +37,9 @@
 
 ;; 16 bytes is 128 bits.
 ;; Which is a single block for AES.
+;; This seems very sketchy, at best.
+;; TODO: Think long and hard about making it
+;; go away.
 (s/def ::data (s/and bytes?
                      #(= (count %) 16)))
 (s/def ::legal-key-algorithms #{"AES"})
@@ -159,6 +162,12 @@
         (update ::counter-low inc)
         (assoc ::encrypted-nonce encrypted-nonce))))
 
+(s/fdef reload-nonce
+        :args (s/cat :this ::nonce-state
+                     ;; using a string for this seems dubious, at best
+                     :key-dir string?
+                     :long-term? boolean?)
+        :ret ::nonce-state)
 (defn reload-nonce
   "Do this inside an agent for thread safety"
   [{:keys [::counter-low
@@ -204,7 +213,10 @@
                                                         1))]
                       (b-t/uint64-pack! data 0 counter-high))
                     (with-open [counter (io/writer nonce-counter)]
-                      (.write counter (String. data))))
+                      (.write counter (String. data))
+                      (assoc this
+                             ::counter-low counter-low
+                             ::counter-high counter-high)))
                   (finally
                     ;; Closing the channel should release the lock,
                     ;; but being explicit about this doesn't hurt
