@@ -222,7 +222,12 @@ implementation. This is code that I don't understand yet"
 (defn server-closed!
   "This seems pretty meaningless in a UDP context"
   [this]
-  (throw (ex-info "Server Closed" this)))
+  ;; Maybe send a ::closed message to the client?
+  (update this
+          ::log/state
+          #(log/warn %
+                     ::server-closed!
+                     "Q: Does it make sense to do anything here?")))
 
 (defn child->server
   "Child sent us (as an agent) a signal to add bytes to the stream to the server"
@@ -610,7 +615,8 @@ implementation. This is code that I don't understand yet"
                           (log/exception log-state
                                          ex
                                          ::stop!)))
-                      log-state (log/flush-logs! (log/info log-state
+                      log-state (log/flush-logs! logger
+                                                 (log/info log-state
                                                            ::stop!
                                                            "Done"))]
                   (assoc this

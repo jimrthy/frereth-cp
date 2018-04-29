@@ -240,8 +240,8 @@ FIXME: Change that"
                         (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
                         (let [log-state
                               (if keydir
-                                (crypto/safe-nonce! log-state working-nonce keydir K/server-nonce-prefix-length false)
-                                (crypto/safe-nonce! log-state working-nonce K/server-nonce-prefix-length))
+                                (crypto/do-safe-nonce log-state working-nonce keydir K/server-nonce-prefix-length false)
+                                (crypto/do-safe-nonce log-state working-nonce K/server-nonce-prefix-length))
                               ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
                           (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
                           log-state)

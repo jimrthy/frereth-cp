@@ -406,7 +406,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
                           ;; That really should have been ready to go quite a while before,
                           ;; but "should" is a bad word.
                           (fn [success]
-                            (send-off wrapper (partial ->message-exchange-mode wrapper) success))
+                            (if-let [ex (agent-error wrapper)]
+                              (log/flush-logs! logger
+                                               (log/exception log-state
+                                                              ex
+                                                              ::final-wait))
+                              (send-off wrapper (partial ->message-exchange-mode wrapper) success)))
                           (fn [ex]
                             (send wrapper #(throw (ex-info "Server vouch response failed"
                                                            (assoc % :problem ex))))))
@@ -485,13 +490,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
                   :message message-packet}
           msg-log-state-atom (::log/state-atom io-handle)
           _ (swap! msg-log-state-atom
-                   (fn [msg-state]
-                     (update msg-state
-                             #(log/debug %
-                                         ::child->
-                                         "Client sending a message packet from child->serve"
-                                         {::shared/network-packet bundle
-                                          ::server-security server-security}))))]
+                   #(log/debug %
+                               ::child->
+                               "Client sending a message packet from child->serve"
+                               {::shared/network-packet bundle
+                                ::server-security server-security}))]
       (assert (and srvr-name srvr-port message-packet "Start back here"))
       (let [result
             (do-send-packet @msg-log-state-atom

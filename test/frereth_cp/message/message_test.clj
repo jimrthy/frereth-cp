@@ -257,7 +257,7 @@
                                                true
                                                {::log/state log-state}
                                                logger)
-            {:keys [::specs/io-handle]} (message/start! initialized logger parent-cb child-cb)]
+            {:keys [::specs/io-handle]} (message/do-start initialized logger parent-cb child-cb)]
         (dfrd/on-realized child-finished
                           (fn [success]
                             (let [logs (log/info @log-atom
@@ -525,10 +525,10 @@
                                               ""
                                               {::received in}))
                    (swap! rcvd conj in))
-        {event-loop ::specs/io-handle} (message/start! start-state
-                                                       logger
-                                                       parent-cb
-                                                       child-cb)]
+        {event-loop ::specs/io-handle} (message/do-start start-state
+                                                         logger
+                                                         parent-cb
+                                                         child-cb)]
     (is (= K/k-1 (get-in start-state [::specs/outgoing ::specs/pipe-from-child-size])))
     (is (= K/k-1 (::specs/pipe-from-child-size event-loop)))
     (is (= 0 (.available (::specs/child-out event-loop))))
@@ -672,7 +672,7 @@
                                                   true
                                                   {::log/state @log-atom}
                                                   logger)
-          {srvr-io-handle ::specs/io-handle} (message/start! srvr-initialized logger server-parent-cb server-child-cb)
+          {srvr-io-handle ::specs/io-handle} (message/do-start srvr-initialized logger server-parent-cb server-child-cb)
 
           parent-cb (fn [bs]
                       (swap! log-atom
@@ -713,7 +713,7 @@
                                                     false
                                                     {::log/state @log-atom}
                                                     logger)
-          {client-io-handle ::specs/io-handle} (message/start! client-initialized logger parent-cb child-cb)]
+          {client-io-handle ::specs/io-handle} (message/do-start client-initialized logger parent-cb child-cb)]
       (reset! srvr-io-atom srvr-io-handle)
       (reset! client-io-atom client-io-handle)
 

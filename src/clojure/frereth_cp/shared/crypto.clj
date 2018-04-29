@@ -136,7 +136,12 @@
            ::nonce-key]
     :as this}
    random-portion]
-  {:pre [nonce-key]}
+  (when-not nonce-key
+    (println "Missing key to obscure  nonce\n"
+             (keys this)
+             "\nin\n"
+             this)
+    (throw (ex-info "Missing nonce-key" this)))
   (when-not data
     (println "No nonce to obscure among\n"
              (keys this)
@@ -689,32 +694,41 @@ Or maybe that's (dec n)"
        (throw ex))
 
      ;; Read the last saved version from keydir
-     (when-not (-> nonce-writer deref ::key-loaded? realized?)
-       (log/debug "Triggering nonce-key initial load")
-       (send nonce-writer load-nonce-key key-dir))
-     ;; Shouldn't need to do this.
-     ;; agent actions are guaranteed to happen sequentially,
-     ;; in the order they were send-ed.
-     ;; Besides, as noted below, we're inside an agent
-     ;; action and thus cannot.
-     ;; Actually, I'm pretty sure that's why I'm getting the NPE
-     ;; from the nonce key in obscure-nonce.
-     ;; This all has to complete before the various agent actions
-     ;; that I'm sending can take effect.
-     ;; Except that doesn't make any sense.
-     ;; Since they have to execute serially, load-nonce-key had
-     ;; to complete before we can get to obscure-nonce.
-     (comment (await nonce-writer))
-     (let [{:keys [::counter-low
-                   ::counter-high]} @nonce-writer]
-       (when (>= counter-low counter-high)
-         (send nonce-writer reload-nonce key-dir long-term?)))
-     (random-bytes! random-portion)
-     (send nonce-writer obscure-nonce random-portion)
-     ;; Tempting to do an await here, but we're inside an
-     ;; agent action, so that isn't legal.
-     (when-let [ex (agent-error nonce-writer)]
-       (log/error ex "System is down")))
+     (let [log-state
+           (if-not (-> nonce-writer deref ::key-loaded? realized?)
+             (let [log-state (log2/debug log-state
+                                         ::do-safe-nonce
+                                         "Triggering nonce-key initial load")]
+               (send nonce-writer load-nonce-key key-dir)
+               log-state)
+             log-state)]
+       ;; Shouldn't need to do this.
+       ;; agent actions are guaranteed to happen sequentially,
+       ;; in the order they were send-ed.
+       ;; Besides, as noted below, we're inside an agent
+       ;; action and thus cannot.
+       ;; Actually, I'm pretty sure that's why I'm getting the NPE
+       ;; from the nonce key in obscure-nonce.
+       ;; This all has to complete before the various agent actions
+       ;; that I'm sending can take effect.
+       ;; Except that doesn't make any sense.
+       ;; Since they have to execute serially, load-nonce-key had
+       ;; to complete before we can get to obscure-nonce.
+       (comment (await nonce-writer))
+       (let [{:keys [::counter-low
+                     ::counter-high]} @nonce-writer]
+         (when (>= counter-low counter-high)
+           (send nonce-writer reload-nonce key-dir long-term?)))
+       (random-bytes! random-portion)
+       (send nonce-writer obscure-nonce random-portion)
+       ;; Tempting to do an await here, but we're inside an
+       ;; agent action, so that isn't legal.
+       (if-let [ex (agent-error nonce-writer)]
+         (log2/exception log-state
+                         ex
+                         ::do-safe-nonce
+                         "System is down")
+         log-state)))
     ([log-state dst offset]
      ;; The 16-byte nonce length is very implementation
      ;; dependent and brittle
