@@ -267,12 +267,12 @@
                                  {::specs/strm-hwm strm-hwm
                                   ::specs/message-loop-name message-loop-name}))]
     (deliver accepted? true)
-    (let [state' (callback state)]
-      (assert (::specs/outgoing state') "Callback threw away outgoing")
-      ;; TODO: check whether we can do output now.
+    (let [state (callback state)]
+      (assert (::specs/outgoing state) "Callback threw away outgoing")
+      ;; TODO: check whether we can do output yet.
       ;; It's pointless to call this if we just have
       ;; to wait for the timer to expire.
-      (trigger-output io-handle state'))))
+      (trigger-output io-handle state))))
 
 (s/fdef trigger-from-parent
         :args (s/cat :io-handle ::specs/io-handle
@@ -899,6 +899,13 @@
                                                        "state-query request missing required deferred"
                                                        {::trigger-details prelog
                                                         ::specs/message-loop-name message-loop-name}))))
+                  ::reset-parent-callback (fn [state]
+                                            (-> state
+                                                (update ::log/state
+                                                        #(log/warn %
+                                                                   ::action-trigger
+                                                                   "Changing parent-callback"))
+                                                (assoc ::specs/->parent (second next-action))))
                   ::timed-out (fn [state]
                                 (trigger-from-timer io-handle
                                                     (update state
@@ -962,47 +969,47 @@
                                  "Trying to run updater because of"
                                  {::tag tag}))
 
-        state' (try (updater state)
-                    (catch ExceptionInfo ex
-                      (update state
-                              ::log/state
-                              #(log/exception %
-                                              ex
-                                              ::action-trigger
-                                              "Running updater failed"
-                                              {::details (.getData ex)
-                                               ::specs/message-loop-name message-loop-name})))
-                    (catch RuntimeException ex
-                      ;; The eternal question in this scenario:
-                      ;; Fail fast, or hope we can keep limping
-                      ;; along?
-                      ;; TODO: Add prod vs. dev environment options
-                      ;; to give the caller control over what
-                      ;; should happen here.
-                      ;; (Note that, either way, it really should
-                      ;; include a callback to some
-                      ;; currently-undefined status updater
-                      (comment state)
-                      (update state
-                              ::log/state
-                              #(log/exception %
-                                              ex
-                                              ::action-trigger
-                                              "Running updater: low-level failure"
-                                              {::specs/message-loop-name message-loop-name}))))
-        state' (update state'
-                       ::log/state
-                       #(log/warn %
-                                  ::action-trigger
-                                  "Updater returned"
-                                  (dissoc state' ::log/state)))
-        _ (assert (::specs/outgoing state') (str "After updating for " tag))
-        my-logs (::log/state state')
+        state (try (updater state)
+                   (catch ExceptionInfo ex
+                     (update state
+                             ::log/state
+                             #(log/exception %
+                                             ex
+                                             ::action-trigger
+                                             "Running updater failed"
+                                             {::details (.getData ex)
+                                              ::specs/message-loop-name message-loop-name})))
+                   (catch RuntimeException ex
+                     ;; The eternal question in this scenario:
+                     ;; Fail fast, or hope we can keep limping
+                     ;; along?
+                     ;; TODO: Add prod vs. dev environment options
+                     ;; to give the caller control over what
+                     ;; should happen here.
+                     ;; (Note that, either way, it really should
+                     ;; include a callback to some
+                     ;; currently-undefined status updater
+                     (comment state)
+                     (update state
+                             ::log/state
+                             #(log/exception %
+                                             ex
+                                             ::action-trigger
+                                             "Running updater: low-level failure"
+                                             {::specs/message-loop-name message-loop-name}))))
+        state (update state
+                      ::log/state
+                      #(log/warn %
+                                 ::action-trigger
+                                 "Updater returned"
+                                 (dissoc state ::log/state)))
+        _ (assert (::specs/outgoing state) (str "After updating for " tag))
+        my-logs (::log/state state)
         forked-logs (log/fork my-logs)
         mid (System/currentTimeMillis)
         ;; This is taking a ludicrous amount of time.
         ;; Q: How much should I blame on logging?
-        _ (schedule-next-timeout! io-handle (assoc state'
+        _ (schedule-next-timeout! io-handle (assoc state
                                                    ::log/state
                                                    forked-logs))
         end (System/currentTimeMillis)
@@ -1310,12 +1317,13 @@
 ;;; Public
 
 (s/fdef initial-state
-        :args (s/cat :human-name ::specs/message-loop-name
-                     ;; Q: What (if any) is the difference to spec that this
-                     ;; argument is optional?
-                     :server? :boolean?
-                     :opts ::specs/state
-                     :logger ::log/logger)
+        :args (s/or :possibly-server (s/cat :human-name ::specs/message-loop-name
+                                            :server? :boolean?
+                                            :opts ::specs/state
+                                            :logger ::log/logger)
+                    :always-client (s/cat :human-name ::specs/message-loop-name
+                                            :opts ::specs/state
+                                            :logger ::log/logger))
         :ret ::specs/state)
 (defn initial-state
   "Put together an initial state that's ready to start!"
@@ -1542,9 +1550,6 @@
         :args (s/cat :io-handle ::specs/io-handle
                      :time-out nat-int?
                      :timed-out-value any?)
-        ;; TODO: Add a fn piece that clarifies that the
-        ;; :timed-out :ret possibility will match the
-        ;; :timed-out-value :arg
         :ret (s/or :success ::specs/state
                    :timed-out any?)
         ;; If this timed out, should return the supplied
@@ -1556,8 +1561,8 @@
                 (= failed (:time-out args))
                 (:success ret))))
 (defn get-state
-  "Synchronous equivalent to deref"
-  ;; This really involves side-effects
+  "Synchronous equivalent to a deref"
+  ;; This really does involves side-effects
   ;; Q: Rename to get-state!
   ([{:keys [::log/logger
             ::specs/message-loop-name
@@ -1573,7 +1578,7 @@
                        ::specs/stream stream}))
    (let [state-holder (dfrd/deferred)
          req (strm/try-put! stream [::query-state state-holder] timeout failure-signal)]
-     ;; FIXME: Switch to using dfrd/chain instead
+     ;; Q: Does dfrd/chain make this simpler/easier?
      (dfrd/on-realized req
                        (fn [success]
                          ;; FIXME: Need to cope with a put! timeout (which is not
@@ -1841,3 +1846,33 @@
   ;; detail
   #_(comment (child-> io-handle ::specs/normal))
   (.close from-child))
+
+(s/fdef swap-parent-callback!
+        :args (s/or :with-timeout (s/cat :io-handle ::specs/io-handle
+                                         :time-out nat-int?
+                                         :timed-out-value any?
+                                         :new-callback ::specs/->parent)
+                    :sans-timeout (s/cat :io-handle ::specs/io-handle
+                                         :new-callback ::specs/->parent))
+        :ret ::specs/state)
+;; Q: Do I want to set an alternative that blocks?
+(defn swap-parent-callback!
+  ([{:keys [::log/logger
+             ::specs/message-loop-name
+            ::specs/stream]
+     log-state-atom ::log/state-atom}
+    time-out
+    timed-out-value
+    new-callback]
+   (swap! log-state-atom
+          #(log/debug %
+                      ::swap-parent-callback!
+                      "Swapping out the parent-callback"
+                      {::specs/message-loop-name message-loop-name
+                       ::specs/stream stream}))
+   (let [sent (strm/try-put! stream
+                             [::reset-parent-callback new-callback]
+                             time-out
+                             timed-out-value)]))
+  ([io-handle new-callback]
+   (swap-parent-callback! io-handle 5000 ::timed-out new-callback)))

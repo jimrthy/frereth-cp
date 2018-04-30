@@ -163,6 +163,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                  :opt [::chan->server]))
 (s/def ::state (s/merge ::mutable-state
                         ::immutable-value))
+(s/def ::child-send-state (s/keys :req [::chan->server
+                                        ::log/logger
+                                        ::log/state
+                                        ::msg-specs/io-handle
+                                        ::packet-builder
+                                        ::server-security]))
 
 ;;; Using an agent here seems like a dubious choice.
 ;;; After all, they're slow.
@@ -321,6 +327,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; That doesn't mean that any of those special things fit with what
   ;; I've been trying so far.
   ;; Except that, last I checked, this basically worked.
+  ;; Q: Is there a better alternative?
   (let [log-state (log/warn log-state
                             ::->message-exchange-mode
                             "deprecated")
@@ -334,11 +341,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
             (do
               ;; Q: Do I want to block this thread for this?
               ;; A: As written, we can't. We're already inside an Agent$Action
-              (comment (await-for (state/current-timeout wrapper) wrapper))
+              (comment (await-for (current-timeout wrapper) wrapper))
 
               ;; Need to wire this up to pretty much just pass messages through
               ;; Actually, this seems totally broken from any angle, since we need
-              ;; to handle encryption, at a minimum. (Q: Don't we?)
+              ;; to handle decryption, at a minimum. (Q: Don't we?)
 
               (strm/consume (fn [msg]
                               ;; as-written, we have to unwrap the message
@@ -362,6 +369,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
           (log/warn log-state
                     ::->message-exchange-mode
                     "That response to Initiate was a failure"))]
+    (send wrapper assoc ::packet-builder (fn [_]
+                                           (throw (RuntimeException. "FIXME: Need a function that mirrors initiate/build-initiate-packet!"))))
     ;; This is another example of things falling apart in a multi-threaded
     ;; scenario.
     ;; Honestly, all the log calls that happen here should be updates wrapped
@@ -420,6 +429,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
         (send wrapper #(throw (ex-info "Timed out trying to send vouch" %)))
         this))))
 
+(s/fdef extract-child-send-state
+        :args (s/cat :state ::state)
+        :ret ::child-send-state)
+(defn extract-child-send-state
+  [state]
+  (select-keys state [::chan->server
+                      ::log/logger
+                      ::log/state
+                      ::msg-specs/io-handle
+                      ::packet-builder
+                      ::server-security]))
+
 ;;; This namespace is too big, and I hate to add this next
 ;;; function to it.
 ;;; But there's a circular reference if I try to
@@ -429,7 +450,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;; Which is a strong argument for refactoring specs like
 ;;; that into their own namespace.
 (s/fdef child->
-        :args (s/cat :wrapper ::state-agent
+        :args (s/cat :state ::child-send-state
                      :message bytes?)
         ;; Q: What does this return?
         ;; Note that it's called from the child.
@@ -464,20 +485,20 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; send another.
   ;; That's perfectly legal, but seems wasteful in terms
   ;; of CPU and network.
-  [wrapper
+  [{log-state ::log/state
+    :keys [::chan->server
+           ::log/logger
+           ::msg-specs/io-handle
+           ::packet-builder
+           ::server-security]
+    :as state}
+   timeout
    ^bytes message-block]
-  (let [{log-state ::log/state
-         :keys [::chan->server
-                ::log/logger
-                ::msg-specs/io-handle
-                ::packet-builder
-                ::server-security]
-         :as state} @wrapper
-        {:keys [::specs/srvr-name ::shared/srvr-port]} server-security]
-    (when-not packet-builder
-      (throw (ex-info "Missing packet-builder"
-                      {::existing-keys (keys state)
-                       ::problem (dissoc state ::log/state)})))
+  (when-not packet-builder
+    (throw (ex-info "Missing packet-builder"
+                    {::existing-keys (keys state)
+                     ::problem (dissoc state ::log/state)})))
+  (let [{:keys [::specs/srvr-name ::shared/srvr-port]} server-security]
     ;; This flag is stored in the child state.
     ;; I can retrieve that from the io-handle, but that's
     ;; terribly inefficient.
@@ -504,11 +525,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; receive the server's first message packet in response.
     ;; FIXME: When the child receives its first response packet from the
     ;; server (this will be a Message in response to a Vouch), we need to
-    ;; swap packet-builder from initiate/build-initiate-packet! to
+    ;; use message/swap-parent-callback! to swap packet-builder from
+    ;; initiate/build-initiate-packet! to
     ;; some function that I don't think I've written yet that should
     ;; live in client.message.
     (let [message-packet (packet-builder state message-block)
-          ;; FIXME: Switch to using do-send-packet
           bundle {:host srvr-name
                   :port srvr-port
                   :message message-packet}
@@ -541,7 +562,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                                "Sending packet failed"
                                                                {::shared/network-packet bundle
                                                                 ::server-security server-security})))))
-                            (current-timeout wrapper)
+                            timeout
                             ::child->timed-out)]
         (swap! msg-log-state-atom #(log/flush-logs! logger %))
         result))))
@@ -549,11 +570,30 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
+(s/fdef current-timeout
+        :args (s/cat :state-agent ::state-agent)
+        :ret nat-int?)
 (defn current-timeout
   "How long should next step wait before giving up?"
   [wrapper]
   (-> wrapper deref ::timeout
       (or default-timeout)))
+
+(s/fdef update-timeout!
+        :args (s/cat :state-agent ::state-agent
+                     :timeout nat-int?)
+        :ret any?)
+(defn update-timeout!
+  [wrapper new-timeout]
+  (let [old-timeout (current-timeout wrapper)]
+    (when (not= old-timeout new-timeout)
+      (send wrapper (fn [this]
+                      (assoc this ::timeout new-timeout)))))
+  (let [{:keys [::msg-specs/io-handle]
+         :as this} @wrapper]
+    (message/swap-parent-callback! io-handle (partial child->
+                                                      (extract-child-send-state this)
+                                                      new-timeout))))
 
 (s/fdef clientextension-init
         :args (s/cat :this ::state)
@@ -644,12 +684,6 @@ Which at least implies that the agent approach should go away."
     (throw (ex-info (str "Missing log state among "
                          (keys this))
                     this)))
-  ;; This sets up the message loop and callback,
-  ;; but it leaves out the actual child part.
-  ;; In handshake-test, it's all kicked off by
-  ;; calling buffer-response!
-  ;; And then the server- or client- -child-processor
-  ;; functions handle the actual message exchange.
   (let [log-state (log/info log-state ::fork! "Spawning child!!")
         startable (message/initial-state message-loop-name
                                          false
@@ -659,9 +693,9 @@ Which at least implies that the agent approach should go away."
         {:keys [::msg-specs/io-handle]
          log-state ::log/state} (message/do-start startable
                                                   logger
-                                                  ;; And this is really why
-                                                  ;; I need something stateful
-                                                  (partial child-> wrapper)
+                                                  (partial child->
+                                                           (extract-child-send-state this)
+                                                           (current-timeout wrapper))
                                                   ->child)
         log-state (log/debug log-state
                              ::fork!
