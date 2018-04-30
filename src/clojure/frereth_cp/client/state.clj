@@ -424,7 +424,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;; function to it.
 ;;; But there's a circular reference if I try to
 ;;; add it anywhere else.
-;;; fork! needs access to it, while it needs access
+;;; fork! needs access to child->, while child-> needs access
 ;;; to the ::state-agent spec.
 ;;; Which is a strong argument for refactoring specs like
 ;;; that into their own namespace.
@@ -440,6 +440,30 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :ret dfrd/deferrable?)
 (defn child->
   "Handle packets streaming out of child"
+  ;; This function pulls a couple of stateful pieces
+  ;; out of the state-agent.
+  ;; The first is the packet-builder. We need to start
+  ;; by building/sending Initiate packets, until we
+  ;; receive a Message packet back from the Server. Then
+  ;; we can switch to sending Message packets.
+  ;; The caller is tightly coupled with this and has to
+  ;; follow the same rules. So we could have it send
+  ;; a second parameter which tells us which one to
+  ;; create.
+  ;; In a lot of ways, this seems like the best option:
+  ;; callers should drive the behavior.
+  ;; OTOH, I really the "just write bytes" callback
+  ;; approach.
+  ;; And that really doesn't help much with the point
+  ;; that the send timeout is mutable (Q: Should it be?)
+  ;; Another approach that seems promising would be to
+  ;; add a message signal that lets me update the
+  ;; callback function.
+  ;; Alternatively, I *could* just check the message size.
+  ;; If it's small enough to fit into an Initiate Packet,
+  ;; send another.
+  ;; That's perfectly legal, but seems wasteful in terms
+  ;; of CPU and network.
   [wrapper
    ^bytes message-block]
   (let [{log-state ::log/state
@@ -495,7 +519,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                "Client sending a message packet from child->serve"
                                {::shared/network-packet bundle
                                 ::server-security server-security}))]
-      (assert (and srvr-name srvr-port message-packet "Start back here"))
+      (assert (and srvr-name srvr-port message-packet "Where did this go?"))
       (let [result
             (do-send-packet @msg-log-state-atom
                             state

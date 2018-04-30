@@ -278,6 +278,9 @@ implementation. This is code that I don't understand yet"
                                                       ::shared/packet
                                                       ::state/server-security
                                                       ::state/shared-secrets]))))
+    ;; Verify that the pieces got synchronized correctly.
+    ;; This is really just for the sake of debugging.
+    ;; FIXME: Make it go away.
     (await wrapper)
     (let [unwrapped @wrapper]
       (when (not= unwrapped this)

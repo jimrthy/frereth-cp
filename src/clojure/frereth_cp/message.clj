@@ -115,7 +115,8 @@
 
 ;;;; Q: what else is in the reference implementation?
 ;;;; A: Lots. Scattered around quite a bit now
-;;;; 186-654 main
+;;;; FIXME: Move these to the functions where I've implemented them.
+;;; 186-654 main
 ;;;          186-204 boilerplate
 
 ;;;          260-263 set up some globals
@@ -749,14 +750,14 @@
      ::log/state log-state}))
 
 (declare schedule-next-timeout!)
-(s/fdef action-trigger
+(s/fdef action-trigger!
         :args (s/cat :timing-details ::action-timing-details
                      :io-handle ::specs/io-handle
                      :state ::specs/state
                      :log-state-atom ::shared-specs/atom
                      :next-action ::next-action)
         :ret any?)
-(defn action-trigger
+(defn action-trigger!
   [{:keys [::actual-next
            ::delta_f
            ::scheduling-time]
@@ -869,6 +870,9 @@
                                                   ::specs/message-loop-name message-loop-name})))
                   ::no-op identity
                   ;; Q: Shouldn't this be from the specs ns?
+                  ;; Or maybe ::child-> should move here.
+                  ;; Either probably makes sense. It just needs
+                  ;; to be consistent.
                   ::parent-> (partial trigger-from-parent
                                       io-handle
                                       (second next-action))
@@ -1224,7 +1228,7 @@
             (println "Missing outgoing in" state)
             (throw (ex-info "Missing outgoing" state)))
           (dfrd/on-realized next-action
-                            (partial action-trigger
+                            (partial action-trigger!
                                      {::actual-next actual-next
                                       ::delta_f delta_f
                                       ::scheduling-time now}
