@@ -241,7 +241,9 @@ implementation. This is code that I don't understand yet"
 
 (s/fdef servers-polled
         :args (s/cat :wrapper ::state/state-agent
-                     :this ::state/state))
+                     :this ::state/state)
+        :ret (s/merge ::state/state
+                      ::specs/deferrable))
 (defn servers-polled
   [wrapper
    {log-state ::log/state
@@ -250,6 +252,7 @@ implementation. This is code that I don't understand yet"
   (when-not log-state
     ;; This is an ugly situation.
     ;; Something has gone badly wrong
+    ;; TODO: Write to a STDOUT logger instead
     (println "Missing log-state among"
              (keys this)
              "\nin\n"
@@ -259,45 +262,16 @@ implementation. This is code that I don't understand yet"
   (let [this (dissoc this ::specs/network-packet)
         log-state (log/info log-state
                             ::servers-polled!
-                            "Building/sending Vouch")]
-    ;; This is really where mixing an Agent and Manifold gets tricky.
-    (send wrapper (fn [current]
-                    ;; This is safe enough for a single-threaded client
-                    ;; interaction.
-                    ;; At this level, the Client effectively *is*
-                    ;; single-threaded.
-                    ;; It's its own entity, polling a Seq of servers.
-                    ;; Bigger picture, we should have a slew of mostly-
-                    ;; independent clients interacting with multiple
-                    ;; servers.
-                    ;; This is still probably safe in that world.
-                    ;; The various Client instances should regularly
-                    ;; synchronize their Clocks, possibly when calling
-                    ;; flush-logs!, but they should mostly be independent.
-                    (merge current (select-keys this [::log/state
-                                                      ::shared/packet
-                                                      ::state/server-security
-                                                      ::state/shared-secrets]))))
-    ;; Verify that the pieces got synchronized correctly.
-    ;; This is really just for the sake of debugging.
-    ;; FIXME: Make it go away.
-    (await wrapper)
-    (let [unwrapped @wrapper]
-      (when (not= unwrapped this)
-        (let [[only-a only-b both] (data/diff unwrapped this)]
-          (throw (ex-info "Need to synchronize `this` into wrapper"
-                          {::only-in-agent only-a
-                           ::only-in-this only-b
-                           ::shared both})))))
-    ;; Got a Cookie response packet from server.
-    ;; Theory in the reference implementation is that this is
-    ;; a good signal that it's time to spawn the child to do
-    ;; the real work.
-    ;; That really seems to complect the concerns.
-    ;; But this entire function is a stateful mess.
-    ;; At least this helps it stay in one place.
-    (send wrapper state/fork! wrapper)
-    (initiate/build-and-send-vouch! wrapper cookie)))
+                            "Building/sending Vouch")
+        ;; Got a Cookie response packet from server.
+        ;; Theory in the reference implementation is that this is
+        ;; a good signal that it's time to spawn the child to do
+        ;; the real work.
+        ;; That really seems to complect the concerns.
+        ;; But this entire function is a stateful mess.
+        ;; At least this helps it stay in one place.
+        this (state/fork! this)]
+    (initiate/build-and-send-vouch! wrapper this cookie)))
 
 (s/fdef poll-servers-with-hello!
         :args (s/cat :this ::state/agent-wrapper
@@ -498,7 +472,7 @@ implementation. This is code that I don't understand yet"
 
   (let [{:keys [::state/chan->server]
          :as this} @wrapper
-        timeout (state/current-timeout wrapper)]
+        timeout (state/current-timeout this)]
     (strm/on-drained chan->server
                      (partial chan->server-closed wrapper))
     ;; This feels inside-out and backwards.
@@ -529,7 +503,20 @@ implementation. This is code that I don't understand yet"
             ;; thread.
             (poll-servers-with-hello! wrapper timeout)]
         (-> result
-            (dfrd/chain (partial servers-polled wrapper))
+            (dfrd/chain (partial servers-polled wrapper)
+                        (fn [{:keys [::specs/deferred
+                                     ::log/state]}]
+                          (-> deferred
+                              (dfrd/chain
+                               (fn [sent]
+                                 (if (not (or (= sent ::state/sending-vouch-timed-out)
+                                              (= sent ::state/drained)))
+                                   (send-off wrapper (partial state/->message-exchange-mode wrapper) sent)
+                                   )))
+                              (dfrd/catch
+                                  (fn [ex]
+                                    (send wrapper #(throw (ex-info "Server vouch response failed"
+                                                                   (assoc % :problem ex)))))))))
             (dfrd/catch
                 (fn [ex]
                   ;; Q: Does it make more sense to just tip the agent over

@@ -341,7 +341,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             (do
               ;; Q: Do I want to block this thread for this?
               ;; A: As written, we can't. We're already inside an Agent$Action
-              (comment (await-for (current-timeout wrapper) wrapper))
+              (comment (await-for (current-timeout this) wrapper))
 
               ;; Need to wire this up to pretty much just pass messages through
               ;; Actually, this seems totally broken from any angle, since we need
@@ -378,17 +378,21 @@ The fact that this is so big says a lot about needing to re-think my approach"
     (send wrapper assoc ::log/state log-state)))
 
 (declare current-timeout)
-;; TODO: This needs a spec
+(s/fdef final-wait
+        :args (s/cat :this ::state
+                     ;; Q: What is sent?
+                     :sent any?)
+        :ret ::specs/deferrable)
 (defn final-wait
   "We've received the cookie and responded with a vouch.
   Now waiting for the server's first real message
   packet so we can switch into the message exchange
   loop"
-  [wrapper
+  [this
    sent]
+  (print "Entering final-wait. sent:" sent)
   (let [{:keys [::log/logger]
-         log-state ::log/state
-         :as this} @wrapper]
+         log-state ::log/state} this]
     (when-not log-state
       (throw (ex-info
               "Missing log-state"
@@ -399,35 +403,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                ::final-wait
                                "Entering [penultimate] final-wait"))
     (if (not= sent ::sending-vouch-timed-out)
-      (let [timeout (current-timeout wrapper)
-            chan<-server (::chan<-server this)
-            taken (strm/try-take! chan<-server
-                                  ::drained timeout
-                                  ::initial-response-timed-out)]
-        ;; I have some comment rot here.
-        ;; Big Q: Is the comment about waiting for the client's response
-        ;; below correct? (The code doesn't look like it, but the behavior I'm
-        ;; seeing implies a bug)
-        ;; Or is the docstring above?
-        (dfrd/on-realized taken
-                          ;; Using send-off here because it potentially has to block to wait
-                          ;; for the child's initial message.
-                          ;; That really should have been ready to go quite a while before,
-                          ;; but "should" is a bad word.
-                          (fn [success]
-                            (if-let [ex (agent-error wrapper)]
-                              (log/flush-logs! logger
-                                               (log/exception log-state
-                                                              ex
-                                                              ::final-wait))
-                              (send-off wrapper (partial ->message-exchange-mode wrapper) success)))
-                          (fn [ex]
-                            (send wrapper #(throw (ex-info "Server vouch response failed"
-                                                           (assoc % :problem ex))))))
-        this)
-      (do
-        (send wrapper #(throw (ex-info "Timed out trying to send vouch" %)))
-        this))))
+      (let [timeout (current-timeout this)
+            chan<-server (::chan<-server this)]
+        (strm/try-take! chan<-server
+                        ::drained timeout
+                        ::initial-response-timed-out))
+      (throw (ex-info "Timed out trying to send vouch" {::state (dissoc this ::log/state)})))))
 
 (s/fdef extract-child-send-state
         :args (s/cat :state ::state)
@@ -571,12 +552,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;; Public
 
 (s/fdef current-timeout
-        :args (s/cat :state-agent ::state-agent)
+        :args (s/cat :state-agent ::state)
         :ret nat-int?)
 (defn current-timeout
   "How long should next step wait before giving up?"
-  [wrapper]
-  (-> wrapper deref ::timeout
+  [this]
+  (-> this deref ::timeout
       (or default-timeout)))
 
 (s/fdef update-timeout!
@@ -585,7 +566,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :ret any?)
 (defn update-timeout!
   [wrapper new-timeout]
-  (let [old-timeout (current-timeout wrapper)]
+  (let [old-timeout (current-timeout @wrapper)]
     (when (not= old-timeout new-timeout)
       (send wrapper (fn [this]
                       (assoc this ::timeout new-timeout)))))
@@ -654,8 +635,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
              ::shared/extension extension))))
 
 (s/fdef fork!
-        :args (s/cat :state ::state
-                     :wrapper ::state-agent)
+        :args (s/cat :state ::state)
         :ret ::state)
 (defn fork!
   "This has to 'fork' a child with access to the agent, and update the agent state
@@ -677,8 +657,7 @@ Which at least implies that the agent approach should go away."
            ::msg-specs/message-loop-name]
     initial-msg-state ::msg-specs/state
     log-state ::log/state
-    :as this}
-   wrapper]
+    :as this}]
   {:pre [message-loop-name]}
   (when-not log-state
     (throw (ex-info (str "Missing log state among "
@@ -695,7 +674,7 @@ Which at least implies that the agent approach should go away."
                                                   logger
                                                   (partial child->
                                                            (extract-child-send-state this)
-                                                           (current-timeout wrapper))
+                                                           (current-timeout this))
                                                   ->child)
         log-state (log/debug log-state
                              ::fork!
@@ -742,11 +721,12 @@ Which at least implies that the agent approach should go away."
                      :timeout (s/and integer?
                                      (complement neg?))
                      :timeout-key any?)
-        :ret ::specs/deferrable)
+        :ret (s/keys :req [::log/state ::specs/deferrable]))
 (defn do-send-packet
   "Send a ByteBuf (et al) as UDP to the server"
   [{log-state ::log/state
-    {:keys [::specs/srvr-ip
+    {:keys [::log/logger
+            ::specs/srvr-ip
             ::specs/srvr-port]
      :as server-security} ::server-security
     :keys [::chan->server]
@@ -756,16 +736,20 @@ Which at least implies that the agent approach should go away."
    timeout
    timeout-key
    packet]
-  (println "do-send-packet server-security:" server-security)
   (let [d (strm/try-put! chan->server
                          {:host srvr-ip
                           :message packet
                           :port srvr-port}
                          timeout
-                         timeout-key)]
-    (dfrd/on-realized d
-                      on-success
-                      on-failure)))
+                         timeout-key)
+        log-state (log/info log-state
+                            ::do-send-packet
+                            ""
+                            {::server-security server-security})]
+    {::log/state log-state
+     ::specs/deferrable (dfrd/on-realized d
+                                          on-success
+                                          on-failure)}))
 
 (defn update-client-short-term-nonce
   "Note that this can loop right back to a negative number."
