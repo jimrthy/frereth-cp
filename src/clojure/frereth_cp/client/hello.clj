@@ -48,7 +48,7 @@
         ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
         log-state (log2/info log-state
                              ::build-raw
-                             "Details"
+                             ""
                              {::crypto-box (b-t/->string boxed)
                               ::shared/working-nonce (b-t/->string working-nonce)
                               ::my-short-pk (-> my-short-pair

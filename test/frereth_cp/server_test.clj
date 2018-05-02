@@ -240,7 +240,7 @@
             (is client->server)
             (let [taken (strm/try-take! client->server ::drained 1000 ::timeout)
                   hello @taken]
-              (println "Hello from client:" hello)
+              (println "server-test/handshake Hello from client:" hello)
               (when (or (= hello ::drained)
                         (= hello ::timeout))
                 (throw (ex-info "Client took too long"

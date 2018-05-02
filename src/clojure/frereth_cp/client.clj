@@ -247,8 +247,10 @@ implementation. This is code that I don't understand yet"
 (defn servers-polled
   [wrapper
    {log-state ::log/state
+    logger ::log/logger
     cookie ::specs/network-packet
     :as this}]
+  (println "client: Top of servers-polled")
   (when-not log-state
     ;; This is an ugly situation.
     ;; Something has gone badly wrong
@@ -259,19 +261,30 @@ implementation. This is code that I don't understand yet"
              this
              "\nstate-agent:"
              wrapper))
-  (let [this (dissoc this ::specs/network-packet)
-        log-state (log/info log-state
-                            ::servers-polled!
-                            "Building/sending Vouch")
-        ;; Got a Cookie response packet from server.
-        ;; Theory in the reference implementation is that this is
-        ;; a good signal that it's time to spawn the child to do
-        ;; the real work.
-        ;; That really seems to complect the concerns.
-        ;; But this entire function is a stateful mess.
-        ;; At least this helps it stay in one place.
-        this (state/fork! this)]
-    (initiate/build-and-send-vouch! wrapper this cookie)))
+  (try
+    (let [this (dissoc this ::specs/network-packet)
+          log-state (log/info log-state
+                              ::servers-polled!
+                              "Building/sending Vouch")
+          ;; Got a Cookie response packet from server.
+          ;; Theory in the reference implementation is that this is
+          ;; a good signal that it's time to spawn the child to do
+          ;; the real work.
+          ;; That really seems to complect the concerns.
+          ;; But this entire function is a stateful mess.
+          ;; At least this helps it stay in one place.
+          this (state/fork! this)]
+      (initiate/build-and-send-vouch! wrapper this cookie))
+    (catch Exception ex
+      (let [log-state (log/exception log-state
+                                     ex
+                                     ::servers-polled)
+            log-state (log/flush-logs! logger log-state)
+            failure (dfrd/deferred)]
+        (dfrd/error! failure ex)
+        (assoc this
+               ::log/state log-state
+               ::specs/deferrable failure)))))
 
 (s/fdef poll-servers-with-hello!
         :args (s/cat :this ::state/agent-wrapper
@@ -284,11 +297,10 @@ implementation. This is code that I don't understand yet"
 ;; And broken up into several smaller functions.
 (defn poll-servers-with-hello!
   "Send hello packet to a seq of server IPs associated with a single server name."
-  ;; In a lot of ways, this amounts to an attempt at load-balancing from the client side.
   ;; Ping a bunch of potential servers (listening on an appropriate port with the
   ;; appropriate public key) in a sequence until you get a response or a timeout.
   ;; In a lot of ways, it was an early attempt at what haproxy does.
-  ;; Then again, haproxy doesn't support UDP.
+  ;; Then again, haproxy doesn't support UDP, and it's from the client side.
   ;; So maybe this was/is breathtakingly cutting-edge.
   ;; The main point is to avoid waiting 20-ish minutes for TCP connections
   ;; to time out.
@@ -346,13 +358,15 @@ implementation. This is code that I don't understand yet"
                                (assoc ::log/state log-state)
                                (assoc-in [::state/server-security ::specs/srvr-ip] ip))
                       cookie-waiter (partial cookie/wait-for-cookie!
-                                             wrapper
                                              this
                                              cookie-response
                                              timeout)
                       dfrd-success (state/do-send-packet this
                                                          cookie-waiter
-                                                         identity
+                                                         (fn [ex]
+                                                           (send wrapper
+                                                                 #(throw (ex-info (log/exception-details ex)
+                                                                                  {::problem %}))))
                                                          timeout
                                                          ::sending-hello-timed-out
                                                          raw-packet)
@@ -373,14 +387,25 @@ implementation. This is code that I don't understand yet"
                            "\nReceived:\n"
                            (::specs/network-packet actual-success))
                   (if (and (not (instance? Throwable actual-success))
-                           (not= actual-success ::sending-hello-timed-out)
-                           (not= actual-success ::awaiting-cookie-timed-out)
-                           (not= actual-success ::send-response-timed-out))
-                    (let [log-state (log/info (::log/state actual-success)
-                                              ::poll-servers-with-hello!
-                                              "Might have found a responsive server"
-                                              {::specs/srvr-ip ip})
-                          log-state (log/flush-logs! logger log-state)]
+                           (not (#{::sending-hello-timed-out
+                                   ::awaiting-cookie-timed-out
+                                   ::send-response-timed-out} actual-success)))
+                    (let [log-state (try
+                                      (log/info (::log/state actual-success)
+                                                ::poll-servers-with-hello!
+                                                "Might have found a responsive server"
+                                                {::specs/srvr-ip ip})
+                                      (catch Exception ex
+                                        (println "client: Failed trying to log about potentially responsive server\n"
+                                                 (log/exception-details ex))
+                                        (throw (ex-info "Logging failure re: server response" {::actual-success actual-success} ex))))
+                          log-state (try
+                                      (log/flush-logs! logger log-state)
+                                      (catch Exception ex
+                                        (println "client: Failed trying to flush logs re: server response\n"
+                                                 (log/exception-details ex))
+                                        (throw (ex-info "Log flush failure re: server response" {::actual-success actual-success} ex))))]
+                      (println "client: Should have a log message about possibly responsive server")
                       (if-let [{:keys [::specs/network-packet]} actual-success]
                         (do
                           ;; Need to move on to Vouch. But there's already far
@@ -441,6 +466,53 @@ implementation. This is code that I don't understand yet"
                                                       ::chan->server-closed)))))
   (send wrapper server-closed!))
 
+(defn set-up-server-polling!
+  [wrapper timeout]
+  (let [{log-state ::log/state
+         outcome ::specs/deferrable}
+        ;; Note that this is going to block the calling
+        ;; thread. Which is annoying, but probably not
+        ;; a serious issue outside of unit tests that
+        ;; are mimicking both client and server pieces,
+        ;; which need to run this function in a separate
+        ;; thread.
+        (poll-servers-with-hello! wrapper timeout)
+        _ (println "client: triggered hello! polling")
+        result (-> outcome
+                   (dfrd/chain (partial servers-polled wrapper)
+                               (fn [{:keys [::specs/deferred
+                                            ::log/state]
+                                     :as this}]
+                                 (println "client: servers-polled succeeded:" this)
+                                 (-> deferred
+                                     (dfrd/chain
+                                      (fn [sent]
+                                        (if (not (or (= sent ::state/sending-vouch-timed-out)
+                                                     (= sent ::state/drained)))
+                                          (send-off wrapper (partial state/->message-exchange-mode wrapper) sent)
+                                          )))
+                                     (dfrd/catch
+                                         (fn [ex]
+                                           (send wrapper #(throw (ex-info "Server vouch response failed"
+                                                                          (assoc % :problem ex)))))))))
+                   (dfrd/catch
+                       (fn [ex]
+                         (println "Failure polling servers with hello!\n"
+                                  (log/exception-details ex))
+                         ;; Q: Does it make more sense to just tip the agent over
+                         ;; into an error state?
+                         ;; This *is* a pretty big deal
+                         (send wrapper (fn [{log-state ::log/state
+                                             :keys [::log/logger]
+                                             :as this}]
+                                         (let [log-state (log/exception log-state
+                                                                        ex
+                                                                        ::start!
+                                                                        "After servers-polled")
+                                               log-state (log/flush-logs! logger log-state)]
+                                           (assoc this ::log/state log-state)))))))]
+    result))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -485,57 +557,7 @@ implementation. This is code that I don't understand yet"
       (send wrapper hello/do-build-hello)
       (println "client: told state-agent to build hello packet" )
       (if (await-for timeout wrapper)
-        (let [{log-state ::log/state
-               result ::specs/deferrable}
-              ;; Note that this is going to block the calling
-              ;; thread. Which is annoying, but probably not
-              ;; a serious issue outside of unit tests that
-              ;; are mimicking both client and server pieces,
-              ;; which need to run this function in a separate
-              ;; thread.
-              (poll-servers-with-hello! wrapper timeout)]
-          (println "client: triggered hello! polling")
-          (-> result
-              (dfrd/chain (partial servers-polled wrapper)
-                          (fn [{:keys [::specs/deferred
-                                       ::log/state]}]
-                            (-> deferred
-                                (dfrd/chain
-                                 (fn [sent]
-                                   (if (not (or (= sent ::state/sending-vouch-timed-out)
-                                                (= sent ::state/drained)))
-                                     (send-off wrapper (partial state/->message-exchange-mode wrapper) sent)
-                                     )))
-                                (dfrd/catch
-                                    (fn [ex]
-                                      (send wrapper #(throw (ex-info "Server vouch response failed"
-                                                                     (assoc % :problem ex)))))))))
-              (dfrd/catch
-                  (fn [ex]
-                    ;; Q: Does it make more sense to just tip the agent over
-                    ;; into an error state?
-                    ;; This *is* a pretty big deal
-                    (send wrapper (fn [{log-state ::log/state
-                                        :keys [::log/logger]
-                                        :as this}]
-                                    (let [log-state (log/exception log-state
-                                                                   ex
-                                                                   ::start!
-                                                                   "After servers-polled")
-                                          log-state (log/flush-logs! logger log-state)]
-                                      (assoc this ::log/state log-state)))))))
-          (dfrd/catch result
-              (fn [ex]
-                ;; I've seen the deferrable returned by poll-servers-with-hello!
-                ;; be an exception at least once.
-                ;; Adding this error report seems to have made that problem disapper.
-                ;; Maybe I've somehow managed to introduce a race condition.
-                (send wrapper (fn [_]
-                                (throw (ex-info
-                                        "Sending our hello packet to server"
-                                        {::this @wrapper}
-                                        ex))))))
-          (assoc this ::log/state log-state))
+        (set-up-server-polling! wrapper timeout)
         (let [problem (agent-error wrapper)
               {log-state ::log/state
                logger ::log/logger
@@ -545,7 +567,7 @@ implementation. This is code that I don't understand yet"
                           {::problem problem
                            ::failed-state #(update this ::log/state % (log/flush-logs! logger log-state))})))))
     (catch Exception ex
-      (println "Failed before I could even get to a logger:\n"
+      (println "client: Failed before I could even get to a logger:\n"
                (log/exception-details ex)))))
 
 (s/fdef stop!

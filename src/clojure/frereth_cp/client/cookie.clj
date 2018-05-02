@@ -170,120 +170,129 @@
                             ::received-response
                             "Possibly got a response from server"
                             cookie)]
-    (if-not (or (= cookie ::drained)
-                (= cookie ::hello-response-timed-out))
-      (if (= K/cookie-packet-length (count message))
-        ;; Next step for reference implementation is to compare the
-        ;; expected server IP and port vs. what we received.
-        ;; That info's pretty unreliable/meaningless, but the server
-        ;; address probably won't change very often.
-        ;; Unless we're communicating with a server on someone's cell
-        ;; phone.
-        ;; Which, if this is successful, will totally happen.
-        ;; FIXME: Verify those before trying to proceed
-        (try
-          (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
-                                                                        [::shared/extension
-                                                                         ::shared/work-area
-                                                                         ::state/server-extension
-                                                                         ::state/server-security
-                                                                         ::state/shared-secrets])
-                                                           ::log/state log-state
-                                                           ::shared/packet message))]
-            (let [this (into this decrypted)
-                  {:keys [::shared/my-keys]} this
-                  server-short (get-in this
-                                       [::state/server-security
-                                        ::specs/public-short])
-                  log-state (log/debug log-state
-                                       ::cookie->vouch
-                                       "Managed to decrypt the cookie")]
-              (assert server-short (str "Missing ::specs/public-short among\n"
-                                        (keys (::state/server-security this))
-                                        "\namong bigger-picture\n"
-                                        (keys this)))
-              (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
-                    ;; line 327
-                    this (assoc-in this
-                                   [::state/shared-secrets ::state/client-short<->server-short]
-                                   (crypto/box-prepare
-                                    server-short
-                                    (.getSecretKey my-short-pair)))
+    (try
+      (if-not (or (= cookie ::drained)
+                  (= cookie ::hello-response-timed-out))
+        (if (= K/cookie-packet-length (count message))
+          ;; Next step for reference implementation is to compare the
+          ;; expected server IP and port vs. what we received.
+          ;; That info's pretty unreliable/meaningless, but the server
+          ;; address probably won't change very often.
+          ;; Unless we're communicating with a server on someone's cell
+          ;; phone.
+          ;; Which, if this is successful, will totally happen.
+          ;; FIXME: Verify those before trying to proceed
+          (try
+            (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
+                                                                          [::shared/extension
+                                                                           ::shared/work-area
+                                                                           ::state/server-extension
+                                                                           ::state/server-security
+                                                                           ::state/shared-secrets])
+                                                             ::log/state log-state
+                                                             ::shared/packet message))]
+              (let [this (into this decrypted)
+                    {:keys [::shared/my-keys]} this
+                    server-short (get-in this
+                                         [::state/server-security
+                                          ::specs/public-short])
                     log-state (log/debug log-state
                                          ::cookie->vouch
-                                         "Prepared shared short-term secret")]
-                (dfrd/success! notifier (assoc this
-                                               ::log/state log-state
-                                               ::specs/network-packet cookie))))
-            (let [log-state (log/warn log-state
-                                      ::received-response
-                                      "Unable to decrypt server cookie"
-                                      {::problem cookie})]
-              (dfrd/success! notifier (assoc this ::log/state log-state))))
-          ;; TODO: Look into recovering from these
-          (catch ExceptionInfo ex
-            (let [log-state (log/exception log-state
-                                           ex
-                                           ::received-response
-                                           "High-level failure")
-                  log-state (log/flush-logs! logger log-state)]
-              (dfrd/error! notifier (assoc this ::log/state log-state))))
-          (catch RuntimeException ex
-            (let [log-state (log/exception log-state
-                                           ex
-                                           ::received-response
-                                           "Unexpected failure")
-                  log-state (log/flush-logs! logger log-state)]
-              (dfrd/error! notifier (assoc this ::log/state log-state))))
-          (catch Exception ex
-            (let [log-state (log/exception log-state
-                                           ex
-                                           ::received-response
-                                           "Low-level failure")
-                  log-state (log/flush-logs! logger log-state)]
-              (dfrd/error! notifier (assoc this ::log/state log-state))))
-          (catch Throwable ex
-            (let [log-state (log/exception log-state
-                                           ex
-                                           ::received-response
-                                           "Serious Problem")
-                  log-state (log/flush-logs! logger log-state)]
-              (dfrd/error! notifier (assoc this ::log/state log-state)))))
+                                         "Managed to decrypt the cookie")]
+                (assert server-short (str "Missing ::specs/public-short among\n"
+                                          (keys (::state/server-security this))
+                                          "\namong bigger-picture\n"
+                                          (keys this)))
+                (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
+                      ;; line 327
+                      this (assoc-in this
+                                     [::state/shared-secrets ::state/client-short<->server-short]
+                                     (crypto/box-prepare
+                                      server-short
+                                      (.getSecretKey my-short-pair)))
+                      log-state (log/debug log-state
+                                           ::cookie->vouch
+                                           "Prepared shared short-term secret")]
+                  (dfrd/success! notifier (assoc this
+                                                 ::log/state (log/flush-logs! logger log-state)
+                                                 ::specs/network-packet cookie))))
+              (let [log-state (log/warn log-state
+                                        ::received-response
+                                        "Unable to decrypt server cookie"
+                                        {::problem cookie})]
+                (dfrd/success! notifier (assoc this ::log/state log-state))))
+            ;; TODO: Look into recovering from these
+            (catch ExceptionInfo ex
+              (let [log-state (log/exception log-state
+                                             ex
+                                             ::received-response
+                                             "High-level failure")
+                    log-state (log/flush-logs! logger log-state)]
+                (dfrd/error! notifier (assoc this ::log/state log-state))))
+            (catch RuntimeException ex
+              (let [log-state (log/exception log-state
+                                             ex
+                                             ::received-response
+                                             "Unexpected failure")
+                    log-state (log/flush-logs! logger log-state)]
+                (dfrd/error! notifier (assoc this ::log/state log-state))))
+            (catch Exception ex
+              (let [log-state (log/exception log-state
+                                             ex
+                                             ::received-response
+                                             "Low-level failure")
+                    log-state (log/flush-logs! logger log-state)]
+                (dfrd/error! notifier (assoc this ::log/state log-state))))
+            (catch Throwable ex
+              (let [log-state (log/exception log-state
+                                             ex
+                                             ::received-response
+                                             "Serious Problem")
+                    log-state (log/flush-logs! logger log-state)]
+                (dfrd/error! notifier (assoc this ::log/state log-state)))))
+          (let [log-state (log/warn log-state
+                                    ::received-response
+                                    "Invalid response. Just discard and retry"
+                                    {::problem cookie})]
+            (dfrd/success! notifier (assoc this ::log/state (log/flush-logs! logger log-state)))))
         (let [log-state (log/warn log-state
                                   ::received-response
-                                  "Invalid response. Just discard and retry"
-                                  {::problem cookie})]
+                                  "Server didn't respond to HELLO. Move on to next.")]
           (dfrd/success! notifier (assoc this ::log/state log-state))))
-      (let [log-state (log/warn log-state
-                                ::received-response
-                                "Server didn't respond to HELLO. Move on to next.")]
-        (dfrd/success! notifier (assoc this ::log/state log-state))))))
+      (catch Exception ex
+        (log/flush-logs! logger (log/exception log-state
+                                               ex
+                                               received-response))))))
 
 (s/fdef hello-response-failed
-        :args (s/cat :wrapper ::state/state-agent
+        :args (s/cat :wrapper ::state/state
                      :failure ::specs/throwable))
 (defn hello-response-failed!
-  [this failure]
-  ;; FIXME: Find a better way to signal this so wait-for-cookie!
-  ;; doesn't need access to the agent.
-  (send this #(throw (ex-info "Timed out waiting for hello response"
-                              {::problem %}
-                              failure))))
+  [{:keys [::log/logger
+           ::log/state]
+    :as this}
+   failure]
+  ;; FIXME: Really need to signal the outer client that
+  ;; things broke pretty badly.
+  ;; Note that this isn't an ordinary timeout: this was a true
+  ;; failure in taking from the stream. And, realistically,
+  ;; should never happen.
+  (log/flush-logs! logger (log/exception state
+                                         failure
+                                         ::hello-response-failed!)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
 (s/fdef wait-for-cookie!
-        :args (s/cat :wrapper ::state/agent-wrapper
-                     :this ::state/state
+        :args (s/cat :this ::state/state
                      :notifier dfrd/deferrable?
                      ::timeout (s/and number?
                                       (complement neg?))
                      :sent ::specs/network-packet)
         :ret any?)
 (defn wait-for-cookie!
-  ;; FIXME: Eliminate wrapper from here.
-  [wrapper this notifier timeout sent]
+  [this notifier timeout sent]
   (if (not= sent ::sending-hello-timed-out)
     (let [this (update this
                        ::log/state
@@ -298,5 +307,5 @@
                                 ::hello-response-timed-out)]
         (dfrd/on-realized d
                           (partial received-response this notifier)
-                          (partial hello-response-failed! wrapper))))
+                          (partial hello-response-failed! this))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
