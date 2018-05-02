@@ -319,106 +319,117 @@ implementation. This is code that I don't understand yet"
       (dfrd/on-realized completion
                         (partial hello-succeeded! logger)
                         (partial hello-failed! wrapper))
-      (loop [this (-> this
-                      (assoc ::log/state log-state))
-             start-time (System/nanoTime)
-             ;; FIXME: The initial timeout needs to be customizable
-             timeout (util/seconds->nanos 1)
-             ;; Q: Do we really want to max out at 8?
-             ;; 8 means over 46 seconds waiting for a response,
-             ;; but what if you want the ability to try 20?
-             ;; Or don't particularly care how long it takes to get a response?
-             ;; Stick with the reference implementation version for now.
-             ips (take 8 (cycle server-ips))]
-        (let [ip (first ips)
-              {log-state ::log/state} this
-              log-state (log/info log-state
-                                  ::poll-servers-with-hello!
-                                  "Polling server"
-                                  {::specs/srvr-ip ip})
-              cookie-response (dfrd/deferred)
-              log-state (log/warn log-state
-                                  ::poll-servers-with-hello!
-                                  "FIXME: wait-for-cookie! shouldn't need wrapper")
-              this (-> this
-                       (assoc ::log/state log-state)
-                       (assoc-in [::state/server-security ::specs/srvr-ip] ip))
-              cookie-waiter (partial cookie/wait-for-cookie!
-                                     wrapper
-                                     this
-                                     cookie-response
-                                     timeout)
-              dfrd-success (state/do-send-packet this
-                                                 cookie-waiter
-                                                 identity
-                                                 timeout
-                                                 ::sending-hello-timed-out
-                                                 raw-packet)
-              send-packet-success (deref dfrd-success 1000 ::send-response-timed-out)
-              actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
-              now (System/nanoTime)]
-          ;; I don't think send-packet-success matters much
-          ;; Although...actually, ::send-response-timed-out would be a big
-          ;; deal.
-          ;; FIXME: Add error handling for that.
-          (println "client/poll-servers-with-hello! Sending HELLO returned:"
-                   send-packet-success
-                   "\nQ: Does that value matter?"
-                   "\nactual-success:\n"
-                   (dissoc actual-success ::log/state)
-                   "\nTop-level keys:\n"
-                   (keys actual-success)
-                   "\nReceived:\n"
-                   (::specs/network-packet actual-success))
-          (if (and (not (instance? Throwable actual-success))
-                   (not= actual-success ::sending-hello-timed-out)
-                   (not= actual-success ::awaiting-cookie-timed-out)
-                   (not= actual-success ::send-response-timed-out))
-            (let [{log-state ::log/state} actual-success
-                  log-state (log/info log-state
-                                      ::poll-servers-with-hello!
-                                      "Might have found a responsive server"
-                                      {::specs/srvr-ip ip})
-                  log-state (log/flush-logs! logger log-state)]
-              (if-let [{:keys [::specs/network-packet]} actual-success]
-                ;; Need to move on to Vouch. But there's already far
-                ;; too much happening here.
-                ;; So the deferred in completion should trigger servers-polled
-                (dfrd/success! completion (assoc actual-success
-                                                 ::log/state log-state))
-                (let [elapsed (- now start-time)
-                      remaining (- timeout elapsed)]
-                  (if (< 0 remaining)
-                    (recur this
-                           start-time
-                           ;; Note that this jacks up the orderly timeout progression
-                           ;; Not that the progression is quite as orderly as it looked
-                           ;; at first glance:
-                           ;; there's a modulo against a random 32-byte number involved
-                           ;; (line 289)
-                           remaining
-                           ips)
-                    (if-let [remaining-ips (next ips)]
-                      (recur this now (* 1.5 timeout) remaining-ips)
-                      (dfrd/error! completion (ex-info "Giving up" this)))))))
-            (let [this (assoc this (log/warn log-state
-                                             ::poll-servers-with-hello!
-                                             "Failed to connect"
-                                             {::specs/srvr-ip ip
-                                              ;; Actually, if this is a Throwable,
-                                              ;; we probably don't have a way
-                                              ;; to recover
-                                              ::outcome actual-success}))]
-              (if-let [remaining-ips (next ips)]
-                (recur this now (* 1.5 timeout) remaining-ips)
-                (dfrd/error! completion (ex-info "Giving up" this)))))))
-      {::specs/deferrable completion
-       ;; FIXME: Move this back into hello (actually
-       ;; that's problematic because it uses a function in
-       ;; the cookie ns. And another in here. That really just
-       ;; means another indirection layer of callbacks, but
-       ;; it's annoying).
-       ::log/state log-state})))
+      (println "Client: Entering the hello polling loop")
+      (let [log-state
+            (try
+              (loop [this (-> this
+                              (assoc ::log/state log-state))
+                     start-time (System/nanoTime)
+                     ;; FIXME: The initial timeout needs to be customizable
+                     timeout (util/seconds->nanos 1)
+                     ;; Q: Do we really want to max out at 8?
+                     ;; 8 means over 46 seconds waiting for a response,
+                     ;; but what if you want the ability to try 20?
+                     ;; Or don't particularly care how long it takes to get a response?
+                     ;; Stick with the reference implementation version for now.
+                     ips (take 8 (cycle server-ips))]
+                (let [ip (first ips)
+                      log-state (log/info (::log/state this)
+                                          ::poll-servers-with-hello!
+                                          "Polling server"
+                                          {::specs/srvr-ip ip})
+                      cookie-response (dfrd/deferred)
+                      log-state (log/warn log-state
+                                          ::poll-servers-with-hello!
+                                          "FIXME: wait-for-cookie! shouldn't need wrapper")
+                      this (-> this
+                               (assoc ::log/state log-state)
+                               (assoc-in [::state/server-security ::specs/srvr-ip] ip))
+                      cookie-waiter (partial cookie/wait-for-cookie!
+                                             wrapper
+                                             this
+                                             cookie-response
+                                             timeout)
+                      dfrd-success (state/do-send-packet this
+                                                         cookie-waiter
+                                                         identity
+                                                         timeout
+                                                         ::sending-hello-timed-out
+                                                         raw-packet)
+                      send-packet-success (deref dfrd-success 1000 ::send-response-timed-out)
+                      actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
+                      now (System/nanoTime)]
+                  ;; I don't think send-packet-success matters much
+                  ;; Although...actually, ::send-response-timed-out would be a big
+                  ;; deal.
+                  ;; FIXME: Add error handling for that.
+                  (println "client/poll-servers-with-hello! Sending HELLO returned:"
+                           send-packet-success
+                           "\nQ: Does that value matter?"
+                           "\nactual-success:\n"
+                           (dissoc actual-success ::log/state)
+                           "\nTop-level keys:\n"
+                           (keys actual-success)
+                           "\nReceived:\n"
+                           (::specs/network-packet actual-success))
+                  (if (and (not (instance? Throwable actual-success))
+                           (not= actual-success ::sending-hello-timed-out)
+                           (not= actual-success ::awaiting-cookie-timed-out)
+                           (not= actual-success ::send-response-timed-out))
+                    (let [log-state (log/info (::log/state actual-success)
+                                              ::poll-servers-with-hello!
+                                              "Might have found a responsive server"
+                                              {::specs/srvr-ip ip})
+                          log-state (log/flush-logs! logger log-state)]
+                      (if-let [{:keys [::specs/network-packet]} actual-success]
+                        (do
+                          ;; Need to move on to Vouch. But there's already far
+                          ;; too much happening here.
+                          ;; So the deferred in completion should trigger servers-polled
+                          (dfrd/success! completion (assoc actual-success
+                                                           ::log/state log-state))
+                          log-state)
+                        (let [elapsed (- now start-time)
+                              remaining (- timeout elapsed)]
+                          (if (< 0 remaining)
+                            (recur (assoc this ::log/state log-state)
+                                   start-time
+                                   ;; Note that this jacks up the orderly timeout progression
+                                   ;; Not that the progression is quite as orderly as it looked
+                                   ;; at first glance:
+                                   ;; there's a modulo against a random 32-byte number involved
+                                   ;; (line 289)
+                                   remaining
+                                   ips)
+                            (if-let [remaining-ips (next ips)]
+                              (recur this now (* 1.5 timeout) remaining-ips)
+                              (do
+                                (dfrd/error! completion (ex-info "Giving up" this))
+                                log-state))))))
+                    (let [this (assoc this (log/warn log-state
+                                                     ::poll-servers-with-hello!
+                                                     "Failed to connect"
+                                                     {::specs/srvr-ip ip
+                                                      ;; Actually, if this is a Throwable,
+                                                      ;; we probably don't have a way
+                                                      ;; to recover
+                                                      ::outcome actual-success}))]
+                      (if-let [remaining-ips (next ips)]
+                        (recur this now (* 1.5 timeout) remaining-ips)
+                        (do
+                          (dfrd/error! completion (ex-info "Giving up" this))
+                          (::log/state this)))))))
+              (catch Exception ex
+                (log/exception log-state
+                               ex
+                               ::poll-servers-with-hello!)))]
+        {::specs/deferrable completion
+         ;; FIXME: Move this back into hello (actually
+         ;; that's problematic because it uses a function in
+         ;; the cookie ns. And another in here. That really just
+         ;; means another indirection layer of callbacks, but
+         ;; it's annoying).
+         ::log/state log-state}))))
 
 (defn chan->server-closed
   [wrapper]
@@ -442,115 +453,100 @@ implementation. This is code that I don't understand yet"
         :ret any?)
 (defn start!
   "Perform the side-effects to establish a connection with a server"
-  ;; This almost seems like it belongs in ctor.
-
-  ;; But not quite, since it's really the first in a chain of side-effects.
-
-  ;; Q: Is there something equivalent I can set up using core.async?
-
-  ;; Actually, this seems to be screaming to be rewritten on top of manifold
-  ;; Deferreds.
-
-  ;; For that matter, it seems like setting up a watch on an atom that's
-  ;; specifically for something like this might make a lot more sense.
-
-  ;; That way I wouldn't be trying to multi-purpose communications channels.
-
-  ;; OTOH, they *are* the trigger for this sort of thing.
-
-  ;; The reference implementation mingles networking with this code.
-  ;; That seems like it might make sense as an optimization,
-  ;; but not until I have convincing numbers that it's needed.
-  ;; Of course, I might also be opening things up for something
-  ;; like a timing attack.
-
-  ;; TODO: Ask for opinions.
   [wrapper]
+  (println "Client: Top of start!")
   (when-let [failure (agent-error wrapper)]
     (throw (ex-info "Agent failed before we started"
                     {:problem failure})))
 
-  (let [{:keys [::state/chan->server]
-         :as this} @wrapper
-        timeout (state/current-timeout this)]
-    (strm/on-drained chan->server
-                     (partial chan->server-closed wrapper))
-    ;; This feels inside-out and backwards.
-    ;; But it probably should, since this is very
-    ;; explicitly place-oriented programming working
-    ;; with mutable state.
-    ;; Any way you look at it, it isn't worth doing
-    ;; here.
-    ;; This is something that happens once at startup.
-    ;; So it shouldn't be slow, but this level of optimization
-    ;; simply cannot be worth it.
-    ;; (Even if we're talking about something like a web browser
-    ;; with dozens of open connections...well, a GC delay of a
-    ;; second or two to clean this stuff up would be super-
-    ;; annoying)
-    ;; FIXME: Prune this back to a pure function (yes, that's
-    ;; easier said than done: I probably do need to scrap
-    ;; the idea of using an agent for this).
-    (send wrapper hello/do-build-hello)
-    (if (await-for timeout wrapper)
-      (let [{log-state ::log/state
-             result ::specs/deferrable}
-            ;; Note that this is going to block the calling
-            ;; thread. Which is annoying, but probably not
-            ;; a serious issue outside of unit tests that
-            ;; are mimicking both client and server pieces,
-            ;; which need to run this function in a separate
-            ;; thread.
-            (poll-servers-with-hello! wrapper timeout)]
-        (-> result
-            (dfrd/chain (partial servers-polled wrapper)
-                        (fn [{:keys [::specs/deferred
-                                     ::log/state]}]
-                          (-> deferred
-                              (dfrd/chain
-                               (fn [sent]
-                                 (if (not (or (= sent ::state/sending-vouch-timed-out)
-                                              (= sent ::state/drained)))
-                                   (send-off wrapper (partial state/->message-exchange-mode wrapper) sent)
-                                   )))
-                              (dfrd/catch
-                                  (fn [ex]
-                                    (send wrapper #(throw (ex-info "Server vouch response failed"
-                                                                   (assoc % :problem ex)))))))))
-            (dfrd/catch
-                (fn [ex]
-                  ;; Q: Does it make more sense to just tip the agent over
-                  ;; into an error state?
-                  ;; This *is* a pretty big deal
-                  (send wrapper (fn [{log-state ::log/state
-                                      :keys [::log/logger]
-                                      :as this}]
-                                  (let [log-state (log/exception log-state
-                                                                 ex
-                                                                 ::start!
-                                                                 "After servers-polled")
-                                        log-state (log/flush-logs! logger log-state)]
-                                    (assoc this ::log/state log-state)))))))
-        (dfrd/catch result
-            (fn [ex]
-              ;; I've seen the deferrable returned by poll-servers-with-hello!
-              ;; be an exception at least once.
-              ;; Adding this error report seems to have made that problem disapper.
-              ;; Maybe I've somehow managed to introduce a race condition.
-              (send wrapper (fn [_]
-                              (throw (ex-info
-                                      "Sending our hello packet to server"
-                                      {::this @wrapper}
-                                      ex))))))
-        (assoc this ::log/state log-state))
-      (let [problem (agent-error wrapper)
-            {log-state ::log/state
-             logger ::log/logger
-             :as this} @wrapper]
-        (throw (ex-info (str "Timed out after " timeout
-                             " milliseconds waiting to build HELLO packet")
-                        {::problem problem
-                         ::failed-state #(update this ::log/state % (log/flush-logs! logger log-state))}))))))
+  (try
+    (let [{:keys [::state/chan->server]
+           :as this} @wrapper
+          timeout (state/current-timeout this)]
+      (assert chan->server)
+      (strm/on-drained chan->server
+                       (partial chan->server-closed wrapper))
+      ;; This feels inside-out and backwards.
+      ;; But it probably should, since this is very
+      ;; explicitly place-oriented programming working
+      ;; with mutable state.
+      ;; Any way you look at it, it isn't worth doing
+      ;; here.
+      ;; This is something that happens once at startup.
+      ;; So it shouldn't be slow, but this level of optimization
+      ;; simply cannot be worth it.
+      ;; (Even if we're talking about something like a web browser
+      ;; with dozens of open connections...well, a GC delay of a
+      ;; second or two to clean this stuff up would be super-
+      ;; annoying)
+      ;; FIXME: Prune this back to a pure function (yes, that's
+      ;; easier said than done: I probably do need to scrap
+      ;; the idea of using an agent for this).
+      (send wrapper hello/do-build-hello)
+      (println "client: told state-agent to build hello packet" )
+      (if (await-for timeout wrapper)
+        (let [{log-state ::log/state
+               result ::specs/deferrable}
+              ;; Note that this is going to block the calling
+              ;; thread. Which is annoying, but probably not
+              ;; a serious issue outside of unit tests that
+              ;; are mimicking both client and server pieces,
+              ;; which need to run this function in a separate
+              ;; thread.
+              (poll-servers-with-hello! wrapper timeout)]
+          (println "client: triggered hello! polling")
+          (-> result
+              (dfrd/chain (partial servers-polled wrapper)
+                          (fn [{:keys [::specs/deferred
+                                       ::log/state]}]
+                            (-> deferred
+                                (dfrd/chain
+                                 (fn [sent]
+                                   (if (not (or (= sent ::state/sending-vouch-timed-out)
+                                                (= sent ::state/drained)))
+                                     (send-off wrapper (partial state/->message-exchange-mode wrapper) sent)
+                                     )))
+                                (dfrd/catch
+                                    (fn [ex]
+                                      (send wrapper #(throw (ex-info "Server vouch response failed"
+                                                                     (assoc % :problem ex)))))))))
+              (dfrd/catch
+                  (fn [ex]
+                    ;; Q: Does it make more sense to just tip the agent over
+                    ;; into an error state?
+                    ;; This *is* a pretty big deal
+                    (send wrapper (fn [{log-state ::log/state
+                                        :keys [::log/logger]
+                                        :as this}]
+                                    (let [log-state (log/exception log-state
+                                                                   ex
+                                                                   ::start!
+                                                                   "After servers-polled")
+                                          log-state (log/flush-logs! logger log-state)]
+                                      (assoc this ::log/state log-state)))))))
+          (dfrd/catch result
+              (fn [ex]
+                ;; I've seen the deferrable returned by poll-servers-with-hello!
+                ;; be an exception at least once.
+                ;; Adding this error report seems to have made that problem disapper.
+                ;; Maybe I've somehow managed to introduce a race condition.
+                (send wrapper (fn [_]
+                                (throw (ex-info
+                                        "Sending our hello packet to server"
+                                        {::this @wrapper}
+                                        ex))))))
+          (assoc this ::log/state log-state))
+        (let [problem (agent-error wrapper)
+              {log-state ::log/state
+               logger ::log/logger
+               :as this} @wrapper]
+          (throw (ex-info (str "Timed out after " timeout
+                               " milliseconds waiting to build HELLO packet")
+                          {::problem problem
+                           ::failed-state #(update this ::log/state % (log/flush-logs! logger log-state))})))))
+    (catch Exception ex
+      (println "Failed before I could even get to a logger:\n"
+               (log/exception-details ex)))))
 
 (s/fdef stop!
         :args (s/cat :state-agent ::state/state-agent)

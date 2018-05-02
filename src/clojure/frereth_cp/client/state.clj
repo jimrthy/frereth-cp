@@ -552,12 +552,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;; Public
 
 (s/fdef current-timeout
-        :args (s/cat :state-agent ::state)
+        :args (s/cat :state ::state)
         :ret nat-int?)
 (defn current-timeout
   "How long should next step wait before giving up?"
   [this]
-  (-> this deref ::timeout
+  (-> this ::timeout
       (or default-timeout)))
 
 (s/fdef update-timeout!

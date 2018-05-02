@@ -15,6 +15,7 @@ This really seems like a bad road to go down."
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
 (s/def ::deferrable dfrd/deferrable?)
 (s/def ::exception-instance (class-predicate Exception))
+(s/def ::throwable (class-predicate Throwable))
 
 (def ^Integer key-length 32)
 ;; I really don't want to reference generators in here.

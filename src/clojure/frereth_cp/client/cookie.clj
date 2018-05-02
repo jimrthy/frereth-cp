@@ -259,11 +259,16 @@
                                 "Server didn't respond to HELLO. Move on to next.")]
         (dfrd/success! notifier (assoc this ::log/state log-state))))))
 
+(s/fdef hello-response-failed
+        :args (s/cat :wrapper ::state/state-agent
+                     :failure ::specs/throwable))
 (defn hello-response-failed!
   [this failure]
+  ;; FIXME: Find a better way to signal this so wait-for-cookie!
+  ;; doesn't need access to the agent.
   (send this #(throw (ex-info "Timed out waiting for hello response"
-                              (assoc %
-                                     :problem failure)))))
+                              {::problem %}
+                              failure))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -280,20 +285,17 @@
   ;; FIXME: Eliminate wrapper from here.
   [wrapper this notifier timeout sent]
   (if (not= sent ::sending-hello-timed-out)
-    (do
-      (send wrapper
-            update
-            ::log/state
-            #(log/info %
-                       ::wait-for-cookie!
-                       "Sent to server"
-                       sent))
-      (let [chan<-server (::state/chan<-server @wrapper)
+    (let [this (update this
+                       ::log/state
+                       #(log/info %
+                                  ::wait-for-cookie!
+                                  "Sent to server"
+                                  sent))]
+      (let [chan<-server (::state/chan<-server this)
             d (strm/try-take! chan<-server
                                 ::drained
                                 timeout
                                 ::hello-response-timed-out)]
-        (await wrapper)
         (dfrd/on-realized d
                           (partial received-response this notifier)
                           (partial hello-response-failed! wrapper))))
