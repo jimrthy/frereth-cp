@@ -262,7 +262,7 @@
       (catch Exception ex
         (log/flush-logs! logger (log/exception log-state
                                                ex
-                                               received-response))))))
+                                               ::received-response))))))
 
 (s/fdef hello-response-failed
         :args (s/cat :wrapper ::state/state
@@ -290,7 +290,7 @@
                      ::timeout (s/and number?
                                       (complement neg?))
                      :sent ::specs/network-packet)
-        :ret any?)
+        :ret ::specs/deferrable)
 (defn wait-for-cookie!
   [this notifier timeout sent]
   (if (not= sent ::sending-hello-timed-out)

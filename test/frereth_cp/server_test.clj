@@ -262,7 +262,7 @@
                       hello-length (.readableBytes hello-buffer)
                       hello-packet (byte-array hello-length)]
                   (.readBytes hello-buffer hello-packet)
-                  (println (str "shake-hands: Trying to put hello packet "
+                  (println (str "shake-hands: Trying to put hello packet\n"
                                 (b-t/->string hello-packet)
                                 "\nonto server channel "
                                 ->srvr
@@ -295,7 +295,7 @@
                             ;; Note that I didn't need to do this for the Hello packet.
                             packet-take (strm/try-take! srvr-> ::drained 1000 ::timeout)
                             packet (deref packet-take 1000 ::take-timeout)]
-                        (println "server-test Server response to hello:"
+                        (println "server-test/shake-hands: Server response to hello:"
                                  packet)
                         (if (and (not= ::drained packet)
                                  (not= ::timeout packet)
@@ -308,15 +308,16 @@
                                                    :host
                                                    .getAddress
                                                    vec)))
-                              (when-not (= server-port (:port packet))
-                                (println "Falsey port in"
-                                         packet
-                                         "based on\n"
-                                         (-> client-agent
-                                             deref
-                                             ::client-state/server-security)))
-                              (is (= server-port (:port packet)))
+                              (is (= server-port (:port packet))
+                                  (str "Mismatched port in"
+                                       packet
+                                       "based on\n"
+                                       (-> client-agent
+                                           deref
+                                           ::client-state/server-security)))
                               ;; Send the Cookie to the client
+                              (println "server-test/handshake-test: Sending Cookie to"
+                                       client<-server)
                               (let [put @(strm/try-put! client<-server
                                                         (assoc packet
                                                                :message cookie)

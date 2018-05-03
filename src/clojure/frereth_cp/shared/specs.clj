@@ -3,7 +3,8 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.test.check.generators :as lo-gen]
             [frereth-cp.util :as utils]
-            [manifold.deferred :as dfrd]))
+            [manifold.deferred :as dfrd])
+  (:import [io.aleph.dirigiste Executor Stats]))
 
 (defn class-predicate
   "Returns a predicate to check whether an object is an instance of the supplied class.
@@ -15,6 +16,7 @@ This really seems like a bad road to go down."
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
 (s/def ::deferrable dfrd/deferrable?)
 (s/def ::exception-instance (class-predicate Exception))
+(s/def ::executor (class-predicate Executor))
 (s/def ::throwable (class-predicate Throwable))
 
 (def ^Integer key-length 32)

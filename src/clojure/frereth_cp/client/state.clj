@@ -15,6 +15,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as dfrd]
+            [manifold.executor :as exec]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
@@ -102,8 +103,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; mutable byte arrays (which is where the "real work"
 ;; happens) seems like a recipe for disaster.
 (s/def ::mutable-state (s/keys :req [::client-extension-load-time  ; not really mutable
+                                     ::specs/executor
                                      ;; This isn't mutable
                                      ;; Q: Is it?
+                                     ;; A: Well, technically. Since it's a byte-array.
+                                     ;; But, in practice, it will never change over the
+                                     ;; course of the client's lifetime
                                      ::shared/extension
                                      ::log/logger
                                      ;; If we track ::msg-specs/state here,
@@ -228,8 +233,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
   [{:keys [::msg-specs/message-loop-name
            ::chan<-server
            ::server-extension
-           ::server-ips]
+           ::server-ips
+           ::specs/executor]
     log-state ::log/state
+    ;; TODO: Play with the numbers here to come up with something more reasonable
+    :or {executor (exec/utilization-executor 0.5)}
     :as this}
    log-initializer]
   {:pre [message-loop-name
@@ -241,8 +249,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                      ::big-picture this})))
   (let [logger (log-initializer)]
     (-> this
-        (assoc ::log/logger logger)
-        (assoc ::chan->server (strm/stream))
+        (assoc ::log/logger logger
+               ::chan->server (strm/stream)
+               ::specs/executor executor)
         ;; Can't do this: it involves a circular import
         #_(assoc ::packet-builder initiate/build-initiate-packet!)
         ;; FIXME: This is a cheeseball way to do this.
@@ -586,8 +595,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; b)  subject to timing attacks
   ;; because it just won't be called very often.
   ;; Those assumptions are false. This actually gets called
-  ;; before pretty much every packet that gets sent.
-  ;; Q: Really?
+  ;; every time the client forwards us a packet.
   ;; However: it only does the reload once every 30 seconds.
   [{:keys [::client-extension-load-time
            ::log/logger

@@ -306,6 +306,7 @@ implementation. This is code that I don't understand yet"
   ;; to time out.
   [wrapper timeout]
   (let [{:keys [::log/logger
+                ::specs/executor
                 ::state/server-ips]
          log-state ::log/state
          {raw-packet ::shared/packet
@@ -350,7 +351,7 @@ implementation. This is code that I don't understand yet"
                                           ::poll-servers-with-hello!
                                           "Polling server"
                                           {::specs/srvr-ip ip})
-                      cookie-response (dfrd/deferred)
+                      cookie-response (dfrd/deferred executor)
                       log-state (log/warn log-state
                                           ::poll-servers-with-hello!
                                           "FIXME: wait-for-cookie! shouldn't need wrapper")
@@ -454,7 +455,7 @@ implementation. This is code that I don't understand yet"
          ;; the cookie ns. And another in here. That really just
          ;; means another indirection layer of callbacks, but
          ;; it's annoying).
-         ::log/state log-state}))))
+         ::log/state (log/flush-logs! logger log-state)}))))
 
 (defn chan->server-closed
   [wrapper]
