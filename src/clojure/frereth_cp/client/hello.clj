@@ -105,12 +105,12 @@
   ;; it possibly be worth the trouble?
   [{:keys [::shared/packet-management
            ::shared/work-area]
-    log-state ::log2/state
     :as this}]
   (let [;; There's a good chance this updates my extension
         ;; That doesn't get set into stone until/unless I
         ;; manage to handshake with a server
-        this (state/clientextension-init this)
+        {log-state ::log2/state
+         :as this} (state/clientextension-init this)
         working-nonce (::shared/working-nonce work-area)
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)]

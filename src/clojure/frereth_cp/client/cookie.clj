@@ -212,7 +212,8 @@
                                       (.getSecretKey my-short-pair)))
                       log-state (log/debug log-state
                                            ::cookie->vouch
-                                           "Prepared shared short-term secret")]
+                                           (str "Prepared shared short-term secret\n"
+                                                "Should resolve the cookie-response in client/poll-servers-with-hello!"))]
                   (dfrd/success! notifier (assoc this
                                                  ::log/state (log/flush-logs! logger log-state)
                                                  ::specs/network-packet cookie))))

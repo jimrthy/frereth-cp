@@ -431,6 +431,63 @@ The fact that this is so big says a lot about needing to re-think my approach"
                       ::packet-builder
                       ::server-security]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
+
+(s/fdef current-timeout
+        :args (s/cat :state ::state)
+        :ret nat-int?)
+(defn current-timeout
+  "How long should next step wait before giving up?"
+  [this]
+  (-> this ::timeout
+      (or default-timeout)))
+
+(s/fdef do-send-packet
+        :args (s/cat :log-state ::log/state
+                     :this ::state
+                     :on-success (s/fspec :args (s/cat :result any?)
+                                          :ret any?)
+                     :on-failure (s/fspec :args (s/cat :failure ::specs/exception-instance)
+                                          :ret any?)
+                     :chan->server strm/sinkable?
+                     :packet (s/or :bytes bytes?
+                                   ;; Honestly, an nio.ByteBuffer would probably be
+                                   ;; just fine here also
+                                   :byte-buf ::specs/byte-buf)
+                     :timeout (s/and integer?
+                                     (complement neg?))
+                     :timeout-key any?)
+        :ret (s/keys :req [::log/state ::specs/deferrable]))
+(defn do-send-packet
+  "Send a ByteBuf (et al) as UDP to the server"
+  [{log-state ::log/state
+    {:keys [::log/logger
+            ::specs/srvr-ip
+            ::specs/srvr-port]
+     :as server-security} ::server-security
+    :keys [::chan->server]
+    :as this}
+   on-success
+   on-failure
+   timeout
+   timeout-key
+   packet]
+  (let [d (strm/try-put! chan->server
+                         {:host srvr-ip
+                          :message packet
+                          :port srvr-port}
+                         timeout
+                         timeout-key)
+        log-state (log/info log-state
+                            ::do-send-packet
+                            ""
+                            {::server-security server-security})]
+    {::log/state log-state
+     ::specs/deferrable (dfrd/on-realized d
+                                          on-success
+                                          on-failure)}))
+
 ;;; This namespace is too big, and I hate to add this next
 ;;; function to it.
 ;;; But there's a circular reference if I try to
@@ -557,18 +614,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
         (swap! msg-log-state-atom #(log/flush-logs! logger %))
         result))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Public
-
-(s/fdef current-timeout
-        :args (s/cat :state ::state)
-        :ret nat-int?)
-(defn current-timeout
-  "How long should next step wait before giving up?"
-  [this]
-  (-> this ::timeout
-      (or default-timeout)))
-
 (s/fdef update-timeout!
         :args (s/cat :state-agent ::state-agent
                      :timeout nat-int?)
@@ -614,24 +659,27 @@ The fact that this is so big says a lot about needing to re-think my approach"
         client-extension-load-time (if reload?
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
-        extension (if reload?
-                    (try (-> "/etc/curvecpextension"
-                             ;; This is pretty inefficient...we really only want 16 bytes.
-                             ;; Should be good enough for a starting point, though
-                             slurp
-                             (subs 0 16)
-                             .getBytes)
-                         (catch java.io.FileNotFoundException _
-                           ;; This really isn't all that unexpected
-                           ;; The original goal/dream was to get CurveCP
-                           ;; added as a standard part of every operating
-                           ;; system's network stack
-                           (log/flush-logs! logger (log/warn (log/clean-fork log-state
-                                                                             ::clientextension-init)
-                                                             ::clientextension-init
-                                                             "no /etc/curvecpextension file"))
-                           (K/zero-bytes 16)))
-                    extension)]
+        [extension log-state] (if reload?
+                                (try (-> "/etc/curvecpextension"
+                                         ;; This is pretty inefficient...we really only want 16 bytes.
+                                         ;; Should be good enough for a starting point, though
+                                         slurp
+                                         (subs 0 16)
+                                         .getBytes)
+                                     (catch java.io.FileNotFoundException _
+                                       ;; This really isn't all that unexpected.
+                                       ;; The original goal/dream was to get CurveCP
+                                       ;; added as a standard part of every operating
+                                       ;; system's network stack, so that this would
+                                       ;; become a part of standard unix-based systems.
+                                       ;; This is just a demonstrator of how well that
+                                       ;; panned out.
+                                       [(K/zero-bytes 16)
+                                        (log/flush-logs! logger (log/warn (log/clean-fork log-state
+                                                                                          ::clientextension-init)
+                                                                          ::clientextension-init
+                                                                          "no /etc/curvecpextension file"))]))
+                                [extension log-state])]
     (assert (= (count extension) K/extension-length))
     (let [log-state (log/info log-state
                               ::clientextension-init
@@ -713,51 +761,6 @@ Which at least implies that the agent approach should go away."
     (log/warn log-state
               ::do-stop
               "No child message io-loop to stop")))
-
-(s/fdef do-send-packet
-        :args (s/cat :log-state ::log/state
-                     :this ::state
-                     :on-success (s/fspec :args (s/cat :result any?)
-                                          :ret any?)
-                     :on-failure (s/fspec :args (s/cat :failure ::specs/exception-instance)
-                                          :ret any?)
-                     :chan->server strm/sinkable?
-                     :packet (s/or :bytes bytes?
-                                   ;; Honestly, an nio.ByteBuffer would probably be
-                                   ;; just fine here also
-                                   :byte-buf ::specs/byte-buf)
-                     :timeout (s/and integer?
-                                     (complement neg?))
-                     :timeout-key any?)
-        :ret (s/keys :req [::log/state ::specs/deferrable]))
-(defn do-send-packet
-  "Send a ByteBuf (et al) as UDP to the server"
-  [{log-state ::log/state
-    {:keys [::log/logger
-            ::specs/srvr-ip
-            ::specs/srvr-port]
-     :as server-security} ::server-security
-    :keys [::chan->server]
-    :as this}
-   on-success
-   on-failure
-   timeout
-   timeout-key
-   packet]
-  (let [d (strm/try-put! chan->server
-                         {:host srvr-ip
-                          :message packet
-                          :port srvr-port}
-                         timeout
-                         timeout-key)
-        log-state (log/info log-state
-                            ::do-send-packet
-                            ""
-                            {::server-security server-security})]
-    {::log/state log-state
-     ::specs/deferrable (dfrd/on-realized d
-                                          on-success
-                                          on-failure)}))
 
 (defn update-client-short-term-nonce
   "Note that this can loop right back to a negative number."

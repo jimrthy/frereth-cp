@@ -16,6 +16,7 @@
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.test-factory :as factory]
+            [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import io.netty.buffer.ByteBuf))
 
@@ -201,6 +202,8 @@
   (println "Top of shake-hands")
   (jio/delete-file "/tmp/shake-hands.server.log.edn" ::ignore-errors)
   (jio/delete-file "/tmp/shake-hands.client.log.edn" ::ignore-errors)
+  ;; FIXME: Ditch the client agent.
+  ;; Rewrite this entire thing as a pair of dfrd/chains.
   (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log.edn")
         srvr-log-state (log/init ::shake-hands.server)
         initial-server (factory/build-server srvr-logger srvr-log-state)
@@ -323,43 +326,67 @@
                                                                :message cookie)
                                                         1000
                                                         ::timeout)]
+                                (println "server-test/handshake-test: cookie->client result:" put)
                                 (if (not= ::timeout put)
                                   ;; Get the Initiate from the client
-                                  (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                                    ;; FIXME: Verify that this is a valid Initiate packet
-                                    (if-not (or (= initiate ::drained)
-                                                (= initiate ::timeout))
-                                      (do
-                                        (is (= server-ip (-> initiate
-                                                             :host
-                                                             .getAddress
-                                                             vec)))
-                                        (is (bytes? (:message initiate))
-                                            (str "Invalid byte in :message inside" initiate))
-                                        (if-let [port (:port initiate)]
-                                          (is (= server-port port))
-                                          (is false (str "UDP packet missing port in " initiate)))
-                                        (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
-                                          (if (not= ::timeout put)
-                                            (let [first-srvr-message @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
-                                              (if-not (or (= first-srvr-message ::drained)
-                                                          (= first-srvr-message ::timeout))
-                                                (let [put @(strm/try-put! client<-server
-                                                                          first-srvr-message
-                                                                          1000
-                                                                          ::timeout)]
-                                                  (if (not= ::timeout put)
-                                                    (let [first-full-clnt-message @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                                                      ;; As long as we got a message back, we should be able to call
-                                                      ;; this test done.
-                                                      (when (= ::timeout first-full-clnt-message)
-                                                        (throw (ex-info "Timed out waiting for client response"))))
-                                                    (throw (ex-info "Timed out writing first server Message packet to client"))))
-                                                (throw (ex-info "Failed pulling first real Message packet from Server"
-                                                                {::problem first-srvr-message}))))
-                                            (throw (ex-info "Timed out writing Initiate to Server")))))
-                                      (throw (ex-info "Failed to take Initiate/Vouch from Client"
-                                                      {::problem initiate}))))
+                                  (let [possible-initiate (strm/try-take! client->server ::drained 1000 ::timeout)
+                                        initiate-outcome (dfrd/deferred)]
+                                    (dfrd/on-realized possible-initiate
+                                                      (fn [initiate]
+                                                        (println "Initiate retrieved from client:"
+                                                                 initiate
+                                                                 "\nclient->server:"
+                                                                 client->server)
+                                                        ;; FIXME: Verify that this is a valid Initiate packet
+                                                        (if-not (or (= initiate ::drained)
+                                                                    (= initiate ::timeout))
+                                                          (do
+                                                            (is (= server-ip (-> initiate
+                                                                                 :host
+                                                                                 .getAddress
+                                                                                 vec)))
+                                                            (is (bytes? (:message initiate))
+                                                                (str "Invalid byte in :message inside" initiate))
+                                                            (if-let [port (:port initiate)]
+                                                              (is (= server-port port))
+                                                              (is false (str "UDP packet missing port in " initiate)))
+                                                            (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
+                                                              (if (not= ::timeout put)
+                                                                (let [first-srvr-message @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
+                                                                  (if-not (or (= first-srvr-message ::drained)
+                                                                              (= first-srvr-message ::timeout))
+                                                                    (let [put @(strm/try-put! client<-server
+                                                                                              first-srvr-message
+                                                                                              1000
+                                                                                              ::timeout)]
+                                                                      (if (not= ::timeout put)
+                                                                        (let [first-full-clnt-message @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                                                          ;; As long as we got a message back, we should be able to call
+                                                                          ;; this test done.
+                                                                          (if (= ::timeout first-full-clnt-message)
+                                                                            (do
+                                                                              (dfrd/error! initiate-outcome
+                                                                                           (ex-info "Timed out waiting for client response")))
+                                                                            (dfrd/success! initiate-outcome first-full-clnt-message)))
+                                                                        (do
+                                                                          (dfrd/error! initiate-outcome
+                                                                                       (ex-info "Timed out writing first server Message packet to client")))))
+                                                                    (do
+                                                                      (dfrd/error! initiate-outcome
+                                                                                   (ex-info "Failed pulling first real Message packet from Server"
+                                                                                            {::problem first-srvr-message})))))
+                                                                (do
+                                                                  (dfrd/error! initiate-outcome
+                                                                               (ex-info "Timed out writing Initiate to Server"))))))
+                                                          (do
+                                                            (dfrd/error! initiate-outcome (ex-info "Failed to take Initiate/Vouch from Client"
+                                                                                                   {::problem initiate})))))
+                                                      identity)
+                                    (let [initiate-outcome (deref initiate-outcome 2000 ::initiate-timeout)]
+                                      (is (not= ::initiate-timeout initiate-outcome))
+                                      (is (not (instance? Throwable initiate-outcome)))
+                                      ;; Q: What are we dealing with here?
+                                      (is (not initiate-outcome))))
                                   (throw (RuntimeException. "Timed out putting Cookie to Client")))))
                             (throw (ex-info "I know I have a mechanism for writing from server to client among"
                                             {::keys (keys @client-agent)

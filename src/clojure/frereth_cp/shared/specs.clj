@@ -4,7 +4,7 @@
             [clojure.test.check.generators :as lo-gen]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd])
-  (:import [io.aleph.dirigiste Executor Stats]))
+  (:import [io.aleph.dirigiste Executor]))
 
 (defn class-predicate
   "Returns a predicate to check whether an object is an instance of the supplied class.

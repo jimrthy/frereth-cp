@@ -97,6 +97,7 @@ implementation. This is code that I don't understand yet"
                                     ::state/server-security
                                     ::state/vouch
                                     ::shared/work-area]
+                             log-state ::log/state
                              :as this} (state/clientextension-init this)
                             {:keys [::shared/text]} work-area
 
@@ -362,17 +363,19 @@ implementation. This is code that I don't understand yet"
                                              this
                                              cookie-response
                                              timeout)
-                      dfrd-success (state/do-send-packet this
-                                                         cookie-waiter
-                                                         (fn [ex]
-                                                           (send wrapper
-                                                                 #(throw (ex-info (log/exception-details ex)
-                                                                                  {::problem %}))))
-                                                         timeout
-                                                         ::sending-hello-timed-out
-                                                         raw-packet)
-                      send-packet-success (deref dfrd-success 1000 ::send-response-timed-out)
+                      dfrd-send-success (state/do-send-packet this
+                                                              cookie-waiter
+                                                              (fn [ex]
+                                                                (send wrapper
+                                                                      #(throw (ex-info (log/exception-details ex)
+                                                                                       {::problem %}))))
+                                                              timeout
+                                                              ::sending-hello-timed-out
+                                                              raw-packet)
+                      send-packet-success (deref dfrd-send-success 1000 ::send-response-timed-out)
+                      _ (println "client/poll-servers-with-hello! Hello sent:" send-packet-success)
                       actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
+                      _ (println "client/poll-servers-with-hello! Cookie received:" actual-success)
                       now (System/nanoTime)]
                   ;; I don't think send-packet-success matters much
                   ;; Although...actually, ::send-response-timed-out would be a big
@@ -525,6 +528,11 @@ implementation. This is code that I don't understand yet"
         ;; Even though it really is just called for side-effects.
         :ret any?)
 (defn start!
+  ;; FIXME: Ditch the client agent completely.
+  ;; Take the client state as a standard immutable value parameter.
+  ;; Return a deferred that's really a chain of everything that
+  ;; happens here, up to the point of switching into message-exchange
+  ;; mode.
   "Perform the side-effects to establish a connection with a server"
   [wrapper]
   (println "Client: Top of start!")
