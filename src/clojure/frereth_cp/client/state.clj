@@ -588,7 +588,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                {::shared/network-packet bundle
                                 ::server-security server-security}))]
       (assert (and srvr-name srvr-port message-packet "Where did this go?"))
-      (let [result
+      (let [composite-result
             (do-send-packet @msg-log-state-atom
                             state
                             (fn [success]
@@ -610,7 +610,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                                {::shared/network-packet bundle
                                                                 ::server-security server-security})))))
                             timeout
-                            ::child->timed-out)]
+                            ::child->timed-out)
+            {log-state ::log/state
+             result ::specs/deferrable} composite-result]
+        ;; TODO: Finish writing log/merge and make this happen
+        (swap! msg-log-state-atom #(log/warn %
+                                             ::child->
+                                             "FIXME: Need to push new logs from log-state into the message-log-state-atom"))
         (swap! msg-log-state-atom #(log/flush-logs! logger %))
         result))))
 

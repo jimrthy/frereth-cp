@@ -310,7 +310,8 @@
 
 (defn exception
   ([log-state ex label]
-   (add-log-entry log-state ::exception label))
+   (add-log-entry log-state ::exception label ""
+                  (exception-details ex)))
   ([log-state ex label message]
    (add-log-entry log-state ::exception label message
                   (exception-details ex)))
@@ -461,3 +462,12 @@ show up later."
      (synchronize src forked)))
   ([src]
    (init (::context src) (inc (::lamport src)))))
+
+(s/fdef merge
+        :args (s/cat :logs1 ::state
+                     :logs2 ::state)
+        :ret ::state)
+(defn merge
+  "Combine the entries of two log states"
+  [x y]
+  (throw (RuntimeException. "Write this")))

@@ -363,15 +363,16 @@ implementation. This is code that I don't understand yet"
                                              this
                                              cookie-response
                                              timeout)
-                      dfrd-send-success (state/do-send-packet this
-                                                              cookie-waiter
-                                                              (fn [ex]
-                                                                (send wrapper
-                                                                      #(throw (ex-info (log/exception-details ex)
-                                                                                       {::problem %}))))
-                                                              timeout
-                                                              ::sending-hello-timed-out
-                                                              raw-packet)
+                      {log-state ::log/state
+                       dfrd-send-success ::specs/deferrable} (state/do-send-packet this
+                                                                                   cookie-waiter
+                                                                                   (fn [ex]
+                                                                                     (send wrapper
+                                                                                           #(throw (ex-info (log/exception-details ex)
+                                                                                                            {::problem %}))))
+                                                                                   timeout
+                                                                                   ::sending-hello-timed-out
+                                                                                   raw-packet)
                       send-packet-success (deref dfrd-send-success 1000 ::send-response-timed-out)
                       _ (println "client/poll-servers-with-hello! Hello sent:" send-packet-success)
                       actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
