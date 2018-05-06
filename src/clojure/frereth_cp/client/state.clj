@@ -310,15 +310,19 @@ The fact that this is so big says a lot about needing to re-think my approach"
              ::server-security server-security
              ::log/state log-state}))))
 
+(s/fdef ->message-exchange-mode
+        :args (s/cat :wrapper ::state-agent
+                     :this ::state
+                     :initial-server-response ::specs/network-packet))
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.
   Now we can start doing something interesting."
-  [{:keys [::chan<-server
+  [wrapper
+   {:keys [::chan<-server
            ::chan->server
            ::msg-specs/->child]
     log-state ::log/state
     :as this}
-   wrapper
    initial-server-response]
   (when-not log-state
     (println "Missing log-state among\n"
@@ -339,7 +343,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; Q: Is there a better alternative?
   (let [log-state (log/warn log-state
                             ::->message-exchange-mode
-                            "deprecated")
+                            "deprecated (?)")
         log-state (log/info log-state
                             ::->message-exchange-mode
                             "Initial Response from server"
@@ -378,13 +382,15 @@ The fact that this is so big says a lot about needing to re-think my approach"
           (log/warn log-state
                     ::->message-exchange-mode
                     "That response to Initiate was a failure"))]
-    (send wrapper assoc ::packet-builder (fn [_]
-                                           (throw (RuntimeException. "FIXME: Need a function that mirrors initiate/build-initiate-packet!"))))
-    ;; This is another example of things falling apart in a multi-threaded
-    ;; scenario.
-    ;; Honestly, all the log calls that happen here should be updates wrapped
-    ;; in a send.
-    (send wrapper assoc ::log/state log-state)))
+    (send wrapper
+          assoc
+          ::packet-builder (fn [_]
+                             (throw (RuntimeException. "FIXME: Need a function that mirrors initiate/build-initiate-packet!")))
+          ;; This is another example of things falling apart in a multi-threaded
+          ;; scenario.
+          ;; Honestly, all the log calls that happen here should be updates wrapped
+          ;; in a send.
+          ::log/state log-state)))
 
 (declare current-timeout)
 (s/fdef final-wait
@@ -430,6 +436,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
                       ::msg-specs/io-handle
                       ::packet-builder
                       ::server-security]))
+
+(s/fdef update-callback!
+        :args (s/cat :io-handle ::msg-specs/io-handle
+                     :time-out (s/and integer?
+                                      (complement neg?))
+                     :new-callback ::msg-specs/->parent))
+(defn update-callback!
+  [io-handle time-out new-callback]
+  (message/swap-parent-callback! io-handle
+                                 time-out
+                                 ::child
+                                 new-callback))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -545,6 +563,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
     (throw (ex-info "Missing packet-builder"
                     {::existing-keys (keys state)
                      ::problem (dissoc state ::log/state)})))
+  (when-not io-handle
+    (throw (ex-info "Missing io-handle"
+                    {::existing-keys (keys state)
+                     ::problem (dissoc state ::log/state)})))
   (let [{:keys [::specs/srvr-name ::shared/srvr-port]} server-security]
     ;; This flag is stored in the child state.
     ;; I can retrieve that from the io-handle, but that's
@@ -580,15 +602,19 @@ The fact that this is so big says a lot about needing to re-think my approach"
           bundle {:host srvr-name
                   :port srvr-port
                   :message message-packet}
-          msg-log-state-atom (::log/state-atom io-handle)
-          _ (swap! msg-log-state-atom
-                   #(log/debug %
-                               ::child->
-                               "Client sending a message packet from child->serve"
-                               {::shared/network-packet bundle
-                                ::server-security server-security}))]
+          msg-log-state-atom (::log/state-atom io-handle)]
+      (if msg-log-state-atom
+        (swap! msg-log-state-atom
+               #(log/debug %
+                           ::child->
+                           "Client sending a message packet from child->serve"
+                           {::shared/network-packet bundle
+                            ::server-security server-security}))
+        (throw (ex-info "Missing log state-atom in io-handle"
+                        {::available-keys (keys io-handle)
+                         ::problem io-handle})))
       (assert (and srvr-name srvr-port message-packet "Where did this go?"))
-      (let [composite-result
+      (let [composite-result-placeholder
             (do-send-packet @msg-log-state-atom
                             state
                             (fn [success]
@@ -612,7 +638,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                             timeout
                             ::child->timed-out)
             {log-state ::log/state
-             result ::specs/deferrable} composite-result]
+             result ::specs/deferrable} composite-result-placeholder]
         ;; TODO: Finish writing log/merge and make this happen
         (swap! msg-log-state-atom #(log/warn %
                                              ::child->
@@ -632,9 +658,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                       (assoc this ::timeout new-timeout)))))
   (let [{:keys [::msg-specs/io-handle]
          :as this} @wrapper]
-    (message/swap-parent-callback! io-handle (partial child->
-                                                      (extract-child-send-state this)
-                                                      new-timeout))))
+    (update-callback! io-handle (partial child->
+                                         (extract-child-send-state this)
+                                         new-timeout))))
 
 (s/fdef clientextension-init
         :args (s/cat :this ::state)
@@ -734,15 +760,35 @@ Which at least implies that the agent approach should go away."
         {:keys [::msg-specs/io-handle]
          log-state ::log/state} (message/do-start startable
                                                   logger
-                                                  (partial child->
-                                                           (extract-child-send-state this)
-                                                           (current-timeout this))
+                                                  nil
                                                   ->child)
         log-state (log/debug log-state
                              ::fork!
                              "Child message loop initialized"
                              {::this (dissoc this ::log/state)
-                              ::child (dissoc io-handle ::log/state)})]
+                              ::child (dissoc io-handle ::log/state)})
+        time-out (current-timeout this)]
+    ;; There's a chicken/egg problem. We need the io-handle before
+    ;; we can build this callback. But we need a callback before we
+    ;; can build the io-handle.
+    (update-callback! io-handle
+                      time-out
+                      (partial child->
+                               (extract-child-send-state (assoc this
+                                                                ::msg-specs/io-handle io-handle))
+                               time-out))
+    ;; At least theoretically, we could
+    ;; wind up in a race condition where
+    ;; an NPE due to this gets triggered
+    ;; when the child does a write before
+    ;; the swap triggered by update-callback!
+    ;; finishes.
+    ;; Note that this is *not* a simple atom
+    ;; swap! The change has to work through
+    ;; the message loop.
+    ;; TODO: Make the message loop check for
+    ;; a nil callback and postpone any sends
+    ;; until
     (child-spawner! io-handle)
     (assoc this
            ::child io-handle
@@ -768,6 +814,9 @@ Which at least implies that the agent approach should go away."
               ::do-stop
               "No child message io-loop to stop")))
 
+(s/fdef update-client-short-term-nonce
+        :args (s/cat :nonce integer?)
+        :ret integer?)
 (defn update-client-short-term-nonce
   "Note that this can loop right back to a negative number."
   [^Long nonce]

@@ -1614,8 +1614,7 @@
            main-log-state-atom (atom log-state)]
        (swap! log-state-atom (fn [io-log-state]
                                (let [[main-log-state io-log-state] (log/synchronize log-state io-log-state)]
-                                 (reset! main-log-state-atom main-log-state)
-                                 io-log-state)))
+                                 main-log-state)))
        (assoc result ::log/state @main-log-state-atom))))
   ([stream-holder]
    (get-state stream-holder 500 ::timed-out)))
@@ -1854,25 +1853,38 @@
                                          :new-callback ::specs/->parent)
                     :sans-timeout (s/cat :io-handle ::specs/io-handle
                                          :new-callback ::specs/->parent))
-        :ret ::specs/state)
+        :ret (s/or :succeeded ::specs/state
+                   :timed-out-value any?))
 ;; Q: Do I want to set an alternative that blocks?
 (defn swap-parent-callback!
   ([{:keys [::log/logger
              ::specs/message-loop-name
             ::specs/stream]
-     log-state-atom ::log/state-atom}
+     log-state-atom ::log/state-atom
+     :as io-loop}
     time-out
     timed-out-value
     new-callback]
-   (swap! log-state-atom
-          #(log/debug %
-                      ::swap-parent-callback!
-                      "Swapping out the parent-callback"
-                      {::specs/message-loop-name message-loop-name
-                       ::specs/stream stream}))
-   (let [sent (strm/try-put! stream
-                             [::reset-parent-callback new-callback]
-                             time-out
-                             timed-out-value)]))
+   (let [start-time (System/currentTimeMillis)]
+     (swap! log-state-atom
+            #(log/debug %
+                        ::swap-parent-callback!
+                        "Swapping out the parent-callback"
+                        {::specs/message-loop-name message-loop-name
+                         ::specs/stream stream}))
+     (let [sent (strm/try-put! stream
+                               [::reset-parent-callback new-callback]
+                               time-out
+                               timed-out-value)
+           successfully-sent (deref sent time-out ::timed-out)]
+       (if (not= successfully-sent ::timed-out)
+         (let [sent-time (System/currentTimeMillis)
+               remaining-time (- time-out sent-time)]
+           (swap! log-state-atom
+                  #(log/debug %
+                              ::swap-parent-callback!
+                              "Querying for new client state"))
+           (get-state io-loop remaining-time timed-out-value))
+         timed-out-value))))
   ([io-handle new-callback]
    (swap-parent-callback! io-handle 5000 ::timed-out new-callback)))

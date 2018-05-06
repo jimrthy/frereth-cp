@@ -275,7 +275,7 @@ implementation. This is code that I don't understand yet"
           ;; But this entire function is a stateful mess.
           ;; At least this helps it stay in one place.
           this (state/fork! this)]
-      (initiate/build-and-send-vouch! wrapper this cookie))
+      (initiate/build-and-send-vouch! this cookie))
     (catch Exception ex
       (let [log-state (log/exception log-state
                                      ex
