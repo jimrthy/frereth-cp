@@ -171,7 +171,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::child-send-state (s/keys :req [::chan->server
                                         ::log/logger
                                         ::log/state
-                                        ::msg-specs/io-handle
                                         ::packet-builder
                                         ::server-security]))
 
@@ -433,7 +432,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (select-keys state [::chan->server
                       ::log/logger
                       ::log/state
-                      ::msg-specs/io-handle
                       ::packet-builder
                       ::server-security]))
 
@@ -553,21 +551,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
   [{log-state ::log/state
     :keys [::chan->server
            ::log/logger
-           ::msg-specs/io-handle
            ::packet-builder
            ::server-security]
     :as state}
    timeout
    ^bytes message-block]
-  (when-not packet-builder
-    (throw (ex-info "Missing packet-builder"
-                    {::existing-keys (keys state)
-                     ::problem (dissoc state ::log/state)})))
-  (when-not io-handle
-    (throw (ex-info "Missing io-handle"
-                    {::existing-keys (keys state)
-                     ::problem (dissoc state ::log/state)})))
-  (let [{:keys [::specs/srvr-name ::shared/srvr-port]} server-security]
+  {:pre [packet-builder]}
+  #_(when-not packet-builder
+      (throw (ex-info "Missing packet-builder"
+                      {::existing-keys (keys state)
+                       ::problem (dissoc state ::log/state)})))
+  (let [log-state (log/do-sync-clock log-state)
+        {:keys [::specs/srvr-name ::shared/srvr-port]} server-security]
     ;; This flag is stored in the child state.
     ;; I can retrieve that from the io-handle, but that's
     ;; terribly inefficient.
@@ -602,48 +597,33 @@ The fact that this is so big says a lot about needing to re-think my approach"
           bundle {:host srvr-name
                   :port srvr-port
                   :message message-packet}
-          msg-log-state-atom (::log/state-atom io-handle)]
-      (if msg-log-state-atom
-        (swap! msg-log-state-atom
-               #(log/debug %
-                           ::child->
-                           "Client sending a message packet from child->serve"
-                           {::shared/network-packet bundle
-                            ::server-security server-security}))
-        (throw (ex-info "Missing log state-atom in io-handle"
-                        {::available-keys (keys io-handle)
-                         ::problem io-handle})))
+          log-state (log/debug log-state
+                               ::child->
+                               "Client sending a message packet from child->serve"
+                               {::shared/network-packet bundle
+                                ::server-security server-security})]
       (assert (and srvr-name srvr-port message-packet "Where did this go?"))
       (let [composite-result-placeholder
-            (do-send-packet @msg-log-state-atom
+            (do-send-packet log-state
                             state
                             (fn [success]
-                              (swap! msg-log-state-atom
-                                     (fn [msg-state]
-                                       (update msg-state
-                                               #(log/debug %
-                                                           ::child->
-                                                           "Packet sent"
-                                                           {::shared/network-packet bundle
-                                                            ::server-security server-security})))))
+                              (let [log-state (log/debug log-state
+                                                         ::child->
+                                                         "Packet sent"
+                                                         {::shared/network-packet bundle
+                                                          ::server-security server-security})]
+                                (log/flush-logs! logger log-state)))
                             (fn [ex]
-                              (swap! msg-log-state-atom
-                                     (fn [msg-state]
-                                       (update msg-state
-                                               #(log/exception %
-                                                               ::child->
-                                                               "Sending packet failed"
-                                                               {::shared/network-packet bundle
-                                                                ::server-security server-security})))))
+                              (let [log-state (log/exception log-state
+                                                             ex
+                                                             ::child->
+                                                             "Sending packet failed"
+                                                             {::shared/network-packet bundle
+                                                              ::server-security server-security})]))
                             timeout
                             ::child->timed-out)
             {log-state ::log/state
              result ::specs/deferrable} composite-result-placeholder]
-        ;; TODO: Finish writing log/merge and make this happen
-        (swap! msg-log-state-atom #(log/warn %
-                                             ::child->
-                                             "FIXME: Need to push new logs from log-state into the message-log-state-atom"))
-        (swap! msg-log-state-atom #(log/flush-logs! logger %))
         result))))
 
 (s/fdef update-timeout!
@@ -760,35 +740,15 @@ Which at least implies that the agent approach should go away."
         {:keys [::msg-specs/io-handle]
          log-state ::log/state} (message/do-start startable
                                                   logger
-                                                  nil
+                                                  (partial child->
+                                                           (extract-child-send-state this)
+                                                           (current-timeout this))
                                                   ->child)
         log-state (log/debug log-state
                              ::fork!
                              "Child message loop initialized"
                              {::this (dissoc this ::log/state)
-                              ::child (dissoc io-handle ::log/state)})
-        time-out (current-timeout this)]
-    ;; There's a chicken/egg problem. We need the io-handle before
-    ;; we can build this callback. But we need a callback before we
-    ;; can build the io-handle.
-    (update-callback! io-handle
-                      time-out
-                      (partial child->
-                               (extract-child-send-state (assoc this
-                                                                ::msg-specs/io-handle io-handle))
-                               time-out))
-    ;; At least theoretically, we could
-    ;; wind up in a race condition where
-    ;; an NPE due to this gets triggered
-    ;; when the child does a write before
-    ;; the swap triggered by update-callback!
-    ;; finishes.
-    ;; Note that this is *not* a simple atom
-    ;; swap! The change has to work through
-    ;; the message loop.
-    ;; TODO: Make the message loop check for
-    ;; a nil callback and postpone any sends
-    ;; until
+                              ::child (dissoc io-handle ::log/state)})]
     (child-spawner! io-handle)
     (assoc this
            ::child io-handle

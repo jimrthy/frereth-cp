@@ -358,6 +358,17 @@
     []
     @my-lamport)
   (comment (get-official-clock))
+
+  (s/fdef do-sync-clock
+          :args (s/cat :log-state ::state)
+          :ret ::state)
+  (defn do-sync-clock
+    "Synchronize my clock with a state's"
+    [log-state]
+    (let [{:keys [::lamport]} log-state]
+      (swap! my-lamport max lamport)
+      (assoc log-state ::lamport @my-lamport)))
+
   (defn flush-logs!
     "For the side-effects to write the accumulated logs.
 
@@ -382,10 +393,9 @@
       (doseq [message (::entries log-state)]
         (log! logger message))
       (flush! logger)
-      (swap! my-lamport max lamport)
-      (assoc log-state
-             ::entries []
-             ::lamport @my-lamport))))
+
+      (assoc (do-sync-clock log-state)
+             ::entries []))))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state
