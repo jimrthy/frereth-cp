@@ -333,7 +333,7 @@
                                         initiate-outcome (dfrd/deferred)]
                                     (dfrd/on-realized possible-initiate
                                                       (fn [initiate]
-                                                        (println "Initiate retrieved from client:"
+                                                        (println "server-test/handshake Initiate retrieved from client:"
                                                                  initiate
                                                                  "\nclient->server:"
                                                                  client->server)

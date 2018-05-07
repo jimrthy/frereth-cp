@@ -288,8 +288,8 @@
 (s/fdef wait-for-cookie!
         :args (s/cat :this ::state/state
                      :notifier dfrd/deferrable?
-                     ::timeout (s/and number?
-                                      (complement neg?))
+                     :timeout (s/and number?
+                                     (complement neg?))
                      :sent ::specs/network-packet)
         :ret ::specs/deferrable)
 (defn wait-for-cookie!
