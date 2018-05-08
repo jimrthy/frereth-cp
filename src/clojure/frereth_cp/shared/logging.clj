@@ -473,11 +473,11 @@ show up later."
   ([src]
    (init (::context src) (inc (::lamport src)))))
 
-(s/fdef merge
+(s/fdef merge-state
         :args (s/cat :logs1 ::state
                      :logs2 ::state)
         :ret ::state)
-(defn merge
+(defn merge-state
   "Combine the entries of two log states"
   [x y]
   (throw (RuntimeException. "Write this")))

@@ -346,7 +346,7 @@
                                                                                  .getAddress
                                                                                  vec)))
                                                             (is (bytes? (:message initiate))
-                                                                (str "Invalid byte in :message inside" initiate))
+                                                                (str "Invalid byte in :message inside Initiate packet: " initiate))
                                                             (if-let [port (:port initiate)]
                                                               (is (= server-port port))
                                                               (is false (str "UDP packet missing port in " initiate)))
@@ -395,9 +395,11 @@
                       (throw (RuntimeException. "Timed out putting Hello to Server")))))
                 (throw (RuntimeException. (str hello " taking Hello from Client"))))))
           (finally
-            (println "Stopping client agent" (-> client-agent
-                                                 deref
-                                                 (dissoc ::log/state)))
+            (let [client-state @client-agent
+                  cleaned (if (map? client-state)
+                            (dissoc client-state ::log/state)
+                            {::agent-state client-state})]
+              (println "Stopping client agent" cleaned))
             (try
               (client/stop! client-agent)
               (try
@@ -413,9 +415,11 @@
                            (log/exception-details ex))))
               (catch Exception ex
                 (println "stop! failed:\n" (log/exception-details ex))))
-            (println "client-agent stopped state:\n"
-                     (dissoc @client-agent
-                             ::log/state)))))
+            (println "client-agent stopped")
+            (if-let [problem (agent-error client-agent)]
+              (println problem)
+              (pprint (dissoc @client-agent
+                              ::log/state))))))
       (finally
         (println "Triggering server event loop exit")
         (factory/stop-server started)))))

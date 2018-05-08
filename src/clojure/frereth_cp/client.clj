@@ -227,8 +227,7 @@ implementation. This is code that I don't understand yet"
         :ret (s/merge ::state/state
                       ::specs/deferrable))
 (defn servers-polled
-  [wrapper
-   {log-state ::log/state
+  [{log-state ::log/state
     logger ::log/logger
     cookie ::specs/network-packet
     :as this}]
@@ -240,9 +239,7 @@ implementation. This is code that I don't understand yet"
     (println "Missing log-state among"
              (keys this)
              "\nin\n"
-             this
-             "\nstate-agent:"
-             wrapper))
+             this))
   (try
     (let [this (dissoc this ::specs/network-packet)
           log-state (log/info log-state
@@ -293,10 +290,10 @@ implementation. This is code that I don't understand yet"
         ;; are mimicking both client and server pieces,
         ;; which need to run this function in a separate
         ;; thread.
-        (hello/poll-servers! wrapper timeout cookie/wait-for-cookie!)
+        (hello/poll-servers! @wrapper timeout cookie/wait-for-cookie!)
         _ (println "client: triggered hello! polling")
         result (-> outcome
-                   (dfrd/chain (partial servers-polled wrapper)
+                   (dfrd/chain servers-polled
                                (fn [{:keys [::specs/deferred
                                             ::log/state]
                                      :as this}]
@@ -307,7 +304,7 @@ implementation. This is code that I don't understand yet"
                                         (if (not (or (= sent ::state/sending-vouch-timed-out)
                                                      (= sent ::state/drained)))
                                           (send-off wrapper (partial state/->message-exchange-mode wrapper) sent)
-                                          )))
+                                          (throw (RuntimeException. "FIXME: Do something with that")))))
                                      (dfrd/catch
                                          (fn [ex]
                                            (send wrapper #(throw (ex-info "Server vouch response failed"
@@ -422,45 +419,57 @@ implementation. This is code that I don't understand yet"
                   log-state ::log/state
                   :as this}]
               (println "Made it into the real client stopper")
-              (try
-                (let [log-state (log/debug log-state
-                                           ::stop!
-                                           "Top of the real stopper")
-                      log-state (state/do-stop (assoc this
-                                                      ::log/state log-state))
-                      log-state
-                      (try
-                        (println "Possibly closing the channel to server" chan->server)
-                        (if chan->server
-                          (do
-                            (strm/close! chan->server)
-                            (log/debug log-state
-                                       ::stop!
-                                       "chan->server closed"))
-                          (log/warn (log/clean-fork log-state ::possible-issue)
-                                    ::stop!
-                                    "chan->server already nil"
-                                    (dissoc this ::log/state)))
-                        (catch Exception ex
-                          (log/exception log-state
-                                         ex
-                                         ::stop!)))
-                      log-state (log/flush-logs! logger
-                                                 (log/info log-state
-                                                           ::stop!
-                                                           "Done"))]
-                  (assoc this
-                         ::chan->server nil
-                         ::log/state log-state
-                         ::shared/packet-management nil))
-                (catch Exception ex
-                  (assoc this
-                         ::chan->server nil
-                         ::log/state (log/exception log-state
-                                                    ex
-                                                    ::stop!
-                                                    "Actual stop function failed")
-                         ::shared/packet-management nil)))))
+              (if log-state
+                (try
+                  (let [log-state (log/debug log-state
+                                             ::stop!
+                                             "Top of the real stopper")
+                        log-state (state/do-stop (assoc this
+                                                        ::log/state log-state))
+                        log-state
+                        (try
+                          (println "Possibly closing the channel to server" chan->server)
+                          (if chan->server
+                            (do
+                              (strm/close! chan->server)
+                              (log/debug log-state
+                                         ::stop!
+                                         "chan->server closed"))
+                            (log/warn (log/clean-fork log-state ::possible-issue)
+                                      ::stop!
+                                      "chan->server already nil"
+                                      (dissoc this ::log/state)))
+                          (catch Exception ex
+                            (log/exception log-state
+                                           ex
+                                           ::stop!)))
+                        log-state (log/flush-logs! logger
+                                                   (log/info log-state
+                                                             ::stop!
+                                                             "Done"))]
+                    (assoc this
+                           ::chan->server nil
+                           ::log/state log-state
+                           ::shared/packet-management nil))
+                  (catch Exception ex
+                    (assoc this
+                           ::chan->server nil
+                           ::log/state (log/exception log-state
+                                                      ex
+                                                      ::stop!
+                                                      "Actual stop function failed")
+                           ::shared/packet-management nil)))
+                (try
+                  (println "Missing log-state. Trying to close the channel to server" chan->server)
+                  (if chan->server
+                    (do
+                      (strm/close! chan->server)
+                      (println "client/stop! Failed logging DEBUG: chan->server closed"))
+                    (println "client/stop! Failed logging DEBUG: chan->server already nil among\n"
+                             (dissoc this ::log/state)))
+                  (catch Exception ex
+                    (println "Couldn't even do that much:\n"
+                             (log/exception-details ex)))))))
       (catch Exception ex
         (println "(send)ing the close function to the client agent failed\n"
                  ex)))))

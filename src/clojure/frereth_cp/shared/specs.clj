@@ -76,3 +76,10 @@ This really seems like a bad road to go down."
                      pos?
                      #(< % 65536)))
 (s/def ::srvr-port ::port)
+
+;; FIXME: Use this more generally
+;; There is some confusion in places where I'm
+;; specifying :timeout as nat-int?
+;; Q: How many of those need to be that instead of this?
+(s/def ::timeout (s/and number?
+                        (complement neg?)))

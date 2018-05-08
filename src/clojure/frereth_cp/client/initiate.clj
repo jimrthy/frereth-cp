@@ -24,6 +24,14 @@
 ;;;; Specs
 
 (s/def ::crypto-box bytes?)
+(s/def ::vouch-building-params (s/keys :req [::log/logger
+                                             ::shared/my-keys
+                                             ::shared/packet-management
+                                             ::state/shared-secrets
+                                             ::shared/work-area]))
+(s/def ::vouch-built (s/keys :req [::inner-i-nonce
+                                   ::log/state
+                                   ::state/vouch]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
@@ -169,10 +177,9 @@ FIXME: Change that"
   ;; for its minute key to definitely time out, though that seems
   ;; like a naive approach with a terrible user experience.
   [this]
-  (let [
-        {log-state ::log/state
+  (let [{log-state ::log/state
          :keys [::log/logger]
-         packet ::vouch} this
+         packet ::state/vouch} this
         log-state (log/flush-logs! logger log-state)
         this (assoc this ::log/state log-state)
         {log-state ::log/state
@@ -213,10 +220,8 @@ FIXME: Change that"
            ::specs/deferred deferred)))
 
 (s/fdef build-vouch
-  :args (s/cat :this ::state/state)
-  :ret (s/keys :req [::inner-i-nonce
-                     ::log/state
-                     ::state/vouch]))
+  :args (s/cat :this ::vouch-building-params)
+  :ret ::vouch-built)
 (defn build-vouch
   [{:keys [::log/logger
            ::shared/my-keys

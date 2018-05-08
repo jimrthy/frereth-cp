@@ -301,7 +301,7 @@
 ;;;; Public
 
 (s/fdef poll-servers-with-hello!
-        :args (s/cat :this ::state/agent-wrapper
+        :args (s/cat :this ::state/state
                      :timeout nat-int?
                      :cookie-waiter (s/fspec :args (s/cat :notifier ::specs/deferrable
                                                           :timeout (s/and number?
@@ -320,14 +320,14 @@
   ;; So maybe this was/is breathtakingly cutting-edge.
   ;; The main point is to avoid waiting 20-ish minutes for TCP connections
   ;; to time out.
-  [wrapper timeout cookie-waiter]
-  (let [{:keys [::log/logger
-                ::state/server-ips]
-         log-state ::log/state
-         {raw-packet ::shared/packet
-          :as packet-management} ::shared/packet-management
-         :as this} @wrapper
-        log-state (log/debug log-state
+  [{:keys [::log/logger
+           ::state/server-ips]
+    log-state ::log/state
+    {raw-packet ::shared/packet
+     :as packet-management} ::shared/packet-management
+    :as this}
+   timeout cookie-waiter]
+  (let [log-state (log/debug log-state
                              ::poll-servers!
                              "Putting hello(s) onto ->server channel"
                              {::raw-packet raw-packet})]

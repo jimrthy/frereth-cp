@@ -59,7 +59,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::server-ips (s/coll-of ::specs/srvr-ip))
 (s/def ::server-security (s/merge ::specs/peer-keys
                                   (s/keys :req [::specs/srvr-name
-                                                ::shared/srvr-port]
+                                                ::specs/srvr-port]
                                           ;; Q: Is there a valid reason for the server-cookie to live here?
                                           ;; Q: I can discard it after sending the vouch, can't I?
                                           ;; A: Yes.
@@ -471,8 +471,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                    ;; Honestly, an nio.ByteBuffer would probably be
                                    ;; just fine here also
                                    :byte-buf ::specs/byte-buf)
-                     :timeout (s/and integer?
-                                     (complement neg?))
+                     :timeout ::specs/timeout
                      :timeout-key any?)
         :ret (s/keys :req [::log/state ::specs/deferrable]))
 (defn do-send-packet
@@ -489,6 +488,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
    timeout
    timeout-key
    packet]
+  (when-not packet
+    (throw (RuntimeException. "Trying to send nil bytes")))
   (let [d (strm/try-put! chan->server
                          {:host srvr-ip
                           :message packet
@@ -557,12 +558,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
    timeout
    ^bytes message-block]
   {:pre [packet-builder]}
-  #_(when-not packet-builder
-      (throw (ex-info "Missing packet-builder"
-                      {::existing-keys (keys state)
-                       ::problem (dissoc state ::log/state)})))
   (let [log-state (log/do-sync-clock log-state)
-        {:keys [::specs/srvr-name ::shared/srvr-port]} server-security]
+        {:keys [::specs/srvr-name ::specs/srvr-port]} server-security]
     ;; This flag is stored in the child state.
     ;; I can retrieve that from the io-handle, but that's
     ;; terribly inefficient.
@@ -602,7 +599,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                "Client sending a message packet from child->serve"
                                {::shared/network-packet bundle
                                 ::server-security server-security})]
-      (assert (and srvr-name srvr-port message-packet "Where did this go?"))
+      (when-not (and srvr-name srvr-port message-packet)
+        (throw (ex-info "Missing something vital"
+                        {::specs/srvr-name srvr-name
+                         ::specs/srvr-port srvr-port
+                         ::shared/network-packet bundle})))
       (let [composite-result-placeholder
             (do-send-packet log-state
                             state
