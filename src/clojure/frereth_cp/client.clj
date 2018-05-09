@@ -391,88 +391,135 @@ implementation. This is code that I don't understand yet"
 
 (s/fdef stop!
         :args (s/cat :state-agent ::state/state-agent)
-        :ret any?)
+        :ret ::state/state)
 (defn stop!
   [wrapper]
-  (println "Trying to stop a client agent\nWrapper:\n"
-           wrapper)
-  (println "Current state:\n"
-           ;; The client state inside the agent is getting
-           ;; set to a deferred.
-           ;; Somewhere.
-           (dissoc @wrapper ::log/state))
-  (if-let [ex (agent-error wrapper)]
-    (let [logger (log/std-out-log-factory)]
-      (log/flush-logs! logger
-                       (log/exception (log/init ::failed)
-                                      ex
-                                      ::stop!
-                                      "Client Agent was in error state")))
+  (let [local-log-atom (atom (log/init ::stop!))]
     (try
-      ;; It seems like it might also make sense to make sure the child
-      ;; message loop (if any) exits.
-      ;; FIXME: Make sure that goes away
-      (send wrapper
-            (fn [{:keys [::state/chan->server
-                         ::log/logger
-                         ::shared/packet-management]
-                  log-state ::log/state
-                  :as this}]
-              (println "Made it into the real client stopper")
-              (if log-state
-                (try
-                  (let [log-state (log/debug log-state
+      (swap! local-log-atom #(log/debug %
+                                        ::stop!
+                                        "Trying to stop a client agent"
+                                        {::wrapper wrapper
+                                         ::wrapper-class (class wrapper)
+                                         ::wrapper-content-class (class @wrapper)}))
+      ;; The client state inside the agent is getting
+      ;; set to a deferred.
+      ;; Somewhere.
+      (swap! local-log-atom #(log/debug %
+                                        ::stop!
+                                        "Current state"
+                                        {::state/state (dissoc @wrapper ::log/state)}))
+      (if-let [ex (agent-error wrapper)]
+        (swap! local-log-atom #(log/exception (log/init ::failed)
+                                              ex
+                                              ::stop!
+                                              "Client Agent was in error state"))
+        ;; Somewhere between checking for the agent-error and this next send,
+        ;; the client agent is very consistently going into an error state.
+        ;; This is worrisome.
+        ;; And yet another reason to just ditch the thing.
+        (try
+          ;; It seems like it might also make sense to make sure the child
+          ;; message loop (if any) exits.
+          ;; FIXME: Make sure that goes away
+          (send wrapper
+                (fn [{:keys [::state/chan->server
+                             ::log/logger
+                             ::shared/packet-management]
+                      log-state ::log/state
+                      :as this}]
+                  (swap! local-log-atom #(log/trace % ::stop! "Made it into the real client stopper"))
+                  (if log-state
+                    (try
+                      (let [log-state (log/debug log-state
+                                                 ::stop!
+                                                 "Top of the real stopper")
+                            log-state (state/do-stop (assoc this
+                                                            ::log/state log-state))
+                            log-state
+                            (try
+                              (swap! local-log-atom #(log/trace %
+                                                                ::stop!
+                                                                "Possibly closing the channel to server"
+                                                                {::state/chan->server chan->server}))
+                              (if chan->server
+                                (do
+                                  (strm/close! chan->server)
+                                  (log/debug log-state
                                              ::stop!
-                                             "Top of the real stopper")
-                        log-state (state/do-stop (assoc this
-                                                        ::log/state log-state))
-                        log-state
-                        (try
-                          (println "Possibly closing the channel to server" chan->server)
-                          (if chan->server
-                            (do
-                              (strm/close! chan->server)
-                              (log/debug log-state
-                                         ::stop!
-                                         "chan->server closed"))
-                            (log/warn (log/clean-fork log-state ::possible-issue)
-                                      ::stop!
-                                      "chan->server already nil"
-                                      (dissoc this ::log/state)))
-                          (catch Exception ex
-                            (log/exception log-state
-                                           ex
-                                           ::stop!)))
-                        log-state (log/flush-logs! logger
-                                                   (log/info log-state
-                                                             ::stop!
-                                                             "Done"))]
-                    (assoc this
-                           ::chan->server nil
-                           ::log/state log-state
-                           ::shared/packet-management nil))
-                  (catch Exception ex
-                    (assoc this
-                           ::chan->server nil
-                           ::log/state (log/exception log-state
-                                                      ex
-                                                      ::stop!
-                                                      "Actual stop function failed")
-                           ::shared/packet-management nil)))
-                (try
-                  (println "Missing log-state. Trying to close the channel to server" chan->server)
-                  (if chan->server
-                    (do
-                      (strm/close! chan->server)
-                      (println "client/stop! Failed logging DEBUG: chan->server closed"))
-                    (println "client/stop! Failed logging DEBUG: chan->server already nil among\n"
-                             (dissoc this ::log/state)))
-                  (catch Exception ex
-                    (println "Couldn't even do that much:\n"
-                             (log/exception-details ex)))))))
-      (catch Exception ex
-        (println "(send)ing the close function to the client agent failed\n"
-                 ex)))))
+                                             "chan->server closed"))
+                                (log/warn (log/clean-fork log-state ::possible-issue)
+                                          ::stop!
+                                          "chan->server already nil"
+                                          (dissoc this ::log/state)))
+                              (catch Exception ex
+                                (log/exception log-state
+                                               ex
+                                               ::stop!)))
+                            log-state (log/flush-logs! logger
+                                                       (log/info log-state
+                                                                 ::stop!
+                                                                 "Done"))]
+                        (assoc this
+                               ::chan->server nil
+                               ::log/state log-state
+                               ::shared/packet-management nil))
+                      (catch Exception ex
+                        (assoc this
+                               ::chan->server nil
+                               ::log/state (log/exception log-state
+                                                          ex
+                                                          ::stop!
+                                                          "Actual stop function failed")
+                               ::shared/packet-management nil)))
+                    (try
+                      (swap! local-log-atom
+                             #(log/warn %
+                                        ::stop!
+                                        "Missing log-state. Trying to close the channel to server"
+                                        {::state/chan->server chan->server}))
+                      (if chan->server
+                        (do
+                          (strm/close! chan->server)
+                          (swap! local-log-atom
+                                 #(log/info %
+                                            ::stop!
+                                            "client/stop! Failed logging DEBUG: chan->server closed"))
+                          (assoc this
+                                 ::chan->server nil
+                                 ::log/state (log/init ::resurrected-during-stop!)
+                                 ::shared/packet-management nil))
+                        (do
+                          (swap! local-log-atom
+                                 #(log/info %
+                                            ::stop!
+                                            "client/stop! Failed logging: chan->server already nil"
+                                            {::state/state (dissoc this ::log/state)}))
+                          (assoc this
+                                 ::chan->server nil
+                                 ::log/state (log/init ::resurrected-during-stop!)
+                                 ::shared/packet-management nil)))
+                      (catch Exception ex
+                        (swap! local-log-atom
+                               #(log/exception %
+                                               ex
+                                               "Couldn't even do that much"))
+                        (assoc this
+                               ::chan->server nil
+                               ::log/state (log/init ::resurrected-during-stop!)
+                               ::shared/packet-management nil))))))
+          (catch Exception ex
+            (swap! local-log-atom
+                   #(log/exception %
+                                   ex
+                                   "(send)ing the close function to the client agent failed"))
+            (assoc @wrapper
+                   ::chan->server nil
+                   ::log/state (log/init ::resurrected-during-stop!)
+                   ::shared/packet-management nil))))
+      (finally
+        (let [logger (log/std-out-log-factory)]
+          (log/flush-logs! logger @local-log-atom))))))
 
 (s/fdef ctor
         :args (s/cat :opts (s/keys :req [::msg-specs/->child

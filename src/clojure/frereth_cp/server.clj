@@ -275,7 +275,10 @@
       (assoc this
              ::log2/state (log2/debug log-state
                                       ::handle-incoming!
-                                      "Ignoring packet of illegal length")))))
+                                      "Ignoring packet of illegal length"
+                                      {::message-length (count message)
+                                       ::shared/network-packet packet
+                                       ::pretty (b-t/->string message)})))))
 
 (s/fdef input-reducer
         :args (s/cat :this ::state/state

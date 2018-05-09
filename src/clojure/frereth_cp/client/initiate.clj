@@ -148,11 +148,11 @@ FIXME: Change that"
          ::log/state log-state})
       {::log/state log-state})))
 
-(s/fdef send-vouch!
+(s/fdef do-send-vouch
         :args (s/cat :this ::state/state)
         :ret (s/merge ::state/state
                       (s/keys :req [::specs/deferred])))
-(defn send-vouch!
+(defn do-send-vouch
   "Send a Vouch/Initiate packet (along with a Message sub-packet)"
   ;; We may have to send this multiple times, because it could
   ;; very well get dropped.
@@ -192,7 +192,7 @@ FIXME: Change that"
                               (fn [success]
                                 (log/flush-logs! logger
                                                  (log/info log-state
-                                                           ::send-vouch!
+                                                           ::do-send-vouch
                                                            "Initiate packet sent.\nWaiting for 1st message"
                                                            {::success success}))
                                 (state/final-wait this success))
@@ -206,7 +206,7 @@ FIXME: Change that"
                                                                 ;; A: Even if it isn't the logger needs to be
                                                                 ;; able to cope with other problems
                                                                 failure
-                                                                ::send-vouch!
+                                                                ::do-send-vouch
                                                                 "Sending Initiate packet failed!"
                                                                 {::problem failure}))
                                 (throw (ex-info "Failed to send cookie->vouch response"
@@ -329,6 +329,8 @@ FIXME: Change that"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
+;; FIXME: Refactor/rename to do-build-and-send-vouch
+;; Because the return value does matter
 (s/fdef build-and-send-vouch!
         :args (s/cat :this ::state/state
                      :cookie ::specs/network-packet)
@@ -355,7 +357,7 @@ FIXME: Change that"
           this (cookie->vouch (update this
                                       ::log/state
                                       #(log/info %
-                                                 ::build-and-send-vouch
+                                                 ::build-and-send-vouch!
                                                  "Converting cookie->vouch"
                                                  {::cause "Received cookie"
                                                   ::effect "Forking child"
@@ -363,11 +365,18 @@ FIXME: Change that"
                               cookie-packet)
           this (update this
                        ::log/state
-                       #(log/flush-logs! logger (log/debug %
-                                                           ::build-and-send-vouch
-                                                           "cookie converted to vouch")))]
-      ;; FIXME: Debug only
-      (println "Client built Initiate/Vouch. Sending it")
-      (send-vouch! this))
+                       #(log/debug %
+                                   ::build-and-send-vouch!
+                                   "cookie converted to vouch"))]
+      (try
+        ;; FIXME: Debug only
+        (println "Client built Initiate/Vouch. Sending it")
+        (let [base-result (do-send-vouch this)]
+          (update base-result ::log/state #(log/flush-logs! logger %)))
+        (catch Exception ex
+          (update this
+                  ::log/state #(log/flush-logs! logger (log/exception %
+                                                                      ex
+                                                                      ::build-and-send-vouch!))))))
     (throw (ex-info "Should have a valid cookie response packet, but do not"
                             {::state/state this}))))

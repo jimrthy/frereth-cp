@@ -15,6 +15,7 @@
             [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
+            [frereth-cp.util :as utils]
             [frereth-cp.test-factory :as factory]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -400,26 +401,38 @@
                             (dissoc client-state ::log/state)
                             {::agent-state client-state})]
               (println "Stopping client agent" cleaned))
-            (try
-              (client/stop! client-agent)
+            (if-let [problem (agent-error client-agent)]
+              (println "Uh-oh. Don't try to stop client-agent. It's in a failed state:\n"
+                       problem)
               (try
-                (if-let [problem (agent-error client-agent)]
-                  (println "Uh-oh. client-agent is in a failed state:\n"
-                           problem)
-                  (await client-agent))
+                (client/stop! client-agent)
+                (try
+                  (if-let [problem (agent-error client-agent)]
+                    (println "Uh-oh. Trying to step client-agent put it into a failed state:\n"
+                             problem)
+                    (await client-agent))
+                  (catch Exception ex
+                    ;; This should never happen.
+                    ;; But I want to be certain that it doesn't escape to the
+                    ;; outer try/catch
+                    (println "Problem waiting for client-agent to finish\n"
+                             (log/exception-details ex))))
                 (catch Exception ex
-                  ;; This should never happen.
-                  ;; But I want to be certain that it doesn't escape to the
-                  ;; outer try/catch
-                  (println "Problem waiting for client-agent to finish\n"
-                           (log/exception-details ex))))
-              (catch Exception ex
-                (println "stop! failed:\n" (log/exception-details ex))))
+                  (println "stop! failed:\n" (log/exception-details ex)))))
             (println "client-agent stopped")
             (if-let [problem (agent-error client-agent)]
-              (println problem)
-              (pprint (dissoc @client-agent
-                              ::log/state))))))
+              (do
+                (is not problem)
+                (println problem))
+              (try
+                (pprint (dissoc @client-agent
+                                ::log/state))
+                (catch Exception ex
+                  (is not ex)
+                  (println "Something got terribly broken:\n"
+                           ;; This causes a stack overflow
+                           #_(utils/pretty @client-agent)
+                           @client-agent)))))))
       (finally
         (println "Triggering server event loop exit")
         (factory/stop-server started)))))
