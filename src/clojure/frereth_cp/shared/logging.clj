@@ -277,11 +277,11 @@
   (log! [{:keys [:state-agent]
           :as this} msg]
     (when-let [ex (agent-error state-agent)]
+      (println "Logging Agent Failed:\n"
+               (exception-details ex))
       ;; Q: What are the odds this will work?
       (let [last-state @state-agent]
-        (println "Logging Agent Failed:\n"
-                 (exception-details ex)
-                 "\nLogging Agent State:\n"
+        (println "Logging Agent State:\n"
                  last-state)
         (restart-agent state-agent last-state)))
     ;; Creating an exception that we're going to throw away
@@ -340,9 +340,10 @@
   (let [writer (BufferedWriter. (FileWriter. file-name))]
     (->OutputWriterLogger writer)))
 
+(let [std-out-log-agent (agent {::flush-count 0})])
 (defn std-out-log-factory
   []
-  (->StdOutLogger (agent {::flush-count 0})))
+  (->StdOutLogger #_std-out-log-agent (agent {::flush-count 0})))
 
 (defn stream-log-factory
   [stream]

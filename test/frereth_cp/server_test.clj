@@ -82,8 +82,7 @@
                      ::io-handle io-handle})))
   (swap! log-state-atom #(log/debug %
                                     ::handshake-client-child-spawner!
-                                    "Forking child process"
-                                    {::now (System/currentTimeMillis)}))
+                                    "Forking child process"))
   (swap! log-state-atom #(log/flush-logs! logger %))
 
   ;; Doing a req/rep sort of thing from server is honestly

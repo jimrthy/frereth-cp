@@ -447,9 +447,10 @@
            ::shared/packet-management]
     log-state ::log2/state
     :as this}]
-  (let [log-state (log2/flush-logs! logger (log2/warn log-state
-                                                      ::stop!
-                                                      "Stopping server state"))]
+  (let [log-state (log2/do-sync-clock log-state)
+        log-state (log2/warn log-state
+                             ::stop!
+                             "Stopping server state")]
     (try
       (let [log-state
             (if event-loop-stopper!
