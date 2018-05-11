@@ -499,7 +499,21 @@ The fact that this is so big says a lot about needing to re-think my approach"
         log-state (log/info log-state
                             ::do-send-packet
                             ""
-                            {::server-security server-security})]
+                            {::server-security server-security
+                             ;; Can't do the straightforward approach from
+                             ;; a ByteBuf without
+                             ;; adding a byte-streams/def-conversion.
+                             ;; TODO: I should probably do that.
+                             ;; However, there's a different problem here:
+                             ;; Sometimes this gets called with packet as a [B.
+                             ;; Others, it's the network-packet spec.
+                             ::human-readable-message (b-t/->string #_packet
+                                                                    (if (bytes? packet)
+                                                                      packet
+                                                                      (let [^ByteBuf packet packet
+                                                                            bs (byte-array (.readableBytes packet))]
+                                                                        (.getBytes packet 0 bs)
+                                                                        bs)))})]
     {::log/state log-state
      ::specs/deferrable (dfrd/on-realized d
                                           on-success
@@ -604,8 +618,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
                         {::specs/srvr-name srvr-name
                          ::specs/srvr-port srvr-port
                          ::shared/network-packet bundle})))
+      ;; do-send-packet was definitely getting called with
+      ;; bad parameters. This should fix the NPE, and maybe the
+      ;; root cause of what I've been fighting for the past couple
+      ;; of days.
+      ;; But it doesn't help with the probably-bigger issue: how
+      ;; is the garbage packet that I'm sending back to the server
+      ;; getting built, much less sent?
+      (throw (RuntimeException. "FIXME: Start back here"))
       (let [composite-result-placeholder
-            (do-send-packet log-state
+            (do-send-packet #_log-state
                             state
                             (fn [success]
                               (let [log-state (log/debug log-state
@@ -622,7 +644,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              {::shared/network-packet bundle
                                                               ::server-security server-security})]))
                             timeout
-                            ::child->timed-out)
+                            ::child->timed-out
+                            bundle)
             {log-state ::log/state
              result ::specs/deferrable} composite-result-placeholder]
         result))))
