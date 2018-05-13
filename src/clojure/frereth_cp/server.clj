@@ -233,7 +233,8 @@
     ^bytes message :message
     :as packet}]
   (println "Server incoming <---------------")
-  (let [log-state (log2/debug log-state
+  (let [log-state (log2/do-sync-clock log-state)
+        log-state (log2/debug log-state
                               ::handle-incoming!
                               "Top")]
     (when-not message

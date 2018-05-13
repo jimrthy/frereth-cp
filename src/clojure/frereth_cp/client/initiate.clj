@@ -29,9 +29,10 @@
                                              ::shared/packet-management
                                              ::state/shared-secrets
                                              ::shared/work-area]))
-(s/def ::vouch-built (s/keys :req [::inner-i-nonce
+(s/def ::vouch-built (s/keys :req [::K/inner-i-nonce
                                    ::log/state
                                    ::state/vouch]))
+(s/def ::vouch bytes?)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
@@ -219,10 +220,10 @@ FIXME: Change that"
            ::log/state log-state
            ::specs/deferred deferred)))
 
-(s/fdef build-vouch
+(s/fdef build-inner-vouch
   :args (s/cat :this ::vouch-building-params)
   :ret ::vouch-built)
-(defn build-vouch
+(defn build-inner-vouch
   [{:keys [::log/logger
            ::shared/my-keys
            ::shared/packet-management
@@ -230,6 +231,9 @@ FIXME: Change that"
            ::shared/work-area]
     log-state ::log/state
     :as this}]
+  ;; This has really been refactored out of cookie->vouch,
+  ;; as a first step toward making the bites a little more
+  ;; digestible. TODO: Continue that process.
   (let [{:keys [::shared/working-nonce
                 ::shared/text]} work-area
         keydir (::shared/keydir my-keys)
@@ -255,14 +259,14 @@ FIXME: Change that"
                                                                  "Setting up working-nonce or short-pair"))
                           (throw ex)))]
         (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
-          (let [log-state (log/trace log-state
-                                   ::build-vouch
-                                   (str "Encrypting the inner-most Initiate Vouch\n"
-                                        "FIXME: Don't log the shared secret")
-                                   {::state/shared-secret (b-t/->string shared-secret)
-                                    ::shared/text text
-                                    ::key-length K/key-length
-                                    ::shared/working-nonce working-nonce})
+          (let [log-state (log/debug log-state
+                                     ::build-vouch
+                                     (str "Encrypting the inner-most Initiate Vouch\n"
+                                          "FIXME: Don't log the shared secret")
+                                     {::state/shared-secret (b-t/->string shared-secret)
+                                      ::shared/text text
+                                      ::key-length K/key-length
+                                      ::shared/working-nonce working-nonce})
               log-state (log/flush-logs! logger log-state)
               ;; This is the inner-most secret that the inner vouch hides.
               ;; The point is to allow the server to verify
@@ -277,18 +281,31 @@ FIXME: Change that"
                                   (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
                                        "(FIXME: Don't log the shared secret)")
                                   {::shared/working-nonce (b-t/->string working-nonce)
-                                   ::state/shared-secret (b-t/->string shared-secret)})]
+                                   ::state/shared-secret (b-t/->string shared-secret)
+                                   ::state/vouch (b-t/->string vouch)})]
             (b-t/byte-copy! vouch
                             0
                             (+ K/box-zero-bytes K/key-length)
                             encrypted)
-            {::inner-i-nonce nonce-suffix
+            {::K/inner-i-nonce nonce-suffix
              ::log/state log-state
              ::state/vouch vouch})
           (throw (ex-info "Missing long-term shared keys"
                           {::problem shared-secrets}))))
       (assert false (str "Missing nonce in packet-management:\n"
                          (keys packet-management))))))
+
+(s/fdef build-vouch
+        :args (s/cat :this ::state/state
+                     :message bytes?)
+        :ret (s/keys :req [::state/state ::vouch]))
+(defn build-vouch
+  [this
+   ^bytes message]
+  (let [{log-state ::log/state
+         :keys [::K/inner-i-nonce ::state/vouch]
+         :as this} (build-inner-vouch this)]
+    (throw (RuntimeException. "Need to build/return the rest of the nonce"))))
 
 (s/fdef cookie->vouch
         :args (s/cat :this ::state/state
@@ -313,18 +330,20 @@ FIXME: Change that"
                             ::cookie->vouch
                             "Getting ready to convert cookie into a Vouch"
                             {::human-readable-cookie (b-t/->string message)
-                             ::shared/network-packet cookie-packet})]
-    ;; Note that this supplies new state
-    ;; Though whether it should is debatable.
-    ;; Q: why would I put this into ::vouch?
-    ;; A: In case we need to resend it.
-    ;; It's perfectly legal to send as many Initiate
-    ;; packets as the client chooses.
-    ;; This is especially important before the Server
-    ;; has responded with its first Message so the client
-    ;; can switch to sending those.
-    (into this (build-vouch (assoc this
-                                   ::log/state log-state)))))
+                             ::shared/network-packet cookie-packet})
+        ;; Note that this supplies new state
+        ;; Though whether it should is debatable.
+        ;; Q: why would I put this into ::vouch?
+        ;; A: In case we need to resend it.
+        ;; It's perfectly legal to send as many Initiate
+        ;; packets as the client chooses.
+        ;; This is especially important before the Server
+        ;; has responded with its first Message so the client
+        ;; can switch to sending those.
+        {this ::state/state
+         vouch ::vouch} (build-vouch (assoc this
+                                            ::log/state log-state))]
+    (throw (RuntimeException. "Still need to build the rest of the Initiate packet"))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -352,16 +371,19 @@ FIXME: Change that"
   (if cookie-packet
     (let [{log-state ::log/state
            logger ::log/logger} this
+          log-state (log/info log-state
+                              ::build-and-send-vouch!
+                              "Converting cookie->vouch"
+                              {::cause "Received cookie"
+                               ::effect "Forking child"
+                               ::state/state (dissoc this ::log/state)})
           ;; Once we've signaled the child to start doing its own thing,
           ;; cope with the cookie we just received.
-          this (cookie->vouch (update this
-                                      ::log/state
-                                      #(log/info %
-                                                 ::build-and-send-vouch!
-                                                 "Converting cookie->vouch"
-                                                 {::cause "Received cookie"
-                                                  ::effect "Forking child"
-                                                  ::state/state (dissoc this ::log/state)}))
+          ;; Honestly, this should return a map of ::log/state
+          ;; and the packet to send.
+          ;; And we shouldn't send it any more of `this` than
+          ;; it absolutely needs
+          this (cookie->vouch (assoc this ::log/state log-state)
                               cookie-packet)
           this (update this
                        ::log/state
@@ -371,6 +393,7 @@ FIXME: Change that"
       (try
         ;; FIXME: Debug only
         (println "Client built Initiate/Vouch. Sending it")
+        (throw (RuntimeException. ""))
         (let [base-result (do-send-vouch this)]
           (update base-result ::log/state #(log/flush-logs! logger %)))
         (catch Exception ex

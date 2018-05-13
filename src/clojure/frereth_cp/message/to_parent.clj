@@ -231,7 +231,8 @@
         :args (s/cat :state ::specs/state)
         :ret ::specs/state)
 (defn pre-calculate-state-after-send
-  "This is mostly setting up the buffer to do the send from child to parent"
+  "Calculate what the state will be after the send"
+  ;; This is mostly setting up the buffer to do the send from child to parent
   [{:keys [::specs/message-loop-name
            ::specs/recent]
     {:keys [::specs/next-block-queue

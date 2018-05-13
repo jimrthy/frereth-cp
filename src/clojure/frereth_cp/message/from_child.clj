@@ -536,6 +536,9 @@
                                                               ::forward-bytes-from-child!
                                                               "Successfully posted to main i/o loop"
                                                               {::specs/bs-or-eof bs-or-eof
+                                                               ::length (if (bytes? bs-or-eof)
+                                                                          (count bs-or-eof)
+                                                                          "n/a")
                                                                ::specs/monitor-id monitor-id
                                                                ::success success})]
                               (deliver on-completion forked-log-state)))

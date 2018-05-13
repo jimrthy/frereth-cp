@@ -758,6 +758,9 @@
                      :next-action ::next-action)
         :ret any?)
 (defn action-trigger!
+  "Some action triggered the main ioloop"
+  ;; This function is way too long.
+  ;; FIXME: refactor it into smaller pieces
   [{:keys [::actual-next
            ::delta_f
            ::scheduling-time]
@@ -780,9 +783,10 @@
    ;; success until I check the tag.
    ;; So I could destructure it here as [tag & args],
    ;; then destructure args later. But that makes
-   ;; it less obviously a win.
+   ;; ita  less obvious a win.
    next-action]
   {:pre [outgoing]}
+  (swap! log-state-atom log/do-sync-clock)
   (let [now (System/nanoTime)  ; It's tempting to just use millis, but that throws off recent
         ;; Line 337
         ;; Doing this now instead of after trying to receive data from the
@@ -800,7 +804,7 @@
                  "at ~:d because: ~a")
         log-state (try
                     (log/debug log-state
-                               ::action-trigger
+                               ::action-trigger!
                                (cl-format nil
                                           fmt
                                           delta_f
@@ -812,7 +816,7 @@
                     (catch NullPointerException ex
                       (log/exception log-state
                                      ex
-                                     ::action-trigger
+                                     ::action-trigger!
                                      "Error building the event loop Awakening message"
                                      {::delta_f delta_f
                                       ::scheduling-time scheduling-time
@@ -824,7 +828,7 @@
                     (catch NumberFormatException ex
                       (log/exception log-state
                                      ex
-                                     ::action-trigger
+                                     ::action-trigger!
                                      "Error formatting the event loop Awakening message"
                                      {::delta_f delta_f
                                       ::scheduling-time scheduling-time
@@ -840,7 +844,7 @@
                         [::no-op
                          (log/exception log-state
                                         ex
-                                        ::action-trigger
+                                        ::action-trigger!
                                         "Should have been a variant"
                                         {::trigger-details prelog
                                          ::specs/message-loop-name message-loop-name})]))
@@ -864,7 +868,7 @@
                               (update state
                                       ::log/state
                                       #(log/warn %
-                                                 ::action-trigger
+                                                 ::action-trigger!
                                                  "Stream closed. Surely there's more to do"
                                                  {::trigger-details prelog
                                                   ::specs/message-loop-name message-loop-name})))
@@ -895,7 +899,7 @@
                                     (update state
                                             ::log/state
                                             #(log/warn %
-                                                       ::action-trigger
+                                                       ::action-trigger!
                                                        "state-query request missing required deferred"
                                                        {::trigger-details prelog
                                                         ::specs/message-loop-name message-loop-name}))))
@@ -903,7 +907,7 @@
                                             (-> state
                                                 (update ::log/state
                                                         #(log/warn %
-                                                                   ::action-trigger
+                                                                   ::action-trigger!
                                                                    "Changing parent-callback"))
                                                 (assoc ::specs/->parent (second next-action))))
                   ::timed-out (fn [state]
@@ -918,7 +922,7 @@
         state (assoc state
                      ::log/state
                      (log/debug log-state
-                                ::action-trigger
+                                ::action-trigger!
                                 "Processing event"
                                 {::tag tag
                                  ::specs/message-loop-name message-loop-name}))
@@ -965,7 +969,7 @@
         state (update state
                       ::log/state
                       #(log/warn %
-                                 ::action-trigger
+                                 ::action-trigger!
                                  "Trying to run updater because of"
                                  {::tag tag}))
 
@@ -975,7 +979,7 @@
                              ::log/state
                              #(log/exception %
                                              ex
-                                             ::action-trigger
+                                             ::action-trigger!
                                              "Running updater failed"
                                              {::details (.getData ex)
                                               ::specs/message-loop-name message-loop-name})))
@@ -994,13 +998,13 @@
                              ::log/state
                              #(log/exception %
                                              ex
-                                             ::action-trigger
+                                             ::action-trigger!
                                              "Running updater: low-level failure"
                                              {::specs/message-loop-name message-loop-name}))))
         state (update state
                       ::log/state
                       #(log/warn %
-                                 ::action-trigger
+                                 ::action-trigger!
                                  "Updater returned"
                                  (dissoc state ::log/state)))
         _ (assert (::specs/outgoing state) (str "After updating for " tag))
@@ -1014,7 +1018,7 @@
                                                    forked-logs))
         end (System/currentTimeMillis)
         my-logs (log/debug  my-logs
-                            ::action-trigger
+                            ::action-trigger!
                             "Handled a triggered action"
                             {::tag tag
                              ::handling-ms (- mid start)
@@ -1091,11 +1095,14 @@
                                 ::stream stream})]
       (if (= delta 1)
         (do
+          ;; Should really be more sophisticated about this.
+          ;; If the previous action-trigger was not a timeout,
+          ;; then we probably are not in a fast-spin loop.
           (swap! fast-spins inc)
           (when (> @fast-spins 5)
             ;; Q: Does this ever happen if nothing's broken?
-            (println "FIXME: Debug only")
-            (throw (ex-info "Exiting to avoid fast-spin lock"
+            (println "FIXME: Exiting due to fast-spin loop. Debug only")
+            (throw (ex-info "Exiting to avoid fast-spin loop"
                             (dissoc this ::log/state)))))
         (reset! fast-spins 0))
       {::delta_f delta_f

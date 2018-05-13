@@ -31,6 +31,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
+;; Specify it this way because I waffle between
+;; a byte-array vs. ByteBuf.
 (s/def ::msg-bytes bytes?)
 
 ;; Q: Do these make sense?
@@ -92,6 +94,22 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; Because, for now, I need somewhere to hang onto the future
 ;; Q: So...what is this? a Future?
 (s/def ::child any?)
+
+;; Note that this is really the inner-most crypto-box for the Initiate
+;; packet.
+;; According to the spec:
+;; "a cryptographic box encrypted and authenticated to the server's long-term
+;; public key S from the client's long-term public key C using this 24-byte
+;; nonce. The 32-byte plaintext inside the box has the following contents:
+;; * 32 bytes: the client's short-term public key C'."
+;; Note that this is pretty much useless without the corresponding compressed
+;; nonce.
+;; Which is going into the state map under the ::shared.constants/inner-i-nonce
+;; key. It's unfortunate, but needed for serializing the packets.
+;; This also needs to go somewhere shered.
+;; TODO: Make that move happen.
+(s/def ::vouch (s/and ::msg-bytes
+                      #(= (count %) K/vouch-length)))
 
 ;; The parts that change really need to be stored in a mutable
 ;; data structure.
