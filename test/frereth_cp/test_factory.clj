@@ -39,7 +39,7 @@
     {::cp-server {::log/logger logger
                   ::log/state log-state
                   ::shared/extension server-extension
-                  ::shared/my-keys #::shared{::K/srvr-name server-name
+                  ::shared/my-keys #::shared{::shared-specs/srvr-name server-name
                                              :keydir "curve-test"}
                   ::srvr-state/client-read-chan {::srvr-state/chan client-read-chan}
                   ::srvr-state/client-write-chan {::srvr-state/chan client-write-chan}
@@ -147,7 +147,7 @@
                               ::msg-specs/message-loop-name message-loop-name
                               ::shared/my-keys {::shared/keydir key-dir
                                                 ::shared/long-pair long-pair
-                                                ::K/server-name server-name}
+                                                ::shared-specs/srvr-name server-name}
                               ::client-state/server-extension server-extension
                               ::client-state/server-ips [(InetAddress/getByAddress (byte-array srvr-ip))]
                               ::client-state/server-security {::shared-specs/srvr-name srvr-name

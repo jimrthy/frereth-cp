@@ -12,12 +12,13 @@
 (s/def ::possible-response bytes?)
 
 (s/fdef filter-initial-message-bytes
-        :args (s/cat :msg-bytes ::specs/msg-bytes)
+        :args (s/cat :log-state ::log/state
+                     :msg-bytes ::specs/msg-bytes)
         :ret  (s/keys :req [::log/state]
                       :opt [::possible-response]))
 (defn filter-initial-message-bytes
   "Make sure bytes are legal for a Vouch"
-  [{log-state ::log/state}
+  [log-state
    ^bytes msg-bytes]
   (let [log-state (log/info log-state
                             ::filter-initial-message-bytes

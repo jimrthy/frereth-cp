@@ -26,8 +26,7 @@
 (def message-len 1104)
 (def nonce-length 24)
 (def server-key-length key-length)
-;; FIXME: Refactor-move this into specs
-(def ^Integer server-nonce-prefix-length 8)
+(def ^Integer server-nonce-prefix-length specs/server-nonce-prefix-length)
 (def ^Integer server-nonce-suffix-length specs/server-nonce-suffix-length)
 (def shared-key-length key-length)
 

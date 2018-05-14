@@ -19,6 +19,7 @@
 ;; And I want to avoid circular dependencies.
 ;; TODO: Move the serialization templates out of there so this isn't
 ;; an issue.
+(def ^Integer server-nonce-prefix-length 8)
 (def ^Integer server-nonce-suffix-length 16)
 
 ;; 48 bytes
@@ -96,7 +97,6 @@ This really seems like a bad road to go down."
 ;; 1. Its encoder starts with an array of zeros
 ;; 2. Each name segment is prefixed with the number of bytes
 ;; 3. No name segment is longer than 63 bytes
-;; FIXME: Rename this to ::srvr-name
 (s/def ::srvr-name (s/and bytes #(= (count %) server-name-length)))
 (s/def ::port (s/and int?
                      pos?
@@ -117,6 +117,12 @@ This really seems like a bad road to go down."
 (s/def ::server-nonce-suffix (s/and bytes?
                                     #(= (count %) server-nonce-suffix-length)))
 (s/def ::inner-i-nonce ::server-nonce-suffix)
+;; The server and client nonces wind up being the same length.
+;; The difference is really in the prefix/suffix distribution.
+;; Still, this is annoying.
+(s/def ::nonce (s/and bytes?
+                      #(= (count %) (+ server-nonce-prefix-length
+                                       server-nonce-suffix-length))))
 
 ;; Note that this is really the inner-most crypto-box for the Initiate
 ;; packet.

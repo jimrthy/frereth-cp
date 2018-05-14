@@ -62,7 +62,7 @@
 ;; with the long-/short-pairs.
 ;; TODO: Split this up.
 (s/def ::my-keys (s/keys :req [::keydir  ; Note that ::state/state may need to change when this stops being here
-                               ::K/srvr-name]
+                               ::specs/srvr-name]
                          :opt [::long-pair
                                ::short-pair]))
 

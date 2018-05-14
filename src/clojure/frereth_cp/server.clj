@@ -15,6 +15,7 @@
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -402,7 +403,7 @@
          (::state/chan client-read-chan)
          client-write-chan
          (::state/chan client-write-chan)
-         (::K/srvr-name my-keys)
+         (::specs/srvr-name my-keys)
          (::shared/keydir my-keys)
          extension
          ;; Actually, the rule is that it must be
