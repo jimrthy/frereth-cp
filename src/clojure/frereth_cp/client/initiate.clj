@@ -29,10 +29,11 @@
                                              ::shared/packet-management
                                              ::state/shared-secrets
                                              ::shared/work-area]))
-(s/def ::vouch-built (s/keys :req [::K/inner-i-nonce
+(s/def ::vouch-built (s/keys :req [::specs/inner-i-nonce
                                    ::log/state
-                                   ::state/vouch]))
-(s/def ::vouch bytes?)
+                                   ::specs/vouch]))
+(s/def ::vouch (s/and ::crypto-box
+                      #(= (count %) K/vouch-length)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
@@ -45,40 +46,47 @@
 (defn build-initiate-interior
   "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
   [{log-state ::log/state
+    inner-nonce-suffix ::specs/inner-i-nonce
+    :keys [::shared/work-area]
     :as this} msg outer-nonce-suffix]
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   (let [msg-length (count msg)
         _ (assert (< 0 msg-length))
         tmplt (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)
-        srvr-name (get-in this [::shared/my-keys ::specs/srvr-name])
-        _ (assert srvr-name)
-        inner-nonce-suffix (::state/inner-i-nonce this)
-        ^TweetNaclFast$Box$KeyPair long-pair (get-in this [::shared/my-keys ::shared/long-pair])
-        src {::K/client-long-term-key (.getPublicKey long-pair)
-             ::K/inner-i-nonce inner-nonce-suffix
-             ::K/inner-vouch (::state/vouch this)
-             ::specs/srvr-name srvr-name
-             ::K/child-message msg}
-        work-area (::shared/work-area this)
-        secret (get-in this [::state/shared-secrets ::state/client-short<->server-short])
-        log-state (log/info log-state
-                            ::build-initiate-interior
-                            "Encrypting\nFIXME: Do not log the shared secret!"
-                            {::source src
-                             ::inner-nonce-suffix (b-t/->string inner-nonce-suffix)
-                             ::shared-secret (b-t/->string secret)})]
-    {::crypto-box (crypto/build-crypto-box tmplt
-                                           src
-                                           (::shared/text work-area)
-                                           secret
-                                           K/initiate-nonce-prefix
-                                           outer-nonce-suffix)
-     ::log/state log-state}))
+        ;; This is actually ::K/server-name.
+        ;; Which doesn't make any sense, since it isn't a constant.
+        ;; FIXME: Make it sensible.
+        srvr-name (get-in this [::shared/my-keys ::specs/srvr-name])]
+    (if srvr-name
+      (let [^TweetNaclFast$Box$KeyPair long-pair (get-in this [::shared/my-keys ::shared/long-pair])
+            src {::K/client-long-term-key (.getPublicKey long-pair)
+                 ::specs/inner-i-nonce inner-nonce-suffix
+                 ::K/inner-vouch (::specs/vouch this)
+                 ::specs/srvr-name srvr-name
+                 ::K/child-message msg}
+            secret (get-in this [::state/shared-secrets ::state/client-short<->server-short])
+            log-state (log/info log-state
+                                ::build-initiate-interior
+                                "Encrypting\nFIXME: Do not log the shared secret!"
+                                {::source src
+                                 ::inner-nonce-suffix (b-t/->string inner-nonce-suffix)
+                                 ::shared-secret (b-t/->string secret)})]
+        {::crypto-box (crypto/build-crypto-box tmplt
+                                               src
+                                               (::shared/text work-area)
+                                               secret
+                                               K/initiate-nonce-prefix
+                                               outer-nonce-suffix)
+         ::log/state log-state})
+      {::log/state (log/warn log-state
+                             ::build-initiate-interior
+                             "Missing server name"
+                             (select-keys this [::shared/my-keys]))})))
 
 (s/fdef build-initiate-packet!
         :args (s/cat :this ::state/state
-                     :msg-bytes (s/and bytes?
+                     :msg-bytes (s/and ::specs/msg-bytes
                                        ;; Just be explicit about the
                                        ;; the legal incoming length.
                                        ;; This is mostly for the sake of
@@ -104,7 +112,7 @@
 (defn build-initiate-packet!
   "Combine message buffer and client state into an Initiate packet
 
-This was destructive in the sense that it overwrites ::shared/work-area
+This is destructive in the sense that it overwrites ::shared/work-area
 FIXME: Change that"
   [this msg-bytes]
   (let [{log-state ::log/state
@@ -115,9 +123,11 @@ FIXME: Change that"
       ;; It kind-of made sense with the original approach, which involved
       ;; locking down strict access from a single thread, using an agent.
       ;; Note that this approach is worse than I thought at first glance:
-      ;; I'm really just reusing the last-used nonce.
-      ;; That seems wrong all around.
-      ;; c.f. lines 329-334.
+      ;; I'm really just reusing the last-used nonce (which, in theory,
+      ;; should be the one sent by the server for its cookie).
+      ;; That seems wrong all around. After all, the client can send Initiate
+      ;; packets any time it likes.
+      ;; c.f. lines 329-334 in the reference spec.
       (let [working-nonce (byte-array K/nonce-length)
             ;; Just reuse a subset of whatever the server sent us.
             ;; Legal because a) it uses a different prefix and b) it's a different number anyway
@@ -125,32 +135,41 @@ FIXME: Change that"
             nonce-suffix (b-t/sub-byte-array working-nonce
                                              K/client-nonce-prefix-length)
             {:keys [::crypto-box]
-             log-state ::log/state} (build-initiate-interior this msg nonce-suffix)
-            log-state (log/info log-state
-                                ::build-initiate-packet!
-                                "Stuffing crypto-box into Initiate packet"
-                                {::crypto-box (b-t/->string crypto-box)
-                                 ::message-length (count crypto-box)})
-            dscr (update-in K/initiate-packet-dscr
-                            [::K/vouch-wrapper ::K/length]
-                            +
-                            (count msg))
-            ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
-            fields #:frereth-cp.shared.constants{:prefix K/initiate-header
-                                                 :srvr-xtn (::state/server-extension this)
-                                                 :clnt-xtn (::shared/extension this)
-                                                 :clnt-short-pk (.getPublicKey short-pair)
-                                                 :cookie (get-in this [::state/server-security ::state/server-cookie])
-                                                 :outer-i-nonce nonce-suffix
-                                                 :vouch-wrapper crypto-box}]
-        {::specs/byte-buf
-         (serial/compose dscr
-                         fields)
-         ::log/state log-state})
+             log-state ::log/state
+             :as initiate-interior} (build-initiate-interior this msg nonce-suffix)]
+        (if crypto-box
+          (let [log-state (log/info log-state
+                                    ::build-initiate-packet!
+                                    "Stuffing crypto-box into Initiate packet"
+                                    {::crypto-box (when crypto-box
+                                                    (b-t/->string crypto-box))
+                                     ::message-length (count crypto-box)})
+                dscr (update-in K/initiate-packet-dscr
+                                [::K/vouch-wrapper ::K/length]
+                                +
+                                (count msg))
+                ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
+                fields #:frereth-cp.shared.constants{:prefix K/initiate-header
+                                                     :srvr-xtn (::state/server-extension this)
+                                                     :clnt-xtn (::shared/extension this)
+                                                     :clnt-short-pk (.getPublicKey short-pair)
+                                                     :cookie (get-in this [::state/server-security ::state/server-cookie])
+                                                     :outer-i-nonce nonce-suffix
+                                                     :vouch-wrapper crypto-box}]
+            {::specs/byte-buf
+             (serial/compose dscr
+                             fields)
+             ::log/state log-state})
+          {::log/state (log/warn log-state
+                                 ::build-initiate-packet!
+                                 "Building initiate-interior failed to generate a crypto-box"
+                                 {::problem (dissoc initiate-interior
+                                                    ::log/state)})}))
       {::log/state log-state})))
 
 (s/fdef do-send-vouch
-        :args (s/cat :this ::state/state)
+        :args (s/cat :this ::state/state
+                     :message ::specs/msg-bytes)
         :ret (s/merge ::state/state
                       (s/keys :req [::specs/deferred])))
 (defn do-send-vouch
@@ -177,48 +196,55 @@ FIXME: Change that"
   ;; It would be very easy to just wait
   ;; for its minute key to definitely time out, though that seems
   ;; like a naive approach with a terrible user experience.
-  [this]
-  (let [{log-state ::log/state
-         :keys [::log/logger]
-         packet ::state/vouch} this
-        log-state (log/flush-logs! logger log-state)
-        this (assoc this ::log/state log-state)
-        {log-state ::log/state
-         deferred ::specs/deferred}
-        ;; FIXME: Instead of this, have HELLO set up a partial or lexical closure
-        ;; that we can use to send packets.
-        ;; Honestly, most of what I'm passing along in here is overkill that
-        ;; I set up for debugging.
-        (state/do-send-packet this
-                              (fn [success]
-                                (log/flush-logs! logger
-                                                 (log/info log-state
-                                                           ::do-send-vouch
-                                                           "Initiate packet sent.\nWaiting for 1st message"
-                                                           {::success success}))
-                                (state/final-wait this success))
-                              (fn [failure]
-                                ;; Extremely unlikely, but
-                                ;; just for the sake of paranoia
-                                (log/flush-logs! logger
-                                                 (log/exception log-state
-                                                                ;; Q: Am I absolutely positive that this will
-                                                                ;; always be an exception?
-                                                                ;; A: Even if it isn't the logger needs to be
-                                                                ;; able to cope with other problems
-                                                                failure
-                                                                ::do-send-vouch
-                                                                "Sending Initiate packet failed!"
-                                                                {::problem failure}))
-                                (throw (ex-info "Failed to send cookie->vouch response"
-                                                (assoc this
-                                                       :problem failure))))
-                              (state/current-timeout this)
-                              ::sending-vouch-timed-out
-                              packet)]
+  [{log-state ::log/state
+    :keys [::log/logger]
+    :as this}
+   packet]
+  (if packet
+    (let [log-state (log/flush-logs! logger log-state)
+          this (assoc this ::log/state log-state)
+          {log-state ::log/state
+           deferred ::specs/deferred}
+          ;; FIXME: Instead of this, have HELLO set up a partial or lexical closure
+          ;; that we can use to send packets.
+          ;; (it's pretty close)
+          ;; Honestly, most of what I'm passing along in here is overkill that
+          ;; I set up for debugging.
+          (state/do-send-packet this
+                                (fn [success]
+                                  (log/flush-logs! logger
+                                                   (log/info log-state
+                                                             ::do-send-vouch
+                                                             "Initiate packet sent.\nWaiting for 1st message"
+                                                             {::success success}))
+                                  (state/final-wait this success))
+                                (fn [failure]
+                                  ;; Extremely unlikely, but
+                                  ;; just for the sake of paranoia
+                                  (log/flush-logs! logger
+                                                   (log/exception log-state
+                                                                  ;; Q: Am I absolutely positive that this will
+                                                                  ;; always be an exception?
+                                                                  ;; A: Even if it isn't the logger needs to be
+                                                                  ;; able to cope with other problems
+                                                                  failure
+                                                                  ::do-send-vouch
+                                                                  "Sending Initiate packet failed!"
+                                                                  {::problem failure}))
+                                  (throw (ex-info "Failed to send cookie->vouch response"
+                                                  (assoc this
+                                                         :problem failure))))
+                                (state/current-timeout this)
+                                ::sending-vouch-timed-out
+                                packet)]
+      (assoc this
+             ::log/state log-state
+             ::specs/deferred deferred))
     (assoc this
-           ::log/state log-state
-           ::specs/deferred deferred)))
+           ::log/state (log/warn log-state
+                                 ::do-send-vouch
+                                 "No message bytes to send")
+           ::specs/deferred (dfrd/success-deferred ::nothing-to-send))))
 
 (s/fdef build-inner-vouch
   :args (s/cat :this ::vouch-building-params)
@@ -282,36 +308,25 @@ FIXME: Change that"
                                        "(FIXME: Don't log the shared secret)")
                                   {::shared/working-nonce (b-t/->string working-nonce)
                                    ::state/shared-secret (b-t/->string shared-secret)
-                                   ::state/vouch (b-t/->string vouch)})]
+                                   ::specs/vouch (b-t/->string vouch)})]
             (b-t/byte-copy! vouch
                             0
                             (+ K/box-zero-bytes K/key-length)
                             encrypted)
-            {::K/inner-i-nonce nonce-suffix
+            {::specs/inner-i-nonce nonce-suffix
              ::log/state log-state
-             ::state/vouch vouch})
+             ::specs/vouch vouch})
           (throw (ex-info "Missing long-term shared keys"
                           {::problem shared-secrets}))))
       (assert false (str "Missing nonce in packet-management:\n"
                          (keys packet-management))))))
 
-(s/fdef build-vouch
-        :args (s/cat :this ::state/state
-                     :message bytes?)
-        :ret (s/keys :req [::state/state ::vouch]))
-(defn build-vouch
-  [this
-   ^bytes message]
-  (let [{log-state ::log/state
-         :keys [::K/inner-i-nonce ::state/vouch]
-         :as this} (build-inner-vouch this)]
-    (throw (RuntimeException. "Need to build/return the rest of the nonce"))))
-
-(s/fdef cookie->vouch
+(s/fdef cookie->initiate
         :args (s/cat :this ::state/state
                      :packet ::shared/network-packet)
-        :ret ::state/state)
-(defn cookie->vouch
+        :ret (s/keys :req [::log/state]
+                     :opt [::specs/byte-buf]))
+(defn cookie->initiate
   "Got a cookie from the server.
 
   Replace those bytes
@@ -340,10 +355,13 @@ FIXME: Change that"
         ;; This is especially important before the Server
         ;; has responded with its first Message so the client
         ;; can switch to sending those.
-        {this ::state/state
-         vouch ::vouch} (build-vouch (assoc this
-                                            ::log/state log-state))]
-    (throw (RuntimeException. "Still need to build the rest of the Initiate packet"))))
+        {log-state ::log/state
+         vouch ::vouch} (build-inner-vouch (assoc this
+                                                  ::log/state log-state))]
+    (build-initiate-packet! (assoc this
+                                   ::log/state log-state
+                                   ::specs/inner-i-vouch vouch)
+                            cookie-packet)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -383,18 +401,17 @@ FIXME: Change that"
           ;; and the packet to send.
           ;; And we shouldn't send it any more of `this` than
           ;; it absolutely needs
-          this (cookie->vouch (assoc this ::log/state log-state)
-                              cookie-packet)
-          this (update this
-                       ::log/state
-                       #(log/debug %
-                                   ::build-and-send-vouch!
-                                   "cookie converted to vouch"))]
+          ;; TODO: Those changes
+          {byte-buf ::specs/byte-buf
+           log-state ::log/state} (cookie->initiate (assoc this ::log/state log-state)
+                                                    cookie-packet)]
       (try
         ;; FIXME: Debug only
-        (println "Client built Initiate/Vouch. Sending it")
-        (throw (RuntimeException. ""))
-        (let [base-result (do-send-vouch this)]
+        (println "Client built Initiate/Vouch. Sending" byte-buf)
+        (let [base-result (do-send-vouch (assoc this
+                                                ::log/state
+                                                log-state)
+                                         byte-buf)]
           (update base-result ::log/state #(log/flush-logs! logger %)))
         (catch Exception ex
           (update this
