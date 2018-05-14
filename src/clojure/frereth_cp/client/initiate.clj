@@ -114,9 +114,10 @@
 
 This is destructive in the sense that it overwrites ::shared/work-area
 FIXME: Change that"
-  [this msg-bytes]
+  [{log-state ::log/state
+    :as this} msg-bytes]
   (let [{log-state ::log/state
-         msg ::message/possible-response} (message/filter-initial-message-bytes this
+         msg ::message/possible-response} (message/filter-initial-message-bytes log-state
                                                                                 msg-bytes)]
     (if msg
       ;; I really don't like this approach to a shared work-area.
@@ -246,10 +247,70 @@ FIXME: Change that"
                                  "No message bytes to send")
            ::specs/deferred (dfrd/success-deferred ::nothing-to-send))))
 
+(s/fdef build-working-nonce!
+        :args (s/cat :logger ::log/logger
+                     :log-state ::log/state
+                     :keydir ::shared/keydir
+                     :working-nonce ::shared/working-nonce)
+        :ret ::log/state)
+(defn build-working-nonce!
+  "Destructively build up the nonce used to encrypt the innermost Vouch"
+  [logger
+   log-state
+   keydir
+   working-nonce]
+  (try
+    (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
+    (let [log-state
+          (if keydir
+            (crypto/do-safe-nonce log-state working-nonce keydir K/server-nonce-prefix-length false)
+            (crypto/do-safe-nonce log-state working-nonce K/server-nonce-prefix-length))]
+      log-state)
+    (catch Exception ex
+      (log/flush-logs! logger (log/exception log-state
+                                             ex
+                                             ::build-vouch
+                                             "Setting up working-nonce"))
+      (throw ex))))
+
+(s/fdef encrypt-inner-vouch
+        :args (s/cat :log-state ::log/state
+                     :shared-secret ::shared/shared-secret
+                     :working-nonce ::specs/nonce
+                     :clear-text ::shared/text))
+(defn encrypt-inner-vouch
+  "Encrypt the inner-most crypto box"
+  [log-state shared-secret working-nonce clear-text]
+  ;; This is the inner-most secret that the inner vouch hides.
+  ;; The point is to allow the server to verify
+  ;; that whoever sent this packet truly has access to the
+  ;; secret keys associated with both the long-term and short-
+  ;; term key's we're claiming for this session.
+  (let [encrypted (crypto/box-after shared-secret
+                                    clear-text K/key-length working-nonce)
+        vouch (byte-array K/vouch-length)
+        log-state (log/info log-state
+                            ::build-vouch
+                            (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
+                                 "(FIXME: Don't log the shared secret)")
+                            {::shared/working-nonce (b-t/->string working-nonce)
+                             ::state/shared-secret (b-t/->string shared-secret)
+                             ::specs/vouch (b-t/->string vouch)})]
+    (b-t/byte-copy! vouch
+                    0
+                    (+ K/box-zero-bytes K/key-length)
+                    encrypted)
+    {::log/state log-state
+     ::specs/vouch vouch}))
+
 (s/fdef build-inner-vouch
   :args (s/cat :this ::vouch-building-params)
   :ret ::vouch-built)
 (defn build-inner-vouch
+  "Build the innermost vouch/nonce pair"
+  ;; This has really been refactored out of cookie->vouch,
+  ;; as a first step toward making the bites a little more
+  ;; digestible. TODO: Continue that process.
   [{:keys [::log/logger
            ::shared/my-keys
            ::shared/packet-management
@@ -257,9 +318,6 @@ FIXME: Change that"
            ::shared/work-area]
     log-state ::log/state
     :as this}]
-  ;; This has really been refactored out of cookie->vouch,
-  ;; as a first step toward making the bites a little more
-  ;; digestible. TODO: Continue that process.
   (let [{:keys [::shared/working-nonce
                 ::shared/text]} work-area
         keydir (::shared/keydir my-keys)
@@ -269,21 +327,16 @@ FIXME: Change that"
                                 ::build-vouch
                                 "Setting up working nonce"
                                 {::shared/working-nonce working-nonce})
-            log-state (try
-                        (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
-                        (let [log-state
-                              (if keydir
-                                (crypto/do-safe-nonce log-state working-nonce keydir K/server-nonce-prefix-length false)
-                                (crypto/do-safe-nonce log-state working-nonce K/server-nonce-prefix-length))
-                              ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
-                          (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
-                          log-state)
-                        (catch Exception ex
-                          (log/flush-logs! logger (log/exception log-state
-                                                                 ex
-                                                                 ::build-vouch
-                                                                 "Setting up working-nonce or short-pair"))
-                          (throw ex)))]
+            log-state (build-working-nonce! logger
+                                            log-state
+                                            keydir
+                                            working-nonce)
+            ;; FIXME: This really belongs inside its own try/catch
+            ;; block.
+            ;; Unfortunately, that isn't trivial, because the nested
+            ;; pieces below here can/will throw their own exceptions.
+            ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
+        (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
         (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
           (let [log-state (log/debug log-state
                                      ::build-vouch
@@ -293,26 +346,18 @@ FIXME: Change that"
                                       ::shared/text text
                                       ::key-length K/key-length
                                       ::shared/working-nonce working-nonce})
-              log-state (log/flush-logs! logger log-state)
-              ;; This is the inner-most secret that the inner vouch hides.
-              ;; The point is to allow the server to verify
-              ;; that whoever sent this packet truly has access to the
-              ;; secret keys associated with both the long-term and short-
-              ;; term key's we're claiming for this session.
-              encrypted (crypto/box-after shared-secret
-                                          text K/key-length working-nonce)
-              vouch (byte-array K/vouch-length)
-              log-state (log/info log-state
-                                  ::build-vouch
-                                  (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
-                                       "(FIXME: Don't log the shared secret)")
-                                  {::shared/working-nonce (b-t/->string working-nonce)
-                                   ::state/shared-secret (b-t/->string shared-secret)
-                                   ::specs/vouch (b-t/->string vouch)})]
-            (b-t/byte-copy! vouch
-                            0
-                            (+ K/box-zero-bytes K/key-length)
-                            encrypted)
+                {log-state ::log/state
+                 :keys [::specs/vouch]} (encrypt-inner-vouch log-state
+                                                             shared-secret
+                                                             working-nonce
+                                                             text)]
+            ;; I've finally found one solid piece of evidence about that
+            ;; ridiculous StackOverflow error.
+            ;; If this assert fails, that particular error goes away (and
+            ;; the server handshake-test turns into a false positive).
+            ;; If it passes, then something that happens downstream
+            ;; triggers the StackOverflow.
+            (assert log-state)
             {::specs/inner-i-nonce nonce-suffix
              ::log/state log-state
              ::specs/vouch vouch})
@@ -358,6 +403,7 @@ FIXME: Change that"
         {log-state ::log/state
          vouch ::vouch} (build-inner-vouch (assoc this
                                                   ::log/state log-state))]
+    (assert log-state)
     (build-initiate-packet! (assoc this
                                    ::log/state log-state
                                    ::specs/inner-i-vouch vouch)
