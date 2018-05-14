@@ -6,6 +6,33 @@
             [manifold.deferred :as dfrd])
   (:import [io.aleph.dirigiste Executor]))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Magic Constants - don't belong in here
+;;;; Warning: Use the versions in shared.constants instead
+
+(def box-zero-bytes 16)
+
+(def ^Integer key-length 32)
+(def client-key-length key-length)
+
+;; Really belongs in shared.constants, but we also need it in here.
+;; And I want to avoid circular dependencies.
+;; TODO: Move the serialization templates out of there so this isn't
+;; an issue.
+(def ^Integer server-nonce-suffix-length 16)
+
+;; 48 bytes
+;; Q: What is this for?
+;; A: It's that ::inner-vouch portion of the vouch-wrapper.
+;; Really, neither of those is a great name choice.
+(def vouch-length (+ box-zero-bytes ;; 16
+                     ;; 32
+                     client-key-length))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Specs
+
 (defn class-predicate
   "Returns a predicate to check whether an object is an instance of the supplied class.
 This really seems like a bad road to go down."
@@ -19,7 +46,6 @@ This really seems like a bad road to go down."
 (s/def ::executor (class-predicate Executor))
 (s/def ::throwable (class-predicate Throwable))
 
-(def ^Integer key-length 32)
 ;; I really don't want to reference generators in here.
 ;; Much less something like rose-tree.
 ;; Those sorts of details really belong in a test ns.
@@ -83,3 +109,25 @@ This really seems like a bad road to go down."
 ;; Q: How many of those need to be that instead of this?
 (s/def ::timeout (s/and number?
                         (complement neg?)))
+
+;; Specify it this way because I waffle between
+;; a byte-array vs. ByteBuf.
+(s/def ::msg-bytes bytes?)
+
+(s/def ::server-nonce-suffix (s/and bytes?
+                                    #(= (count %) server-nonce-suffix-length)))
+(s/def ::inner-i-nonce ::server-nonce-suffix)
+
+;; Note that this is really the inner-most crypto-box for the Initiate
+;; packet.
+;; According to the spec:
+;; "a cryptographic box encrypted and authenticated to the server's long-term
+;; public key S from the client's long-term public key C using this 24-byte
+;; nonce. The 32-byte plaintext inside the box has the following contents:
+;; * 32 bytes: the client's short-term public key C'."
+;; Note that this is pretty much useless without the corresponding compressed
+;; nonce.
+;; Which is going into the state map under the ::inner-i-nonce
+;; key.
+(s/def ::vouch (s/and ::msg-bytes
+                      #(= (count %) vouch-length)))

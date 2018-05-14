@@ -99,7 +99,7 @@
   (log/debug (str "Incoming: " packet ", a " (class packet)))
   ;; For now, retain the name r for compatibility/historical reasons
   (let [r (count packet)]
-    (log/info (str "Incoming packet contains " r " bytes"))
+    (log/info (str "Incoming packet contains " r " somethings"))
     (and (<= 80 r 1184)
          ;; i.e. (= (rem r 16) 0)
          ;; TODO: Keep an eye out for potential benchmarks

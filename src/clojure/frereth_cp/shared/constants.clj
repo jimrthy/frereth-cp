@@ -3,18 +3,21 @@
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.shared.specs :as specs]))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Magic Constants
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Magic Constants
 
 ;; Q: How many of the rest of this could benefit enough by
 ;; getting a ^:const metadata hint to justify adding it?
-;; TODO: More benchmarking
-(def box-zero-bytes 16)
+;; TODO: benchmarking
+(def box-zero-bytes specs/box-zero-bytes)
 (def ^Integer decrypt-box-zero-bytes 32)
 (def ^Integer key-length specs/key-length)
 (def max-random-nonce (long (Math/pow 2 48)))
 
-(def client-key-length key-length)
+(def client-key-length specs/client-key-length)
+;; Might as well move these into specs for consistency
+;; with server-nonce-suffix-length
+;; FIXME: Make it so
 (def ^Integer client-nonce-prefix-length 16)
 (def ^Integer client-nonce-suffix-length 8)
 (def extension-length specs/extension-length)
@@ -23,8 +26,9 @@
 (def message-len 1104)
 (def nonce-length 24)
 (def server-key-length key-length)
+;; FIXME: Refactor-move this into specs
 (def ^Integer server-nonce-prefix-length 8)
-(def ^Integer server-nonce-suffix-length 16)
+(def ^Integer server-nonce-suffix-length specs/server-nonce-suffix-length)
 (def shared-key-length key-length)
 
 (def client-header-prefix-string "QvnQ5Xl")
@@ -53,8 +57,8 @@
   "1 Meg"
   1048576)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Specs
 
 ;;; Q: Why are these here instead of top-level shared?
 ;;; A: Because they're used in here, and I want to avoid
@@ -65,8 +69,6 @@
 
 (s/def ::client-nonce-suffix (s/and bytes?
                                     #(= (count %) client-nonce-suffix-length)))
-(s/def ::server-nonce-suffix (s/and bytes?
-                                    #(= (count %) server-nonce-suffix-length)))
 
 ;; The prefixes are all a series of constant bytes.
 ;; Callers shouldn't need to know/worry about them.
@@ -160,7 +162,7 @@
                                  ::length extension-length}
              ;; Implicitly prefixed with "CurveCPK"
              ::client-nonce-suffix {::type ::bytes
-                                    ::length server-nonce-suffix-length}
+                                    ::length specs/server-nonce-suffix-length}
              ::cookie {::type ::bytes
                        ::length cookie-frame-length}))
 
@@ -190,7 +192,7 @@
 (def min-vouch-message-length 16)
 
 (s/def ::hidden-client-short-pk ::specs/public-short)
-(s/def ::inner-i-nonce ::server-nonce-suffix)
+(s/def ::inner-i-nonce ::specs/inner-i-nonce)
 (s/def ::long-term-public-key ::specs/public-long)
 ;; FIXME: Actually, this should be a full-blown
 ;; :frereth-cp.message.specs/packet, with a better
@@ -205,13 +207,8 @@
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 (def initiate-header (.getBytes (str client-header-prefix "I")))
 
-;; 48 bytes
-;; Q: What is this for?
-;; A: It's that ::inner-vouch portion of the vouch-wrapper.
-;; Really, neither of those is a great name choice.
-(def vouch-length (+ box-zero-bytes ;; 16
-                     ;; 32
-                     client-key-length))
+(def vouch-length specs/vouch-length)
+
 ;; The way this is wrapped up seems odd.
 ;; We have a box containing the short-term key encrypted
 ;; by the long-term public key.

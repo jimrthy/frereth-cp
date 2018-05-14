@@ -94,14 +94,14 @@
                                 ;; evenly divisible by 16
                                 #(= 0 (bit-and % 0xf)))))
 (s/def ::packet-nonce integer?)
-;; Q: Can I make this any more explicit?
-;; This is really arriving as a ByteBuffer. It's tempting to work
+
+;; This is really arriving as a netty ByteBuf. It's tempting to work
 ;; with that instead, but TweetNacl only handles byte arrays.
 ;; It's also tempting to shove it into a vector and only use byte
 ;; arrays/buffers with the low-level java code when I really need it.
 ;; TODO: Get it working, then see what kind of performance impact
 ;; that has
-(s/def ::packet bytes?)
+(s/def ::packet ::specs/msg-bytes)
 
 (s/def ::packet-management (s/keys :opt [::packet]
                                    :req [::packet-nonce]))

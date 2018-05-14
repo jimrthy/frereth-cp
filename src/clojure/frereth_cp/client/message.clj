@@ -3,6 +3,7 @@
             [frereth-cp.client.state :as state]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.logging :as log]
+            [frereth-cp.shared.specs :as specs]
             [manifold.stream :as strm])
   (:import io.netty.buffer.ByteBuf))
 
@@ -11,7 +12,7 @@
 (s/def ::possible-response bytes?)
 
 (s/fdef filter-initial-message-bytes
-        :args (s/cat :msg-bytes bytes?)
+        :args (s/cat :msg-bytes ::specs/msg-bytes)
         :ret  (s/keys :req [::log/state]
                       :opt [::possible-response]))
 (defn filter-initial-message-bytes

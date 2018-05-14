@@ -95,12 +95,11 @@ implementation. This is code that I don't understand yet"
                                     ::state/server-extension
                                     ::state/shared-secrets
                                     ::state/server-security
-                                    ::state/vouch
-                                    ::shared/work-area]
+                                    ::shared/work-area
+                                    ::specs/inner-i-vouch]
                              log-state ::log/state
                              :as this} (state/clientextension-init this)
                             {:keys [::shared/text]} work-area
-
                             {:keys [::shared/packet
                                     ::shared/packet-nonce]} packet-management
                             _ (throw (RuntimeException. "this Component nonce isn't updated"))
@@ -139,7 +138,7 @@ implementation. This is code that I don't understand yet"
                           (b-t/byte-copy! text K/decrypt-box-zero-bytes
                                           K/key-length
                                           (.getPublicKey my-long-pair))
-                          (b-t/byte-copy! text 64 64 vouch)
+                          (b-t/byte-copy! text 64 64 inner-i-vouch)
                           (b-t/byte-copy! text
                                           128
                                           specs/server-name-length

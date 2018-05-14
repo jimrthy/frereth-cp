@@ -300,7 +300,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
-(s/fdef poll-servers-with-hello!
+(s/fdef poll-servers!
         :args (s/cat :this ::state/state
                      :timeout nat-int?
                      :cookie-waiter (s/fspec :args (s/cat :notifier ::specs/deferrable
@@ -310,7 +310,6 @@
                                                           :sent ::specs/network-packet)))
         :ret (s/keys :req [::specs/deferrable
                            ::log/state]))
-;; TODO: Break this up into several smaller functions.
 (defn poll-servers!
   "Send hello packet to a seq of server IPs associated with a single server name."
   ;; Ping a bunch of potential servers (listening on an appropriate port with the
