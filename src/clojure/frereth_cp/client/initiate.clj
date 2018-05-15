@@ -23,7 +23,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(s/def ::crypto-box bytes?)
 (s/def ::vouch-building-params (s/keys :req [::log/logger
                                              ::shared/my-keys
                                              ::shared/packet-management
@@ -32,9 +31,6 @@
 (s/def ::vouch-built (s/keys :req [::specs/inner-i-nonce
                                    ::log/state
                                    ::specs/vouch]))
-(s/def ::vouch (s/and ::crypto-box
-                      #(= (count %) K/vouch-length)))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
@@ -42,7 +38,7 @@
         :args (s/cat :this ::state/state
                      :msg bytes?
                      :outer-nonce-suffix bytes?)
-        :ret (s/keys :req [::crypto-box ::log/state]))
+        :ret (s/keys :req [::specs/crypto-box ::log/state]))
 (defn build-initiate-interior
   "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
   [{log-state ::log/state
@@ -70,14 +66,17 @@
                                 ::build-initiate-interior
                                 "Encrypting\nFIXME: Do not log the shared secret!"
                                 {::source src
-                                 ::inner-nonce-suffix (b-t/->string inner-nonce-suffix)
+                                 ::inner-nonce-suffix (if inner-nonce-suffix
+                                                        (b-t/->string inner-nonce-suffix)
+                                                        (assoc this
+                                                               ::problem
+                                                               "Missing"))
                                  ::shared-secret (b-t/->string secret)})]
-        {::crypto-box (crypto/build-crypto-box tmplt
-                                               src
-                                               (::shared/text work-area)
-                                               secret
-                                               K/initiate-nonce-prefix
-                                               outer-nonce-suffix)
+        {::specs/crypto-box (crypto/build-crypto-box tmplt
+                                                     src
+                                                     secret
+                                                     K/initiate-nonce-prefix
+                                                     outer-nonce-suffix)
          ::log/state log-state})
       {::log/state (log/warn log-state
                              ::build-initiate-interior
@@ -135,15 +134,15 @@ FIXME: Change that"
             ;; Note that this is actually for the *inner* vouch nonce.
             nonce-suffix (b-t/sub-byte-array working-nonce
                                              K/client-nonce-prefix-length)
-            {:keys [::crypto-box]
+            {:keys [::specs/crypto-box]
              log-state ::log/state
              :as initiate-interior} (build-initiate-interior this msg nonce-suffix)]
         (if crypto-box
           (let [log-state (log/info log-state
                                     ::build-initiate-packet!
                                     "Stuffing crypto-box into Initiate packet"
-                                    {::crypto-box (when crypto-box
-                                                    (b-t/->string crypto-box))
+                                    {::specs/crypto-box (when crypto-box
+                                                          (b-t/->string crypto-box))
                                      ::message-length (count crypto-box)})
                 dscr (update-in K/initiate-packet-dscr
                                 [::K/vouch-wrapper ::K/length]
@@ -357,6 +356,10 @@ FIXME: Change that"
             ;; the server handshake-test turns into a false positive).
             ;; If it passes, then something that happens downstream
             ;; triggers the StackOverflow.
+            ;; However:
+            ;; If I just throw a regular Exception, it gets caught,
+            ;; and I get the StackOverflow.
+            (comment (throw (RuntimeException. "Start back here.")))
             (assert log-state)
             {::specs/inner-i-nonce nonce-suffix
              ::log/state log-state
@@ -401,8 +404,8 @@ FIXME: Change that"
         ;; has responded with its first Message so the client
         ;; can switch to sending those.
         {log-state ::log/state
-         vouch ::vouch} (build-inner-vouch (assoc this
-                                                  ::log/state log-state))]
+         vouch ::specs/vouch} (build-inner-vouch (assoc this
+                                                        ::log/state log-state))]
     (assert log-state)
     (build-initiate-packet! (assoc this
                                    ::log/state log-state

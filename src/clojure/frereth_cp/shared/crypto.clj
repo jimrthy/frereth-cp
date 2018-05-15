@@ -8,6 +8,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util])
   (:import clojure.lang.ExceptionInfo
@@ -317,24 +318,18 @@
         ;; FIXME: Specify the any? args
         :args (s/cat :template any?
                      :source any?
-                     :dst ::specs/byte-buf
                      :key-pair any?
                      :nonce-prefix bytes?
                      :nonce-suffix bytes?)
         :ret bytes?)
 (defn build-crypto-box
-  "Compose a map into bytes and encrypt it
-
-Really belongs in crypto.
-
-But it depends on compose, which would set up circular dependencies"
-  [tmplt src ^ByteBuf dst key-pair nonce-prefix nonce-suffix]
-  {:pre [dst]}
-  (let [^ByteBuf buffer (Unpooled/wrappedBuffer dst)]
-    (.writerIndex buffer 0)
-    (shared/compose tmplt src buffer)
+  "Compose a map into bytes and encrypt it"
+  [tmplt src key-pair nonce-prefix nonce-suffix]
+  (let [^ByteBuf buffer (serial/compose tmplt src)]
     (let [n (.readableBytes buffer)
-          nonce (byte-array K/nonce-length)]
+          nonce (byte-array K/nonce-length)
+          dst (byte-array n)]
+      (.getBytes buffer 0 dst)
       (b-t/byte-copy! nonce nonce-prefix)
       (b-t/byte-copy! nonce
                       (count nonce-prefix)

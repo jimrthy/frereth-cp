@@ -124,6 +124,7 @@ This really seems like a bad road to go down."
                       #(= (count %) (+ server-nonce-prefix-length
                                        server-nonce-suffix-length))))
 
+(s/def ::crypto-box bytes?)
 ;; Note that this is really the inner-most crypto-box for the Initiate
 ;; packet.
 ;; According to the spec:
@@ -135,5 +136,5 @@ This really seems like a bad road to go down."
 ;; nonce.
 ;; Which is going into the state map under the ::inner-i-nonce
 ;; key.
-(s/def ::vouch (s/and ::msg-bytes
+(s/def ::vouch (s/and ::crypto-box
                       #(= (count %) vouch-length)))
