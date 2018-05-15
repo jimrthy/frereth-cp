@@ -253,7 +253,7 @@
                            ::length client-key-length}
    ::inner-i-nonce {::type ::bytes ::length server-nonce-suffix-length}
    ::inner-vouch {::type ::bytes ::length vouch-length}
-   ::server-name {::type ::bytes ::length specs/server-name-length}
+   ::srvr-name {::type ::bytes ::length specs/server-name-length}
    ;; Q: Do I want to allow compose to accept parameters for things like this?
    ::child-message {::type ::bytes ::length '?child-message-length}})
 
@@ -312,8 +312,8 @@ TODO: Rename this to something like initiate-client-vouch-message"
                             ::length server-nonce-suffix-length}
              ::hidden-client-short-pk {::type ::bytes
                                        ::length (+ client-key-length box-zero-bytes)}
-             ::server-name {::type ::bytes
-                            ::length specs/server-name-length}
+             ::srvr-name {::type ::bytes
+                          ::length specs/server-name-length}
              ::message {::type ::bytes
                         ::length '*}))
 (s/def ::initiate-client-vouch-wrapper

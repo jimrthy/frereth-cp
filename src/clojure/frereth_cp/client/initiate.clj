@@ -44,7 +44,14 @@
   [{log-state ::log/state
     inner-nonce-suffix ::specs/inner-i-nonce
     :keys [::shared/work-area]
-    :as this} msg outer-nonce-suffix]
+    :as this}
+   msg
+   outer-nonce-suffix]
+  #_{:pre [inner-nonce-suffix]}
+  (assert inner-nonce-suffix (str "Missing ::specs/inner-i-nonce among\n"
+                                  (keys this)
+                                  "\nin\n"
+                                  this))
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   (let [msg-length (count msg)
@@ -57,9 +64,9 @@
     (if srvr-name
       (let [^TweetNaclFast$Box$KeyPair long-pair (get-in this [::shared/my-keys ::shared/long-pair])
             src {::K/client-long-term-key (.getPublicKey long-pair)
-                 ::specs/inner-i-nonce inner-nonce-suffix
+                 ::K/inner-i-nonce inner-nonce-suffix
                  ::K/inner-vouch (::specs/vouch this)
-                 ::specs/srvr-name srvr-name
+                 ::K/srvr-name srvr-name
                  ::K/child-message msg}
             secret (get-in this [::state/shared-secrets ::state/client-short<->server-short])
             log-state (log/info log-state
@@ -130,8 +137,13 @@ FIXME: Change that"
       ;; c.f. lines 329-334 in the reference spec.
       (let [working-nonce (byte-array K/nonce-length)
             ;; Just reuse a subset of whatever the server sent us.
-            ;; Legal because a) it uses a different prefix and b) it's a different number anyway
+            ;; Legal for the original Initiate Packet  because
+            ;; a) it uses a different prefix and
+            ;; b) it's a subset of the bytes the server really used anyway
             ;; Note that this is actually for the *inner* vouch nonce.
+            ;; Which gets gets re-encrypted inside the Message chunk
+            ;; of the actual Initiate Packet.
+            ;; I'm going to trust the cryptographers about safety here.
             nonce-suffix (b-t/sub-byte-array working-nonce
                                              K/client-nonce-prefix-length)
             {:keys [::specs/crypto-box]
@@ -404,12 +416,19 @@ FIXME: Change that"
         ;; has responded with its first Message so the client
         ;; can switch to sending those.
         {log-state ::log/state
-         vouch ::specs/vouch} (build-inner-vouch (assoc this
-                                                        ::log/state log-state))]
+         :keys [::specs/vouch]
+         :as built-vouch} (build-inner-vouch (assoc this
+                                                    ::log/state log-state))]
     (assert log-state)
-    (build-initiate-packet! (assoc this
-                                   ::log/state log-state
-                                   ::specs/inner-i-vouch vouch)
+    (assert vouch (str "Missing vouch among\n"
+                       (keys built-vouch)
+                       "\nin\n"
+                       built-vouch))
+    (build-initiate-packet! (into this (select-keys built-vouch
+                                                    [::log/state
+                                                     ::specs/inner-i-nonce
+                                                     ;; FIXME: Deliberate!
+                                                     ::specs/vouch-broken]))
                             cookie-packet)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
