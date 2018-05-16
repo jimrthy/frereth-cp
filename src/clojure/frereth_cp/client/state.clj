@@ -607,20 +607,17 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; initiate/build-initiate-packet! to
     ;; some function that I don't think I've written yet that should
     ;; live in client.message.
-    (let [message-packet (packet-builder state message-block)
-          bundle {:host srvr-name
-                  :port srvr-port
-                  :message message-packet}
+    (let [message-packet (packet-builder (assoc state ::log/state log-state) message-block)
           log-state (log/debug log-state
                                ::child->
                                "Client sending a message packet from child->serve"
-                               {::shared/network-packet bundle
+                               {::shared/message (b-t/->string message-packet)
                                 ::server-security server-security})]
       (when-not (and srvr-name srvr-port message-packet)
         (throw (ex-info "Missing something vital"
                         {::specs/srvr-name srvr-name
                          ::specs/srvr-port srvr-port
-                         ::shared/network-packet bundle})))
+                         ::shared/message message-packet})))
       ;; do-send-packet was definitely getting called with
       ;; bad parameters. This should fix the NPE, and maybe the
       ;; root cause of what I've been fighting for the past couple
@@ -635,7 +632,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               (let [log-state (log/debug log-state
                                                          ::child->
                                                          "Packet sent"
-                                                         {::shared/network-packet bundle
+                                                         {::shared/message message-packet
                                                           ::server-security server-security})]
                                 (log/flush-logs! logger log-state)))
                             (fn [ex]
@@ -643,11 +640,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              ex
                                                              ::child->
                                                              "Sending packet failed"
-                                                             {::shared/network-packet bundle
+                                                             {::shared/message message-packet
                                                               ::server-security server-security})]))
                             timeout
                             ::child->timed-out
-                            bundle)
+                            message-packet)
             {log-state ::log/state
              result ::specs/deferrable} composite-result-placeholder]
         result))))

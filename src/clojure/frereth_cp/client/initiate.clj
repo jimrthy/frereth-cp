@@ -23,6 +23,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
+;;; These pieces are about the innermost nonce
 (s/def ::vouch-building-params (s/keys :req [::log/logger
                                              ::shared/my-keys
                                              ::shared/packet-management
@@ -31,11 +32,20 @@
 (s/def ::vouch-built (s/keys :req [::specs/inner-i-nonce
                                    ::log/state
                                    ::specs/vouch]))
+
+;;; These pieces are about the main message payload
+(s/def ::message-building-params (s/keys :req [::log/state
+                                               ::specs/inner-i-nonce
+                                               ::shared/my-keys
+                                               ::shared/work-area
+                                               ::specs/vouch
+                                               ::state/shared-secrets]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
 (s/fdef build-initiate-interior
-        :args (s/cat :this ::state/state
+        :args (s/cat :this ::message-building-params
                      :msg bytes?
                      :outer-nonce-suffix bytes?)
         :ret (s/keys :req [::specs/crypto-box ::log/state]))
@@ -43,7 +53,11 @@
   "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
   [{log-state ::log/state
     inner-nonce-suffix ::specs/inner-i-nonce
-    :keys [::shared/work-area]
+    {^TweetNaclFast$Box$KeyPair long-pair ::shared/long-pair
+     :keys [::specs/srvr-name]} ::shared/my-keys
+    :keys [::shared/work-area
+           ::specs/vouch
+           ::state/shared-secrets]
     :as this}
    msg
    outer-nonce-suffix]
@@ -56,19 +70,14 @@
   ;; received from the client/child.
   (let [msg-length (count msg)
         _ (assert (< 0 msg-length))
-        tmplt (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)
-        ;; This is actually ::K/server-name.
-        ;; Which doesn't make any sense, since it isn't a constant.
-        ;; FIXME: Make it sensible.
-        srvr-name (get-in this [::shared/my-keys ::specs/srvr-name])]
+        tmplt (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)]
     (if srvr-name
-      (let [^TweetNaclFast$Box$KeyPair long-pair (get-in this [::shared/my-keys ::shared/long-pair])
-            src {::K/client-long-term-key (.getPublicKey long-pair)
+      (let [src {::K/client-long-term-key (.getPublicKey long-pair)
                  ::K/inner-i-nonce inner-nonce-suffix
-                 ::K/inner-vouch (::specs/vouch this)
+                 ::K/inner-vouch vouch
                  ::K/srvr-name srvr-name
                  ::K/child-message msg}
-            secret (get-in this [::state/shared-secrets ::state/client-short<->server-short])
+            secret (::state/client-short<->server-short shared-secrets)
             log-state (log/info log-state
                                 ::build-initiate-interior
                                 "Encrypting\nFIXME: Do not log the shared secret!"
@@ -121,7 +130,14 @@
 This is destructive in the sense that it overwrites ::shared/work-area
 FIXME: Change that"
   [{log-state ::log/state
-    :as this} msg-bytes]
+    :as this}
+   msg-bytes]
+  ;; The msg-bytes parameter is actually the Cookie we just got back
+  ;; from the server.
+  ;; At this point, if we have a Message to forward along from the
+  ;; Child, it isn't obvious where.
+  (throw (RuntimeException. "Start back here"))
+  (println "Building initiated packet based on incoming" msg-bytes)
   (let [{log-state ::log/state
          msg ::message/possible-response} (message/filter-initial-message-bytes log-state
                                                                                 msg-bytes)]
@@ -148,7 +164,15 @@ FIXME: Change that"
                                              K/client-nonce-prefix-length)
             {:keys [::specs/crypto-box]
              log-state ::log/state
-             :as initiate-interior} (build-initiate-interior this msg nonce-suffix)]
+             :as initiate-interior} (build-initiate-interior (select-keys this
+                                                                          [::log/state
+                                                                           ::specs/inner-i-nonce
+                                                                           ::shared/my-keys
+                                                                           ::shared/work-area
+                                                                           ::specs/vouch
+                                                                           ::state/shared-secrets])
+                                                             msg
+                                                             nonce-suffix)]
         (if crypto-box
           (let [log-state (log/info log-state
                                     ::build-initiate-packet!
@@ -398,13 +422,13 @@ FIXME: Change that"
   [{log-state ::log/state
     :as this}
    {:keys [:host :port]
-    ^bytes message :message
-    :as cookie-packet}]
+   ^bytes cookie :message
+   :as cookie-packet}]
   {:pre [cookie-packet]}
   (let [log-state (log/info log-state
                             ::cookie->vouch
                             "Getting ready to convert cookie into a Vouch"
-                            {::human-readable-cookie (b-t/->string message)
+                            {::human-readable-cookie (b-t/->string cookie)
                              ::shared/network-packet cookie-packet})
         ;; Note that this supplies new state
         ;; Though whether it should is debatable.
@@ -424,12 +448,23 @@ FIXME: Change that"
                        (keys built-vouch)
                        "\nin\n"
                        built-vouch))
+    (when-not (s/valid? ::specs/vouch vouch)
+      (throw (ex-info "Invalid vouch built"
+                      {::state/state this
+                       ::problem (s/explain-data ::specs/vouch vouch)})))
     (build-initiate-packet! (into this (select-keys built-vouch
                                                     [::log/state
                                                      ::specs/inner-i-nonce
                                                      ;; FIXME: Deliberate!
-                                                     ::specs/vouch-broken]))
-                            cookie-packet)))
+                                                     #_::specs/vouch-broken
+                                                     ;; Comment this out to
+                                                     ;; kill the stack
+                                                     ;; overflow error and
+                                                     ;; restore false
+                                                     ;; positivy for my
+                                                     ;; handshake test
+                                                     ::specs/vouch]))
+                            cookie)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
