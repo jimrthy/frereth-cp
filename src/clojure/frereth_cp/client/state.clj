@@ -618,16 +618,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                         {::specs/srvr-name srvr-name
                          ::specs/srvr-port srvr-port
                          ::shared/message message-packet})))
-      ;; do-send-packet was definitely getting called with
-      ;; bad parameters. This should fix the NPE, and maybe the
-      ;; root cause of what I've been fighting for the past couple
-      ;; of days.
-      ;; But it doesn't help with the probably-bigger issue: how
-      ;; is the garbage packet that I'm sending back to the server
-      ;; getting built, much less sent?
       (let [composite-result-placeholder
-            (do-send-packet #_log-state
-                            state
+            (do-send-packet state
                             (fn [success]
                               (let [log-state (log/debug log-state
                                                          ::child->
@@ -729,19 +721,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :args (s/cat :state ::state)
         :ret ::state)
 (defn fork!
-  "This has to 'fork' a child with access to the agent, and update the agent state
+  ;; TODO: Verify the send-off vs. send. But surely it is.
+  "It happens in the agent processing thread pool, during a send-off operation.
 
-So, yes, it *is* weird.
-
-It happens in the agent processing thread pool, during a send operation.
-
-Although send-off might seem more appropriate, it probably isn't.
-
-TODO: Need to ask around about that.
-
-Bigger TODO: This really should be identical to the server implementation.
-
-Which at least implies that the agent approach should go away."
+  TODO: Move this into shared so the server can use the same code."
   [{:keys [::log/logger
            ::msg-specs/->child
            ::msg-specs/child-spawner!

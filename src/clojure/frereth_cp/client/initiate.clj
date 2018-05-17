@@ -122,25 +122,21 @@
                 (= (count real-result)
                    (+ 544 (count legal-to-send)))
                 true))
-        :ret (s/keys :opt [::specs/byte-buf]
-                     :req [::log/state]))
+        :ret ::specs/byte-buf)
 (defn build-initiate-packet!
   "Combine message buffer and client state into an Initiate packet
 
 This is destructive in the sense that it overwrites ::shared/work-area
 FIXME: Change that"
-  [{log-state ::log/state
+  [{logger ::log/logger
+    log-state ::log/state
     :as this}
-   msg-bytes]
-  ;; The msg-bytes parameter is actually the Cookie we just got back
-  ;; from the server.
-  ;; At this point, if we have a Message to forward along from the
-  ;; Child, it isn't obvious where.
-  (throw (RuntimeException. "Start back here"))
+   ^bytes msg-bytes]
   (println "Building initiated packet based on incoming" msg-bytes)
   (let [{log-state ::log/state
-         msg ::message/possible-response} (message/filter-initial-message-bytes log-state
-                                                                                msg-bytes)]
+         msg ::message/possible-response
+         :as filtered} (message/filter-initial-message-bytes log-state
+                                                             msg-bytes)]
     (if msg
       ;; I really don't like this approach to a shared work-area.
       ;; It kind-of made sense with the original approach, which involved
@@ -189,25 +185,31 @@ FIXME: Change that"
                                                      :srvr-xtn (::state/server-extension this)
                                                      :clnt-xtn (::shared/extension this)
                                                      :clnt-short-pk (.getPublicKey short-pair)
-                                                     :cookie (get-in this [::state/server-security ::state/server-cookie])
+                                                     :cookie (get-in this
+                                                                     [::state/server-security
+                                                                      ::state/server-cookie])
                                                      :outer-i-nonce nonce-suffix
-                                                     :vouch-wrapper crypto-box}]
-            {::specs/byte-buf
-             (serial/compose dscr
-                             fields)
-             ::log/state log-state})
-          {::log/state (log/warn log-state
-                                 ::build-initiate-packet!
-                                 "Building initiate-interior failed to generate a crypto-box"
-                                 {::problem (dissoc initiate-interior
-                                                    ::log/state)})}))
-      {::log/state log-state})))
+                                                     :vouch-wrapper crypto-box}
+                result (serial/compose dscr
+                                       fields)]
+            (log/flush-logs! logger log-state)
+            result)
+          (do
+            (log/flush-logs! logger log-state)
+            (throw (ex-info "Building initiate-interior failed to generate a crypto-box"
+                            {::problem (dissoc initiate-interior
+                                               ::log/state)})))))
+      (do
+        (log/flush-logs! logger log-state)
+        (throw (ex-info "Illegal outgoing message"
+                        {::specs/msg-bytes msg-bytes
+                         ::filtered filtered}))))))
 
 (s/fdef do-send-vouch
         :args (s/cat :this ::state/state
                      :message ::specs/msg-bytes)
-        :ret (s/merge ::state/state
-                      (s/keys :req [::specs/deferred])))
+        :ret (s/keys :req [::specs/deferred
+                           ::state/state]))
 (defn do-send-vouch
   "Send a Vouch/Initiate packet (along with a Message sub-packet)"
   ;; We may have to send this multiple times, because it could
@@ -273,14 +275,14 @@ FIXME: Change that"
                                 (state/current-timeout this)
                                 ::sending-vouch-timed-out
                                 packet)]
-      (assoc this
-             ::log/state log-state
-             ::specs/deferred deferred))
+      {::state/state (assoc this
+                            ::log/state log-state)
+       ::specs/deferrable deferred})
     (assoc this
            ::log/state (log/warn log-state
                                  ::do-send-vouch
                                  "No message bytes to send")
-           ::specs/deferred (dfrd/success-deferred ::nothing-to-send))))
+           ::specs/deferrable (dfrd/success-deferred ::nothing-to-send))))
 
 (s/fdef build-working-nonce!
         :args (s/cat :logger ::log/logger
@@ -407,7 +409,7 @@ FIXME: Change that"
 
 (s/fdef cookie->initiate
         :args (s/cat :this ::state/state
-                     :packet ::shared/network-packet)
+                     :cookie-packet ::shared/network-packet)
         :ret (s/keys :req [::log/state]
                      :opt [::specs/byte-buf]))
 (defn cookie->initiate
@@ -452,8 +454,14 @@ FIXME: Change that"
       (throw (ex-info "Invalid vouch built"
                       {::state/state this
                        ::problem (s/explain-data ::specs/vouch vouch)})))
+    ;; I was originally pulling cookie from.
+    ;; This makes me doubt my diagnosis about what/where cookie-packet
+    ;; is/came from
+    (comment (get-in this [::state/server-security ::state/server-cookie]))
     (build-initiate-packet! (into this (select-keys built-vouch
                                                     [::log/state
+                                                     ::shared/my-keys
+                                                     ::shared/work-area
                                                      ::specs/inner-i-nonce
                                                      ;; FIXME: Deliberate!
                                                      #_::specs/vouch-broken
@@ -461,10 +469,14 @@ FIXME: Change that"
                                                      ;; kill the stack
                                                      ;; overflow error and
                                                      ;; restore false
-                                                     ;; positivy for my
+                                                     ;; positive for my
                                                      ;; handshake test
-                                                     ::specs/vouch]))
-                            cookie)))
+                                                     ::specs/vouch
+                                                     ::state/server-security
+                                                     ::state/shared-secrets]))
+                            cookie
+                            ;; Q: where should this message come from then?
+                            )))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -474,21 +486,19 @@ FIXME: Change that"
 (s/fdef build-and-send-vouch!
         :args (s/cat :this ::state/state
                      :cookie ::specs/network-packet)
-        :ret (s/merge ::state/state
-                      (s/keys :req [::specs/deferred])))
+        :ret (s/keys :req [::specs/deferrable
+                           ::log/state]))
 (defn build-and-send-vouch!
   "@param this: client-state
-  @param cookie-packet: first response from the server
-
-  The current implementation is built around side-effects.
-
-  We send a request to the agent in wrapper to update its state with the
-  Vouch, based on the cookie packet. Then we do another send to get it to
-  send the vouch.
-
-  This matches the original implementation, but it seems like a really
-  terrible approach in an environment that's intended to multi-thread."
+  @param cookie-packet: first response from the server"
   [this cookie-packet]
+  ;; However:
+  ;; we do have to set up the packet builder to include the
+  ;; cookie packet.
+  ;; Right?
+  ;; Wrong.
+  ;; It's included in (::state/server-security this)
+  (throw (RuntimeException. "obsolete"))
   (if cookie-packet
     (let [{log-state ::log/state
            logger ::log/logger} this
@@ -500,9 +510,7 @@ FIXME: Change that"
                                ::state/state (dissoc this ::log/state)})
           ;; Once we've signaled the child to start doing its own thing,
           ;; cope with the cookie we just received.
-          ;; Honestly, this should return a map of ::log/state
-          ;; and the packet to send.
-          ;; And we shouldn't send it any more of `this` than
+          ;; Honestly, we shouldn't send it any more of `this` than
           ;; it absolutely needs
           ;; TODO: Those changes
           {byte-buf ::specs/byte-buf
@@ -515,7 +523,9 @@ FIXME: Change that"
                                                 ::log/state
                                                 log-state)
                                          byte-buf)]
-          (update base-result ::log/state #(log/flush-logs! logger %)))
+          (update-in base-result
+                     [::state/state ::log/state]
+                     #(log/flush-logs! logger %)))
         (catch Exception ex
           (update this
                   ::log/state #(log/flush-logs! logger (log/exception %

@@ -221,10 +221,8 @@ implementation. This is code that I don't understand yet"
   (throw (RuntimeException. "Not translated")))
 
 (s/fdef servers-polled
-        :args (s/cat :wrapper ::state/state-agent
-                     :this ::state/state)
-        :ret (s/merge ::state/state
-                      ::specs/deferrable))
+        :args (s/cat :this ::state/state)
+        :ret ::state/state)
 (defn servers-polled
   [{log-state ::log/state
     logger ::log/logger
@@ -243,16 +241,19 @@ implementation. This is code that I don't understand yet"
     (let [this (dissoc this ::specs/network-packet)
           log-state (log/info log-state
                               ::servers-polled!
-                              "Building/sending Vouch")
-          ;; Got a Cookie response packet from server.
-          ;; Theory in the reference implementation is that this is
-          ;; a good signal that it's time to spawn the child to do
-          ;; the real work.
-          ;; That really seems to complect the concerns.
-          ;; But this entire function is a stateful mess.
-          ;; At least this helps it stay in one place.
-          this (state/fork! this)]
-      (initiate/build-and-send-vouch! this cookie))
+                              "Building/sending Vouch")]
+      ;; Got a Cookie response packet from server.
+      ;; Theory in the reference implementation is that this is
+      ;; a good signal that it's time to spawn the child to do
+      ;; the real work.
+      ;; Note that the packet-builder associated with this
+      ;; will start as a partial built frombuild-initiate-packet!
+      ;; The forked callback will call that until we get a response
+      ;; back from the server.
+      ;; At that point, we need to swap out packet-builder
+      ;; as the child will be able to start sending us full-
+      ;; size blocks to fill Message Packets.
+      (state/fork! this))
     (catch Exception ex
       (let [log-state (log/exception log-state
                                      ex
