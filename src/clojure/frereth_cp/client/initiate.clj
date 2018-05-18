@@ -131,79 +131,78 @@ FIXME: Change that"
   [{logger ::log/logger
     log-state ::log/state
     :as this}
-   ^bytes msg-bytes]
-  (println "Building initiated packet based on incoming" msg-bytes)
-  (let [{log-state ::log/state
-         msg ::message/possible-response
-         :as filtered} (message/filter-initial-message-bytes log-state
-                                                             msg-bytes)]
-    (if msg
-      ;; I really don't like this approach to a shared work-area.
-      ;; It kind-of made sense with the original approach, which involved
-      ;; locking down strict access from a single thread, using an agent.
-      ;; Note that this approach is worse than I thought at first glance:
-      ;; I'm really just reusing the last-used nonce (which, in theory,
-      ;; should be the one sent by the server for its cookie).
-      ;; That seems wrong all around. After all, the client can send Initiate
-      ;; packets any time it likes.
-      ;; c.f. lines 329-334 in the reference spec.
-      (let [working-nonce (byte-array K/nonce-length)
-            ;; Just reuse a subset of whatever the server sent us.
-            ;; Legal for the original Initiate Packet  because
-            ;; a) it uses a different prefix and
-            ;; b) it's a subset of the bytes the server really used anyway
-            ;; Note that this is actually for the *inner* vouch nonce.
-            ;; Which gets gets re-encrypted inside the Message chunk
-            ;; of the actual Initiate Packet.
-            ;; I'm going to trust the cryptographers about safety here.
-            nonce-suffix (b-t/sub-byte-array working-nonce
-                                             K/client-nonce-prefix-length)
-            {:keys [::specs/crypto-box]
-             log-state ::log/state
-             :as initiate-interior} (build-initiate-interior (select-keys this
-                                                                          [::log/state
-                                                                           ::specs/inner-i-nonce
-                                                                           ::shared/my-keys
-                                                                           ::shared/work-area
-                                                                           ::specs/vouch
-                                                                           ::state/shared-secrets])
-                                                             msg
-                                                             nonce-suffix)]
-        (if crypto-box
-          (let [log-state (log/info log-state
-                                    ::build-initiate-packet!
-                                    "Stuffing crypto-box into Initiate packet"
-                                    {::specs/crypto-box (when crypto-box
-                                                          (b-t/->string crypto-box))
-                                     ::message-length (count crypto-box)})
-                dscr (update-in K/initiate-packet-dscr
-                                [::K/vouch-wrapper ::K/length]
-                                +
-                                (count msg))
-                ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
-                fields #:frereth-cp.shared.constants{:prefix K/initiate-header
-                                                     :srvr-xtn (::state/server-extension this)
-                                                     :clnt-xtn (::shared/extension this)
-                                                     :clnt-short-pk (.getPublicKey short-pair)
-                                                     :cookie (get-in this
-                                                                     [::state/server-security
-                                                                      ::state/server-cookie])
-                                                     :outer-i-nonce nonce-suffix
-                                                     :vouch-wrapper crypto-box}
-                result (serial/compose dscr
-                                       fields)]
-            (log/flush-logs! logger log-state)
-            result)
-          (do
-            (log/flush-logs! logger log-state)
-            (throw (ex-info "Building initiate-interior failed to generate a crypto-box"
-                            {::problem (dissoc initiate-interior
-                                               ::log/state)})))))
+   ^bytes msg]
+  (println "Thread:" (utils/get-current-thread) "Building initiated packet based on" (count msg) "incoming bytes in" msg)
+  (when-not msg
+    (log/flush-logs! logger log-state)
+    (throw (ex-info
+            {::specs/msg-bytes msg}))"Missing outgoing message")
+
+  ;; I really don't like this approach to a shared work-area.
+  ;; It kind-of made sense with the original approach, which involved
+  ;; locking down strict access from a single thread, using an agent.
+  ;; Note that this approach is worse than I thought at first glance:
+  ;; I'm really just reusing the last-used nonce (which, in theory,
+  ;; should be the one sent by the server for its cookie).
+  ;; That seems wrong all around. After all, the client can send Initiate
+  ;; packets any time it likes.
+  ;; c.f. lines 329-334 in the reference spec.
+  (let [working-nonce (byte-array K/nonce-length)
+        ;; Just reuse a subset of whatever the server sent us.
+        ;; Legal for the original Initiate Packet  because
+        ;; a) it uses a different prefix and
+        ;; b) it's a subset of the bytes the server really used anyway
+        ;; Note that this is actually for the *inner* vouch nonce.
+        ;; Which gets gets re-encrypted inside the Message chunk
+        ;; of the actual Initiate Packet.
+        ;; I'm going to trust the cryptographers about safety here.
+        nonce-suffix (b-t/sub-byte-array working-nonce
+                                         K/client-nonce-prefix-length)
+        {:keys [::specs/crypto-box]
+         log-state ::log/state
+         :as initiate-interior} (build-initiate-interior (select-keys this
+                                                                      [::log/state
+                                                                       ::specs/inner-i-nonce
+                                                                       ::shared/my-keys
+                                                                       ::shared/work-area
+                                                                       ::specs/vouch
+                                                                       ::state/shared-secrets])
+                                                         msg
+                                                         nonce-suffix)]
+    (if crypto-box
+      (let [log-state (log/info log-state
+                                ::build-initiate-packet!
+                                "Stuffing crypto-box into Initiate packet"
+                                {::specs/crypto-box (when crypto-box
+                                                      (b-t/->string crypto-box))
+                                 ::message-length (count crypto-box)})
+            dscr (update-in K/initiate-packet-dscr
+                            [::K/vouch-wrapper ::K/length]
+                            +
+                            (count msg))
+            ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
+            fields #:frereth-cp.shared.constants{:prefix K/initiate-header
+                                                 :srvr-xtn (::state/server-extension this)
+                                                 :clnt-xtn (::shared/extension this)
+                                                 :clnt-short-pk (.getPublicKey short-pair)
+                                                 :cookie (get-in this
+                                                                 [::state/server-security
+                                                                  ::state/server-cookie])
+                                                 :outer-i-nonce nonce-suffix
+                                                 :vouch-wrapper crypto-box}
+            result-bytes (serial/compose dscr
+                                         fields)
+            {log-state ::log/state
+             result ::message/possible-response
+             :as filtered} (message/filter-initial-message-bytes log-state
+                                                                 result-bytes)]
+        (log/flush-logs! logger log-state)
+        result)
       (do
         (log/flush-logs! logger log-state)
-        (throw (ex-info "Illegal outgoing message"
-                        {::specs/msg-bytes msg-bytes
-                         ::filtered filtered}))))))
+        (throw (ex-info "Building initiate-interior failed to generate a crypto-box"
+                        {::problem (dissoc initiate-interior
+                                           ::log/state)}))))))
 
 (s/fdef do-send-vouch
         :args (s/cat :this ::state/state
