@@ -26,7 +26,7 @@
   (as-> (::log/state this) x
     (log/info x
               ::hello-succeeded!
-              "Polling complete. Should trigger Initiate/Vouch"
+              "Polling complete. Child should be able to trigger Initiate/Vouch"
               {::result (dissoc this ::log/state)})
     ;; Note that the log-flush gets discarded, except
     ;; for its side-effects.

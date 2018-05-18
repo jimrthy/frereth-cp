@@ -46,27 +46,27 @@
   (let [key-dir "curve-test"]
     (testing "Same size"
       (let [nonce (byte-array K/key-length)]
-        (crypto/safe-nonce! nonce key-dir 0 false)
+        (crypto/do-safe-nonce nonce key-dir 0 false)
         (is nonce "Just getting here was a win")))
     (testing "Leave padding at end"
       (let [nonce (byte-array (* 2 K/key-length))]
-        (crypto/safe-nonce! nonce key-dir 0 false)
+        (crypto/do-safe-nonce nonce key-dir 0 false)
         (let [tail (drop K/key-length nonce)]
           (is (every? zero? tail)))))
     (testing "Leave padding at beginning"
       (let [nonce (byte-array (* 2 K/key-length))]
-        (crypto/safe-nonce! nonce key-dir K/key-length false)
+        (crypto/do-safe-nonce nonce key-dir K/key-length false)
         (let [head (take K/key-length nonce)]
           (is (every? zero? head)))))))
 
 (deftest check-random-safe-nonce
   (testing "Leave padding at end"
     (let [nonce (byte-array (* 2 K/key-length))]
-      (crypto/safe-nonce! nonce 0)
+      (crypto/do-safe-nonce nonce 0)
       (let [tail (drop K/key-length nonce)]
         (is (every? zero? tail)))))
   (testing "Leave padding at beginning"
     (let [nonce (byte-array (* 2 K/key-length))]
-      (crypto/safe-nonce! nonce K/key-length)
+      (crypto/do-safe-nonce nonce K/key-length)
       (let [head (take K/key-length nonce)]
         (is (every? zero? head))))))
