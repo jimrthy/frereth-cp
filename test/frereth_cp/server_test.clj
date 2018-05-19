@@ -409,10 +409,10 @@
                   (println "Stopping client agent" cleaned)
                   ;; Here's the StackOverflowError I've been chasing around for so long.
                   (catch StackOverflowError ex
-                    (is not ex)
+                    (is (not ex))
                     (println "Failed to print the cleaned-up client agent state:"
                              (log/exception-details ex))
-                    (println "The state object that caused problems is a" (class client-state)))))
+                    (println "The unprintable state object that caused problems is a" (class client-state)))))
               (if-let [problem (agent-error client-agent)]
                 (println "Uh-oh. Don't try to stop client-agent. It's in a failed state:\n"
                          problem)

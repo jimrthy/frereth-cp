@@ -303,7 +303,7 @@ implementation. This is code that I don't understand yet"
                                       (fn [sent]
                                         (if (not (or (= sent ::state/sending-vouch-timed-out)
                                                      (= sent ::state/drained)))
-                                          (send-off wrapper (partial state/->message-exchange-mode wrapper) sent)
+                                          (send-off wrapper state/->message-exchange-mode sent)
                                           (throw (RuntimeException. "FIXME: Do something with that")))))
                                      (dfrd/catch
                                          (fn [ex]
@@ -397,7 +397,7 @@ implementation. This is code that I don't understand yet"
   [wrapper]
   (println "Top of client/stop!")
   (let [local-log-atom (atom (log/init ::stop!))
-        stop-finished (promise)
+        stop-finished (dfrd/deferred)
         logger (log/std-out-log-factory)]
     (try
       (swap! local-log-atom #(log/debug %

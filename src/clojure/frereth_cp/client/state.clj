@@ -314,8 +314,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.
   Now we can start doing something interesting."
-  [wrapper
-   {:keys [::chan<-server
+  [{:keys [::chan<-server
            ::chan->server
            ::msg-specs/->child]
     log-state ::log/state
@@ -356,7 +355,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
               ;; Need to wire this up to pretty much just pass messages through
               ;; Actually, this seems totally broken from any angle, since we need
               ;; to handle decryption, at a minimum. (Q: Don't we?)
-
               (strm/consume (fn [msg]
                               ;; as-written, we have to unwrap the message
                               ;; bytes for the stream from the message
@@ -379,15 +377,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
           (log/warn log-state
                     ::->message-exchange-mode
                     "That response to Initiate was a failure"))]
-    (send wrapper
-          assoc
-          ::packet-builder (fn [_]
-                             (throw (RuntimeException. "FIXME: Need a function that mirrors initiate/build-initiate-packet!")))
-          ;; This is another example of things falling apart in a multi-threaded
-          ;; scenario.
-          ;; Honestly, all the log calls that happen here should be updates wrapped
-          ;; in a send.
-          ::log/state log-state)))
+    (assoc this
+           ::packet-builder (fn [_]
+                              (throw (RuntimeException. "FIXME: Need a function that mirrors initiate/build-initiate-packet!")))
+           ;; This is another example of things falling apart in a multi-threaded
+           ;; scenario.
+           ;; Honestly, all the log calls that happen here should be updates wrapped
+           ;; in a send.
+           ::log/state log-state)))
 
 (declare current-timeout)
 (s/fdef final-wait
