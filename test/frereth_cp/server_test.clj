@@ -388,11 +388,14 @@
                                                               (dfrd/error! initiate-outcome (ex-info "Failed to take Initiate/Vouch from Client"
                                                                                                      {::problem initiate})))))
                                                         identity)
-                                      (let [initiate-outcome (deref initiate-outcome 2000 ::initiate-timeout)]
-                                        (is (not= ::initiate-timeout initiate-outcome))
-                                        (is (not (instance? Throwable initiate-outcome)))
-                                        ;; Q: What are we dealing with here?
-                                        (is (not initiate-outcome))))
+                                      (try
+                                        (let [actual-initiate-outcome (deref initiate-outcome 2000 ::initiate-timeout)]
+                                          (is (not= ::initiate-timeout actual-initiate-outcome))
+                                          ;; Q: What are we dealing with here?
+                                          (is (not actual-initiate-outcome)))
+                                        (catch Exception ex
+                                          ;; We get here on any of those dfrd/error! triggers above
+                                          (is (not ex)))))
                                     (throw (RuntimeException. "Timed out putting Cookie to Client")))))
                               (throw (ex-info "I know I have a mechanism for writing from server to client among"
                                               {::keys (keys @client-agent)

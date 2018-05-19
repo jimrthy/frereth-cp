@@ -2,6 +2,7 @@
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.client.message :as message]
             [frereth-cp.client.state :as state]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
@@ -132,7 +133,12 @@ FIXME: Change that"
     log-state ::log/state
     :as this}
    ^bytes msg]
-  (println "Thread:" (utils/get-current-thread) "Building initiated packet based on" (count msg) "incoming bytes in" msg)
+  (println "Thread:" (utils/get-current-thread)
+           "Message Loop:" (if-let [loop-name (::msg-specs/message-loop-name this)]
+                             loop-name
+                             (str "Missing, among:\n" (keys this)))
+           "Building initiated packet based on" (count msg)
+           "incoming bytes in" msg)
   (when-not msg
     (log/flush-logs! logger log-state)
     (throw (ex-info

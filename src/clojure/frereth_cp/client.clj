@@ -406,9 +406,6 @@ implementation. This is code that I don't understand yet"
                                         {::wrapper wrapper
                                          ::wrapper-class (class wrapper)
                                          ::wrapper-content-class (class @wrapper)}))
-      ;; The client state inside the agent is getting
-      ;; set to a deferred.
-      ;; Somewhere.
       (swap! local-log-atom #(log/debug %
                                         ::stop!
                                         "Current state"
@@ -528,6 +525,11 @@ implementation. This is code that I don't understand yet"
                       (swap! local-log-atom
                              #(log/flush-logs! logger %))
                       (dfrd/success! stop-finished true)))))
+          ;; FIXME: don't do this
+          ;; I really just want to eliminate the agent completely.
+          (println "Waiting for the client agent to wrap up")
+          (await wrapper)
+          (println "Client Agent finished")
           (catch Exception ex
             (swap! local-log-atom
                    #(log/exception %
@@ -537,15 +539,18 @@ implementation. This is code that I don't understand yet"
             (send wrapper
                   assoc
                   ::chan->server nil
-                  ::log/state (log/init ::resurrected-during-stop!)
+                  ::log/state (log/init ::ended-during-stop!)
                   ::shared/packet-management nil))))
       (dfrd/on-realized stop-finished
                         ;; Flushing logs here should be totally redundant.
+                        ;; However: This is getting totally tangled up with the
+                        ;; logs coming from somewhere else.
                         (fn [success]
-                          (println "Actual bottom of client/stop!")
+                          (println "stop-finished realized at bottom client/stop!")
+                          (println "Flushing local log to logger" logger)
                           (log/flush-logs! logger @local-log-atom))
                         (fn [fail]
-                          (println "Failed bottom of client/stop!")
+                          (println "stop-finished failed at bottom of client/stop!")
                           (log/flush-logs! logger @local-log-atom))))))
 
 (s/fdef ctor
