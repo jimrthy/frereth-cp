@@ -13,6 +13,7 @@
             ;; These are moderately useless under boot.
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
             [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))
