@@ -308,9 +308,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
              ::log/state log-state}))))
 
 (s/fdef ->message-exchange-mode
-        :args (s/cat :wrapper ::state-agent
-                     :this ::state
-                     :initial-server-response ::specs/network-packet))
+        :args (s/cat :this ::state
+                     :initial-server-response ::specs/network-packet)
+        :ret ::state)
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.
   Now we can start doing something interesting."
@@ -339,7 +339,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; Q: Is there a better alternative?
   (let [log-state (log/warn log-state
                             ::->message-exchange-mode
-                            "deprecated (?)")
+                            "I really want to deprecate this. I'm just not sure how.")
         log-state (log/info log-state
                             ::->message-exchange-mode
                             "Initial Response from server"
@@ -359,17 +359,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               ;; as-written, we have to unwrap the message
                               ;; bytes for the stream from the message
                               ;; packet.
-                              #_(send wrapper chan->child %)
-                              (->child (:message msg))
-                              ;; Q: Is this approach better?
-                              ;; A: Well, at least it isn't total nonsense like what I wrote originally
-                              #_(send-off wrapper (fn [state]
-                                                    (let [a
-                                                          (update state ::child-packets
-                                                                  conj {:message msg})]
-                                                      ;; Well...what did I have planned for this?
-                                                      #_(send-messages! a)
-                                                      (throw (RuntimeException. "Well, it's still mostly nonsense"))))))
+                              (->child (:message msg)))
                             chan<-server)
               log-state)
             (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" @this)
@@ -484,6 +474,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
    timeout-key
    packet]
   (when-not packet
+    ;; There aren't a lot of details that seem like they'd
+    ;; be worth adding to justify switching to ex-info.
     (throw (RuntimeException. "Trying to send nil bytes")))
   (let [log-state (log/debug log-state
                              ::do-send-packet
@@ -644,15 +636,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :ret any?)
 (defn update-timeout!
   [wrapper new-timeout]
-  (let [old-timeout (current-timeout @wrapper)]
-    (when (not= old-timeout new-timeout)
-      (send wrapper (fn [this]
-                      (assoc this ::timeout new-timeout)))))
-  (let [{:keys [::msg-specs/io-handle]
-         :as this} @wrapper]
-    (update-callback! io-handle (partial child->
-                                         (extract-child-send-state this)
-                                         new-timeout))))
+  (throw (RuntimeException. "Never should have written this in the first place")))
 
 (s/fdef clientextension-init
         :args (s/cat :this ::state)

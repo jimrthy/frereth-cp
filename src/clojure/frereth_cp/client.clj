@@ -203,12 +203,9 @@ implementation. This is code that I don't understand yet"
 (defn server-closed!
   "This seems pretty meaningless in a UDP context"
   [this]
-  ;; Maybe send a ::closed message to the client?
-  (update this
-          ::log/state
-          #(log/warn %
-                     ::server-closed!
-                     "Q: Does it make sense to do anything here?")))
+  ;; Q: Do I need to send a ::closed message to the client?
+  ;; A: Nope. Handled elsewhere.
+  (throw (RuntimeException. "Obsolete")))
 
 (defn child->server
   "Child sent us (as an agent) a signal to add bytes to the stream to the server"
@@ -266,22 +263,19 @@ implementation. This is code that I don't understand yet"
                ::specs/deferrable failure)))))
 
 (defn chan->server-closed
-  [wrapper]
-  (send wrapper (fn [{:keys [::log/logger]
-                      :as this}]
-                  (println "Getting ready to update ::log/state\n"
-                           (::log/state this)
-                           "\namong\n"
-                           (keys this)
-                           "\nTo warn that the chan->server closed.")
-                  (update this ::log/state
-                          #(log/flush-logs! logger
-                                            (log/warn %
-                                                      ::chan->server-closed)))))
-  (send wrapper server-closed!))
+  [{:keys [::log/logger
+           ::log/state]
+    :as this}]
+  ;; This is moderately useless. But I want *some* record
+  ;; that we got here.
+  (log/flush-logs! logger
+                   (log/warn (log/fork state)
+                             ::chan->server-closed)))
 
-(defn set-up-server-polling!
-  [wrapper timeout]
+(defn set-up-server-hello-polling!
+  "Q:"
+  ;; FIXME: Find a way to eliminate the wrapper parameter
+  [wrapper this timeout]
   (let [{log-state ::log/state
          outcome ::specs/deferrable}
         ;; Note that this is going to block the calling
@@ -290,15 +284,29 @@ implementation. This is code that I don't understand yet"
         ;; are mimicking both client and server pieces,
         ;; which need to run this function in a separate
         ;; thread.
-        (hello/poll-servers! @wrapper timeout cookie/wait-for-cookie!)
+        ;; Note 2: Including the cookie/wait-for-cookie! callback
+        ;; is the initial, most obvious reason that I haven't
+        ;; moved this to the hello ns yet.
+        ;; TODO: Convert that to another parameter.
+        (hello/poll-servers! this timeout cookie/wait-for-cookie!)
         _ (println "client: triggered hello! polling")
         result (-> outcome
                    (dfrd/chain servers-polled
-                               (fn [{:keys [::specs/deferred
+                               (fn [{:keys [::specs/deferrable
                                             ::log/state]
                                      :as this}]
                                  (println "client: servers-polled succeeded:" this)
-                                 (-> deferred
+                                 ;; This is at least a little twisty.
+                                 ;; And seems pretty wrong. In the outer context, outcome
+                                 ;; was a deferrable that got added to this by
+                                 ;; hello/poll-servers!
+                                 ;; That returns a ::log/state.
+                                 ;; Q: How has this ever worked?
+                                 ;; Alt Q: Has it ever?
+                                 ;; A: I don't think I've ever gotten this far.
+                                 ;; It's a crash and burn just waiting to happen.
+                                 ;; FIXME: Get back to this.
+                                 (-> deferrable
                                      (dfrd/chain
                                       (fn [sent]
                                         (if (not (or (= sent ::state/sending-vouch-timed-out)
@@ -356,36 +364,9 @@ implementation. This is code that I don't understand yet"
           timeout (state/current-timeout this)]
       (assert chan->server)
       (strm/on-drained chan->server
-                       (partial chan->server-closed wrapper))
-      ;; This feels inside-out and backwards.
-      ;; But it probably should, since this is very
-      ;; explicitly place-oriented programming working
-      ;; with mutable state.
-      ;; Any way you look at it, it isn't worth doing
-      ;; here.
-      ;; This is something that happens once at startup.
-      ;; So it shouldn't be slow, but this level of optimization
-      ;; simply cannot be worth it.
-      ;; (Even if we're talking about something like a web browser
-      ;; with dozens of open connections...well, a GC delay of a
-      ;; second or two to clean this stuff up would be super-
-      ;; annoying)
-      ;; FIXME: Prune this back to a pure function (yes, that's
-      ;; easier said than done: I probably do need to scrap
-      ;; the idea of using an agent for this).
-      (send wrapper hello/do-build-hello)
-      (println "client: told state-agent to build hello packet" )
-      (if (await-for timeout wrapper)
-        (set-up-server-polling! wrapper timeout)
-        (let [problem (agent-error wrapper)
-              {log-state ::log/state
-               logger ::log/logger
-               :as this} @wrapper]
-          (log/flush-logs! logger log-state)
-          (throw (ex-info (str "Timed out after " timeout
-                               " milliseconds waiting to build HELLO packet")
-                          {::problem problem
-                           ::failed-state (dissoc this ::log/state)})))))
+                       (partial chan->server-closed this))
+      (let [this (hello/do-build-packet this)]
+        (set-up-server-hello-polling! wrapper this timeout)))
     (catch Exception ex
       (println "client: Failed before I could even get to a logger:\n"
                (log/exception-details ex)))))

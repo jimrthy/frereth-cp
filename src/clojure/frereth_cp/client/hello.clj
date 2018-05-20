@@ -128,51 +128,6 @@
     {::shared/packet result
      ::log/state log-state}))
 
-(defn do-build-hello
-  "Puts plain-text hello packet into packet-management
-
-  Note that this is really called for side-effects"
-  ;; A major part of the way this is written revolves around
-  ;; updating packet-management and work-area in place.
-  ;; That seems like premature optimization here.
-  ;; Though it seems as though it might make sense for
-  ;; sending messages.
-  ;; Then again, if the implementation isn't shared...can
-  ;; it possibly be worth the trouble?
-  [{:keys [::shared/packet-management
-           ::shared/work-area]
-    :as this}]
-  (let [;; There's a good chance this updates my extension
-        ;; That doesn't get set into stone until/unless I
-        ;; manage to handshake with a server
-        {log-state ::log/state
-         :as this} (state/clientextension-init this)
-        working-nonce (::shared/working-nonce work-area)
-        {:keys [::shared/packet-nonce ::shared/packet]} packet-management
-        short-term-nonce (state/update-client-short-term-nonce packet-nonce)]
-    (b-t/byte-copy! working-nonce K/hello-nonce-prefix)
-    (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length short-term-nonce)
-
-    (let [log-state (log/info log-state
-                              ::do-build-hello
-                              "Packed short-term- into working- -nonces"
-                              {::short-term-nonce short-term-nonce
-                               ::shared/working-nonce (b-t/->string working-nonce)})
-          {:keys [::shared/packet]
-           log-state ::log/state} (build-actual-packet (assoc this ::log/state log-state)
-                                                        short-term-nonce
-                                                        working-nonce)
-          log-state (log/info log-state
-                              ::do-build-hello
-                              "hello packet built inside the agent. Returning/updating")]
-      (-> this
-          (update ::shared/packet-management
-                  (fn [current]
-                    (assoc current
-                           ::shared/packet-nonce short-term-nonce
-                           ::shared/packet (b-s/convert packet io.netty.buffer.ByteBuf))))
-          (assoc ::log/state log-state)))))
-
 (s/fdef do-polling-loop
         :args (s/cat :completion ::specs/deferrable
                      :this ::state/state
@@ -192,7 +147,7 @@
    raw-packet cookie-sent-callback start-time timeout ips]
   (let [ip (first ips)
         log-state (log/info (::log/state this)
-                            ::poll-servers-with-hello!
+                            ::do-polling-loop
                             "Polling server"
                             {::specs/srvr-ip ip})
         cookie-response (dfrd/deferred executor)
@@ -235,7 +190,7 @@
                      ::send-response-timed-out} actual-success)))
       (let [log-state (try
                         (log/info (::log/state actual-success)
-                                  ::poll-servers-with-hello!
+                                  ::do-polling-loop
                                   "Might have found a responsive server"
                                   {::specs/srvr-ip ip})
                         (catch Exception ex
@@ -284,7 +239,7 @@
                   (dfrd/error! completion (ex-info "Giving up" this))
                   log-state))))))
       (let [this (assoc this (log/warn log-state
-                                       ::poll-servers-with-hello!
+                                       ::do-polling-loop
                                        "Failed to connect"
                                        {::specs/srvr-ip ip
                                         ;; Actually, if this is a Throwable,
@@ -299,6 +254,59 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
+
+(s/fdef do-build-packet
+        ;; FIXME: Be more restrictive about this.
+        ;; Only pass/return the pieces that this
+        ;; actually uses.
+        ;; Since that involves tracing down everything
+        ;; it calls (et al), that isn't quite trivial.
+        :args (s/cat :this ::state/state)
+        :ret ::state/state)
+(defn do-build-packet
+  "Puts plain-text hello packet into packet-management
+
+  Note that this is really called for side-effects"
+  ;; A major part of the way this is written revolves around
+  ;; updating packet-management and work-area in place.
+  ;; That seems like premature optimization here.
+  ;; Though it seems as though it might make sense for
+  ;; sending messages.
+  ;; Then again, if the implementation isn't shared...can
+  ;; it possibly be worth the trouble?
+  [{:keys [::shared/packet-management
+           ::shared/work-area]
+    :as this}]
+  (let [;; There's a good chance this updates my extension.
+        ;; That doesn't get set into stone until/unless I
+        ;; manage to handshake with a server
+        {log-state ::log/state
+         :as this} (state/clientextension-init this)
+        working-nonce (::shared/working-nonce work-area)
+        {:keys [::shared/packet-nonce ::shared/packet]} packet-management
+        short-term-nonce (state/update-client-short-term-nonce packet-nonce)]
+    (b-t/byte-copy! working-nonce K/hello-nonce-prefix)
+    (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length short-term-nonce)
+
+    (let [log-state (log/info log-state
+                              ::do-build-hello
+                              "Packed short-term- into working- -nonces"
+                              {::short-term-nonce short-term-nonce
+                               ::shared/working-nonce (b-t/->string working-nonce)})
+          {:keys [::shared/packet]
+           log-state ::log/state} (build-actual-packet (assoc this ::log/state log-state)
+                                                        short-term-nonce
+                                                        working-nonce)
+          log-state (log/info log-state
+                              ::do-build-hello
+                              "hello packet built inside the agent. Returning/updating")]
+      (-> this
+          (update ::shared/packet-management
+                  (fn [current]
+                    (assoc current
+                           ::shared/packet-nonce short-term-nonce
+                           ::shared/packet (b-s/convert packet io.netty.buffer.ByteBuf))))
+          (assoc ::log/state log-state)))))
 
 (s/fdef poll-servers!
         :args (s/cat :this ::state/state
