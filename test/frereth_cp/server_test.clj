@@ -454,8 +454,8 @@
                     (pprint @client-agent)))))))
         (println "Made it to the bottom of the server handshake main try/catch")
         (catch Exception ex
+          (is (not ex))
           (println "Unhandled exception in the main server handshake test try/catch")
-          (println ex)
           (println (log/exception-details ex)))
         (finally
           (println "Triggering server event loop exit")
@@ -463,6 +463,7 @@
           (println "Server stopped successfully"))))
     (println "Got to the bottom of the server handshake test successfully")
     (catch Exception ex
+      (is (not ex))
       (println "Unhandled exception at top-level of the server handshake test")
       (println ex)
       (println (log/exception-details ex)))))
