@@ -101,7 +101,7 @@
                              (select-keys this [::shared/my-keys]))})))
 
 (s/fdef build-initiate-packet!
-        :args (s/cat :this ::state/state
+        :args (s/cat :this ::state/initiate-building-params
                      :msg-bytes (s/and ::specs/msg-bytes
                                        ;; Just be explicit about the
                                        ;; the legal incoming length.
@@ -129,15 +129,16 @@
 
 This is destructive in the sense that it overwrites ::shared/work-area
 FIXME: Change that"
-  [{logger ::log/logger
-    log-state ::log/state
+  [{log-state ::log/state
+    :keys [::log/logger
+           ::msg-specs/message-loop-name]
     :as this}
    ^bytes msg]
   (println "Thread:" (utils/get-current-thread)
-           "Message Loop:" (if-let [loop-name (::msg-specs/message-loop-name this)]
+           "Message Loop:" (if-let [loop-name message-loop-name]
                              loop-name
-                             (str "Missing, among:\n" (keys this)))
-           "Building initiated packet based on" (count msg)
+                             (str "'Name Missing', among:\n" (keys this)))
+           "Trying to build initiated packet based on" (count msg)
            "incoming bytes in" msg)
   (when-not msg
     (log/flush-logs! logger log-state)
@@ -168,9 +169,9 @@ FIXME: Change that"
          log-state ::log/state
          :as initiate-interior} (build-initiate-interior (select-keys this
                                                                       [::log/state
-                                                                       ::specs/inner-i-nonce
                                                                        ::shared/my-keys
                                                                        ::shared/work-area
+                                                                       ::specs/inner-i-nonce
                                                                        ::specs/vouch
                                                                        ::state/shared-secrets])
                                                          msg
@@ -393,15 +394,6 @@ FIXME: Change that"
                                                              shared-secret
                                                              working-nonce
                                                              text)]
-            ;; I've finally found one solid piece of evidence about that
-            ;; ridiculous StackOverflow error.
-            ;; If this assert fails, that particular error goes away (and
-            ;; the server handshake-test turns into a false positive).
-            ;; If it passes, then something that happens downstream
-            ;; triggers the StackOverflow.
-            ;; However:
-            ;; If I just throw a regular Exception, it gets caught,
-            ;; and I get the StackOverflow.
             (comment (throw (RuntimeException. "Start back here.")))
             (assert log-state)
             {::specs/inner-i-nonce nonce-suffix
@@ -463,7 +455,7 @@ FIXME: Change that"
     ;; This makes me doubt my diagnosis about what/where cookie-packet
     ;; is/came from
     (comment (get-in this [::state/server-security ::state/server-cookie]))
-    (build-initiate-packet! (into this (select-keys built-vouch
+    (let [overrides-from-vouch-building (select-keys built-vouch
                                                     [::log/state
                                                      ::shared/my-keys
                                                      ::shared/work-area
@@ -478,10 +470,21 @@ FIXME: Change that"
                                                      ;; handshake test
                                                      ::specs/vouch
                                                      ::state/server-security
-                                                     ::state/shared-secrets]))
-                            cookie
-                            ;; Q: where should this message come from then?
-                            )))
+                                                     ::state/shared-secrets])]
+      (println "Overrides retrieved from vouch building:\n"
+               overrides-from-vouch-building
+               "\nbased upon\n"
+               (keys built-vouch)
+               "\nfrom\n"
+               built-vouch
+               "\noverriding\n"
+               (keys this)
+               "\nin\n"
+               this)
+      (build-initiate-packet! (into this overrides-from-vouch-building)
+                              cookie
+                              ;; Q: where should this message come from then?
+                              ))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public

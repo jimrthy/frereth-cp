@@ -79,11 +79,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; c.f. client/extract-child-message
 (s/def ::outgoing-message any?)
 
-;; The circular reference involved here is a red flag.
-;; ::state-agent depends on ::state depends on ::mutable-state depends on ::packet-builder
-;; This seems like the best option available in a bad situation, but just
-;; using a boolean flag and an if check might be better.
-(s/def ::packet-builder (s/fspec :args (s/cat :wrapper ::state-agent
+(s/def ::packet-builder (s/fspec :args (s/cat :state ::child-send-state
                                               :msg-packet bytes?)
                                  :ret ::msg-specs/buf))
 
@@ -166,11 +162,20 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                  :opt [::chan->server]))
 (s/def ::state (s/merge ::mutable-state
                         ::immutable-value))
-(s/def ::child-send-state (s/keys :req [::chan->server
-                                        ::log/logger
-                                        ::log/state
-                                        ::packet-builder
-                                        ::server-security]))
+
+;; FIXME: This really should be ::message-building-params
+(s/def ::initiate-building-params (s/keys :req [::log/logger
+                                                ::log/state
+                                                ::msg-specs/message-loop-name
+                                                ;; Q: Why was this ever here?
+                                                #_::chan->server
+                                                ::packet-builder
+                                                ::server-security
+                                                ;; Note that this doesn't really make
+                                                ;; any sense for message-building.
+                                                ::specs/inner-i-nonce]))
+(s/def ::child-send-state (s/merge ::initiate-building-params
+                                   (s/keys :req [::chan->server])))
 
 ;;; Using an agent here seems like a dubious choice.
 ;;; After all, they're slow.
@@ -251,14 +256,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                ::specs/executor executor)
         ;; Can't do this: it involves a circular import
         #_(assoc ::packet-builder initiate/build-initiate-packet!)
-        ;; FIXME: This is a cheeseball way to do this.
-        ;; Honestly, to follow the "proper" (i.e. established)
-        ;; pattern, load-keys should just operate on the full
-        ;; ::state map.
-        ;; OTOH, I've gotten pretty fierce about how this is a
-        ;; terrible approach, and there's no time like the present
-        ;; to mend my ways.
-        ;; So maybe this is exactly what I want after all.
         (into (load-keys log-state (::shared/my-keys this))))))
 
 (s/fdef initialize-mutable-state!
@@ -311,6 +308,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :args (s/cat :this ::state
                      :initial-server-response ::specs/network-packet)
         :ret ::state)
+;; I think this is the last place where I may somewhat-legitimately
+;; be using the agent
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.
   Now we can start doing something interesting."
@@ -354,7 +353,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
               ;; Need to wire this up to pretty much just pass messages through
               ;; Actually, this seems totally broken from any angle, since we need
-              ;; to handle decryption, at a minimum. (Q: Don't we?)
+              ;; to handle decryption, at a minimum.
+              ;; Q: Don't we?
+              ;; A: Absolutely!
+              ;; We have a Server Message Packet here. Have to
+              ;; 1. Pull out the Message crypto box
+              ;; 2. Decrypt it
+              ;; 3. Call ->child
               (strm/consume (fn [msg]
                               ;; as-written, we have to unwrap the message
                               ;; bytes for the stream from the message
@@ -413,10 +418,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :args (s/cat :state ::state)
         :ret ::child-send-state)
 (defn extract-child-send-state
+  "Extract the pieces that are actually used to forward a message from the Child"
   [state]
   (select-keys state [::chan->server
                       ::log/logger
                       ::log/state
+                      ::msg-specs/message-loop-name
+                      ::shared/my-keys
+                      ::shared/work-area
+                      ::specs/inner-i-nonce
+                      ::specs/vouch
                       ::packet-builder
                       ::server-security]))
 

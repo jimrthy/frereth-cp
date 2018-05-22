@@ -12,6 +12,7 @@
             [clojure.test.check.generators :as lo-gen]
             ;; These are moderately useless under boot.
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
+            [frereth-cp.message :as msg]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]

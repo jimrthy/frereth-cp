@@ -1036,7 +1036,11 @@
   (defn interrupt
     []
     (println "FIXME: Debug only\nInterrupting ioloop manually")
-    (deliver interrupted true)))
+    (deliver interrupted true))
+
+  (defn interrupted?
+    []
+    (realized? interrupted)))
 
 (comment
   (let [delta_f ##Inf,
