@@ -751,7 +751,14 @@
 
 (declare schedule-next-timeout!)
 ;; FIXME: This seems like it really should be debug only
-(let [interrupted (promise)]
+(let [interrupted (atom nil)]
+  (defn interrupted?
+    []
+    @interrupted)
+  (comment
+    (interrupted?)
+    )
+
   (s/fdef action-trigger!
           :args (s/cat :timing-details ::action-timing-details
                        :io-handle ::specs/io-handle
@@ -1013,7 +1020,7 @@
           my-logs (::log/state state)
           forked-logs (log/fork my-logs)
           mid (System/currentTimeMillis)]
-      (if (not (realized? interrupted))
+      (if (not (interrupted?))
         ;; This is taking a ludicrous amount of time.
         ;; Q: How much should I blame on logging?
         (schedule-next-timeout! io-handle (assoc state
@@ -1033,14 +1040,21 @@
                                my-logs)))
     nil)
 
-  (defn interrupt
+  (defn interrupt!
     []
     (println "FIXME: Debug only\nInterrupting ioloop manually")
-    (deliver interrupted true))
+    (reset! interrupted true))
+  (comment
+    (interrupt!)
+    )
 
-  (defn interrupted?
+  (defn clear-interrupt
     []
-    (realized? interrupted)))
+    (println "Unblocking ioloop manually")
+    (reset! interrupted false))
+  (comment
+    (clear-interrupt!)
+    ))
 
 (comment
   (let [delta_f ##Inf,
