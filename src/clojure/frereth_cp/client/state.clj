@@ -163,16 +163,20 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::state (s/merge ::mutable-state
                         ::immutable-value))
 
-;; FIXME: This really should be ::message-building-params
+;; FIXME: This really should be ::message-building-params.
+;; Except that those are different.
 (s/def ::initiate-building-params (s/keys :req [::log/logger
                                                 ::log/state
                                                 ::msg-specs/message-loop-name
                                                 ;; Q: Why was this ever here?
                                                 #_::chan->server
+                                                ;; We still have a circular dependency.
                                                 ::packet-builder
                                                 ::server-security
                                                 ;; Note that this doesn't really make
                                                 ;; any sense for message-building.
+                                                ;; But it's absolutely vital for
+                                                ;; for building the Initiate Packet.
                                                 ::specs/inner-i-nonce]))
 (s/def ::child-send-state (s/merge ::initiate-building-params
                                    (s/keys :req [::chan->server])))
@@ -735,11 +739,26 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                          (assoc initial-msg-state
                                                 ::log/state log-state)
                                          logger)
+        child-send-state (extract-child-send-state this)
+        ;; At this point in time, we don't have the inner-i-nonce.
+        ;; So of course it can't get passed along to child->
+        ;; This must have been something that was getting updated by
+        ;; the agent, back when this part worked.
+        ;; FIXME: Start back here
+        _ (assert (::specs/inner-i-nonce child-send-state) (str "Missing inner-i-nonce in child-send-state\n"
+                                                              (keys child-send-state)
+                                                              "\namong\n"
+                                                              child-send-state
+                                                              "\nbuilt from\n"
+                                                              (keys this)
+                                                              "\namong\n"
+                                                              this))
+        _ (println "state/fork! inner-i-nonce:" (::specs/inner-i-nonce child-send-state))
         {:keys [::msg-specs/io-handle]
          log-state ::log/state} (message/do-start startable
                                                   logger
                                                   (partial child->
-                                                           (extract-child-send-state this)
+                                                           child-send-state
                                                            (current-timeout this))
                                                   ->child)
         log-state (log/debug log-state

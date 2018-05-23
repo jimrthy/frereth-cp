@@ -247,8 +247,9 @@
                 (println "server-test/handshake Hello from client:" hello)
                 (when (or (= hello ::drained)
                           (= hello ::timeout))
-                  (throw (ex-info "Client took too long"
-                                  {::client-state/state @client-agent
+                  (throw (ex-info "Client didn't send Hello"
+                                  {::received hello
+                                   ::client-state/state @client-agent
                                    ::problem (agent-error client-agent)})))
                 (let [host (:host hello)]
                   (when-not host

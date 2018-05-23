@@ -134,7 +134,8 @@ FIXME: Change that"
            ::msg-specs/message-loop-name]
     :as this}
    ^bytes msg]
-  (println "Thread:" (utils/get-current-thread)
+  (println "initiate/build-initiate-packet!\n"
+           "Thread:" (utils/get-current-thread)
            "Message Loop:" (if-let [loop-name message-loop-name]
                              loop-name
                              (str "'Name Missing', among:\n" (keys this)))
@@ -424,6 +425,7 @@ FIXME: Change that"
    ^bytes cookie :message
    :as cookie-packet}]
   {:pre [cookie-packet]}
+  (throw (RuntimeException. "obsolete"))
   (let [log-state (log/info log-state
                             ::cookie->vouch
                             "Getting ready to convert cookie into a Vouch"
@@ -471,7 +473,7 @@ FIXME: Change that"
                                                      ::specs/vouch
                                                      ::state/server-security
                                                      ::state/shared-secrets])]
-      (println "Overrides retrieved from vouch building:\n"
+      (println "Overrides retrieved for vouch building:\n"
                overrides-from-vouch-building
                "\nbased upon\n"
                (keys built-vouch)
