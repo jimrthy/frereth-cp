@@ -272,10 +272,23 @@ implementation. This is code that I don't understand yet"
                    (log/warn (log/fork state)
                              ::chan->server-closed)))
 
+(s/fdef set-up-server-hello-polling!
+        :args (s/cat :wrapper ::state/state-agent  ; FIXME: Go away.
+                     :this ::state/state
+                     :timeout (s/and #((complement neg?) %)
+                                     int?))
+        ;; Hmm.
+        ;; This deferrable will get delivered as either
+        ;; a) new State, after we get a hello response
+        ;; b) a Exception, if the hello polling fails
+        :ret ::specs/deferrable)
 (defn set-up-server-hello-polling!
-  "Q:"
+  "Start polling the server(s) with HELLO Packets"
   ;; FIXME: Find a way to eliminate the wrapper parameter
-  [wrapper this timeout]
+  [wrapper
+   {:keys [::log/logger]
+    :as this}
+   timeout]
   (let [{log-state ::log/state
          outcome ::specs/deferrable}
         ;; Note that this is going to block the calling
@@ -291,33 +304,40 @@ implementation. This is code that I don't understand yet"
         (hello/poll-servers! this timeout cookie/wait-for-cookie!)
         _ (println "client: triggered hello! polling")
         result (-> outcome
-                   (dfrd/chain servers-polled
-                               (fn [{:keys [::specs/deferrable
+                   (dfrd/chain #(into % (initiate/build-inner-vouch %))
+                               servers-polled
+                               ;; Based on what's written here, deferrable involves
+                               ;; the success of...what? Pulling the Vouch from
+                               ;; the server?
+                               (fn [{:keys [::specs/deferrable  ; Q: What does deferrable represent here?
                                             ::log/state]
                                      :as this}]
-                                 (println "client: servers-polled succeeded:" this)
-                                 ;; This is at least a little twisty.
-                                 ;; And seems pretty wrong. In the outer context, outcome
-                                 ;; was a deferrable that got added to this by
-                                 ;; hello/poll-servers!
-                                 ;; That returns a ::log/state.
-                                 ;; Q: How has this ever worked?
-                                 ;; Alt Q: Has it ever?
-                                 ;; A: I don't think I've ever gotten this far.
-                                 ;; It's a crash and burn just waiting to happen.
-                                 ;; FIXME: Get back to this.
-                                 (-> deferrable
-                                     (dfrd/chain
-                                      (fn [sent]
-                                        (if (not (or (= sent ::state/sending-vouch-timed-out)
-                                                     (= sent ::state/drained)))
-                                          (send-off wrapper state/->message-exchange-mode sent)
-                                          (throw (RuntimeException. "FIXME: Do something with that")))))
-                                     (dfrd/catch
-                                         (fn [ex]
-                                           (send wrapper #(throw (ex-info "Server vouch response failed"
-                                                                          (assoc % :problem ex)))))))))
-                   (dfrd/catch
+                                 (println "client: servers-polled succeeded:" (dissoc this ::log/state))
+                                 (let [log-state (log/flush-logs! logger state)]
+                                   ;; This is at least a little twisty.
+                                   ;; And seems pretty wrong. In the outer context, outcome
+                                   ;; was a deferrable that got added to this by
+                                   ;; hello/poll-servers!
+                                   ;; That returns a ::log/state.
+                                   ;; Q: How has this ever worked?
+                                   ;; Alt Q: Has it ever?
+                                   ;; A: I don't think I've ever gotten this far.
+                                   ;; It's a crash and burn just waiting to happen.
+                                   ;; FIXME: Get back to this.
+                                   (dfrd/chain deferrable
+                                               (fn [sent]
+                                                 (if (not (or (= sent ::state/sending-vouch-timed-out)
+                                                              (= sent ::state/drained)))
+                                                   (state/->message-exchange-mode (assoc this
+                                                                                         ::log/state log-state)
+                                                                                  sent)
+                                                   (throw (ex-info "Something about polling/sending Vouch failed"
+                                                                   {::problem sent}))))))))
+                   ;; Q: What happens if I just don't catch this?
+                   ;; The next option is to just flush the logs and have it
+                   ;; update state, but that discards the error implications of what
+                   ;; just happened.
+                   #_(dfrd/catch
                        (fn [ex]
                          (println "Failure polling servers with hello!\n"
                                   (log/exception-details ex))
@@ -362,10 +382,12 @@ implementation. This is code that I don't understand yet"
     (let [{:keys [::state/chan->server]
            :as this} @wrapper
           timeout (state/current-timeout this)]
+      (println "client/start! Verifying chan->server")
       (assert chan->server)
       (strm/on-drained chan->server
                        (partial chan->server-closed this))
       (let [this (hello/do-build-packet this)]
+        (println "client/start! hello packet built")
         (set-up-server-hello-polling! wrapper this timeout)))
     (catch Exception ex
       (println "client: Failed before I could even get to a logger:\n"
@@ -396,10 +418,6 @@ implementation. This is code that I don't understand yet"
                                               ex
                                               ::stop!
                                               "Client Agent was in error state"))
-        ;; Somewhere between checking for the agent-error and this next send,
-        ;; the client agent is very consistently going into an error state.
-        ;; This is worrisome.
-        ;; And yet another reason to just ditch the thing.
         (try
           (send wrapper
                 (fn [{:keys [::state/chan->server

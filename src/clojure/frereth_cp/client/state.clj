@@ -433,6 +433,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                       ::specs/inner-i-nonce
                       ::specs/vouch
                       ::packet-builder
+                      ::shared-secrets
                       ::server-security]))
 
 (s/fdef update-callback!
@@ -743,8 +744,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
         ;; At this point in time, we don't have the inner-i-nonce.
         ;; So of course it can't get passed along to child->
         ;; This must have been something that was getting updated by
-        ;; the agent, back when this part worked.
-        ;; FIXME: Start back here
+        ;; the agent, back when this part seemed to work.
+        ;; Actually, it looks like it's much simpler.
+        ;; We "just" need to call initiate/build-inner-vouch before
+        ;; we get here.
+        ;; FIXME: Make that happen.
         _ (assert (::specs/inner-i-nonce child-send-state) (str "Missing inner-i-nonce in child-send-state\n"
                                                               (keys child-send-state)
                                                               "\namong\n"

@@ -45,6 +45,18 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
+#_{:frereth-cp.shared.logging/state {:frereth-cp.shared.logging/entries [],
+                                   :frereth-cp.shared.logging/lamport 829,
+                                   :frereth-cp.shared.logging/context ("client-hand-shaker" :frereth-cp.client.state/clientextension-init)},
+ :frereth-cp.shared/my-keys {:frereth-cp.shared/keydir "client-test",
+                             :frereth-cp.shared/long-pair #object[com.iwebpp.crypto.TweetNaclFast$Box$KeyPair 0x25d0d418 "com.iwebpp.crypto.TweetNaclFast$Box$KeyPair@25d0d418"],
+                             :frereth-cp.shared.specs/srvr-name (byte-array "foo"),
+                             :frereth-cp.shared/short-pair #object[com.iwebpp.crypto.TweetNaclFast$Box$KeyPair 0x23320baf "com.iwebpp.crypto.TweetNaclFast$Box$KeyPair@23320baf"]},
+ :frereth-cp.shared/work-area {:frereth-cp.shared/working-nonce (byte-array 16),
+                               :frereth-cp.shared/text (byte-array 2048)},
+ :frereth-cp.shared.specs/inner-i-nonce (byte-array 16),
+ :frereth-cp.shared.specs/vouch (byte-array 192)}
+
 (s/fdef build-initiate-interior
         :args (s/cat :this ::message-building-params
                      :msg bytes?
@@ -79,6 +91,10 @@
                  ::K/srvr-name srvr-name
                  ::K/child-message msg}
             secret (::state/client-short<->server-short shared-secrets)
+            _ (assert secret (str "Missing shared-short secret among '"
+                                  shared-secrets
+                                  "'\nin\n"
+                                  this))
             log-state (log/info log-state
                                 ::build-initiate-interior
                                 "Encrypting\nFIXME: Do not log the shared secret!"
@@ -395,7 +411,6 @@ FIXME: Change that"
                                                              shared-secret
                                                              working-nonce
                                                              text)]
-            (comment (throw (RuntimeException. "Start back here.")))
             (assert log-state)
             {::specs/inner-i-nonce nonce-suffix
              ::log/state log-state
@@ -462,14 +477,6 @@ FIXME: Change that"
                                                      ::shared/my-keys
                                                      ::shared/work-area
                                                      ::specs/inner-i-nonce
-                                                     ;; FIXME: Deliberate!
-                                                     #_::specs/vouch-broken
-                                                     ;; Comment this out to
-                                                     ;; kill the stack
-                                                     ;; overflow error and
-                                                     ;; restore false
-                                                     ;; positive for my
-                                                     ;; handshake test
                                                      ::specs/vouch
                                                      ::state/server-security
                                                      ::state/shared-secrets])]
