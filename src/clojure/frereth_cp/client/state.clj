@@ -172,7 +172,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                 #_::chan->server
                                                 ;; We still have a circular dependency.
                                                 ::packet-builder
+                                                ::server-extension
                                                 ::server-security
+                                                ::shared/extension
                                                 ;; Note that this doesn't really make
                                                 ;; any sense for message-building.
                                                 ;; But it's absolutely vital for
@@ -428,12 +430,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
                       ::log/logger
                       ::log/state
                       ::msg-specs/message-loop-name
+                      ::shared/extension
                       ::shared/my-keys
                       ::shared/work-area
                       ::specs/inner-i-nonce
                       ::specs/vouch
                       ::packet-builder
                       ::shared-secrets
+                      ::server-extension
                       ::server-security]))
 
 (s/fdef update-callback!
