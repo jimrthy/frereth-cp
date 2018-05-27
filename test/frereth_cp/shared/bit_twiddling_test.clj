@@ -1,10 +1,24 @@
 (ns frereth-cp.shared.bit-twiddling-test
-  (:require [clojure.spec.alpha :as s]
+  (:require [byte-streams :as b-s]
+            [clojure.spec.alpha :as s]
             [clojure.test :refer (are deftest is testing)]
             [clojure.test.check.clojure-test :as c-t]
             [clojure.test.check.generators :as lo-gen]
             [clojure.test.check.properties :as props]
-            [frereth-cp.shared.bit-twiddling :as b-t]))
+            [frereth-cp.shared.bit-twiddling :as b-t])
+  (:import [io.netty.buffer ByteBuf Unpooled]))
+
+(deftest check-byte-buf-conversion
+  (let [n 256
+        buf (Unpooled/buffer n)]
+    (doseq [x (range n)] (.writeByte buf x))
+    (let [bs (b-s/convert buf bytes)]
+      (is (= n (count bs))))
+    (let [s (b-t/->string buf)]
+      ;; It seems tempting to do some sort of validation here.
+      ;; Really, the fact that it works without throwing an exception
+      ;; is a victory.
+      (is s))))
 
 (deftest complement-2s
   (are [x expected] (= expected (b-t/possibly-2s-complement-8 x))

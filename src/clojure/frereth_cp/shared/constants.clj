@@ -1,7 +1,8 @@
 (ns frereth-cp.shared.constants
   "Magical names, numbers, and data structures"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.shared.specs :as specs]))
+            [frereth-cp.shared.specs :as specs])
+  (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants
@@ -177,7 +178,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets
 
+;; Header, cookie, server name, extensions, keys, nonces
+(def vouch-overhead 544)
 (def max-vouch-message-length 640)
+(def max-initiate-packet-size (+ vouch-overhead max-vouch-message-length))
 ;; Q: Can this ever be < 16?
 ;; A: Well, in the reference implementation, trying to write
 ;; too few (< 16) or too many (> 640 in the Initiatet/Vouch phase)
@@ -198,6 +202,8 @@
 ;; name.
 ;; FIXME: Switch to that name.
 (s/def ::message (s/and bytes?
+                        ;; This predicate is nonsense.
+                        ;; FIXME: Switch to something sensible
                         #(<= max-vouch-message-length (count %))
                         #(<= (count %))))
 (s/def ::outer-i-nonce ::client-nonce-suffix)
@@ -245,7 +251,7 @@
   [^bytes bs]
   (let [n (count bs)]
     (and (< n max-vouch-message-length)
-         (= 0 (quot n 16)))))
+         (= 0 (rem n 16)))))
 
 (def vouch-wrapper
   "Template for composing the inner part of an Initiate Packet's Vouch that holds everything interesting"

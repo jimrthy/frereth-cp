@@ -1,6 +1,7 @@
 (ns frereth-cp.client.message
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.client.state :as state]
+            [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as specs]
@@ -28,15 +29,16 @@
 (defn filter-initial-message-bytes
   "Make sure bytes are legal for a Vouch"
   [log-state
-   ^bytes msg-bytes]
-  (let [log-state (log/info log-state
-                            ::filter-initial-message-bytes
-                            ""
-                            {::incoming msg-bytes
-                             ::incoming-class (class msg-bytes)
-                             ::incoming-length (count msg-bytes)})
-        result {::log/state log-state}]
-    (if (and msg-bytes
-             (K/legal-vouch-message-length? msg-bytes))
-      (assoc result ::possible-response msg-bytes)
-      result)))
+   ^ByteBuf initiate-packet]
+  (when initiate-packet
+    (let [packet-size (.readableBytes initiate-packet)
+          log-state (log/info log-state
+                              ::filter-initial-message-bytes
+                              ""
+                              {::shared/packet initiate-packet
+                               ::incoming-class (class initiate-packet)
+                               ::incoming-length packet-size})
+          result {::log/state log-state}]
+      (if (<= packet-size K/max-initiate-packet-size)
+        (assoc result ::possible-response initiate-packet)
+        result))))

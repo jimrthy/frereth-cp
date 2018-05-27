@@ -3,17 +3,24 @@
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
-            [frereth-cp.shared.constants :as K]))
+            [frereth-cp.shared.constants :as K])
+  (:import io.netty.buffer.ByteBuf))
 
 (set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(b-s/def-conversion [ByteBuf bytes]
+  [^ByteBuf buf _]
+  (let [dst (byte-array (.readableBytes buf))]
+    (.readBytes buf dst)
+    dst))
+
 (s/fdef ->string
         ;; Q: What's legal to send here?
         :args (s/cat :x (s/or :byte-array bytes
-                              :byte-buf #(instance? io.netty.buffer.ByteBuf %)))
+                              :byte-buf #(instance? ByteBuf %)))
         :ret string?)
 (defn ->string
   [x]

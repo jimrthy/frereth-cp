@@ -620,7 +620,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
           log-state (log/debug log-state
                                ::child->
                                "Client sending a message packet from child->serve"
-                               {::shared/message (b-t/->string message-packet)
+                               {::shared/message (if message-packet
+                                                   (b-t/->string message-packet)
+                                                   "No message packet built")
                                 ::server-security server-security})]
       (when-not (and srvr-name srvr-port message-packet)
         (throw (ex-info "Missing something vital"

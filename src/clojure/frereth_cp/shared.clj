@@ -20,6 +20,13 @@
 
 (def cookie-position-in-packet 80)
 
+;; Q: Can this possibly be right?
+;; It seems like, realistically, I need to
+;; a) convert this to a long
+;; b) translate those bits into an unsigned BigInt
+;; or something along those lines.
+;; It probably depends on how I'm actually using this.
+;; TODO: Dig into that.
 (def max-unsigned-long -1)
 (def millis-in-second 1000)
 (def nanos-in-milli (long (Math/pow 10 6)))
