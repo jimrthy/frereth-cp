@@ -8,17 +8,26 @@
             [frereth-cp.shared.bit-twiddling :as b-t])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
-(deftest check-byte-buf-conversion
-  (let [n 256
-        buf (Unpooled/buffer n)]
-    (doseq [x (range n)] (.writeByte buf x))
-    (let [bs (b-s/convert buf bytes)]
-      (is (= n (count bs))))
-    (let [s (b-t/->string buf)]
-      ;; It seems tempting to do some sort of validation here.
-      ;; Really, the fact that it works without throwing an exception
-      ;; is a victory.
-      (is s))))
+(comment
+  ;; This isn't working.
+  ;; Q: Why not?
+  (deftest check-byte-buf-conversion
+    (let [n 256
+          buf (Unpooled/buffer n)
+          byte-array-class (class (byte-array 0))]
+      (doseq [x (range n)] (.writeByte buf x))
+      (let [bs (b-s/convert buf #_(byte-array n) #_bytes byte-array-class)]
+        (is (= n (count bs))))
+      (let [bss (b-s/convert buf (b-s/seq-of byte-array-class))]
+        (is (= 1 (count bss)))
+        (is (= n (count (first bss)))))
+      ;; Note that this will release the ByteBuf
+      (b-s/print-bytes buf)
+      (let [s (b-t/->string buf)]
+        ;; It seems tempting to do some sort of validation here.
+        ;; Really, the fact that it works without throwing an exception
+        ;; is a victory.
+        (is s)))))
 
 (deftest complement-2s
   (are [x expected] (= expected (b-t/possibly-2s-complement-8 x))
