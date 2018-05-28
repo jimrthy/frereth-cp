@@ -97,6 +97,10 @@
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
   [^bytes packet]
   ;; So far, for unit tests, I'm getting the [B I expect
+  ;; Note that this is actually wrong: I really should be
+  ;; getting ByteBuf instances off the wire.
+  ;; FIXME: Revisit this.
+  ;; For that matter, I should convert this over to new-style logging.
   (log/debug (str "Incoming: " packet ", a " (class packet)))
   ;; For now, retain the name r for compatibility/historical reasons
   (let [r (count packet)]

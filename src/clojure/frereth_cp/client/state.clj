@@ -616,12 +616,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; initiate/build-initiate-packet! to
     ;; some function that I don't think I've written yet that should
     ;; live in client.message.
-    (let [message-packet (packet-builder (assoc state ::log/state log-state) message-block)
+    (let [^ByteBuf message-packet (packet-builder (assoc state ::log/state log-state) message-block)
           log-state (log/debug log-state
                                ::child->
                                "Client sending a message packet from child->serve"
                                {::shared/message (if message-packet
-                                                   (b-t/->string message-packet)
+                                                   (let [barray (byte-array (.readableBytes message-packet))]
+                                                     (.readBytes message-packet barray)
+                                                     (b-t/->string barray))
                                                    "No message packet built")
                                 ::server-security server-security})]
       (when-not (and srvr-name srvr-port message-packet)
