@@ -200,13 +200,6 @@ implementation. This is code that I don't understand yet"
   [this]
   (throw (ex-info "child exited" this)))
 
-(defn server-closed!
-  "This seems pretty meaningless in a UDP context"
-  [this]
-  ;; Q: Do I need to send a ::closed message to the client?
-  ;; A: Nope. Handled elsewhere.
-  (throw (RuntimeException. "Obsolete")))
-
 (defn child->server
   "Child sent us (as an agent) a signal to add bytes to the stream to the server"
   [this msg]
@@ -301,59 +294,38 @@ implementation. This is code that I don't understand yet"
         ;; is the initial, most obvious reason that I haven't
         ;; moved this to the hello ns yet.
         ;; TODO: Convert that to another parameter.
-        (hello/poll-servers! this timeout cookie/wait-for-cookie!)
-        _ (println "client: triggered hello! polling")
-        result (-> outcome
-                   (dfrd/chain #(into % (initiate/build-inner-vouch %))
-                               servers-polled
-                               ;; Based on what's written here, deferrable involves
-                               ;; the success of...what? Pulling the Vouch from
-                               ;; the server?
-                               (fn [{:keys [::specs/deferrable  ; Q: What does deferrable represent here?
-                                            ::log/state]
-                                     :as this}]
-                                 (println "client: servers-polled succeeded:" (dissoc this ::log/state))
-                                 (let [log-state (log/flush-logs! logger state)]
-                                   ;; This is at least a little twisty.
-                                   ;; And seems pretty wrong. In the outer context, outcome
-                                   ;; was a deferrable that got added to this by
-                                   ;; hello/poll-servers!
-                                   ;; That returns a ::log/state.
-                                   ;; Q: How has this ever worked?
-                                   ;; Alt Q: Has it ever?
-                                   ;; A: I don't think I've ever gotten this far.
-                                   ;; It's a crash and burn just waiting to happen.
-                                   ;; FIXME: Get back to this.
-                                   (dfrd/chain deferrable
-                                               (fn [sent]
-                                                 (if (not (or (= sent ::state/sending-vouch-timed-out)
-                                                              (= sent ::state/drained)))
-                                                   (state/->message-exchange-mode (assoc this
-                                                                                         ::log/state log-state)
-                                                                                  sent)
-                                                   (throw (ex-info "Something about polling/sending Vouch failed"
-                                                                   {::problem sent}))))))))
-                   ;; Q: What happens if I just don't catch this?
-                   ;; The next option is to just flush the logs and have it
-                   ;; update state, but that discards the error implications of what
-                   ;; just happened.
-                   #_(dfrd/catch
-                       (fn [ex]
-                         (println "Failure polling servers with hello!\n"
-                                  (log/exception-details ex))
-                         ;; Q: Does it make more sense to just tip the agent over
-                         ;; into an error state?
-                         ;; This *is* a pretty big deal
-                         (send wrapper (fn [{log-state ::log/state
-                                             :keys [::log/logger]
-                                             :as this}]
-                                         (let [log-state (log/exception log-state
-                                                                        ex
-                                                                        ::start!
-                                                                        "After servers-polled")
-                                               log-state (log/flush-logs! logger log-state)]
-                                           (assoc this ::log/state log-state)))))))]
-    result))
+        (hello/poll-servers! this timeout cookie/wait-for-cookie!)]
+    (println "client: triggered hello! polling")
+    (-> outcome
+        (dfrd/chain #(into % (initiate/build-inner-vouch %))
+                    servers-polled
+                    ;; Based on what's written here, deferrable involves
+                    ;; the success of...what? Pulling the Vouch from
+                    ;; the server?
+                    (fn [{:keys [::specs/deferrable  ; Q: What does deferrable represent here?
+                                 ::log/state]
+                          :as this}]
+                      (println "client: servers-polled succeeded:" (dissoc this ::log/state))
+                      (let [log-state (log/flush-logs! logger state)]
+                        ;; This is at least a little twisty.
+                        ;; And seems pretty wrong. In the outer context, outcome
+                        ;; was a deferrable that got added to this by
+                        ;; hello/poll-servers!
+                        ;; That returns a ::log/state.
+                        ;; Q: How has this ever worked?
+                        ;; Alt Q: Has it ever?
+                        ;; A: I don't think I've ever gotten this far.
+                        ;; It's a crash and burn just waiting to happen.
+                        ;; FIXME: Get back to this.
+                        (dfrd/chain deferrable
+                                    (fn [sent]
+                                      (if (not (or (= sent ::state/sending-vouch-timed-out)
+                                                   (= sent ::state/drained)))
+                                        (state/->message-exchange-mode (assoc this
+                                                                              ::log/state log-state)
+                                                                       sent)
+                                        (throw (ex-info "Something about polling/sending Vouch failed"
+                                                        {::problem sent})))))))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -394,11 +366,12 @@ implementation. This is code that I don't understand yet"
                (log/exception-details ex)))))
 
 (s/fdef stop!
-        :args (s/cat :state-agent ::state/state-agent)
+        :args (s/cat :state ::state/state)
         :ret any?)
 (defn stop!
-  [wrapper]
+  [this]
   (println "Top of client/stop!")
+  ;; FIXME: local-log-atom can/should go away
   (let [local-log-atom (atom (log/init ::stop!))
         stop-finished (dfrd/deferred)
         logger (log/std-out-log-factory)]
@@ -406,140 +379,118 @@ implementation. This is code that I don't understand yet"
       (swap! local-log-atom #(log/debug %
                                         ::stop!
                                         "Trying to stop a client agent"
-                                        {::wrapper wrapper
-                                         ::wrapper-class (class wrapper)
-                                         ::wrapper-content-class (class @wrapper)}))
-      (swap! local-log-atom #(log/debug %
-                                        ::stop!
-                                        "Current state"
-                                        {::state/state (dissoc @wrapper ::log/state)}))
-      (if-let [ex (agent-error wrapper)]
-        (swap! local-log-atom #(log/exception (log/init ::failed)
-                                              ex
-                                              ::stop!
-                                              "Client Agent was in error state"))
-        (try
-          (send wrapper
-                (fn [{:keys [::state/chan->server
-                             ::log/logger
-                             ::shared/packet-management]
-                      log-state ::log/state
-                      :as this}]
-                  (try
-                    (swap! local-log-atom #(log/trace % ::stop! "Made it into the real client stopper"))
-                    (if log-state
+                                        {::wrapper-content-class (class this)
+                                         ::state/state (dissoc this ::log/state)}))
+      (try
+        (let [{:keys [::state/chan->server
+                      ::log/logger
+                      ::shared/packet-management]
+               log-state ::log/state} this]
+          (try
+            (swap! local-log-atom #(log/trace % ::stop! "Made it into the real client stopper"))
+            (if log-state
+              (try
+                (let [log-state (log/debug log-state
+                                           ::stop!
+                                           "Top of the real stopper")
+                      ;; Note that this signals the Child ioloop to stop
+                      log-state (state/do-stop (assoc this
+                                                      ::log/state log-state))
+                      log-state
                       (try
-                        (let [log-state (log/debug log-state
-                                                   ::stop!
-                                                   "Top of the real stopper")
-                              ;; Note that this signals the Child ioloop to stop
-                              log-state (state/do-stop (assoc this
-                                                              ::log/state log-state))
-                              log-state
-                              (try
-                                (swap! local-log-atom #(log/trace %
-                                                                  ::stop!
-                                                                  "Possibly closing the channel to server"
-                                                                  {::state/chan->server chan->server}))
-                                (if chan->server
-                                  (do
-                                    (strm/close! chan->server)
-                                    (log/debug log-state
-                                               ::stop!
-                                               "chan->server closed"))
-                                  (log/warn (log/clean-fork log-state ::possible-issue)
-                                            ::stop!
-                                            "chan->server already nil"
-                                            (dissoc this ::log/state)))
-                                (catch Exception ex
-                                  (log/exception log-state
-                                                 ex
-                                                 ::stop!)))
-                              log-state (log/flush-logs! logger
-                                                         (log/info log-state
-                                                                   ::stop!
-                                                                   "Done"))]
-                          (assoc this
-                                 ::chan->server nil
-                                 ::log/state log-state
-                                 ::shared/packet-management nil))
-                        (catch Exception ex
-                          (assoc this
-                                 ::chan->server nil
-                                 ::log/state (log/exception log-state
-                                                            ex
-                                                            ::stop!
-                                                            "Actual stop function failed")
-                                 ::shared/packet-management nil)))
-                      ;; No log state
-                      ;; It's very tempting to refactor the duplicate functionality into
-                      ;; its own function. This one is pretty unwieldy.
-                      ;; And I've botched the copy/paste between the two versions at least once.
-                      (try
-                        (swap! local-log-atom
-                               #(log/warn %
-                                          ::stop!
-                                          "Missing log-state. Trying to close the channel to server"
-                                          {::state/chan->server chan->server}))
-                        (swap! local-log-atom
-                               #(state/do-stop (assoc this ::log/state %)))
+                        (swap! local-log-atom #(log/trace %
+                                                          ::stop!
+                                                          "Possibly closing the channel to server"
+                                                          {::state/chan->server chan->server}))
                         (if chan->server
                           (do
                             (strm/close! chan->server)
-                            (swap! local-log-atom
-                                   #(log/info %
-                                              ::stop!
-                                              "client/stop! Failed logging DEBUG: chan->server closed"))
-                            (assoc this
-                                   ::chan->server nil
-                                   ::log/state (log/init ::resurrected-during-stop!)
-                                   ::shared/packet-management nil))
-                          (do
-                            (swap! local-log-atom
-                                   #(log/info %
-                                              ::stop!
-                                              "client/stop! Failed logging: chan->server already nil"
-                                              {::state/state (dissoc this ::log/state)}))
-                            (assoc this
-                                   ::chan->server nil
-                                   ::log/state (log/init ::resurrected-during-stop!)
-                                   ::shared/packet-management nil)))
+                            (log/debug log-state
+                                       ::stop!
+                                       "chan->server closed"))
+                          (log/warn (log/clean-fork log-state ::possible-issue)
+                                    ::stop!
+                                    "chan->server already nil"
+                                    (dissoc this ::log/state)))
                         (catch Exception ex
-                          (swap! local-log-atom
-                                 #(log/exception %
-                                                 ex
-                                                 ::stop!
-                                                 "Couldn't even do that much"))
-                          (assoc this
-                                 ::chan->server nil
-                                 ::log/state (log/init ::resurrected-during-stop!)
-                                 ::shared/packet-management nil))))
-                    (catch Exception ex
-                      (swap! local-log-atom
-                             #(log/exception %
-                                             ex
-                                             ::stop!))
-                      (dfrd/error! stop-finished ex))
-                    (finally
-                      (swap! local-log-atom
-                             #(log/flush-logs! logger %))
-                      (dfrd/success! stop-finished true)))))
-          ;; FIXME: don't do this
-          ;; I really just want to eliminate the agent completely.
-          (println "Waiting for the client agent to wrap up")
-          (await wrapper)
-          (println "Client Agent finished")
-          (catch Exception ex
-            (swap! local-log-atom
-                   #(log/exception %
-                                   ex
-                                   "(send)ing the close function to the client agent failed")))
-          (finally
-            (send wrapper
-                  assoc
-                  ::chan->server nil
-                  ::log/state (log/init ::ended-during-stop!)
-                  ::shared/packet-management nil))))
+                          (log/exception log-state
+                                         ex
+                                         ::stop!)))
+                      log-state (log/flush-logs! logger
+                                                 (log/info log-state
+                                                           ::stop!
+                                                           "Done"))]
+                  (assoc this
+                         ::chan->server nil
+                         ::log/state log-state
+                         ::shared/packet-management nil))
+                (catch Exception ex
+                  (assoc this
+                         ::chan->server nil
+                         ::log/state (log/exception log-state
+                                                    ex
+                                                    ::stop!
+                                                    "Actual stop function failed")
+                         ::shared/packet-management nil)))
+              ;; No log state
+              ;; It's very tempting to refactor the duplicate functionality into
+              ;; its own function. This one is pretty unwieldy.
+              ;; And I've botched the copy/paste between the two versions at least once.
+              (try
+                (swap! local-log-atom
+                       #(log/warn %
+                                  ::stop!
+                                  "Missing log-state. Trying to close the channel to server"
+                                  {::state/chan->server chan->server}))
+                (swap! local-log-atom
+                       #(state/do-stop (assoc this ::log/state %)))
+                (if chan->server
+                  (do
+                    (strm/close! chan->server)
+                    (swap! local-log-atom
+                           #(log/info %
+                                      ::stop!
+                                      "client/stop! Failed logging DEBUG: chan->server closed"))
+                    (assoc this
+                           ::chan->server nil
+                           ::log/state (log/init ::resurrected-during-stop!)
+                           ::shared/packet-management nil))
+                  (do
+                    (swap! local-log-atom
+                           #(log/info %
+                                      ::stop!
+                                      "client/stop! Failed logging: chan->server already nil"
+                                      {::state/state (dissoc this ::log/state)}))
+                    (assoc this
+                           ::chan->server nil
+                           ::log/state (log/init ::resurrected-during-stop!)
+                           ::shared/packet-management nil)))
+                (catch Exception ex
+                  (swap! local-log-atom
+                         #(log/exception %
+                                         ex
+                                         ::stop!
+                                         "Couldn't even do that much"))
+                  (assoc this
+                         ::chan->server nil
+                         ::log/state (log/init ::resurrected-during-stop!)
+                         ::shared/packet-management nil))))
+            (catch Exception ex
+              (swap! local-log-atom
+                     #(log/exception %
+                                     ex
+                                     ::stop!))
+              (dfrd/error! stop-finished ex))
+            (finally
+              (swap! local-log-atom
+                     #(log/flush-logs! logger %))
+              (dfrd/success! stop-finished true))))
+        (println "Successfull reached the bottom of client/stop!")
+        (catch Exception ex
+          (swap! local-log-atom
+                 #(log/exception %
+                                 ex
+                                 "(send)ing the close function to the client agent failed"))))
       (dfrd/on-realized stop-finished
                         ;; Flushing logs here should be totally redundant.
                         ;; However: This is getting totally tangled up with the
@@ -550,7 +501,11 @@ implementation. This is code that I don't understand yet"
                           (log/flush-logs! logger @local-log-atom))
                         (fn [fail]
                           (println "stop-finished failed at bottom of client/stop!")
-                          (log/flush-logs! logger @local-log-atom))))))
+                          (log/flush-logs! logger @local-log-atom)))
+      (assoc this
+             ::chan->server nil
+             ::log/state (log/init ::ended-during-stop!)
+             ::shared/packet-management nil))))
 
 (s/fdef ctor
         :args (s/cat :opts (s/keys :req [::msg-specs/->child
@@ -560,7 +515,7 @@ implementation. This is code that I don't understand yet"
                                          ::state/server-security])
                      :log-initializer (s/fspec :args nil
                                                :ret ::log/logger))
-        :ret ::state/state-agent)
+        :ret ::state/state)
 (defn ctor
   [opts logger-initializer]
   (-> opts
@@ -578,14 +533,4 @@ implementation. This is code that I don't understand yet"
        ;; We definitely don't want multiple threads
        ;; messing with them.
        ::shared/packet-management (shared/default-packet-manager)
-       ::shared/work-area (shared/default-work-area))
-      ;; Using a core.async go-loop is almost guaranteed
-      ;; to be faster.
-      ;; TODO: Verify the "almost" with numbers.
-      ;; The more I try to switching, the more dubious this
-      ;; approach seems.
-      ;; pipelines might not make a lot of sense on the client,
-      ;; since they're at least theoretically about increasing
-      ;; throughput at the expense of latency.
-      ;; But they probably make a lot of sense on some servers.
-      agent))
+       ::shared/work-area (shared/default-work-area))))

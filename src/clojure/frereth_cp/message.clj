@@ -1048,7 +1048,7 @@
     (interrupt!)
     )
 
-  (defn clear-interrupt
+  (defn clear-interrupt!
     []
     (println "Unblocking ioloop manually")
     (reset! interrupted false))

@@ -83,19 +83,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                               :msg-packet bytes?)
                                  :ret ::msg-specs/buf))
 
-;; Because, for now, I need somewhere to hang onto the future
+;; Because, for now, I need somewhere to hang onto the future.
 ;; Q: So...what is this? a Future?
 (s/def ::child any?)
 
 ;; The parts that change really need to be stored in a mutable
 ;; data structure.
-;; An agent really does seem like it was specifically designed
-;; for this.
 ;; Parts of this mutate over time. Others advance with the handshake
 ;; FSM. And others are really just temporary members.
-;; I could also handle this with refs, but combining STM with
-;; mutable byte arrays (which is where the "real work"
-;; happens) seems like a recipe for disaster.
+;; The distinction from the immutable-state portions makes a lot less sense
+;; now that I've eliminated any actual usage of the agent.
 (s/def ::mutable-state (s/keys :req [::client-extension-load-time  ; not really mutable
                                      ::specs/executor
                                      ;; This isn't mutable
@@ -183,29 +180,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::child-send-state (s/merge ::initiate-building-params
                                    (s/keys :req [::chan->server])))
 
-;;; Using an agent here seems like a dubious choice.
-;;; After all, they're slow.
-;;; But it makes sense for in initial pass:
-;;; We have a messaging layer that processes data streams
-;;; of data to/from a child. That layer interacts with a
-;;; single Client instance, which handles the cryptography
-;;; and actual network communication.
-;;; We could probably do what we need via atoms, except that
-;;; those are for managing state and really should not trigger
-;;; side-effects.
-;;; Using something like core.async or manifold.streams
-;;; is probably "the" proper way to go here. Especially
-;;; since, realistically, we want multiple clients speaking
-;;; with multiple servers. And it's perfectly reasonable
-;;; to expect a single "child" to contact multiple servers.
-;;; Actually, that latter point makes this architecture seem
-;;; inside-out.
-;;; Stick with this for now, but keep in mind that it probably
-;;; should change.
-(s/def ::state-agent (s/and #(instance? clojure.lang.Agent %)
-                            #(s/valid? ::state (deref %))))
-
-(s/def ::child-spawner! (s/fspec :args (s/cat :state-agent ::state-agent)
+(s/def ::child-spawner! (s/fspec :args (s/cat :state ::state)
                                  :ret (s/keys :req [::log/state
                                                     ::msg-specs/io-handle])))
 
@@ -237,14 +212,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                :ret ::log/logger))
         :ret ::immutable-value)
 (defn initialize-immutable-values
-  "Sets up the immutable value that will be used in tandem with the mutable agent later"
+  "Sets up the immutable value that will be used in tandem with the mutable state later"
   [{:keys [::msg-specs/message-loop-name
            ::chan<-server
            ::server-extension
            ::server-ips
            ::specs/executor]
     log-state ::log/state
-    ;; TODO: Play with the numbers here to come up with something more reasonable
+    ;; TODO: Play with the numbers here to come up with something reasonable
     :or {executor (exec/utilization-executor 0.5)}
     :as this}
    log-initializer]
@@ -314,8 +289,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :args (s/cat :this ::state
                      :initial-server-response ::specs/network-packet)
         :ret ::state)
-;; I think this is the last place where I may somewhat-legitimately
-;; be using the agent
 (defn ->message-exchange-mode
   "Just received first real response Message packet from the handshake.
   Now we can start doing something interesting."
@@ -342,21 +315,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; I've been trying so far.
   ;; Except that, last I checked, this basically worked.
   ;; Q: Is there a better alternative?
-  (let [log-state (log/warn log-state
-                            ::->message-exchange-mode
-                            "I really want to deprecate this. I'm just not sure how.")
-        log-state (log/info log-state
+  (let [log-state (log/info log-state
                             ::->message-exchange-mode
                             "Initial Response from server"
                             initial-server-response)
         log-state
         (if (not (keyword? (:message initial-server-response)))
           (if (and ->child chan->server)
+            ;; Note the inherent side-effect that happens in here.
+            ;; FIXME: Come up with a better way to handle this.
             (do
-              ;; Q: Do I want to block this thread for this?
-              ;; A: As written, we can't. We're already inside an Agent$Action
-              (comment (await-for (current-timeout this) wrapper))
-
               ;; Need to wire this up to pretty much just pass messages through
               ;; Actually, this seems totally broken from any angle, since we need
               ;; to handle decryption, at a minimum.
@@ -373,7 +341,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               (->child (:message msg)))
                             chan<-server)
               log-state)
-            (throw (ex-info (str "Missing either/both chan<-child and/or chan->server amongst\n" @this)
+            (throw (ex-info (str "Missing either/both chan<-child and/or chan->server")
                             {::state this})))
           (log/warn log-state
                     ::->message-exchange-mode
@@ -383,8 +351,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               (throw (RuntimeException. "FIXME: Need a function that mirrors initiate/build-initiate-packet!")))
            ;; This is another example of things falling apart in a multi-threaded
            ;; scenario.
-           ;; Honestly, all the log calls that happen here should be updates wrapped
-           ;; in a send.
+           ;; Honestly, all the log calls that happen here should be updates modifying
+           ;; an atom.
+           ;; Q: Is that really true?
            ::log/state log-state)))
 
 (declare current-timeout)
@@ -536,7 +505,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;; But there's a circular reference if I try to
 ;;; add it anywhere else.
 ;;; fork! needs access to child->, while child-> needs access
-;;; to the ::state-agent spec.
+;;; to portions of the ::state spec.
 ;;; Which is a strong argument for refactoring specs like
 ;;; that into their own namespace.
 (s/fdef child->
@@ -551,8 +520,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :ret dfrd/deferrable?)
 (defn child->
   "Handle packets streaming out of child"
-  ;; This function pulls a couple of stateful pieces
-  ;; out of the state-agent.
+  ;; This function uses a couple of important pieces
+  ;; from the State.
+
   ;; The first is the packet-builder. We need to start
   ;; by building/sending Initiate packets, until we
   ;; receive a Message packet back from the Server. Then
@@ -563,10 +533,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; create.
   ;; In a lot of ways, this seems like the best option:
   ;; callers should drive the behavior.
-  ;; OTOH, I really the "just write bytes" callback
+  ;; OTOH, I really like the "just write bytes" callback
   ;; approach.
-  ;; And that really doesn't help much with the point
-  ;; that the send timeout is mutable (Q: Should it be?)
+  ;;
   ;; Another approach that seems promising would be to
   ;; add a message signal that lets me update the
   ;; callback function.
@@ -597,7 +566,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; That violates DRY, and makes everything more error prone.
     ;; I could totally see a race condition where a packet
     ;; arrives, gets dispatched to the child, and the child starts
-    ;; sending back bigger message blocks before the agent here
+    ;; sending back bigger message blocks before the real state-tracker
     ;; has been notified that it needs to switch to sending Message
     ;; packets rather than Initiate ones.
     ;; The reference implementation maintains this flag in both places.
@@ -614,7 +583,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; server (this will be a Message in response to a Vouch), we need to
     ;; use message/swap-parent-callback! to swap packet-builder from
     ;; initiate/build-initiate-packet! to
-    ;; some function that I don't think I've written yet that should
+    ;; some equivalent function that I haven't written yet. That function should
     ;; live in client.message.
     (let [^ByteBuf message-packet (packet-builder (assoc state ::log/state log-state) message-block)
           log-state (log/debug log-state
@@ -653,14 +622,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
             {log-state ::log/state
              result ::specs/deferrable} composite-result-placeholder]
         result))))
-
-(s/fdef update-timeout!
-        :args (s/cat :state-agent ::state-agent
-                     :timeout nat-int?)
-        :ret any?)
-(defn update-timeout!
-  [wrapper new-timeout]
-  (throw (RuntimeException. "Never should have written this in the first place")))
 
 (s/fdef clientextension-init
         :args (s/cat :this ::state)
@@ -726,10 +687,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :args (s/cat :state ::state)
         :ret ::state)
 (defn fork!
-  ;; TODO: Verify the send-off vs. send. But surely it is.
-  "It happens in the agent processing thread pool, during a send-off operation.
-
-  TODO: Move this into shared so the server can use the same code."
+  "Create a new Child to do all the interesting work."
   [{:keys [::log/logger
            ::msg-specs/->child
            ::msg-specs/child-spawner!
@@ -749,14 +707,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                 ::log/state log-state)
                                          logger)
         child-send-state (extract-child-send-state this)
-        ;; At this point in time, we don't have the inner-i-nonce.
-        ;; So of course it can't get passed along to child->
-        ;; This must have been something that was getting updated by
-        ;; the agent, back when this part seemed to work.
-        ;; Actually, it looks like it's much simpler.
-        ;; We "just" need to call initiate/build-inner-vouch before
-        ;; we get here.
-        ;; FIXME: Make that happen.
         _ (assert (::specs/inner-i-nonce child-send-state) (str "Missing inner-i-nonce in child-send-state\n"
                                                               (keys child-send-state)
                                                               "\namong\n"
@@ -765,7 +715,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                               (keys this)
                                                               "\namong\n"
                                                               this))
-        _ (println "state/fork! inner-i-nonce:" (::specs/inner-i-nonce child-send-state))
         {:keys [::msg-specs/io-handle]
          log-state ::log/state} (message/do-start startable
                                                   logger

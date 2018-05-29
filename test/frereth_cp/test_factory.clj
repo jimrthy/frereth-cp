@@ -106,7 +106,7 @@
                                                           #(= (count %) K/extension-length))
                                      :->child ::msg-specs/->child
                                      :child-spawner! ::msg-specs/child-spawner!))
-        :ret ::client-state/state-agent)
+        :ret ::client-state/state)
 (defn raw-client
   ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long ->child child-spawner!]
    (raw-client message-loop-name

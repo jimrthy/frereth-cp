@@ -227,20 +227,20 @@
               clnt-log-state (log/init ::shake-hands.client)
               clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log.edn")
               internal-client-chan (strm/stream)
-              client-agent (factory/raw-client "client-hand-shaker"
-                                               (constantly clnt-logger)
-                                               clnt-log-state
-                                               server-ip
-                                               server-port
-                                               srvr-pk-long
-                                               (partial handshake->client-child internal-client-chan)
-                                               (partial handshake-client-child-spawner! internal-client-chan))]
-          (println (str "shake-hands: Agent start triggered. Pulling HELLO from "
-                        client-agent
+              client (factory/raw-client "client-hand-shaker"
+                                         (constantly clnt-logger)
+                                         clnt-log-state
+                                         server-ip
+                                         server-port
+                                         srvr-pk-long
+                                         (partial handshake->client-child internal-client-chan)
+                                         (partial handshake-client-child-spawner! internal-client-chan))]
+          (println (str "shake-hands: Client State start triggered. Pulling HELLO from "
+                        client
                         ", a "
-                        (class client-agent)))
+                        (class client)))
           (try
-            (let [client->server (::client-state/chan->server @client-agent)]
+            (let [client->server (::client-state/chan->server client)]
               (is client->server)
               (let [taken (strm/try-take! client->server ::drained 1000 ::timeout)
                     hello @taken]
@@ -249,11 +249,14 @@
                           (= hello ::timeout))
                   (throw (ex-info "Client didn't send Hello"
                                   {::received hello
-                                   ::client-state/state @client-agent
-                                   ::problem (agent-error client-agent)})))
+                                   ;; Note that this state is going to
+                                   ;; drift further and further from reality, now
+                                   ;; that I'd ditched the agent.
+                                   ;; Q: Isn't it?
+                                   ::client-state/state client})))
                 (let [host (:host hello)]
                   (when-not host
-                    (println "shake-hands: Something went wrong with" @client-agent)
+                    (println "shake-hands: Something went wrong with" client)
                     (throw (ex-info "This layer doesn't know where to send anything"
                                     {::problem hello}))))
                 (if (not (or (= hello ::drained)
@@ -305,7 +308,7 @@
                           (if (and (not= ::drained packet)
                                    (not= ::timeout packet)
                                    (not= ::take-timeout packet))
-                            (if-let [client<-server (::client-state/chan<-server @client-agent)]
+                            (if-let [client<-server (::client-state/chan<-server client)]
                               (let [cookie-buffer (:message packet)
                                     cookie (byte-array (.readableBytes cookie-buffer))]
                                 (.readBytes cookie-buffer cookie)
@@ -317,9 +320,7 @@
                                     (str "Mismatched port in"
                                          packet
                                          "based on\n"
-                                         (-> client-agent
-                                             deref
-                                             ::client-state/server-security)))
+                                         (::client-state/server-security client)))
                                 ;; Send the Cookie to the client
                                 (println "server-test/handshake-test: Sending Cookie to"
                                          client<-server)
@@ -399,60 +400,37 @@
                                           (is (not ex)))))
                                     (throw (RuntimeException. "Timed out putting Cookie to Client")))))
                               (throw (ex-info "I know I have a mechanism for writing from server to client among"
-                                              {::keys (keys @client-agent)
-                                               ::grand-scheme @client-agent})))
+                                              {::keys (keys client)
+                                               ::grand-scheme client})))
                             (throw (RuntimeException. (str packet " reading Cookie from Server")))))
                         (throw (RuntimeException. "Timed out putting Hello to Server")))))
                   (throw (RuntimeException. (str hello " taking Hello from Client"))))))
             (finally
-              (let [client-state @client-agent
-                    cleaned (if (map? client-state)
-                              (dissoc client-state ::log/state)
-                              {::agent-state client-state})]
+              (let [cleaned (if (map? client)
+                              (dissoc client ::log/state)
+                              {::client-state client})]
                 (try
                   (println "Stopping client agent" cleaned)
-                  ;; Here's the StackOverflowError I've been chasing around for so long.
+                  ;; Here's the StackOverflowError I chased around for so long
+                  ;; from nesting the client-agent inside itself.
+                  ;; Should no longer be a concern, since that client-agent is gone.
                   (catch StackOverflowError ex
                     (is (not ex))
                     (println "Failed to print the cleaned-up client agent state:"
                              (log/exception-details ex))
-                    (println "The unprintable state object that caused problems is a" (class client-state)))))
-              (if-let [problem (agent-error client-agent)]
-                (println "Uh-oh. Don't try to stop client-agent. It's in a failed state:\n"
-                         problem)
-                (try
-                  (client/stop! client-agent)
-                  (try
-                    (if-let [problem (agent-error client-agent)]
-                      (println "Uh-oh. Trying to step client-agent put it into a failed state:\n"
-                               problem)
-                      (await client-agent))
-                    (catch Exception ex
-                      ;; This should never happen.
-                      ;; But I want to be certain that it doesn't escape to the
-                      ;; outer try/catch
-                      (println "Problem waiting for client-agent to finish\n"
-                               (log/exception-details ex))))
-                  (catch Exception ex
-                    (println "stop! failed:\n" (log/exception-details ex)))))
+                    (println "The unprintable state object that caused problems is a" (class client)))))
+              (try
+                (client/stop! client)
+                (catch Exception ex
+                  (println "stop! failed:\n" (log/exception-details ex))))
               (println "client-agent stopped")
-              (if-let [problem (agent-error client-agent)]
-                (do
-                  (is not problem)
-                  (println "Problem with the client-agent. Trying to print it")
-                  (println problem))
-                (try
-                  (println "Trying to print out the client-agent")
-                  (pprint (dissoc @client-agent
-                                  ::log/state))
-                  (catch Exception ex
-                    (is not ex)
-                    (println "Something got terribly broken:"
-                             ;; This causes a stack overflow
-                             #_(utils/pretty @client-agent)
-                             )
-                    (println "Q: Is this causing my stack overflow?")
-                    (pprint @client-agent)))))))
+              (try
+                (println "Trying to print out the client state")
+                (pprint (dissoc client
+                                ::log/state))
+                (catch Exception ex
+                  (is not ex)
+                  (println "Something got terribly broken:"))))))
         (println "Made it to the bottom of the server handshake main try/catch")
         (catch Exception ex
           (is (not ex))
