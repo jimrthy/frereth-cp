@@ -264,6 +264,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                "Combined keys"
                                {::srvr-long-pk (b-t/->string server-long-term-pk)
                                 ::my-long-pk (b-t/->string (.getPublicKey long-pair))
+                                ;; FIXME: Don't log this
                                 ::shared-key (b-t/->string long-shared)})]
       (into this
             {::child-packets []

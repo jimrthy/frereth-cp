@@ -266,8 +266,7 @@ implementation. This is code that I don't understand yet"
                              ::chan->server-closed)))
 
 (s/fdef set-up-server-hello-polling!
-        :args (s/cat :wrapper ::state/state-agent  ; FIXME: Go away.
-                     :this ::state/state
+        :args (s/cat :this ::state/state
                      :timeout (s/and #((complement neg?) %)
                                      int?))
         ;; Hmm.
@@ -277,9 +276,7 @@ implementation. This is code that I don't understand yet"
         :ret ::specs/deferrable)
 (defn set-up-server-hello-polling!
   "Start polling the server(s) with HELLO Packets"
-  ;; FIXME: Find a way to eliminate the wrapper parameter
-  [wrapper
-   {:keys [::log/logger]
+  [{:keys [::log/logger]
     :as this}
    timeout]
   (let [{log-state ::log/state
@@ -338,29 +335,23 @@ implementation. This is code that I don't understand yet"
         ;; Even though it really is just called for side-effects.
         :ret any?)
 (defn start!
-  ;; FIXME: Ditch the client agent completely.
   ;; Take the client state as a standard immutable value parameter.
   ;; Return a deferred that's really a chain of everything that
   ;; happens here, up to the point of switching into message-exchange
   ;; mode.
   "Perform the side-effects to establish a connection with a server"
-  [wrapper]
+  [{:keys [::state/chan->server]
+    :as this}]
+  {:pre [chan->server]}
   (println "Client: Top of start!")
-  (when-let [failure (agent-error wrapper)]
-    (throw (ex-info "Agent failed before we started"
-                    {:problem failure})))
-
   (try
-    (let [{:keys [::state/chan->server]
-           :as this} @wrapper
-          timeout (state/current-timeout this)]
-      (println "client/start! Verifying chan->server")
-      (assert chan->server)
+    (let [timeout (state/current-timeout this)]
+      (println "client/start! Wiring side-effects through chan->server")
       (strm/on-drained chan->server
                        (partial chan->server-closed this))
       (let [this (hello/do-build-packet this)]
         (println "client/start! hello packet built")
-        (set-up-server-hello-polling! wrapper this timeout)))
+        (set-up-server-hello-polling! this timeout)))
     (catch Exception ex
       (println "client: Failed before I could even get to a logger:\n"
                (log/exception-details ex)))))
