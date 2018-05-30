@@ -14,9 +14,10 @@
             [frereth-cp.server.state :as srvr-state]
             [frereth-cp.server-test :as server-test]
             [frereth-cp.shared :as shared]
+            [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth-cp.shared.specs :as specs]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
@@ -501,7 +502,7 @@
                                                0x0c 0x0b 0x0a 0x09
                                                0x08 0x07 0x06 0x05
                                                0x04 0x03 0x02 0x01])
-               ::clnt-state/child-spawner! client-child-spawner
+               ::specs/child-spawner! client-child-spawner
                ;; Based on this, the client should be setting up
                ;; a random key pair every time.
                ;; Maybe I'm screwing something up royally and

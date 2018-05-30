@@ -758,7 +758,21 @@
   (comment
     (interrupted?)
     )
+  (defn interrupt!
+    []
+    (println "FIXME: Debug only\nInterrupting ioloop manually")
+    (reset! interrupted true))
+  (comment
+    (interrupt!)
+    )
 
+  (defn clear-interrupt!
+    []
+    (println "Unblocking ioloop manually")
+    (reset! interrupted false))
+  (comment
+    (clear-interrupt!)
+    )
   (s/fdef action-trigger!
           :args (s/cat :timing-details ::action-timing-details
                        :io-handle ::specs/io-handle
@@ -1038,23 +1052,7 @@
       (reset! log-state-atom
               (log/flush-logs! (::log/logger io-handle)
                                my-logs)))
-    nil)
-
-  (defn interrupt!
-    []
-    (println "FIXME: Debug only\nInterrupting ioloop manually")
-    (reset! interrupted true))
-  (comment
-    (interrupt!)
-    )
-
-  (defn clear-interrupt!
-    []
-    (println "Unblocking ioloop manually")
-    (reset! interrupted false))
-  (comment
-    (clear-interrupt!)
-    ))
+    nil))
 
 (comment
   (let [delta_f ##Inf,

@@ -5,18 +5,21 @@
             ;; TODO: Really need millisecond precision (at least)
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
-            [frereth-cp.server.cookie :as cookie]
-            [frereth-cp.server.hello :as hello]
-            [frereth-cp.server.helpers :as helpers]
-            [frereth-cp.server.initiate :as initiate]
-            [frereth-cp.server.state :as state]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
-            [frereth-cp.shared.specs :as specs]
-            [frereth-cp.util :as util]
+            [frereth-cp.server
+             [cookie :as cookie]
+             [hello :as hello]
+             [helpers :as helpers]
+             [initiate :as initiate]
+             [state :as state]]
+            [frereth-cp
+             [shared :as shared]
+             [util :as util]]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log2]
+             [specs :as specs]]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo

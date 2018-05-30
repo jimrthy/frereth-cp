@@ -180,13 +180,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::child-send-state (s/merge ::initiate-building-params
                                    (s/keys :req [::chan->server])))
 
-;; This is pretty much a straight copy/paste from message.specs
-;; FIXME: Scrap this and convert all references from here to there
-(s/def ::child-spawner! (s/fspec :args (s/cat :io-handle ::msg-specs/io-handle)
-                                 ;; The return value is currently ignored.
-                                 ;; That decision seems dubious
-                                 :ret #_(s/keys :req [::log/state]) any?))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Implementation
 

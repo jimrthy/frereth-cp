@@ -104,6 +104,7 @@
 (s/def ::active-clients (s/map-of ::shared/public-key ::client-state))
 (s/def ::max-active-clients nat-int?)
 
+;; TODO: Make this go away. Switch to the version in message.specs
 (s/def ::child-spawner! (s/fspec :args (s/cat)
                                  :ret ::child-interaction))
 
