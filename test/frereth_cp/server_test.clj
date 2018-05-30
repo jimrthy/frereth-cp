@@ -3,22 +3,26 @@
             [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp.client :as client]
+            [frereth-cp
+             [client :as client]
+             [message :as msg]
+             [server :as server]
+             [shared :as shared]
+             [test-factory :as factory]
+             [util :as utils]]
             [frereth-cp.client.state :as client-state]
-            [frereth-cp.message :as msg]
-            [frereth-cp.server :as server]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server.state :as srvr-state]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
-            [frereth-cp.util :as utils]
-            [frereth-cp.test-factory :as factory]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [serialization :as serial]
+             [specs :as specs]]
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import io.netty.buffer.ByteBuf))
 
 (defn build-hello
@@ -69,6 +73,10 @@
   (throw (RuntimeException. "Need to send at least 1 more request"))
   (msg/child-close! io-handle))
 
+(s/fdef handshake-client-child-spawner!
+        :args (s/cat :chan strm/source?
+                     :io-handle ::msg-specs/io-handle)
+        :ret ::log/state)
 (defn handshake-client-child-spawner!
   "Spawn the client-child for the handshake test and initiate the fun"
   [ch

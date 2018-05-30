@@ -266,7 +266,9 @@
 (defn do-build-packet
   "Puts plain-text hello packet into packet-management
 
-  Note that this is really called for side-effects"
+  Note that, for all intents and purposes, this is really called
+  for side-effects, even though it has trappings to make it look
+  functional."
   ;; A major part of the way this is written revolves around
   ;; updating packet-management and work-area in place.
   ;; That seems like premature optimization here.

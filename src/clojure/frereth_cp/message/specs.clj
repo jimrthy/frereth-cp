@@ -518,5 +518,11 @@
 ;; Then again, this may just push the state management problem
 ;; out to the child.
 ;; So the jury's still out.
+;; That actually seems to have worked out fairly well, so
+;; this particular debate seems to be settled.
+
+;; However, it might be nice for this to return a ::log/state.
+;; The down-side to that idea is that this calls client
+;; code, and keeping that isolated seems like a really good idea.
 (s/def ::child-spawner! (s/fspec :args (s/cat :io-handle ::io-handle)
-                                :ret any?))
+                                 :ret any?))
