@@ -45,6 +45,7 @@ This really seems like a bad road to go down."
 (s/def ::deferrable dfrd/deferrable?)
 (s/def ::exception-instance (class-predicate Exception))
 (s/def ::executor (class-predicate Executor))
+(s/def ::internet-address (class-predicate java.net.InetAddress))
 (s/def ::throwable (class-predicate Throwable))
 
 ;; I really don't want to reference generators in here.

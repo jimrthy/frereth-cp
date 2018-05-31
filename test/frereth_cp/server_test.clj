@@ -61,6 +61,9 @@
 
 (defn handshake-client-cb
   [io-handle ^bytes bs]
+  ;; Since this is being called back via strm/consume,
+  ;; the exception that's about to happen probably gets swallowed.
+  (println "server-test/handshake-client-cb: bytes arrived. Should fail.")
   ;; It's tempting to write another interaction test, like
   ;; the one in message.handshake-test.
   ;; That would be a waste of time/energy.
@@ -70,7 +73,7 @@
   ;; Except that I also need to test the transition from
   ;; Initiate-sending mode to full-size Message packets.
   ;; So there has to be more than this.
-  (throw (RuntimeException. "Need to send at least 1 more request"))
+  (throw (RuntimeException. "Need to send at least 1 more 'request'"))
   (msg/child-close! io-handle))
 
 (s/fdef handshake-client-child-spawner!
@@ -211,8 +214,7 @@
     (println "Top of shake-hands")
     (jio/delete-file "/tmp/shake-hands.server.log.edn" ::ignore-errors)
     (jio/delete-file "/tmp/shake-hands.client.log.edn" ::ignore-errors)
-    ;; FIXME: Ditch the client agent.
-    ;; Rewrite this entire thing as a pair of dfrd/chains.
+    ;; TODO: Rewrite this entire thing as a pair of dfrd/chains.
     (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log.edn")
           srvr-log-state (log/init ::shake-hands.server)
           initial-server (factory/build-server srvr-logger srvr-log-state)
@@ -318,6 +320,9 @@
                                    (not= ::take-timeout packet))
                             (if-let [client<-server (::client-state/chan<-server client)]
                               (let [cookie-buffer (:message packet)
+                                    ;; I'm using this pattern often enough in here alone
+                                    ;; that I should get this working through something
+                                    ;; like byte-streams in bit-twiddling
                                     cookie (byte-array (.readableBytes cookie-buffer))]
                                 (.readBytes cookie-buffer cookie)
                                 (is (= server-ip (-> packet

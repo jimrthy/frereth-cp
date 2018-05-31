@@ -90,7 +90,13 @@
 (s/def ::text bytes?)
 (s/def ::work-area (s/keys :req [::text ::working-nonce]))
 
-(s/def ::host string?)
+(s/def ::host (s/or :name string?
+                    :address ::specs/internet-address))
+;; It's very tempting to allow for a myriad of possibilities here.
+;; netty.ByteBuf is the most obvious.
+;; But why not a nio.ByteBuffer also?
+;; Or a string?
+;; That path leads to madness.
 (s/def ::message bytes?)
 (s/def ::network-packet (s/keys :req-un [::host ::message ::specs/port]))
 

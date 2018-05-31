@@ -221,6 +221,14 @@
                                         ::received-response
                                         "Unable to decrypt server cookie"
                                         {::problem cookie})]
+                ;; This is a failure, really.
+                ;; Q: What does the reference implementation do here?
+                ;; Honestly, we should either
+                ;; a) forget about this potential server and move along to the next
+                ;; b) forget about this packet and go back to waiting for either the
+                ;;    next or a timeout
+                ;; The linear nature of a success/failure means this just got trickier
+                ;; than it seems like it should be.
                 (dfrd/success! notifier (assoc this ::log/state log-state))))
             ;; TODO: Look into recovering from these
             (catch ExceptionInfo ex

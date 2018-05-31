@@ -755,24 +755,22 @@
   (defn interrupted?
     []
     @interrupted)
-  (comment
-    (interrupted?)
-    )
+
   (defn interrupt!
     []
     (println "FIXME: Debug only\nInterrupting ioloop manually")
     (reset! interrupted true))
-  (comment
-    (interrupt!)
-    )
 
   (defn clear-interrupt!
     []
     (println "Unblocking ioloop manually")
     (reset! interrupted false))
   (comment
+    (interrupt!)
+    (interrupted?)
     (clear-interrupt!)
     )
+
   (s/fdef action-trigger!
           :args (s/cat :timing-details ::action-timing-details
                        :io-handle ::specs/io-handle

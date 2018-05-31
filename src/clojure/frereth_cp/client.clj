@@ -67,6 +67,10 @@
   "Pretty much blindly translated from the CurveCP reference
 implementation. This is code that I don't understand yet"
   [this buffer]
+  ;; FIXME: Don't eliminate completely yet. There's at least one
+  ;; cross-reference to this in a comment in client.state.
+  ;; Have to eliminate that first
+  (throw (RuntimeException. "obsolete"))
   (let [reducer (fn [{:keys [:buf-len
                              :msg-len
                              :i
@@ -88,6 +92,14 @@ implementation. This is code that I don't understand yet"
                         length-code (aget msg 0)]
                     (when (bit-and length-code 0x80)
                       (throw (ex-info "done" {})))
+                    ;; This is really checking to see whether we've pulled
+                    ;; the promised number of bytes out of the child's read
+                    ;; pipe. This part of the code has been totally revamped
+                    ;; to reflect the fact that we're using the JVM instead of
+                    ;; raw C, and we don't have three different processes
+                    ;; communicating over anonymous pipes.
+                    ;; This code is a pretty strong indication
+                    ;; that this function should go away.
                     (if (= msg-len (inc (* 16 length-code)))
                       (let [{:keys [::shared/extension
                                     ::shared/my-keys

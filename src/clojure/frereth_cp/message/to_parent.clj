@@ -645,9 +645,9 @@
   ;; It seems like a mistake to have already done
   ;; that conversion.
   ;; That's part of the semantic overlap:
-  ;; This part is building the actual Message,
-  ;; which will later get tucked into a Message
-  ;; Packet as a crypto box.
+  ;; This part is building the actual Message stream,
+  ;; which will later get split up and tucked into a
+  ;; Message Packet as a crypto box.
 
   ;; There used to be more involved in this
   (let [size (count send-buf)

@@ -133,7 +133,10 @@
                      :this ::state/state
                      :raw-packet ::specs/network-packet
                      :cookie-sent-callback (s/fspec :args (s/cat :this ::state/state
-                                                                 :sent ::specs/network-packet))
+                                                                 :result dfrd/deferrable?
+                                                                 :timeout nat-int?
+                                                                 :sent ::specs/network-packet)
+                                                    :ret any?)
                      :start-time nat-int?
                      :timeout (s/and number?
                                      (complement neg?))
@@ -167,15 +170,14 @@
                                                                      ::sending-hello-timed-out
                                                                      raw-packet)
         send-packet-success (deref dfrd-send-success 1000 ::send-response-timed-out)
-        _ (println "client/poll-servers-with-hello! Hello sent:" send-packet-success)
+        _ (println "client/do-polling-loop Hello sent:" send-packet-success)
         actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
-        _ (println "client/poll-servers-with-hello! Cookie received:" actual-success)
         now (System/nanoTime)]
     ;; I don't think send-packet-success matters much
     ;; Although...actually, ::send-response-timed-out would be a big
     ;; deal.
     ;; FIXME: Add error handling for that.
-    (println "client/poll-servers-with-hello! Sending HELLO returned:"
+    (println "hello/do-polling-loop Sending HELLO returned:"
              send-packet-success
              "\nQ: Does that value matter?"
              "\nactual-success:\n"
@@ -183,11 +185,18 @@
              "\nTop-level keys:\n"
              (keys actual-success)
              "\nReceived:\n"
-             (::specs/network-packet actual-success))
+             (::shared/network-packet actual-success))
     (if (and (not (instance? Throwable actual-success))
              (not (#{::sending-hello-timed-out
                      ::awaiting-cookie-timed-out
                      ::send-response-timed-out} actual-success)))
+      ;; It's tempting to validate something like
+      ;; (s/explain-data ::state/state actual-success) here.
+      ;; But that really isn't something we can ever really validate.
+      ;; Maybe if I excluded all the problematic keys that cause serious headaches
+      ;; (basically, all the functions it contains, especially the ones that
+      ;; cause side-effects)...but this is only tempting because it seemed like
+      ;; a quick/easy way to verify what I have.
       (let [log-state (try
                         (log/info (::log/state actual-success)
                                   ::do-polling-loop
@@ -301,7 +310,7 @@
                                                         working-nonce)
           log-state (log/info log-state
                               ::do-build-hello
-                              "hello packet built inside the agent. Returning/updating")]
+                              "hello packet built. Returning/updating")]
       (-> this
           (update ::shared/packet-management
                   (fn [current]
@@ -360,19 +369,19 @@
       (let [log-state
             (try
               (do-polling-loop completion
-                                     (-> this
-                                         (assoc ::log/state log-state))
-                                     raw-packet
-                                     cookie-waiter
-                                     (System/nanoTime)
-                                     ;; FIXME: The initial timeout needs to be customizable
-                                     (util/seconds->nanos 1)
-                                     ;; Q: Do we really want to max out at 8?
-                                     ;; 8 means over 46 seconds waiting for a response,
-                                     ;; but what if you want the ability to try 20?
-                                     ;; Or don't particularly care how long it takes to get a response?
-                                     ;; Stick with the reference implementation version for now.
-                                     (take 8 (cycle server-ips)))
+                               (-> this
+                                   (assoc ::log/state log-state))
+                               raw-packet
+                               cookie-waiter
+                               (System/nanoTime)
+                               ;; FIXME: The initial timeout needs to be customizable
+                               (util/seconds->nanos 1)
+                               ;; Q: Do we really want to max out at 8?
+                               ;; 8 means over 46 seconds waiting for a response,
+                               ;; but what if you want the ability to try 20?
+                               ;; Or don't particularly care how long it takes to get a response?
+                               ;; Stick with the reference implementation version for now.
+                               (take 8 (cycle server-ips)))
                 (catch Exception ex
                   (log/exception log-state
                                  ex

@@ -431,8 +431,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
       (or default-timeout)))
 
 (s/fdef do-send-packet
-        :args (s/cat :log-state ::log/state
-                     :this ::state
+        :args (s/cat :this ::state
                      :on-success (s/fspec :args (s/cat :result any?)
                                           :ret any?)
                      :on-failure (s/fspec :args (s/cat :failure ::specs/exception-instance)

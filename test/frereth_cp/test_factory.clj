@@ -154,6 +154,13 @@
                                                               ::shared-specs/srvr-port srvr-port
                                                               ::shared-specs/public-long srvr-pk-long}}
                              logger-init)]
+       ;; Starting in a future like this is nerve-racking.
+       ;; If nothing else, the callers don't have any way to check what happened, unless I add this
+       ;; to the response.
+       ;; Or possible just return this. Maybe as a deferred running on an executor? Or, really,
+       ;; just used dfrd/future.
+       ;; Those options fail because start! will block until something pulls the Hello packet
+       ;; from the to-server channel.
        (future
          (clnt/start! result))
        result))))

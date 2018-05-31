@@ -90,27 +90,41 @@
                                           (log/warn (log/init ::drained)
                                                     ::chan<-server
                                                     "Channel from server drained"))))
-      ;; Q: Doesn't this also need to send the packet?
-      ;; A: Probably.
-      ;; Trying to send a bogus response fails below.
-      (let [hello-packet (hello/do-build-packet client)
-            cookie (byte-array 200)
-            basic-check {:host "10.0.0.12"
-                         :port 48637
-                         :message cookie}
+      (let [cookie (byte-array 200)  ;  <---- Note that this is gibberish that should get discarded.
+            cookie-wrapper {:host "10.0.0.12"
+                            :port 48637
+                            :message cookie}
+            ;; The test-factory signals the raw-client to start, which starts by
+            ;; building a Hello Packet and polling the available servers with it
+            ;; until 1 responsd.
             success (dfrd/chain (strm/try-take! chan->server ::nada 200 ::timed-out)
-                                ;; Q: How is this passing?
                                 (partial check-success client "Waiting for hello")
+                                ;; Mimic the server sending back its Cookie, which
+                                ;; we filled with garbage above.
                                 (fn [hello]
-                                  (strm/try-put! chan<-server basic-check 150 ::timed-out))
+                                  (update hello :message
+                                          (fn [current]
+                                            (if (bytes? current)
+                                              current
+                                              (let [^ByteBuf src current
+                                                    n (.readableBytes src)
+                                                    dst (byte-array n)]
+                                                (.readBytes src dst)
+                                                dst))))
+                                  (is (not (s/explain-data ::shared/network-packet hello)))
+                                  (log/flush-logs! logger (log/info log-state
+                                                                    "Sending garbage Cookie from mock-server to Client"
+                                                                    ::step-1))
+                                  (strm/try-put! chan<-server cookie-wrapper 150 ::timed-out))
                                 (partial check-success client "Putting the cookie")
-                                (fn [_]
+                                ;; Next step (which is all about pulling the Initiate packet) fails
+                                ;; because we can't build it: the Client doesn't have the server's
+                                ;; short-term key yet.
+                                ;; Q: Is that because I just sent garbage in the Cookie?
+                                ;; Or is there a bigger problem?
+                                (fn [cookie]
+                                  (println "Cookie arrived. This should trigger the Initiate")
                                   (strm/try-take! chan->server ::nada 200 ::timed-out))
-                                ;; Getting down to here before it fails.
-                                ;; There's an Arity exception that
-                                ;; stems from calling the child spawner with
-                                ;; 1 argument.
-                                ;; That can't be right.
                                 (partial check-success client "Taking the vouch")
                                 (fn [buf]
                                   (is (instance? ByteBuf buf)
@@ -122,7 +136,7 @@
                                     (is (= expected-n actual-n)))
                                   (let [response (byte-array (.readableBytes buf))]
                                     (.getBytes buf 0 response)
-                                    (is (= (vec response) (vec (.getBytes basic-check))))
+                                    (is (= (vec response) (vec (.getBytes cookie))))
                                     true)))]
         (is @success)))))
 (comment

@@ -14,6 +14,9 @@
 
 (comment)
 ;; byte-streams doesn't seem to get inheritance.
+;; TODO: Look into https://github.com/funcool/octet.
+;; For that matter, look into byte-streams history.
+;; I used to be able to call print-bytes on a ByteBuf.
 (b-s/def-conversion [UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf bytes]
   [^ByteBuf buf _]
   (println "Converting" buf "into a single byte-array")
