@@ -3,7 +3,36 @@
   (:require [clojure.spec.alpha :as s]
             [clojure.test.check.generators :as lo-gen]
             [frereth-cp.util :as utils]
-            [manifold.deferred :as dfrd]))
+            [manifold.deferred :as dfrd])
+  (:import [io.aleph.dirigiste Executor]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Magic Constants - don't belong in here
+;;;; Warning: Use the versions in shared.constants instead
+
+(def box-zero-bytes 16)
+
+(def ^Integer key-length 32)
+(def client-key-length key-length)
+
+;; Really belongs in shared.constants, but we also need it in here.
+;; And I want to avoid circular dependencies.
+;; TODO: Move the serialization templates out of there so this isn't
+;; an issue.
+(def ^Integer server-nonce-prefix-length 8)
+(def ^Integer server-nonce-suffix-length 16)
+
+;; 48 bytes
+;; Q: What is this for?
+;; A: It's that ::inner-vouch portion of the vouch-wrapper.
+;; Really, neither of those is a great name choice.
+(def vouch-length (+ box-zero-bytes ;; 16
+                     ;; 32
+                     client-key-length))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Specs
 
 (defn class-predicate
   "Returns a predicate to check whether an object is an instance of the supplied class.
@@ -15,8 +44,10 @@ This really seems like a bad road to go down."
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
 (s/def ::deferrable dfrd/deferrable?)
 (s/def ::exception-instance (class-predicate Exception))
+(s/def ::executor (class-predicate Executor))
+(s/def ::internet-address (class-predicate java.net.InetAddress))
+(s/def ::throwable (class-predicate Throwable))
 
-(def ^Integer key-length 32)
 ;; I really don't want to reference generators in here.
 ;; Much less something like rose-tree.
 ;; Those sorts of details really belong in a test ns.
@@ -67,9 +98,44 @@ This really seems like a bad road to go down."
 ;; 1. Its encoder starts with an array of zeros
 ;; 2. Each name segment is prefixed with the number of bytes
 ;; 3. No name segment is longer than 63 bytes
-;; FIXME: Rename this to ::srvr-name
 (s/def ::srvr-name (s/and bytes #(= (count %) server-name-length)))
 (s/def ::port (s/and int?
                      pos?
                      #(< % 65536)))
 (s/def ::srvr-port ::port)
+
+;; FIXME: Use this more generally
+;; There is some confusion in places where I'm
+;; specifying :timeout as nat-int?
+;; Q: How many of those need to be that instead of this?
+(s/def ::timeout (s/and number?
+                        (complement neg?)))
+
+;; Specify it this way because I waffle between
+;; a byte-array vs. ByteBuf.
+(s/def ::msg-bytes bytes?)
+
+(s/def ::server-nonce-suffix (s/and bytes?
+                                    #(= (count %) server-nonce-suffix-length)))
+(s/def ::inner-i-nonce ::server-nonce-suffix)
+;; The server and client nonces wind up being the same length.
+;; The difference is really in the prefix/suffix distribution.
+;; Still, this is annoying.
+(s/def ::nonce (s/and bytes?
+                      #(= (count %) (+ server-nonce-prefix-length
+                                       server-nonce-suffix-length))))
+
+(s/def ::crypto-box bytes?)
+;; Note that this is really the inner-most crypto-box for the Initiate
+;; packet.
+;; According to the spec:
+;; "a cryptographic box encrypted and authenticated to the server's long-term
+;; public key S from the client's long-term public key C using this 24-byte
+;; nonce. The 32-byte plaintext inside the box has the following contents:
+;; * 32 bytes: the client's short-term public key C'."
+;; Note that this is pretty much useless without the corresponding compressed
+;; nonce.
+;; Which is going into the state map under the ::inner-i-nonce
+;; key.
+(s/def ::vouch (s/and ::crypto-box
+                      #(= (count %) vouch-length)))

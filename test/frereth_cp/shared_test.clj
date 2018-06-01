@@ -7,9 +7,9 @@
 
 (deftest basic-byte-copy
   (let [dst (byte-array (take 32 (repeat 0)))]
-    (b-t/byte-copy! dst shared/hello-nonce-prefix)
-    (is (= (subs (String. dst) 0 (count shared/hello-nonce-prefix))
-           (String. shared/hello-nonce-prefix)))))
+    (b-t/byte-copy! dst K/hello-nonce-prefix)
+    (is (= (subs (String. dst) 0 (count K/hello-nonce-prefix))
+           (String. K/hello-nonce-prefix)))))
 
 (deftest check-byte=
   (let [lhs (byte-array (take 256 (repeat 0)))

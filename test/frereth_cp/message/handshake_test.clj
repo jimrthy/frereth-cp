@@ -454,6 +454,8 @@
                 log-atom
                 ::client-child
                 "message arrived at client's child"
+                ;; This is a strm/source that streams binary
+                ;; through the decoder into the real callback
                 decode-src
                 bs))
 
@@ -465,7 +467,10 @@
   ;; Then again, this really is an integration test. It's covering
   ;; a *lot* of functionality.
   ;; And I've made it extra-complicated by refusing to consider
-  ;; adding serialization by default.
+  ;; anything like a default serialization implementation.
+  ;; There are plenty of other libraries around for that side
+  ;; of things. Using gloss for the test was bad enough.
+  ;; Pick your own poison.
   (try "Fundamental idea"
     (let [s (strm/stream)
           xfrm-node (decoder s)
@@ -506,13 +511,6 @@
         (is (= 2 (count binary-frames)))
         (is (= 2 (count decoded)))
         (is (not (first decoded)))
-        ;; Current test implementation hinges on this.
-        ;; It doesn't work.
-        ;; Just glancing at the gloss source code,
-        ;; based on what I know about it, really
-        ;; seems as though this should work.
-        ;; TODO: Try just using the ByteBuffer.
-        ;; Or maybe a ByteBuf?
         (is (= msg (second decoded)))
         (finally
           (strm/close! decode-src)
@@ -642,13 +640,13 @@
                     srvr-decode-sink)
 
       (let [client-init (message/initial-state "Client" false {::log/state @client-log-atom} client-logger)
-            {client-io ::specs/io-handle}  (message/start! client-init client-logger client-parent-cb client-child-cb)
+            {client-io ::specs/io-handle}  (message/do-start client-init client-logger client-parent-cb client-child-cb)
             server-init (message/initial-state "Server" true {::log/state @server-log-atom} server-logger)
             ;; It seems like this next part really shouldn't happen until the initial message arrives
             ;; from the client.
             ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So
             ;; that isn't quite true
-            {server-io ::specs/io-handle} (message/start! server-init server-logger server-parent-cb server-child-cb)]
+            {server-io ::specs/io-handle} (message/do-start server-init server-logger server-parent-cb server-child-cb)]
         (reset! client-atom client-io)
         (reset! server-atom server-io)
 

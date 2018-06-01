@@ -8,6 +8,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.logging :as log2]
+            [frereth-cp.shared.serialization :as serial]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util])
   (:import clojure.lang.ExceptionInfo
@@ -37,6 +38,9 @@
 
 ;; 16 bytes is 128 bits.
 ;; Which is a single block for AES.
+;; This seems very sketchy, at best.
+;; TODO: Think long and hard about making it
+;; go away.
 (s/def ::data (s/and bytes?
                      #(= (count %) 16)))
 (s/def ::legal-key-algorithms #{"AES"})
@@ -89,11 +93,14 @@
         :ret ::nonce-state)
 (defn initial-nonce-agent-state
   []
-  {::counter-low 0
+  {::log2/state (log2/init ::nonce-agent)
+   ;; FIXME: Needs a logger for flushing
+   ;; the log-state
+   ::counter-low 0
    ::counter-high 0
    ::data (byte-array 16)
+   ::encrypted-nonce nil
    ::key-loaded? (promise)
-   ;; FIXME: Needs a log-state
    ::nonce-key (byte-array K/key-length)})
 
 (s/fdef load-nonce-key
@@ -130,9 +137,20 @@
            ::nonce-key]
     :as this}
    random-portion]
-  (b-t/uint64-pack! data 8 random-portion)
-  (let [secret-key (generate-symmetric-key "AES" 192)
-        ;; Note that this is never(?) decrypted.
+  (when-not nonce-key
+    (println "Missing key to obscure  nonce\n"
+             (keys this)
+             "\nin\n"
+             this)
+    (throw (ex-info "Missing nonce-key" this)))
+  (when-not data
+    (println "No nonce to obscure among\n"
+             (keys this)
+             "\nin\n"
+             this)
+    (throw (ex-info "Missing data" this)))
+  (b-t/byte-copy! data random-portion)
+  (let [;; Note that this is never(?) decrypted.
         ;; Q: Is there any reason for using this instead
         ;; of something like a SHA-256?
         ;; Obvious A: An attacker that recognizes a single
@@ -146,10 +164,16 @@
         encrypted-nonce (encrypt-block nonce-key data)]
     ;; This means that I need a destination for storing that
     ;; crypto block
-    (assoc
-     (update this ::counter-low inc)
-     ::encrypted-nonce encrypted-nonce)))
+    (-> this
+        (update ::counter-low inc)
+        (assoc ::encrypted-nonce encrypted-nonce))))
 
+(s/fdef reload-nonce
+        :args (s/cat :this ::nonce-state
+                     ;; using a string for this seems dubious, at best
+                     :key-dir string?
+                     :long-term? boolean?)
+        :ret ::nonce-state)
 (defn reload-nonce
   "Do this inside an agent for thread safety"
   [{:keys [::counter-low
@@ -158,6 +182,8 @@
     :as this}
    key-dir
    long-term?]
+  (println "Reloading nonce")
+  (log/debug "Reloading nonce")
   (let [raw-path (str key-dir "/.expertsonly/")
         path (io/resource raw-path)]
     (let [f (io/file path "lock")]
@@ -167,6 +193,7 @@
           (let [channel (.getChannel (RandomAccessFile. f "rw"))]
             (try
               (let [lock (.lock channel 0 Long/MAX_VALUE false)]
+                (println "Lock acquired")
                 (log/info "Lock acquired")
                 (try
                   (let [nonce-counter (io/file path "noncecounter")]
@@ -175,10 +202,13 @@
                       (with-open [counter (io/output-stream nonce-counter)]
                         ;; FIXME: What's a good initial value?
                         (.write counter (byte-array 8))))
+                    (println "Opening" nonce-counter)
                     (log/debug "Opening" nonce-counter)
-                    (with-open [counter (io/reader nonce-counter)]
+                    (with-open [counter (io/input-stream nonce-counter)]
+                      (println "Nonce counter file opened for reading")
                       (log/debug "Nonce counter file opened for reading")
                       (let [bytes-read (.read counter data 0 8)]
+                        (println "Read the 8 bytes")
                         (when (not= bytes-read 8)
                           (throw (ex-info "Nonce counter file too small"
                                           {::contents (b-t/->string data)
@@ -189,7 +219,10 @@
                                                         1))]
                       (b-t/uint64-pack! data 0 counter-high))
                     (with-open [counter (io/writer nonce-counter)]
-                      (.write counter (String. data))))
+                      (.write counter (String. data))
+                      (assoc this
+                             ::counter-low counter-low
+                             ::counter-high counter-high)))
                   (finally
                     ;; Closing the channel should release the lock,
                     ;; but being explicit about this doesn't hurt
@@ -285,24 +318,18 @@
         ;; FIXME: Specify the any? args
         :args (s/cat :template any?
                      :source any?
-                     :dst ::specs/byte-buf
                      :key-pair any?
                      :nonce-prefix bytes?
                      :nonce-suffix bytes?)
         :ret bytes?)
 (defn build-crypto-box
-  "Compose a map into bytes and encrypt it
-
-Really belongs in crypto.
-
-But it depends on compose, which would set up circular dependencies"
-  [tmplt src ^ByteBuf dst key-pair nonce-prefix nonce-suffix]
-  {:pre [dst]}
-  (let [^ByteBuf buffer (Unpooled/wrappedBuffer dst)]
-    (.writerIndex buffer 0)
-    (shared/compose tmplt src buffer)
+  "Compose a map into bytes and encrypt it"
+  [tmplt src key-pair nonce-prefix nonce-suffix]
+  (let [^ByteBuf buffer (serial/compose tmplt src)]
     (let [n (.readableBytes buffer)
-          nonce (byte-array K/nonce-length)]
+          nonce (byte-array K/nonce-length)
+          dst (byte-array n)]
+      (.getBytes buffer 0 dst)
       (b-t/byte-copy! nonce nonce-prefix)
       (b-t/byte-copy! nonce
                       (count nonce-prefix)
@@ -320,6 +347,13 @@ But it depends on compose, which would set up circular dependencies"
   ;; just going to use the built-in AES encryption
   [^SecretKey secret-key
    ^bytes clear-text]
+  (when-not secret-key
+    ;; After all of Tuesday's debugging/log combingy, I'm still winding up here.
+    ;; Note that there are 2 vital questions.
+    ;; The fact that anything makes it back to the server is honestly more
+    ;; worrisome.
+    (throw (RuntimeException. "FIXME: How is anything escaping the message loop?"))
+    (throw (RuntimeException. "FIXME: What's wrong with this key?")))
   ;; Q: Which cipher mode is appropriate here?
   (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
         ;; FIXME: Read https://www.synopsys.com/blogs/software-security/proper-use-of-javas-securerandom/
@@ -615,30 +649,33 @@ Or maybe that's (dec n)"
   []
   (long (random-mod K/max-random-nonce)))
 
-(s/fdef safe-nonce!
-        :args (s/or :persistent (s/cat :dst (and bytes?
+(s/fdef do-safe-nonce
+        :args (s/or :persistent (s/cat :log-state ::log2/state
+                                       :dst (and bytes?
                                                  #(<= K/key-length (count %)))
                                        :key-dir (s/nilable string?)
                                        :offset (complement neg-int?)
                                        :long-term? boolean?)
-                    :transient (s/cat :dst (and bytes?
+                    :transient (s/cat :log-state ::log2/state
+                                      :dst (and bytes?
                                                 #(<= K/key-length (count %)))
                                       :offset (complement neg-int?)))
-        :ret any?)
-;; TODO: Needs ::log2/state (and a way to flush it)
+        :ret ::log2/state)
+;; TODO: Needs a way to flush the log-state
 (let [nonce-writer (agent (initial-nonce-agent-state))
       random-portion (byte-array 8)]
   (defn get-nonce-agent-state
     []
     @nonce-writer)
+  (comment (get-nonce-agent-state))
   (defn reset-safe-nonce-state!
     []
     (restart-agent nonce-writer (initial-nonce-agent-state)))
-  (defn safe-nonce!
+  (defn do-safe-nonce
     "Shoves a theoretically safe 16-byte nonce suffix into dst at offset"
     ;; Note that this is extremely brittle.
     ;; It's only called from 2 places, but it's still a bit worrisome.
-    ([dst key-dir offset long-term?]
+    ([log-state dst key-dir offset long-term?]
      ;; It's tempting to try to set this up to allow multiple
      ;; nonce trackers. It seems like having a single shared
      ;; one risks leaking information to attackers.
@@ -652,24 +689,50 @@ Or maybe that's (dec n)"
        (throw ex))
 
      ;; Read the last saved version from keydir
-     (when-not (-> nonce-writer deref ::key-loaded? realized?)
-       (send nonce-writer load-nonce-key key-dir))
-     (let [{:keys [::counter-low
-                   ::counter-high]} @nonce-writer]
-       (when (>= counter-low counter-high)
-         (send nonce-writer reload-nonce key-dir long-term?)))
-     (random-bytes! random-portion)
-     (send nonce-writer obscure-nonce random-portion)
-     ;; Tempting to do an await here, but we're inside an
-     ;; agent action, so that isn't legal.
-     (when-let [ex (agent-error nonce-writer)]
-       (log/error ex "System is down")))
-    ([dst offset]
+     (let [log-state
+           (if-not (-> nonce-writer deref ::key-loaded? realized?)
+             (let [log-state (log2/debug log-state
+                                         ::do-safe-nonce
+                                         "Triggering nonce-key initial load")]
+               (send nonce-writer load-nonce-key key-dir)
+               log-state)
+             log-state)]
+       ;; Shouldn't need to do this.
+       ;; agent actions are guaranteed to happen sequentially,
+       ;; in the order they were send-ed.
+       ;; Besides, as noted below, we're inside an agent
+       ;; action and thus cannot.
+       ;; Actually, I'm pretty sure that's why I'm getting the NPE
+       ;; from the nonce key in obscure-nonce.
+       ;; This all has to complete before the various agent actions
+       ;; that I'm sending can take effect.
+       ;; Except that doesn't make any sense.
+       ;; Since they have to execute serially, load-nonce-key had
+       ;; to complete before we can get to obscure-nonce.
+       (comment (await nonce-writer))
+       (let [{:keys [::counter-low
+                     ::counter-high]} @nonce-writer]
+         (when (>= counter-low counter-high)
+           (send nonce-writer reload-nonce key-dir long-term?)))
+       (random-bytes! random-portion)
+       (send nonce-writer obscure-nonce random-portion)
+       ;; Tempting to do an await here, but we're inside an
+       ;; agent action, so that isn't legal.
+       (if-let [ex (agent-error nonce-writer)]
+         (log2/exception log-state
+                         ex
+                         ::do-safe-nonce
+                         "System is down")
+         log-state)))
+    ([log-state dst offset]
      ;; The 16-byte nonce length is very implementation
      ;; dependent and brittle
      (let [tmp (byte-array K/server-nonce-suffix-length)]
        (random-bytes! tmp)
-       (b-t/byte-copy! dst offset K/server-nonce-suffix-length tmp)))))
+       (b-t/byte-copy! dst offset K/server-nonce-suffix-length tmp)
+       (log2/debug log-state
+                   ::safe-nonce!
+                   "Picked a random nonce")))))
 (comment
   (get-nonce-agent-state)
   (reset-safe-nonce-state!))

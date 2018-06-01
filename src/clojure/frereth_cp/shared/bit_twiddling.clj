@@ -3,17 +3,50 @@
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
-            [frereth-cp.shared.constants :as K]))
+            [frereth-cp.shared.constants :as K])
+  (:import io.netty.buffer.ByteBuf
+           io.netty.buffer.UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf))
 
 (set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(comment)
+;; byte-streams doesn't seem to get inheritance.
+;; TODO: Look into https://github.com/funcool/octet.
+;; For that matter, look into byte-streams history.
+;; I used to be able to call print-bytes on a ByteBuf.
+(b-s/def-conversion [UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf bytes]
+  [^ByteBuf buf _]
+  (println "Converting" buf "into a single byte-array")
+  #_(throw (RuntimeException. "Got here"))
+  (let [dst (byte-array (.readableBytes buf))]
+    (.readBytes buf dst)
+    dst))
+
+(b-s/def-conversion [UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf (b-s/seq-of bytes)]
+  [^ByteBuf buf _]
+  (println "Converting" buf "into a sequence of byte-arrays")
+  (let [single (b-s/convert buf (class (byte-array 0)))]
+    [single]))
+(comment
+  ;; ByteBuf is definitely in here now
+  ;; However:
+  (.possible-sources @b-s/conversions)
+  (.possible-targets @b-s/conversions)
+  ;; Can't do this because ByteBuf isn't a wrapper around b-s.graph/Type
+  (.possible-conversions @b-s/conversions ByteBuf)
+  (#'b-s/normalize-type-descriptor ByteBuf)
+  (.possible-conversions @b-s/conversions (#'b-s/normalize-type-descriptor ByteBuf))
+  (count (.possible-conversions @b-s/conversions (#'b-s/normalize-type-descriptor ByteBuf)))
+  )
+
+
 (s/fdef ->string
         ;; Q: What's legal to send here?
         :args (s/cat :x (s/or :byte-array bytes
-                              :byte-buf #(instance? io.netty.buffer.ByteBuf %)))
+                              :byte-buf #(instance? ByteBuf %)))
         :ret string?)
 (defn ->string
   [x]

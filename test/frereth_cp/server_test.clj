@@ -1,20 +1,28 @@
 (ns frereth-cp.server-test
-  (:require [clojure.pprint :refer (pprint)]
+  (:require [clojure.java.io :as jio]
+            [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp.client :as client]
+            [frereth-cp
+             [client :as client]
+             [message :as msg]
+             [server :as server]
+             [shared :as shared]
+             [test-factory :as factory]
+             [util :as utils]]
             [frereth-cp.client.state :as client-state]
-            [frereth-cp.server :as server]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server.state :as srvr-state]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
-            [frereth-cp.test-factory :as factory]
-            [manifold.stream :as strm])
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [serialization :as serial]
+             [specs :as specs]]
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import io.netty.buffer.ByteBuf))
 
 (defn build-hello
@@ -40,12 +48,100 @@
                     ::K/crypto-box crypto-box}]
     (serial/compose K/hello-packet-dscr hello-dscr)))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defn handshake->client-child
+  "Client-child callback for bytes arriving on the message stream"
+  [ch
+   ks-or-bs]
+  (println "client-child Incoming:" ks-or-bs)
+  ;; FIXME: This has to cope with buffering.
+  ;; I really should use something like gloss again.
+  (if (bytes? ks-or-bs)
+    (strm/put! ch ks-or-bs)
+    (strm/close! ch)))
+
+(defn handshake-client-cb
+  [io-handle ^bytes bs]
+  ;; Since this is being called back via strm/consume,
+  ;; the exception that's about to happen probably gets swallowed.
+  (println "server-test/handshake-client-cb: bytes arrived. Should fail.")
+  ;; It's tempting to write another interaction test, like
+  ;; the one in message.handshake-test.
+  ;; That would be a waste of time/energy.
+  ;; This really is a straight request/response test.
+  ;; As soon as the server sends back a message packet
+  ;; response, the client quits caring.
+  ;; Except that I also need to test the transition from
+  ;; Initiate-sending mode to full-size Message packets.
+  ;; So there has to be more than this.
+  (throw (RuntimeException. "Need to send at least 1 more 'request'"))
+  (msg/child-close! io-handle))
+
+(s/fdef handshake-client-child-spawner!
+        :args (s/cat :chan strm/source?
+                     :io-handle ::msg-specs/io-handle)
+        :ret ::log/state)
+(defn handshake-client-child-spawner!
+  "Spawn the client-child for the handshake test and initiate the fun"
+  [ch
+   {log-state-atom ::log/state-atom
+    logger ::log/logger
+    :as io-handle}]
+  {:pre [io-handle]}
+  (when-not log-state-atom
+    (throw (ex-info "Missing log-state-atom"
+                    {::keys (keys io-handle)
+                     ::io-handle io-handle})))
+  (swap! log-state-atom #(log/debug %
+                                    ::handshake-client-child-spawner!
+                                    "Forking child process"))
+  (swap! log-state-atom #(log/flush-logs! logger %))
+
+  ;; Doing a req/rep sort of thing from server is honestly
+  ;; pretty boring. But it's easy to test.
+  ;; Assume the client reacts to server messages.
+  ;; Pull them off the network, shove them into this
+  ;; stream, and than have the handshake-client-cb
+  ;; cope with them.
+  (try
+    (strm/consume (partial handshake-client-cb
+                           (assoc io-handle
+                                  ::log/state
+                                  @log-state-atom))
+                  ch)
+    ;; Q: Worth converting this to something like an HTTP request
+    ;; that's too big to fit in a single packet?
+    ;; A: Well, I've really already done that in
+    ;; message-test/bigger-outbound
+    ;; All this *should* test would be whichever means I
+    ;; use on the server side to reassemble the bytes that
+    ;; were streamed in packets.
+    ;; Which is interesting from the standpoint of example
+    ;; usage, but not so much from this angle.
+
+    (let [helo (-> ::helo
+                   pr-str
+                   .getBytes)]
+      (msg/child->! io-handle helo))
+    (swap! log-state-atom
+           #(log/flush-logs! logger (log/debug %
+                                               ::handshake-client-child-spawner!
+                                               "Child HELO sent")))
+    (catch Exception ex
+      (swap! log-state-atom
+             #(log/flush-logs! logger
+                               (log/exception %
+                                              ex
+                                              ::handshake-client-child-spawner!
+                                              "Forking child failed"))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Tests
 
 (deftest start-stop
   (testing "That we can start and stop successfully"
-    (let [inited (factory/build-server)
+    (let [logger (log/std-out-log-factory)
+          log-state (log/init ::verify-start-stop)
+          inited (factory/build-server logger log-state)
           started (factory/start-server inited)]
       (is started)
       (is (factory/stop-server started)))))
@@ -111,155 +207,255 @@
                            (println "Server stopped")
                            (is (not (s/explain-data ::server/post-state-options stopped)))
                            (println "pre-state checked"))))))))))
-(comment
-  (s/form ::srvr-state/state)
-  (s/form ::shared/packet-management)
-  )
 
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two
-  (println "Top of shake-hands")
-  (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log")
-        srvr-log-state (log/init ::shake-hands.server)
-        initial-server (factory/build-server srvr-logger srvr-log-state)
-        started (factory/start-server initial-server)
-        srvr-log-state (log/flush-logs! srvr-logger (log/info srvr-log-state
-                                                             ::shake-hands
-                                                             "Server should be started now"))]
-    ;; Time to start the client
-    (try
-      (let [client-host "cp-client.nowhere.org"
-            ;; This is another example of java's unsigned integer stupidity.
-            ;; This really should be a short, but can't without handling my own
-            ;; 2s-complement bit twiddling.
-            ;; Then again, the extra 2 bytes of memory involved here really don't
-            ;; matter.
-            client-port 48816
-            srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
-            server-ip [127 0 0 1]
-            server-port 65000
-            clnt-log-state (log/init ::shake-hands.client)
-            clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log")
-            client-agent (factory/raw-client "client-hand-shaker"
-                                             (constantly clnt-logger)
-                                             clnt-log-state
-                                             server-ip
-                                             server-port
-                                             srvr-pk-long)]
-        (println "Agent started. Sending HELLO")
-        (try
-          (let [client->server (::client-state/chan->server @client-agent)
-                taken (strm/try-take! client->server ::drained 1000 ::timeout)
-                hello @taken]
-            (println "Hello from client:" hello)
-            (is (not (or (= hello ::drained)
-                         (= hello ::timeout))))
-            (is (:host hello) "This layer doesn't know where to send anything")
-            (if (not (or (= hello ::drained)
-                         (= hello ::timeout)))
-              (let [->srvr (get-in started [::srvr-state/client-read-chan ::srvr-state/chan])
-                    ;; Currently, this arrives as a ByteBuf.
-                    ;; Anything that can be converted to a direct ByteBuf is legal.
-                    ;; So this part is painfully implementation-dependent.
-                    ;; Q: Is it worth generalizing?
-                    ^ByteBuf hello-buffer (:message hello)
-                    hello-length (.readableBytes hello-buffer)
-                    hello-packet (byte-array hello-length)]
-                (.readBytes hello-buffer hello-packet)
-                (println (str "Trying to put hello packet "
-                              (b-t/->string hello-packet)
-                              "\nonto server channel "
-                              ->srvr
-                              " a "
-                              (class ->srvr)))
-                (let [put-success (strm/try-put! ->srvr
-                                                 (assoc hello
-                                                        :message hello-packet)
-                                                 1000
-                                                 ::timed-out)
-                      success (deref put-success
-                                     1000
-                                     ::deref-try-put!-timed-out)]
-                  (println "Result of putting hello onto server channel:" success)
-                  (if (and (not= ::timed-out success)
-                           (not= ::deref-try-put!-timed-out success))
-                    (let [srvr-> (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])
-                          ;; From the aleph docs:
-                          ;; "The stream will accept any messages which can be coerced into
-                          ;; a binary representation."
-                          ;; It's perfectly legit for the Server to send either B] or
-                          ;; ByteBuf instances here.
-                          ;; (Whether socket instances emit ByteBuf or B] depends on a
-                          ;; parameter to their ctor. The B] approach is slower due to
-                          ;; copying, but recommended for any but advanced users,
-                          ;; to avoid needing to cope with reference counts).
-                          ;; TODO: See which format aleph works with natively to
-                          ;; minimize copying for writes (this may or may not mean
-                          ;; rewriting compose to return B] instead)
-                          ;; Note that I didn't need to do this for the Hello packet.
-                          packet-take (strm/try-take! srvr-> ::drained 1000 ::timeout)
-                          packet (deref packet-take 1000 ::take-timeout)]
-                      (println "Server response to hello:" packet)
-                      (if (and (not= ::drained packet)
-                               (not= ::timeout packet)
-                               (not= ::take-timeout packet))
-                        (if-let [client<-server (::client-state/chan<-server @client-agent)]
-                          (let [cookie-buffer (:message packet)
-                                cookie (byte-array (.readableBytes cookie-buffer))]
-                            (.readBytes cookie-buffer cookie)
-                            (is (= server-ip (-> packet
-                                                 :host
-                                                 .getAddress
-                                                 vec)))
-                            (when-not (= server-port (:port packet))
-                              (println "Falsey port in"
-                                       packet
-                                       "based on\n"
-                                       (-> client-agent
-                                           deref
-                                           ::client-state/server-security)))
-                            (is (= server-port (:port packet)))
-                            (let [put @(strm/try-put! client<-server
-                                                      (assoc packet
-                                                             :message cookie)
-                                                      1000
-                                                      ::timeout)]
-                              (if (not= ::timeout put)
-                                (let [initiate @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                                  ;; FIXME: Verify that this is a valid Initiate packet
-                                  (if-not (or (= initiate ::drained)
-                                              (= initiate ::timeout))
-                                    (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
-                                      (if (not= ::timeout put)
-                                        (let [first-srvr-message @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
-                                          (if-not (or (= first-srvr-message ::drained)
-                                                      (= first-srvr-message ::timeout))
-                                            (let [put @(strm/try-put! client<-server
-                                                                      first-srvr-message
-                                                                      1000
-                                                                      ::timeout)]
-                                              (if (not= ::timeout put)
-                                                (let [first-full-clnt-message @(strm/try-take! client->server ::drained 1000 ::timeout)]
-                                                  ;; As long as we got a message back, we should be able to call
-                                                  ;; this test done.
-                                                  (when (= ::timeout first-full-clnt-message)
-                                                    (throw (ex-info "Timed out waiting for client response"))))
-                                                (throw (ex-info "Timed out writing first server Message packet to client"))))
-                                            (throw (ex-info "Failed pulling first real Message packet from Server"
-                                                            {::problem first-srvr-message}))))
-                                        (throw (ex-info "Timed out writing Initiate to Server"))))
-                                    (throw (ex-info "Failed to take Initiate/Vouch from Client"
-                                                    {::problem initiate}))))
-                                (throw (RuntimeException. "Timed out putting Cookie to Client")))))
-                          (throw (ex-info "I know I have a mechanism for writing from server to client among"
-                                          {::keys (keys @client-agent)
-                                           ::grand-scheme @client-agent})))
-                        (throw (RuntimeException. (str packet " reading Cookie from Server")))))
-                    (throw (RuntimeException. "Timed out putting Hello to Server")))))
-              (throw (RuntimeException. (str hello " taking Hello from Client")))))
-          (finally
-            (println "Stopping client")
-            (client/stop! client-agent))))
-      (finally
-        (println "Triggering server event loop exit")
-        (factory/stop-server started)))))
+  (try
+    (println "Top of shake-hands")
+    (jio/delete-file "/tmp/shake-hands.server.log.edn" ::ignore-errors)
+    (jio/delete-file "/tmp/shake-hands.client.log.edn" ::ignore-errors)
+    ;; TODO: Rewrite this entire thing as a pair of dfrd/chains.
+    (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log.edn")
+          srvr-log-state (log/init ::shake-hands.server)
+          initial-server (factory/build-server srvr-logger srvr-log-state)
+          started (factory/start-server initial-server)
+          srvr-log-state (log/flush-logs! srvr-logger (log/info srvr-log-state
+                                                                ::shake-hands
+                                                                "Server should be started now"))]
+      (try
+        ;; Time to start the client
+        (let [client-host "cp-client.nowhere.org"
+              ;; This is another example of java's unsigned integer stupidity.
+              ;; This really should be a short, but can't without handling my own
+              ;; 2s-complement bit twiddling.
+              ;; Then again, the extra 2 bytes of memory involved here really
+              ;; shouldn't matter.
+              client-port 48816
+              srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
+              server-ip [127 0 0 1]
+              server-port 65000
+              clnt-log-state (log/init ::shake-hands.client)
+              clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log.edn")
+              internal-client-chan (strm/stream)
+              client (factory/raw-client "client-hand-shaker"
+                                         (constantly clnt-logger)
+                                         clnt-log-state
+                                         server-ip
+                                         server-port
+                                         srvr-pk-long
+                                         (partial handshake->client-child internal-client-chan)
+                                         (partial handshake-client-child-spawner! internal-client-chan))]
+          (println (str "shake-hands: Client State start triggered. Pulling HELLO from "
+                        client
+                        ", a "
+                        (class client)))
+          (try
+            (let [client->server (::client-state/chan->server client)]
+              (is client->server)
+              (let [taken (strm/try-take! client->server ::drained 1000 ::timeout)
+                    hello @taken]
+                (println "server-test/handshake Hello from client:" hello)
+                (when (or (= hello ::drained)
+                          (= hello ::timeout))
+                  (throw (ex-info "Client didn't send Hello"
+                                  {::received hello
+                                   ;; Note that this state is going to
+                                   ;; drift further and further from reality, now
+                                   ;; that I'd ditched the agent.
+                                   ;; Q: Isn't it?
+                                   ::client-state/state client})))
+                (let [host (:host hello)]
+                  (when-not host
+                    (println "shake-hands: Something went wrong with" client)
+                    (throw (ex-info "This layer doesn't know where to send anything"
+                                    {::problem hello}))))
+                (if (not (or (= hello ::drained)
+                             (= hello ::timeout)))
+                  (let [->srvr (get-in started [::srvr-state/client-read-chan ::srvr-state/chan])
+                        ;; Currently, this arrives as a ByteBuf.
+                        ;; Anything that can be converted to a direct ByteBuf is legal.
+                        ;; So this part is painfully implementation-dependent.
+                        ;; Q: Is it worth generalizing?
+                        ^ByteBuf hello-buffer (:message hello)
+                        hello-length (.readableBytes hello-buffer)
+                        hello-packet (byte-array hello-length)]
+                    (.readBytes hello-buffer hello-packet)
+                    (println (str "shake-hands: Trying to put hello packet\n"
+                                  (b-t/->string hello-packet)
+                                  "\nonto server channel "
+                                  ->srvr
+                                  " a "
+                                  (class ->srvr)))
+                    (let [put-success (strm/try-put! ->srvr
+                                                     (assoc hello
+                                                            :message hello-packet)
+                                                     1000
+                                                     ::timed-out)
+                          success (deref put-success
+                                         1000
+                                         ::deref-try-put!-timed-out)]
+                      (println "shake-hands: Result of putting hello onto server channel:" success)
+                      (if (and (not= ::timed-out success)
+                               (not= ::deref-try-put!-timed-out success))
+                        (let [srvr-> (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])
+                              ;; From the aleph docs:
+                              ;; "The stream will accept any messages which can be coerced into
+                              ;; a binary representation."
+                              ;; It's perfectly legit for the Server to send either B] or
+                              ;; ByteBuf instances here.
+                              ;; (Whether socket instances emit ByteBuf or B] depends on a
+                              ;; parameter to their ctor. The B] approach is slower due to
+                              ;; copying, but recommended for any but advanced users,
+                              ;; to avoid needing to cope with reference counts).
+                              ;; TODO: See which format aleph works with natively to
+                              ;; minimize copying for writes (this may or may not mean
+                              ;; rewriting compose to return B] instead)
+                              ;; Note that I didn't need to do this for the Hello packet.
+                              packet-take (strm/try-take! srvr-> ::drained 1000 ::timeout)
+                              packet (deref packet-take 1000 ::take-timeout)]
+                          (println "server-test/shake-hands: Server response to hello:"
+                                   packet)
+                          (if (and (not= ::drained packet)
+                                   (not= ::timeout packet)
+                                   (not= ::take-timeout packet))
+                            (if-let [client<-server (::client-state/chan<-server client)]
+                              (let [cookie-buffer (:message packet)
+                                    ;; I'm using this pattern often enough in here alone
+                                    ;; that I should get this working through something
+                                    ;; like byte-streams in bit-twiddling
+                                    cookie (byte-array (.readableBytes cookie-buffer))]
+                                (.readBytes cookie-buffer cookie)
+                                (is (= server-ip (-> packet
+                                                     :host
+                                                     .getAddress
+                                                     vec)))
+                                (is (= server-port (:port packet))
+                                    (str "Mismatched port in"
+                                         packet
+                                         "based on\n"
+                                         (::client-state/server-security client)))
+                                ;; Send the Cookie to the client
+                                (println "server-test/handshake-test: Sending Cookie to"
+                                         client<-server)
+                                (let [put @(strm/try-put! client<-server
+                                                          (assoc packet
+                                                                 :message cookie)
+                                                          1000
+                                                          ::timeout)]
+                                  (println "server-test/handshake-test: cookie->client result:" put)
+                                  (if (not= ::timeout put)
+                                    ;; Get the Initiate from the client
+                                    (let [possible-initiate (strm/try-take! client->server ::drained 1000 ::timeout)
+                                          initiate-outcome (dfrd/deferred)]
+                                      (dfrd/on-realized possible-initiate
+                                                        (fn [initiate]
+                                                          (println "server-test/handshake Initiate retrieved from client:"
+                                                                   initiate
+                                                                   "\nclient->server:"
+                                                                   client->server)
+                                                          ;; FIXME: Verify that this is a valid Initiate packet
+                                                          (if-not (or (= initiate ::drained)
+                                                                      (= initiate ::timeout))
+                                                            (do
+                                                              (is (= server-ip (-> initiate
+                                                                                   :host
+                                                                                   .getAddress
+                                                                                   vec)))
+                                                              (is (bytes? (:message initiate))
+                                                                  (str "Invalid byte array in :message inside Initiate packet: " initiate))
+                                                              (if-let [port (:port initiate)]
+                                                                (is (= server-port port))
+                                                                ;; Q: Is this line causing my stack overflow?
+                                                                ;; A: No. I'm getting past this.
+                                                                (is false (str "UDP packet missing port in initiate\n" initiate)))
+                                                              (println "Trying to send that initiate packet to the server")
+                                                              (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
+                                                                (println "Initiate packet sent to the server:" put)
+                                                                (if (not= ::timeout @put)
+                                                                  (let [first-srvr-message @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
+                                                                    (println "First message pulled back from server:" first-srvr-message)
+                                                                    (if-not (or (= first-srvr-message ::drained)
+                                                                                (= first-srvr-message ::timeout))
+                                                                      (let [put @(strm/try-put! client<-server
+                                                                                                first-srvr-message
+                                                                                                1000
+                                                                                                ::timeout)]
+                                                                        (if (not= ::timeout put)
+                                                                          (let [first-full-clnt-message @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                                                            ;; As long as we got a message back, we should be able to call
+                                                                            ;; this test done.
+                                                                            (if (= ::timeout first-full-clnt-message)
+                                                                              (do
+                                                                                (dfrd/error! initiate-outcome
+                                                                                             (ex-info "Timed out waiting for client response")))
+                                                                              (dfrd/success! initiate-outcome first-full-clnt-message)))
+                                                                          (do
+                                                                            (dfrd/error! initiate-outcome
+                                                                                         (ex-info "Timed out writing first server Message packet to client")))))
+                                                                      (do
+                                                                        (dfrd/error! initiate-outcome
+                                                                                     (ex-info "Failed pulling first real Message packet from Server"
+                                                                                              {::problem first-srvr-message})))))
+                                                                  (do
+                                                                    (dfrd/error! initiate-outcome
+                                                                                 (ex-info "Timed out writing Initiate to Server"))))))
+                                                            (do
+                                                              (dfrd/error! initiate-outcome (ex-info "Failed to take Initiate/Vouch from Client"
+                                                                                                     {::problem initiate})))))
+                                                        identity)
+                                      (try
+                                        (let [actual-initiate-outcome (deref initiate-outcome 2000 ::initiate-timeout)]
+                                          (is (not= ::initiate-timeout actual-initiate-outcome))
+                                          ;; Q: What are we dealing with here?
+                                          (is (not actual-initiate-outcome)))
+                                        (catch Exception ex
+                                          ;; We get here on any of those dfrd/error! triggers above
+                                          (is (not ex)))))
+                                    (throw (RuntimeException. "Timed out putting Cookie to Client")))))
+                              (throw (ex-info "I know I have a mechanism for writing from server to client among"
+                                              {::keys (keys client)
+                                               ::grand-scheme client})))
+                            (throw (RuntimeException. (str packet " reading Cookie from Server")))))
+                        (throw (RuntimeException. "Timed out putting Hello to Server")))))
+                  (throw (RuntimeException. (str hello " taking Hello from Client"))))))
+            (finally
+              (let [cleaned (if (map? client)
+                              (dissoc client ::log/state)
+                              {::client-state client})]
+                (try
+                  (println "Stopping client agent" cleaned)
+                  ;; Here's the StackOverflowError I chased around for so long
+                  ;; from nesting the client-agent inside itself.
+                  ;; Should no longer be a concern, since that client-agent is gone.
+                  (catch StackOverflowError ex
+                    (is (not ex))
+                    (println "Failed to print the cleaned-up client agent state:"
+                             (log/exception-details ex))
+                    (println "The unprintable state object that caused problems is a" (class client)))))
+              (try
+                (client/stop! client)
+                (catch Exception ex
+                  (println "stop! failed:\n" (log/exception-details ex))))
+              (println "client-agent stopped")
+              (try
+                (println "Trying to print out the client state")
+                (pprint (dissoc client
+                                ::log/state))
+                (catch Exception ex
+                  (is not ex)
+                  (println "Something got terribly broken:"))))))
+        (println "Made it to the bottom of the server handshake main try/catch")
+        (catch Exception ex
+          (is (not ex))
+          (println "Unhandled exception in the main server handshake test try/catch")
+          (println (log/exception-details ex)))
+        (finally
+          (println "Triggering server event loop exit")
+          (factory/stop-server started)
+          (println "Server stopped successfully"))))
+    (println "Got to the bottom of the server handshake test successfully")
+    (catch Exception ex
+      (is (not ex))
+      (println "Unhandled exception at top-level of the server handshake test")
+      (println ex)
+      (println (log/exception-details ex)))))

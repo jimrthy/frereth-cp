@@ -11,7 +11,7 @@
                           #_[aleph "0.4.4" :exclusions [io.netty/netty-all
                                                       org.clojure/tools.logging]]
                           ;; Alt: Try this instead
-                          [aleph "0.4.5-alpha5"]
+                          [aleph "0.4.5-alpha6"]
                           ;; Note that 5.0.0 is up to alpha2
                           [io.netty/netty-all "4.1.20.Final"]
                           ;; TODO: Eliminate these logging dependencies.

@@ -17,7 +17,7 @@
   (:import clojure.lang.ExceptionInfo
            java.net.InetAddress))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants
 
 (def server-extension (byte-array [0x01 0x02 0x03 0x04
@@ -27,7 +27,7 @@
 
 (def server-name (shared/encode-server-name "test.frereth.com"))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Helpers
 
 (defn server-options
@@ -39,7 +39,7 @@
     {::cp-server {::log/logger logger
                   ::log/state log-state
                   ::shared/extension server-extension
-                  ::shared/my-keys #::shared{::K/srvr-name server-name
+                  ::shared/my-keys #::shared{::shared-specs/srvr-name server-name
                                              :keydir "curve-test"}
                   ::srvr-state/client-read-chan {::srvr-state/chan client-read-chan}
                   ::srvr-state/client-write-chan {::srvr-state/chan client-write-chan}
@@ -93,7 +93,9 @@
                                      :srvr-port ::shared-specs/port
                                      :srvr-pk-long ::shared-specs/public-long
                                      :srvr-xtn-vec (s/and vector?
-                                                          #(= (count %) K/extension-length)))
+                                                          #(= (count %) K/extension-length))
+                                     :->child ::msg-specs/->child
+                                     :child-spawner! ::msg-specs/child-spawner!)
                     :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
                                      :logger-init (s/fspec :args nil :ret ::log/logger)
                                      :log-state ::log/state
@@ -101,10 +103,12 @@
                                      :srvr-port ::shared-specs/port
                                      :srvr-pk-long ::shared-specs/public-long
                                      :srvr-xtn-vec (s/and vector?
-                                                          #(= (count %) K/extension-length))))
-        :ret ::client-state/state-agent)
+                                                          #(= (count %) K/extension-length))
+                                     :->child ::msg-specs/->child
+                                     :child-spawner! ::msg-specs/child-spawner!))
+        :ret ::client-state/state)
 (defn raw-client
-  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long]
+  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long ->child child-spawner!]
    (raw-client message-loop-name
                logger-init
                log-state
@@ -114,8 +118,10 @@
                [0x01 0x02 0x03 0x04
                 0x05 0x06 0x07 0x08
                 0x09 0x0a 0x0b 0x0c
-                0x0d 0x0e 0x0f 0x10]))
-  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long srvr-xtn-vec]
+                0x0d 0x0e 0x0f 0x10]
+               ->child
+               child-spawner!))
+  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long srvr-xtn-vec ->child child-spawner!]
    (let [key-dir "client-test"
          nonce-key-resource (io/resource (str key-dir
                                               "/.expertsonly/noncekey"))]
@@ -134,19 +140,27 @@
            ;; Better choice: make the timeout customizable
            srvr-name (shared/encode-server-name "hypothet.i.cal")
            long-pair (crypto/random-key-pair)
-           result (clnt/ctor {::msg-specs/->child (strm/stream)  ; This seems wrong. Q: Is it?
-                              ::client-state/chan<-server (strm/stream)
+           result (clnt/ctor {::client-state/chan<-server (strm/stream)
                               ::log/state log-state
+                              ::msg-specs/->child ->child
+                              ::msg-specs/child-spawner! child-spawner!
                               ::msg-specs/message-loop-name message-loop-name
                               ::shared/my-keys {::shared/keydir key-dir
                                                 ::shared/long-pair long-pair
-                                                ::K/server-name server-name}
+                                                ::shared-specs/srvr-name server-name}
                               ::client-state/server-extension server-extension
                               ::client-state/server-ips [(InetAddress/getByAddress (byte-array srvr-ip))]
                               ::client-state/server-security {::shared-specs/srvr-name srvr-name
                                                               ::shared-specs/srvr-port srvr-port
                                                               ::shared-specs/public-long srvr-pk-long}}
                              logger-init)]
+       ;; Starting in a future like this is nerve-racking.
+       ;; If nothing else, the callers don't have any way to check what happened, unless I add this
+       ;; to the response.
+       ;; Or possible just return this. Maybe as a deferred running on an executor? Or, really,
+       ;; just used dfrd/future.
+       ;; Those options fail because start! will block until something pulls the Hello packet
+       ;; from the to-server channel.
        (future
          (clnt/start! result))
        result))))

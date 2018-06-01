@@ -1,20 +1,24 @@
 (ns frereth-cp.shared.constants
   "Magical names, numbers, and data structures"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.shared.specs :as specs]))
+            [frereth-cp.shared.specs :as specs])
+  (:import io.netty.buffer.ByteBuf))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Magic Constants
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Magic Constants
 
 ;; Q: How many of the rest of this could benefit enough by
 ;; getting a ^:const metadata hint to justify adding it?
-;; TODO: More benchmarking
-(def box-zero-bytes 16)
+;; TODO: benchmarking
+(def box-zero-bytes specs/box-zero-bytes)
 (def ^Integer decrypt-box-zero-bytes 32)
 (def ^Integer key-length specs/key-length)
 (def max-random-nonce (long (Math/pow 2 48)))
 
-(def client-key-length key-length)
+(def client-key-length specs/client-key-length)
+;; Might as well move these into specs for consistency
+;; with server-nonce-suffix-length
+;; FIXME: Make it so
 (def ^Integer client-nonce-prefix-length 16)
 (def ^Integer client-nonce-suffix-length 8)
 (def extension-length specs/extension-length)
@@ -23,8 +27,8 @@
 (def message-len 1104)
 (def nonce-length 24)
 (def server-key-length key-length)
-(def ^Integer server-nonce-prefix-length 8)
-(def ^Integer server-nonce-suffix-length 16)
+(def ^Integer server-nonce-prefix-length specs/server-nonce-prefix-length)
+(def ^Integer server-nonce-suffix-length specs/server-nonce-suffix-length)
 (def shared-key-length key-length)
 
 (def client-header-prefix-string "QvnQ5Xl")
@@ -53,8 +57,8 @@
   "1 Meg"
   1048576)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Specs
 
 ;;; Q: Why are these here instead of top-level shared?
 ;;; A: Because they're used in here, and I want to avoid
@@ -65,8 +69,6 @@
 
 (s/def ::client-nonce-suffix (s/and bytes?
                                     #(= (count %) client-nonce-suffix-length)))
-(s/def ::server-nonce-suffix (s/and bytes?
-                                    #(= (count %) server-nonce-suffix-length)))
 
 ;; The prefixes are all a series of constant bytes.
 ;; Callers shouldn't need to know/worry about them.
@@ -160,7 +162,7 @@
                                  ::length extension-length}
              ;; Implicitly prefixed with "CurveCPK"
              ::client-nonce-suffix {::type ::bytes
-                                    ::length server-nonce-suffix-length}
+                                    ::length specs/server-nonce-suffix-length}
              ::cookie {::type ::bytes
                        ::length cookie-frame-length}))
 
@@ -176,7 +178,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets
 
+;; Header, cookie, server name, extensions, keys, nonces
+(def vouch-overhead 544)
 (def max-vouch-message-length 640)
+(def max-initiate-packet-size (+ vouch-overhead max-vouch-message-length))
 ;; Q: Can this ever be < 16?
 ;; A: Well, in the reference implementation, trying to write
 ;; too few (< 16) or too many (> 640 in the Initiatet/Vouch phase)
@@ -190,13 +195,15 @@
 (def min-vouch-message-length 16)
 
 (s/def ::hidden-client-short-pk ::specs/public-short)
-(s/def ::inner-i-nonce ::server-nonce-suffix)
+(s/def ::inner-i-nonce ::specs/inner-i-nonce)
 (s/def ::long-term-public-key ::specs/public-long)
 ;; FIXME: Actually, this should be a full-blown
 ;; :frereth-cp.message.specs/packet, with a better
 ;; name.
 ;; FIXME: Switch to that name.
 (s/def ::message (s/and bytes?
+                        ;; This predicate is nonsense.
+                        ;; FIXME: Switch to something sensible
                         #(<= max-vouch-message-length (count %))
                         #(<= (count %))))
 (s/def ::outer-i-nonce ::client-nonce-suffix)
@@ -205,13 +212,8 @@
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 (def initiate-header (.getBytes (str client-header-prefix "I")))
 
-;; 48 bytes
-;; Q: What is this for?
-;; A: It's that ::inner-vouch portion of the vouch-wrapper.
-;; Really, neither of those is a great name choice.
-(def vouch-length (+ box-zero-bytes ;; 16
-                     ;; 32
-                     client-key-length))
+(def vouch-length specs/vouch-length)
+
 ;; The way this is wrapped up seems odd.
 ;; We have a box containing the short-term key encrypted
 ;; by the long-term public key.
@@ -232,13 +234,24 @@
                              vouch-length ; 48
                              ;; 256
                              specs/server-name-length))
-(defn initiate-message-length-filter
-  "The maximum length for the message associated with an Initiate packet is 640 bytes.
 
-  However, it must be evenly divisible by 16."
-  [n]
-  (min (* (quot n 16) 16)
-       max-vouch-message-length))
+(s/fdef legal-vouch-message-length?
+        :args (s/cat :bytes bytes?)
+        :ret boolean?)
+(defn legal-vouch-message-length?
+  "Is a byte array a legal vouch sub-message?"
+  ;; The maximum length for the message associated with an Initiate packet is 640 bytes.
+  ;; However, it must be evenly divisible by 16.
+  ;; This feels a little...odd.
+  ;; It leaves the message child tightly coupled with this implementation
+  ;; detail.
+  ;; And also tied in with the detail that the rules change after
+  ;; the server sends back a response.
+  ;; I'm not sure there's any way to avoid that.
+  [^bytes bs]
+  (let [n (count bs)]
+    (and (< n max-vouch-message-length)
+         (= 0 (rem n 16)))))
 
 (def vouch-wrapper
   "Template for composing the inner part of an Initiate Packet's Vouch that holds everything interesting"
@@ -246,7 +259,7 @@
                            ::length client-key-length}
    ::inner-i-nonce {::type ::bytes ::length server-nonce-suffix-length}
    ::inner-vouch {::type ::bytes ::length vouch-length}
-   ::server-name {::type ::bytes ::length specs/server-name-length}
+   ::srvr-name {::type ::bytes ::length specs/server-name-length}
    ;; Q: Do I want to allow compose to accept parameters for things like this?
    ::child-message {::type ::bytes ::length '?child-message-length}})
 
@@ -305,8 +318,8 @@ TODO: Rename this to something like initiate-client-vouch-message"
                             ::length server-nonce-suffix-length}
              ::hidden-client-short-pk {::type ::bytes
                                        ::length (+ client-key-length box-zero-bytes)}
-             ::server-name {::type ::bytes
-                            ::length specs/server-name-length}
+             ::srvr-name {::type ::bytes
+                          ::length specs/server-name-length}
              ::message {::type ::bytes
                         ::length '*}))
 (s/def ::initiate-client-vouch-wrapper

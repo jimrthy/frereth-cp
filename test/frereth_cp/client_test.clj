@@ -3,31 +3,50 @@
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as clnt]
-            [frereth-cp.client.cookie :as cookie]
-            [frereth-cp.client.hello :as hello]
-            [frereth-cp.client.state :as state]
+            [frereth-cp.client
+             [cookie :as cookie]
+             [hello :as hello]
+             [state :as state]]
             [frereth-cp.message :as message]
             [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server.cookie :as srvr-cookie]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]]
             [frereth-cp.test-factory :as factory]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import io.netty.buffer.ByteBuf))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Helpers
+
 (defn check-success
-  [client-agent where result]
+  [client where result]
   (or (and (not= result ::nada)
            (not= result ::timed-out)
            result)
       (throw (ex-info (str "Failed at '" where "'")
-                      {::details (if-let [problem (agent-error client-agent)]
-                                   (log/exception-details problem)
-                                   @client-agent)
+                      {::details client
                        ::result result}))))
+
+(s/fdef step-1-fork!
+        :args (s/cat :io-handle ::msg-specs/io-handle)
+        :ret any?)
+(defn step-1-fork!
+  [io-handle]
+  ;; Main point: try to send more bytes than will fit
+  ;; into a single Initiate packet
+  (message/child->! io-handle (byte-array (range 1024)))
+  ;; Q: Do I want to mess with anything after this?
+  (message/child-close! io-handle))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Tests
 
 (deftest step-1
   (testing "The first basic thing that clnt/start does"
@@ -36,63 +55,90 @@
     ;; A: It starts by sending a HELO
     ;; packet, then setting the client up to wait for a
     ;; Cookie back from the server.
-    (let [parent-cb (fn [agent-wrapper
+    (let [parent-cb (fn [client
                          chunk]
                       (println "parent-cb: getting ready to fail")
                       (throw (ex-info "Didn't really expect anything at parent callback"
-                                      {::client-state @agent-wrapper
+                                      {::client-state client
                                        ::message chunk})))
           child-cb (fn [chunk]
                      (println "child-cb: getting ready to fail")
                      (throw (ex-info "Didn't really expect anything at child callback"
                                      {::message chunk})))
-          client-agent (factory/raw-client "step-1" 
-                                           logger
-                                           srvr-pk-long)
-          client @client-agent
-          {:keys [::state/chan<-server ::state/chan->server]} client]
+          keydir "curve-test"
+          srvr-long-pair (crypto/do-load-keypair keydir)
+          srvr-pk-long (.getPublicKey srvr-long-pair)
+          log-state (log/init ::step-1)
+          child-spawner step-1-fork!
+          client (factory/raw-client "step-1"
+                                     log/std-out-log-factory
+                                     log-state
+                                     [127 0 0 1]
+                                     64921
+                                     srvr-pk-long
+                                     child-cb
+                                     child-spawner)
+          {:keys [::log/logger
+                  ::state/chan<-server
+                  ::state/chan->server]} client]
       (when-not chan<-server
         (throw (ex-info "Missing from-server channel"
                         client)))
       (strm/on-drained chan<-server
-                       #(send client-agent clnt/server-closed!))
-      ;; Q: Doesn't this also need to send the packet?
-      ;; A: Probably.
-      ;; Trying to send a bogus response fails below.
-      (send client-agent hello/do-build-hello)
-      (if (await-for 150 client-agent)
-        (let [cookie #_"Did this work?" (byte-array 200)
-              basic-check {:host "10.0.0.12"
-                           :port 48637
-                           :message cookie}]
-          (is (not (agent-error client-agent)))
-          (let [success
-                (dfrd/chain (strm/try-take! chan->server ::nada 200 ::timed-out)
-                            (partial check-success client-agent "Waiting for hello")
-                            (fn [hello]
-                              (strm/try-put! chan<-server basic-check 150 ::timed-out))
-                            (partial check-success client-agent "Putting the cookie")
-                            (fn [_]
-                              (strm/try-take! chan->server ::nada 200 ::timed-out))
-                            (partial check-success client-agent "Taking the vouch")
-                            (fn [buf]
-                              (is (instance? ByteBuf buf)
-                                  (str "Expected ByteBuf. Got" (class buf)))
-                              ;; FIXME: Need to extract the cookie from the vouch that
-                              ;; we just received.
-                              (let [expected-n (count cookie)
-                                    actual-n (.readableBytes buf)]
-                                (is (= expected-n actual-n)))
-                              (let [response (byte-array (.readableBytes buf))]
-                                (.getBytes buf 0 response)
-                                (is (= (vec response) (vec (.getBytes basic-check))))
-                                true)))]
-            (is @success)))
-        (is false (str "Timed out waiting for client agent\n"
-                       (if-let [problem (agent-error client-agent)]
-                         (log/exception-details problem)
-                         @client-agent)
-                       "\nto build HELLO packet"))))))
+                       (fn []
+                         (log/flush-logs! logger
+                                          (log/warn (log/init ::drained)
+                                                    ::chan<-server
+                                                    "Channel from server drained"))))
+      (let [cookie (byte-array 200)  ;  <---- Note that this is gibberish that should get discarded.
+            cookie-wrapper {:host "10.0.0.12"
+                            :port 48637
+                            :message cookie}
+            ;; The test-factory signals the raw-client to start, which starts by
+            ;; building a Hello Packet and polling the available servers with it
+            ;; until 1 responsd.
+            success (dfrd/chain (strm/try-take! chan->server ::nada 200 ::timed-out)
+                                (partial check-success client "Waiting for hello")
+                                ;; Mimic the server sending back its Cookie, which
+                                ;; we filled with garbage above.
+                                (fn [hello]
+                                  (update hello :message
+                                          (fn [current]
+                                            (if (bytes? current)
+                                              current
+                                              (let [^ByteBuf src current
+                                                    n (.readableBytes src)
+                                                    dst (byte-array n)]
+                                                (.readBytes src dst)
+                                                dst))))
+                                  (is (not (s/explain-data ::shared/network-packet hello)))
+                                  (log/flush-logs! logger (log/info log-state
+                                                                    "Sending garbage Cookie from mock-server to Client"
+                                                                    ::step-1))
+                                  (strm/try-put! chan<-server cookie-wrapper 150 ::timed-out))
+                                (partial check-success client "Putting the cookie")
+                                ;; Next step (which is all about pulling the Initiate packet) fails
+                                ;; because we can't build it: the Client doesn't have the server's
+                                ;; short-term key yet.
+                                ;; Q: Is that because I just sent garbage in the Cookie?
+                                ;; Or is there a bigger problem?
+                                (fn [cookie]
+                                  (println "Cookie arrived. This should trigger the Initiate")
+                                  (strm/try-take! chan->server ::nada 200 ::timed-out))
+                                (partial check-success client "Taking the vouch")
+                                (fn [buf]
+                                  (is (instance? ByteBuf buf)
+                                      (str "Expected ByteBuf. Got" (class buf)))
+                                  ;; FIXME: Need to extract the cookie from the vouch that
+                                  ;; we just received.
+                                  (let [expected-n (count cookie)
+                                        actual-n (.readableBytes buf)]
+                                    (is (= expected-n actual-n)))
+                                  (let [response (byte-array (.readableBytes buf))]
+                                    (.getBytes buf 0 response)
+                                    (is (= (vec response) (vec (.getBytes cookie))))
+                                    true)))]
+        (is @success)))))
 (comment
   ;; Maybe the problem isn't just CIDER. This also looks as
   ;; though it produces a false positive
@@ -100,9 +146,8 @@
 
 (deftest build-hello
   (testing "Can I build a Hello packet?"
-    (let [{:keys [::client-agent]} (factory/raw-client nil)
-          client @client-agent
-          updated (hello/do-build-hello client)]
+    (let [{:keys [::client]} (factory/raw-client nil)
+          updated (hello/do-build-packet client)]
       (let [p-m (::shared/packet-management updated)
             nonce (::shared/packet-nonce p-m)]
         (is p-m)
@@ -110,11 +155,12 @@
                  (not= 0 nonce)))
         (let [buffer (::shared/packet p-m)]
           (is buffer)
-          (is (= shared/hello-packet-length (.readableBytes buffer)))
-          (let [dst (byte-array shared/hello-packet-length)]
+          (is (= K/hello-packet-length (.readableBytes buffer)))
+          (let [dst (byte-array K/hello-packet-length)]
             (.readBytes buffer dst)
             (let [v (vec dst)]
-              (is (= (subvec v 0 (count shared/hello-header)) (vec shared/hello-header)))
+              (is (= (subvec v 0 (count K/hello-header))
+                     (vec K/hello-header)))
               (is (= (subvec v 72 136) (take 64 (repeat 0)))))))))))
 (comment
   (vec shared/hello-header))
@@ -192,7 +238,7 @@
                   ;; hello should really be a ByteBuffer.
                   ;; Or a portion of a ByteArray that will be
                   ;; copied into a ByteBuffer.
-                  (is (= shared/hello-packet-length
+                  (is (= K/hello-packet-length
                          (if (bytes? hello)
                            (count hello)
                            (.readableBytes hello))))
@@ -203,26 +249,25 @@
                         ;; Especially since, realistically, I should build everything
                         ;; except the crypto box in a Direct buffer, then copy that in
                         ;; and send it to the network.
-                        (is (b-t/bytes= (.getBytes shared/hello-header)
+                        (is (b-t/bytes= (.getBytes K/hello-header)
                                            (byte-array (subvec (vec backing-array) 0
-                                                               (count shared/hello-header))))))
+                                                               (count K/hello-header))))))
                       (do
                         (if (.isDirect hello)
-                          (let [array (byte-array shared/hello-packet-length)]
+                          (let [array (byte-array K/hello-packet-length)]
                             (.getBytes hello 0 array)
                             ;; Q: Anything else useful I can check here?
-                            (is (b-t/bytes= shared/hello-header
+                            (is (b-t/bytes= K/hello-header
                                                (byte-array (subvec (vec array) 0
-                                                                   (count shared/hello-header))))))
+                                                                   (count K/hello-header))))))
                           ;; Q: What's going on here?
                           (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct."))))
-                    (is (b-t/bytes= shared/hello-header
+                    (is (b-t/bytes= K/hello-header
                                        (byte-array (subvec (vec hello) 0
-                                                           (count shared/hello-header))))))
+                                                           (count K/hello-header))))))
                   (println "Hello packet verified. Now I'd send it to the server"))
                 (throw (ex-info "Failed pulling hello packet"
-                                {:client-errors (agent-error client)
-                                 :client-thread client-thread}))))
+                                {:client-thread client-thread}))))
             (finally
               (let [client-start-outcome (deref client-thread 500 ::awaiting-handshake-start)]
                 (is (not= client-start-outcome ::awaiting-handshake-start))
@@ -237,30 +282,9 @@
           (strm/close! chan<-server)
           ;; Give that a chance to percolate through...
           (Thread/sleep 500)
-          (if-let [ex (agent-error client-agent)]
-            (if (instance? clojure.lang.ExceptionInfo ex)
-              ;; So far, I haven't had a chance to come up with a better alternative to
-              ;; "just set the agent state to an error when a channel closes"
-              (let [details (.getData ex)]
-                (println "Agent *has* moved into an error state after closing")
-                (if (= ::clnt/server-closed (:problem details))
-                  (is true "Not elegant, but this *is* expected")
-                  ;; Unexpected failures are worrisome.
-                  ;; And some things are failing almost silently
-                  (do
-                    (println "Unexpected failure:" (.getMessage ex)
-                             "\nProblem:" (:problem details))
-                    (is false (with-out-str (pprint (clnt/hide-long-arrays details))))
-                    ;; So we can get a stack trace
-                    (deref client-agent))))
-              (do
-                ;; I'm winding up with an NPE here, which doesn't seem to make
-                ;; any sense at all
-                (.printStackTrace ex)
-                (is (not ex))))
-            (let [unexpected-success @client-agent]
-              ;; Agent really should be in an exception state by now.
-              (is (not unexpected-success) "Did I just not wait long enough?")))))
+          (let [unexpected-success client]
+            ;; Agent really should be in an exception state by now.
+            (is (not unexpected-success) "Did I just not wait long enough?"))))
       (is chan<-server "No channel to pull data from server"))))
 
 (comment

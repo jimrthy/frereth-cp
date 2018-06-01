@@ -325,8 +325,8 @@
 ;; these calls really *are* all about crossing system
 ;; boundaries and side-effects.
 ;; But that approach still feels very dubious.
-;; And making this completely unconstrained seems
-;; like a terrible idea.
+;; And making those return values completely unconstrained
+;; seems like a terrible idea.
 ;; TODO: Decide how I want to handle this (a set of
 ;; keywords seems most likely)
 (s/def ::callback (s/fspec :args (s/cat :buf bytes?)
@@ -457,7 +457,8 @@
 ;;; The main restriction around these is that they're all
 ;;; about side-effects. So you probably don't want to try
 ;;; to validate this.
-;;; TODO: add an optional status updating callback
+;;; TODO: add an optional callback for updating (querying?)
+;;; the actual status.
 (s/def ::io-handle (s/keys :req [::->child  ;; callbacks here
                                  ::->parent
                                  ;; PipedIn/OutputStream pairs
@@ -475,8 +476,8 @@
                                  ;; Q: How often will I have an io-handle
                                  ;; without state?
                                  ;; The two go together so often/well
-                                 ;; that I'm very tempted to add
-                                 ;; a state-wrapper again that includes
+                                 ;; that I'm very tempted to bring back
+                                 ;; a state-wrapper that includes
                                  ;; them both.
                                  ;; Then again, most client code doesn't
                                  ;; have any reason to include the state.
@@ -489,7 +490,8 @@
                                  ;; but there are at least a couple of places
                                  ;; where I don't have a choice: I need to
                                  ;; log things in places where I do not have
-                                 ;; access to ::state.
+                                 ;; access to ::state (c.f. comments re:
+                                 ;; state-wrapper directly above).
                                  ;; This is really only useful for the outer
                                  ;; fringe portions that are interacting
                                  ;; with the outside world.
@@ -501,3 +503,26 @@
                            :opt [::child-input-loop
                                  ::child-output-loop
                                  ::pipe-from-child-size]))
+
+;; This is a function, called for side effects, that really starts
+;; the "bottom-level" child which is the part that clients using
+;; this library actually care about.
+;; It would make the API nicer if this could return the
+;; ->child callback.
+;; But that presents a chicken/egg problem.
+;; We can't build an ::io-handle without the ::->child.
+;; Well, we *could*. But it would mean additional state
+;; and an extra deref for every arriving message.
+;; Maybe avoiding the deref is premature optimization,
+;; but avoiding the extra state seems like an excellent idea.
+;; Then again, this may just push the state management problem
+;; out to the child.
+;; So the jury's still out.
+;; That actually seems to have worked out fairly well, so
+;; this particular debate seems to be settled.
+
+;; However, it might be nice for this to return a ::log/state.
+;; The down-side to that idea is that this calls client
+;; code, and keeping that isolated seems like a really good idea.
+(s/def ::child-spawner! (s/fspec :args (s/cat :io-handle ::io-handle)
+                                 :ret any?))

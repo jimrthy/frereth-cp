@@ -57,7 +57,9 @@
                    (count ret))))
         :ret map?)
 (defn pop-map-first
-  "Really for a sorted-map"
+  ;; It seems as though pop should do this, but a map
+  ;; does not implement IPersistentStack.
+  "Pop first entry from a map. Only makes sense if sorted"
   [associative]
   (dissoc associative (first (keys associative))))
 
@@ -206,13 +208,7 @@
           state
           gap-buffer))
 
-(s/fdef read-bytes-from-parent!
-        :args (s/cat :io-handle ::specs/io-handle
-                     :log-state ::log/state
-                     :buffer bytes?)
-        :ret (s/keys :req  [::log/state
-                            ::specs/bs-or-eof]))
-(defn read-bytes-from-parent!
+(defn obsolete-read-bytes-from-parent!
   "Parent wrote bytes to its outbuffer. Read them."
   [{:keys [::specs/child-in
            ::specs/message-loop-name]
@@ -221,108 +217,8 @@
    #^bytes buffer]
   {:pre [buffer
          child-in]}
-  (throw (RuntimeException. "obsolete"))
-  (let [bytes-available (.available child-in)
-        max-n (count buffer)]
-    (if (< 0 bytes-available)
-      ;; TODO: This should happen in a dfrd/future that allows
-      ;; us to yield control without actually blocking a thread.
-      (let [n (.read child-in buffer 0 (min bytes-available
-                                            max-n))
-            _ (throw (RuntimeException. "start back here"))
-            ;; The problem with getting the parent's clock time
-            ;; here is that it makes the pipe stateful, due
-            ;; to buffering.
-            ;; All the code that I ganked away by writing things
-            ;; this way really needs to come back.
-            ;; I need to read (e.g.) a 4-byte int for the byte count,
-            ;; 8 bytes (or so) for the clock time, and then read
-            ;; until I have all the bytes for this message.
-            ;; And then recur.
-            ;; I *could* just stick this into an atom that's
-            ;; available via io-handle.
-            ;; That feels like a terrible option, but it may be
-            ;; my best bet.
-            my-log-state (log/error my-log-state
-                                     ::read-bytes-from-parent!
-                                     "Need the sender's lamport clock")]
-        (if (<= 0 n)
-          ;; Can't just return buffer: we don't
-          ;; have a good way to tell the caller
-          ;; how many bytes we just received
-          ;; Although, since it's a mutable byte-array,
-          ;; we could just return that count
-          ;; (yuck!)
-          (let [holder (byte-array n)
-                my-log-state (log/debug my-log-state
-                                         ::read-bytes-from-parent!
-                                         (str n
-                                              "bytes received from parent"))]
-            (b-t/byte-copy! holder 0 n buffer)
-            holder)
-          {::log/state my-log-state
-           ::specs/bs-or-eof ::specs/normal}))
-      (let [my-log-state
-            (log/info my-log-state
-                       ::read-bytes-from-parent!
-                       "No bytes available for child. Blocking Parent Monitor")]
-        ;; Q: Do I really need to work with this "read single byte to unblock
-        ;; and then seem how many more are available" nonsense?
-        ;; I think I implemented it originally because writers weren't
-        ;; calling .flush, so this would buffer until full.
-        ;; TODO: Experiment with this and see how well this works using
-        ;; the easier approach.
-        (let [byte1 (try (.read child-in)
-                         (catch IOException ex
-                           ::specs/normal))
-              bytes-available (.available child-in)]
-          (assert bytes-available)
-          (let [my-log-state (log/info my-log-state
-                                        ::read-bytes-from-parent!
-                                        "Parent Monitor thread unblocked")
-                result
-                (cond (neg? byte1) (let [my-log-state
-                                         (log/warn my-log-state
-                                                    ::read-bytes-from-parent!
-                                                    "Parent monitor received EOF")]
-                                     ;; The part that writes to our paired Pipe
-                                     ;; closed its half.
-                                     ;; Do the same for sanitation.
-                                     (.close child-in)
-                                     {::log/state my-log-state
-                                      ::specs/bs-or-eof ::specs/normal})
-                      (keyword? byte1) {::log/state my-log-state
-                                        ::specs/bs-or-eof byte1}
-                      (< 0 bytes-available)
-                      (let [my-log-state
-                            (log/debug my-log-state
-                                        ::read-bytes-from-parent!
-                                        "Trying to read"
-                                        {::bytes-available bytes-available
-                                         ::src child-in
-                                         ::dst buffer
-                                         ::dst-size (count buffer)})]
-                        ;; Have to account for the initial unblocking byte
-                        (let [n (.read child-in buffer 0 (min bytes-available
-                                                              (dec max-n)))]
-                          (if (<= 0 n)
-                            (let [holder (byte-array (inc n))
-                                  my-log-state (log/debug my-log-state
-                                                           ::read-bytes-from-parent!
-                                                           (str
-                                                            (inc n)
-                                                            "bytes received from parent after initial"
-                                                            byte1))]
-                              (aset-byte holder 0 (b-t/possibly-2s-complement-8 byte1))
-                              (b-t/byte-copy! holder 1 n buffer)
-                              {::log/state my-log-state
-                               ::specs/bs-or-eof holder}))))
-                      :else (byte-array [byte1]))]
-            (when (keyword? result)
-              ;; We got this because the connected PipedOutputStream closed.
-              (.close child-in))
-            {::specs/bs-or-eof result
-             ::log/state my-log-state}))))))
+  ;; TODO: Go ahead and delete this
+  (throw (RuntimeException. "obsolete")))
 
 (s/fdef trigger-from-parent!
         :args (s/cat :io-handle ::specs/io-handle
@@ -613,7 +509,7 @@
   ;; I *do* want to provide the option to write your own, though.
   ;; Maybe I should add an optional parameter during startup:
   ;; if you don't provide
-  ;; this, it will default to calling this.
+  ;; that, it will default to calling this.
   [{:keys [::log/logger
            ::specs/child-in
            ::specs/message-loop-name]
@@ -641,7 +537,7 @@
                           "Starting the loop watching for bytes the parent has sent toward the child")
         my-logs (log/flush-logs! logger my-logs)
         result (strm/consume (partial trigger-from-parent!
-                                      io-handle
+                                      (assoc io-handle ::log/state my-logs)
                                       buffer
                                       cb)
                              trigger-stream)

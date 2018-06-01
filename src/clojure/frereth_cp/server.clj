@@ -5,17 +5,21 @@
             ;; TODO: Really need millisecond precision (at least)
             ;; associated with this log formatter
             [clojure.tools.logging :as log]
-            [frereth-cp.server.cookie :as cookie]
-            [frereth-cp.server.hello :as hello]
-            [frereth-cp.server.helpers :as helpers]
-            [frereth-cp.server.initiate :as initiate]
-            [frereth-cp.server.state :as state]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
-            [frereth-cp.util :as util]
+            [frereth-cp.server
+             [cookie :as cookie]
+             [hello :as hello]
+             [helpers :as helpers]
+             [initiate :as initiate]
+             [state :as state]]
+            [frereth-cp
+             [shared :as shared]
+             [util :as util]]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log2]
+             [specs :as specs]]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
@@ -96,10 +100,14 @@
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
   [^bytes packet]
   ;; So far, for unit tests, I'm getting the [B I expect
+  ;; Note that this is actually wrong: I really should be
+  ;; getting ByteBuf instances off the wire.
+  ;; FIXME: Revisit this.
+  ;; For that matter, I should convert this over to new-style logging.
   (log/debug (str "Incoming: " packet ", a " (class packet)))
   ;; For now, retain the name r for compatibility/historical reasons
   (let [r (count packet)]
-    (log/info (str "Incoming packet contains " r " bytes"))
+    (log/info (str "Incoming packet contains " r " somethings"))
     (and (<= 80 r 1184)
          ;; i.e. (= (rem r 16) 0)
          ;; TODO: Keep an eye out for potential benchmarks
@@ -233,7 +241,8 @@
     ^bytes message :message
     :as packet}]
   (println "Server incoming <---------------")
-  (let [log-state (log2/debug log-state
+  (let [log-state (log2/do-sync-clock log-state)
+        log-state (log2/debug log-state
                               ::handle-incoming!
                               "Top")]
     (when-not message
@@ -275,7 +284,10 @@
       (assoc this
              ::log2/state (log2/debug log-state
                                       ::handle-incoming!
-                                      "Ignoring packet of illegal length")))))
+                                      "Ignoring packet of illegal length"
+                                      {::message-length (count message)
+                                       ::shared/network-packet packet
+                                       ::pretty (b-t/->string message)})))))
 
 (s/fdef input-reducer
         :args (s/cat :this ::state/state
@@ -398,7 +410,7 @@
          (::state/chan client-read-chan)
          client-write-chan
          (::state/chan client-write-chan)
-         (::K/srvr-name my-keys)
+         (::specs/srvr-name my-keys)
          (::shared/keydir my-keys)
          extension
          ;; Actually, the rule is that it must be
@@ -444,9 +456,10 @@
            ::shared/packet-management]
     log-state ::log2/state
     :as this}]
-  (let [log-state (log2/flush-logs! logger (log2/warn log-state
-                                                      ::stop!
-                                                      "Stopping server state"))]
+  (let [log-state (log2/do-sync-clock log-state)
+        log-state (log2/warn log-state
+                             ::stop!
+                             "Stopping server state")]
     (try
       (let [log-state
             (if event-loop-stopper!

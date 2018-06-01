@@ -277,11 +277,11 @@
   (log! [{:keys [:state-agent]
           :as this} msg]
     (when-let [ex (agent-error state-agent)]
+      (println "Logging Agent Failed:\n"
+               (exception-details ex))
       ;; Q: What are the odds this will work?
       (let [last-state @state-agent]
-        (println "Logging Agent Failed:\n"
-                 (exception-details ex)
-                 "\nLogging Agent State:\n"
+        (println "Logging Agent State:\n"
                  last-state)
         (restart-agent state-agent last-state)))
     ;; Creating an exception that we're going to throw away
@@ -310,7 +310,8 @@
 
 (defn exception
   ([log-state ex label]
-   (add-log-entry log-state ::exception label))
+   (add-log-entry log-state ::exception label ""
+                  (exception-details ex)))
   ([log-state ex label message]
    (add-log-entry log-state ::exception label message
                   (exception-details ex)))
@@ -321,6 +322,7 @@
 
 (deflogger fatal)
 
+(declare get-official-clock)
 (s/fdef init
         :args (s/cat :context ::context
                      :start-time ::lamport)
@@ -331,16 +333,17 @@
     ::lamport start-clock
     ::context context})
   ([context]
-   (init context 0)))
+   (init context (get-official-clock))))
 
 (defn file-writer-factory
   [file-name]
   (let [writer (BufferedWriter. (FileWriter. file-name))]
     (->OutputWriterLogger writer)))
 
+(let [std-out-log-agent (agent {::flush-count 0})])
 (defn std-out-log-factory
   []
-  (->StdOutLogger (agent {::flush-count 0})))
+  (->StdOutLogger #_std-out-log-agent (agent {::flush-count 0})))
 
 (defn stream-log-factory
   [stream]
@@ -350,44 +353,50 @@
         :args (s/cat :logger ::logger
                      :logs ::state)
         :ret ::state)
-(defn flush-logs!
-  "For the side-effects to write the accumulated logs.
+;; Do what I can to keep local clocks synchronized
+(let [my-lamport (atom 0)]
+  (defn get-official-clock
+    []
+    @my-lamport)
+  (comment (get-official-clock))
 
-  Returns fresh set of log entries"
-  ;; TODO: Reverse these parameters.
-  ;; So I can thread-first log-state through
-  ;; log calls into this
-  [logger
-   log-state]
-  ;; Honestly, there should be an agent that handles this
-  ;; so we don't block the calling thread.
-  ;; The i/o costs should be quite a bit higher than
-  ;; the agent overhead...though
-  ;; a go-loop would be more efficient
-  (let [{:keys [::context
-                ::lamport]
-         :as log-state} (add-log-entry log-state
-                                       ::trace
-                                       ::top
-                                       "flushing")]
-    (doseq [message (::entries log-state)]
-      (log! logger message))
-    (flush! logger)
-    ;; Q: Which of these next 2 options will perform
-    ;; better?
-    ;; It seems like it should be a toss-up, since most
-    ;; of the impact will come from garbage collecting the
-    ;; old entries anyway.
-    ;; But it seems like the latter might get a minor
-    ;; win by avoiding the overhead of the update call
-    ;; Note that the difference is obsolete if I don't
-    ;; increment the clock here, and it very much looks
-    ;; as though I shouldn't.
-    ;; At that point, the plain assoc really should be
-    ;; the clear winner
-    (comment
-      (assoc log-state ::entries []))
-    (init context lamport)))
+  (s/fdef do-sync-clock
+          :args (s/cat :log-state ::state)
+          :ret ::state)
+  (defn do-sync-clock
+    "Synchronize my clock with a state's"
+    [log-state]
+    (let [{:keys [::lamport]} log-state]
+      (swap! my-lamport max lamport)
+      (assoc log-state ::lamport @my-lamport)))
+
+  (defn flush-logs!
+    "For the side-effects to write the accumulated logs.
+
+  Returns a fresh set of log entries"
+    ;; TODO: Reverse these parameters.
+    ;; So I can thread-first log-state through
+    ;; log calls into this
+    [logger
+     {:keys [::context]
+      :as log-state}]
+    ;; Honestly, there should be an agent that handles this
+    ;; so we don't block the calling thread.
+    ;; The i/o costs should be quite a bit higher than
+    ;; the agent overhead...though
+    ;; a go-loop would be more efficient
+    (let [{:keys [::lamport]
+           :as log-state} (add-log-entry log-state
+                                         ::trace
+                                         ::top
+                                         "flushing"
+                                         {::context context})]
+      (doseq [message (::entries log-state)]
+        (log! logger message))
+      (flush! logger)
+
+      (assoc (do-sync-clock log-state)
+             ::entries []))))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state
@@ -410,16 +419,18 @@
 (defn synchronize
   "Fix 2 clocks that have probably drifted apart"
   [{l-clock ::lamport
+    l-ctx ::context
     :as lhs}
    {r-clock ::lamport
+    r-ctx ::context
     :as rhs}]
   {:pre [l-clock
          r-clock]}
   (let [synced (max l-clock r-clock)
         lhs (assoc lhs ::lamport synced)
         rhs (assoc rhs ::lamport synced)]
-    [(debug lhs ::synchronized "")
-     (debug rhs ::synchronized "")]))
+    [(debug lhs ::synchronized "" {::context l-ctx})
+     (debug rhs ::synchronized "" {::context r-ctx})]))
 
 (s/fdef clean-fork
         :args (s/cat :source ::state
@@ -449,7 +460,7 @@ show up later."
         :ret (s/or :with-nested-context (s/tuple ::state ::state)
                    :keep-parent-context ::state))
 (defn fork
-  "Returns [forkee forked] <- because it increments forked's clock"
+  "Return shape depends on arity"
   ([src child-context]
    (let [parent-ctx (::context src)
          ;; Q: Am I really not using this at all?
@@ -462,3 +473,12 @@ show up later."
      (synchronize src forked)))
   ([src]
    (init (::context src) (inc (::lamport src)))))
+
+(s/fdef merge-state
+        :args (s/cat :logs1 ::state
+                     :logs2 ::state)
+        :ret ::state)
+(defn merge-state
+  "Combine the entries of two log states"
+  [x y]
+  (throw (RuntimeException. "Write this")))

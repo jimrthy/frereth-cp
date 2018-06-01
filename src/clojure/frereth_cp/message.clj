@@ -65,6 +65,7 @@
                                              ::delta_f
                                              ::scheduling-time]))
 (s/def ::next-action-time nat-int?)
+(s/def ::now nat-int?)
 (s/def ::source-tags #{::child-> ::parent-> ::query-state})
 (s/def ::input (s/tuple ::source-tags bytes?))
 (s/def ::action-tag #{::specs/child->
@@ -114,7 +115,8 @@
 
 ;;;; Q: what else is in the reference implementation?
 ;;;; A: Lots. Scattered around quite a bit now
-;;;; 186-654 main
+;;;; FIXME: Move these to the functions where I've implemented them.
+;;; 186-654 main
 ;;;          186-204 boilerplate
 
 ;;;          260-263 set up some globals
@@ -265,12 +267,12 @@
                                  {::specs/strm-hwm strm-hwm
                                   ::specs/message-loop-name message-loop-name}))]
     (deliver accepted? true)
-    (let [state' (callback state)]
-      (assert (::specs/outgoing state') "Callback threw away outgoing")
-      ;; TODO: check whether we can do output now.
+    (let [state (callback state)]
+      (assert (::specs/outgoing state) "Callback threw away outgoing")
+      ;; TODO: check whether we can do output yet.
       ;; It's pointless to call this if we just have
       ;; to wait for the timer to expire.
-      (trigger-output io-handle state'))))
+      (trigger-output io-handle state))))
 
 (s/fdef trigger-from-parent
         :args (s/cat :io-handle ::specs/io-handle
@@ -698,7 +700,7 @@
                                     "after last block time ~:d.\n"
                                     "Recent was ~:d ns in the past\n"
                                     "rtt-timeout: ~:d\n"
-                                    "earliest -time: ~:d")
+                                    "earliest-time: ~:d")
                                min-resend-time
                                n-sec-per-block
                                ;; I'm calculating last-block-time
@@ -748,270 +750,307 @@
      ::log/state log-state}))
 
 (declare schedule-next-timeout!)
-(s/fdef action-trigger
-        :args (s/cat :timing-details ::action-timing-details
-                     :io-handle ::specs/io-handle
-                     :state ::specs/state
-                     :log-state-atom ::shared-specs/atom
-                     :next-action ::next-action)
-        :ret any?)
-(defn action-trigger
-  [{:keys [::actual-next
-           ::delta_f
-           ::scheduling-time]
-    :as timing-details}
-   {:keys [::specs/message-loop-name]
-    :as io-handle}
-   {:keys [::specs/outgoing]
-    :as state}
-   log-state-atom
-   ;; This is a variant that consists of a [tag callback] pair
-   ;; It's tempting to destructure this here.
-   ;; That makes the code a little more concise,
-   ;; and easier to read. But it also makes
-   ;; error handling more difficult.
-   ;; I've had enough trouble getting and keeping
-   ;; this correct that I want to retain this more
-   ;; verbose approach, at least until the entire
-   ;; thing settles down a bit.
-   ;; Besides, I don't actually know what's in
-   ;; success until I check the tag.
-   ;; So I could destructure it here as [tag & args],
-   ;; then destructure args later. But that makes
-   ;; it less obviously a win.
-   next-action]
-  {:pre [outgoing]}
-  (let [now (System/nanoTime)  ; It's tempting to just use millis, but that throws off recent
-        ;; Line 337
-        ;; Doing this now instead of after trying to receive data from the
-        ;; child seems like a fairly significant change from the reference
-        ;; implementation.
-        ;; TODO: Compare with other higher-level implementations
-        ;; TODO: Ask cryptographers and protocol experts whether this is
-        ;; a choice I'll really regret
-        state (assoc state ::specs/recent now)
-        log-state @log-state-atom
-        ;; This is used during exception handling
-        prelog (utils/pre-log message-loop-name)  ; might be on a different thread
-        fmt (str "Awakening event loop that was sleeping for ~g ms "
-                 "after ~:d at ~:d\n"
-                 "at ~:d because: ~a")
-        log-state (try
-                    (log/debug log-state
-                               ::action-trigger
-                               (cl-format nil
-                                          fmt
-                                          delta_f
-                                          scheduling-time
-                                          (or actual-next -1)
-                                          now
-                                          next-action)
-                               {::specs/message-loop-name message-loop-name})
-                    (catch NullPointerException ex
-                      (log/exception log-state
-                                     ex
-                                     ::action-trigger
-                                     "Error building the event loop Awakening message"
-                                     {::delta_f delta_f
-                                      ::scheduling-time scheduling-time
-                                      ::actual-next actual-next
-                                      ::now now
-                                      ::next-action next-action
-                                      ::trigger-details prelog
-                                      ::specs/message-loop-name message-loop-name}))
-                    (catch NumberFormatException ex
-                      (log/exception log-state
-                                     ex
-                                     ::action-trigger
-                                     "Error formatting the event loop Awakening message"
-                                     {::delta_f delta_f
-                                      ::scheduling-time scheduling-time
-                                      ::actual-next actual-next
-                                      ::now now
-                                      ::next-action next-action
-                                      ::trigger-details prelog
-                                      ::specs/message-loop-name message-loop-name})))
-        [tag
-         log-state] (try
-                      [(first next-action) log-state]
-                      (catch IllegalArgumentException ex
-                        [::no-op
-                         (log/exception log-state
-                                        ex
-                                        ::action-trigger
-                                        "Should have been a variant"
-                                        {::trigger-details prelog
-                                         ::specs/message-loop-name message-loop-name})]))
-        ;; TODO: Really should add something like an action ID to the state
-        ;; to assist in tracing the action. flow-control seems like a very
-        ;; likely place to put it.
-        updater (case tag
-                  ;; Q: Is this worth switching to something like core.match or a multimethod?
-                  ::specs/child-> (let [[_ callback ack] next-action]
-                                    (partial trigger-from-child io-handle callback ack))
-                  ::drained (fn [{log-state ::log/state
-                                  :as state}]
-                              ;; Actually, this seems like a strong argument for
-                              ;; having a pair of streams. Child could still have
-                              ;; bytes to send to the parent after the latter's
-                              ;; stopped sending, or vice versa.
-                              ;; I'm pretty sure the complexity I haven't finished
-                              ;; translating stems from that case.
-                              ;; TODO: Another piece to revisit once the basics
-                              ;; work.
-                              (update state
-                                      ::log/state
-                                      #(log/warn %
-                                                 ::action-trigger
-                                                 "Stream closed. Surely there's more to do"
-                                                 {::trigger-details prelog
-                                                  ::specs/message-loop-name message-loop-name})))
-                  ::no-op identity
-                  ;; Q: Shouldn't this be from the specs ns?
-                  ::parent-> (partial trigger-from-parent
-                                      io-handle
-                                      (second next-action))
-                  ;; This can throw off the timer, since we're basing the delay on
-                  ;; the delta from recent (which doesn't change) rather than now.
-                  ;; But we're basing the actual delay from now, which does change.
-                  ;; e.g. If the scheduled delay is 980 ms, and someone triggers a
-                  ;; query-state that takes 20 ms after 20 ms, the new delay will
-                  ;; still be 980 ms rather than the 940 that would have been
-                  ;; appropriate.
-                  ;; Q: What's the best way to avoid this?
-                  ;; Updating recent seems obvious, but also dubious.
-                  ;; Decrementing the delay seems like something the scheduler
-                  ;; should handle.
-                  ::query-state (fn [state]
-                                  (if-let [dst (second next-action)]
-                                    (do
-                                      (deliver dst state)
-                                      state)
-                                    (update state
-                                            ::log/state
-                                            #(log/warn %
-                                                       ::action-trigger
-                                                       "state-query request missing required deferred"
-                                                       {::trigger-details prelog
-                                                        ::specs/message-loop-name message-loop-name}))))
-                  ::timed-out (fn [state]
-                                (trigger-from-timer io-handle
-                                                    (update state
-                                                            ::log/state
-                                                            #(log/debug %
-                                                                        "Re-triggering Output due to timeout"
-                                                                        (assoc timing-details
-                                                                               ::trigger-details prelog
-                                                                               ::specs/message-loop-name message-loop-name))))))
-        state (assoc state
-                     ::log/state
-                     (log/debug log-state
-                                ::action-trigger
-                                "Processing event"
-                                {::tag tag
-                                 ::specs/message-loop-name message-loop-name}))
-        ;; At the end of the main ioloop in the reference
-        ;; implementation, there's a block that closes the pipe
-        ;; to the child if we're done.
-        ;; I think the point is that we'll quit polling on
-        ;; that and start short-circuiting out of the blocks
-        ;; that might do the send, once we've hit EOF
-        ;; Q: What can I do here to
-        ;; produce the same effect?
-        ;; TODO: Worry about that once the basic idea works.
+;; FIXME: This seems like it really should be debug only
+(let [interrupted (atom nil)]
+  (defn interrupted?
+    []
+    @interrupted)
 
-        ;; If the child sent a big batch of data to go out
-        ;; all at once, don't waste time setting up a timeout
-        ;; scheduler. The poll in the original would have
-        ;; returned immediately anyway.
-        ;; Except that n-sec-per-block puts a hard limit on how
-        ;; fast we can send.
-        start (System/currentTimeMillis)
-        ;; TODO: Break these pieces into something
-        ;; like the interceptor-chain idea. They should
-        ;; return a value that includes a key for a
-        ;; seq of functions to run to perform the
-        ;; side-effects.
-        ;; I'd still have to call updater, get
-        ;; that updating seq, and update the state
-        ;; to recurse.
+  (defn interrupt!
+    []
+    (println "FIXME: Debug only\nInterrupting ioloop manually")
+    (reset! interrupted true))
 
-        ;; I'd prefer to do these next two
-        ;; pieces in a single step.
+  (defn clear-interrupt!
+    []
+    (println "Unblocking ioloop manually")
+    (reset! interrupted false))
+  (comment
+    (interrupt!)
+    (interrupted?)
+    (clear-interrupt!)
+    )
 
-        ;; TODO: Read up on Executors. I could wind up
-        ;; with really nasty interactions now that I
-        ;; don't have an agent to keep this single-
-        ;; threaded.
-        ;; Actually, it should be safe as written.
-        ;; Just be sure to keep everything synchronized
-        ;; around takes from the i/o handle. (Not
-        ;; needing to do that manually is
-        ;; a great reason to not introduce a second
-        ;; one for bytes travelling the other direction)
-
-        state (update state
-                      ::log/state
-                      #(log/warn %
-                                 ::action-trigger
-                                 "Trying to run updater because of"
-                                 {::tag tag}))
-
-        state' (try (updater state)
-                    (catch ExceptionInfo ex
-                      (update state
-                              ::log/state
-                              #(log/exception %
-                                              ex
-                                              ::action-trigger
-                                              "Running updater failed"
-                                              {::details (.getData ex)
-                                               ::specs/message-loop-name message-loop-name})))
-                    (catch RuntimeException ex
-                      ;; The eternal question in this scenario:
-                      ;; Fail fast, or hope we can keep limping
-                      ;; along?
-                      ;; TODO: Add prod vs. dev environment options
-                      ;; to give the caller control over what
-                      ;; should happen here.
-                      ;; (Note that, either way, it really should
-                      ;; include a callback to some
-                      ;; currently-undefined status updater
-                      (comment state)
-                      (update state
-                              ::log/state
-                              #(log/exception %
-                                              ex
-                                              ::action-trigger
-                                              "Running updater: low-level failure"
-                                              {::specs/message-loop-name message-loop-name}))))
-        state' (update state'
+  (s/fdef action-trigger!
+          :args (s/cat :timing-details ::action-timing-details
+                       :io-handle ::specs/io-handle
+                       :state ::specs/state
+                       :log-state-atom ::shared-specs/atom
+                       :next-action ::next-action)
+          :ret any?)
+  (defn action-trigger!
+    "Some action triggered the main ioloop"
+    ;; This function is way too long.
+    ;; FIXME: refactor it into smaller pieces
+    [{:keys [::actual-next
+             ::delta_f
+             ::scheduling-time]
+      :as timing-details}
+     {:keys [::specs/message-loop-name]
+      :as io-handle}
+     {:keys [::specs/outgoing]
+      :as state}
+     log-state-atom
+     ;; This is a variant that consists of a [tag callback] pair
+     ;; It's tempting to destructure this here.
+     ;; That makes the code a little more concise,
+     ;; and easier to read. But it also makes
+     ;; error handling more difficult.
+     ;; I've had enough trouble getting and keeping
+     ;; this correct that I want to retain this more
+     ;; verbose approach, at least until the entire
+     ;; thing settles down a bit.
+     ;; Besides, I don't actually know what's in
+     ;; success until I check the tag.
+     ;; So I could destructure it here as [tag & args],
+     ;; then destructure args later. But that makes
+     ;; ita  less obvious a win.
+     next-action]
+    {:pre [outgoing]}
+    (swap! log-state-atom log/do-sync-clock)
+    (let [now (System/nanoTime)  ; It's tempting to just use millis, but that throws off recent
+          ;; Line 337
+          ;; Doing this now instead of after trying to receive data from the
+          ;; child seems like a fairly significant change from the reference
+          ;; implementation.
+          ;; TODO: Compare with other higher-level implementations
+          ;; TODO: Ask cryptographers and protocol experts whether this is
+          ;; a choice I'll really regret
+          state (assoc state ::specs/recent now)
+          log-state @log-state-atom
+          ;; This is used during exception handling
+          prelog (utils/pre-log message-loop-name)  ; might be on a different thread
+          fmt (str "Awakening event loop that was sleeping for ~g ms "
+                   "after ~:d at ~:d\n"
+                   "at ~:d because: ~a")
+          log-state (try
+                      (log/debug log-state
+                                 ::action-trigger!
+                                 (cl-format nil
+                                            fmt
+                                            delta_f
+                                            scheduling-time
+                                            (or actual-next -1)
+                                            now
+                                            next-action)
+                                 {::specs/message-loop-name message-loop-name})
+                      (catch NullPointerException ex
+                        (log/exception log-state
+                                       ex
+                                       ::action-trigger!
+                                       "Error building the event loop Awakening message"
+                                       {::delta_f delta_f
+                                        ::scheduling-time scheduling-time
+                                        ::actual-next actual-next
+                                        ::now now
+                                        ::next-action next-action
+                                        ::trigger-details prelog
+                                        ::specs/message-loop-name message-loop-name}))
+                      (catch NumberFormatException ex
+                        (log/exception log-state
+                                       ex
+                                       ::action-trigger!
+                                       "Error formatting the event loop Awakening message"
+                                       {::delta_f delta_f
+                                        ::scheduling-time scheduling-time
+                                        ::actual-next actual-next
+                                        ::now now
+                                        ::next-action next-action
+                                        ::trigger-details prelog
+                                        ::specs/message-loop-name message-loop-name})))
+          [tag
+           log-state] (try
+                        [(first next-action) log-state]
+                        (catch IllegalArgumentException ex
+                          [::no-op
+                           (log/exception log-state
+                                          ex
+                                          ::action-trigger!
+                                          "Should have been a variant"
+                                          {::trigger-details prelog
+                                           ::specs/message-loop-name message-loop-name})]))
+          ;; TODO: Really should add something like an action ID to the state
+          ;; to assist in tracing the action. flow-control seems like a very
+          ;; likely place to put it.
+          updater (case tag
+                    ;; Q: Is this worth switching to something like core.match or a multimethod?
+                    ::specs/child-> (let [[_ callback ack] next-action]
+                                      (partial trigger-from-child io-handle callback ack))
+                    ::drained (fn [{log-state ::log/state
+                                    :as state}]
+                                ;; Actually, this seems like a strong argument for
+                                ;; having a pair of streams. Child could still have
+                                ;; bytes to send to the parent after the latter's
+                                ;; stopped sending, or vice versa.
+                                ;; I'm pretty sure the complexity I haven't finished
+                                ;; translating stems from that case.
+                                ;; TODO: Another piece to revisit once the basics
+                                ;; work.
+                                (update state
+                                        ::log/state
+                                        #(log/warn %
+                                                   ::action-trigger!
+                                                   "Stream closed. Surely there's more to do"
+                                                   {::trigger-details prelog
+                                                    ::specs/message-loop-name message-loop-name})))
+                    ::no-op identity
+                    ;; Q: Shouldn't this be from the specs ns?
+                    ;; Or maybe ::child-> should move here.
+                    ;; Either probably makes sense. It just needs
+                    ;; to be consistent.
+                    ::parent-> (partial trigger-from-parent
+                                        io-handle
+                                        (second next-action))
+                    ;; This can throw off the timer, since we're basing the delay on
+                    ;; the delta from recent (which doesn't change) rather than now.
+                    ;; But we're basing the actual delay from now, which does change.
+                    ;; e.g. If the scheduled delay is 980 ms, and someone triggers a
+                    ;; query-state that takes 20 ms after 20 ms, the new delay will
+                    ;; still be 980 ms rather than the 940 that would have been
+                    ;; appropriate.
+                    ;; Q: What's the best way to avoid this?
+                    ;; Updating recent seems obvious, but also dubious.
+                    ;; Decrementing the delay seems like something the scheduler
+                    ;; should handle.
+                    ::query-state (fn [state]
+                                    (if-let [dst (second next-action)]
+                                      (do
+                                        (deliver dst state)
+                                        state)
+                                      (update state
+                                              ::log/state
+                                              #(log/warn %
+                                                         ::action-trigger!
+                                                         "state-query request missing required deferred"
+                                                         {::trigger-details prelog
+                                                          ::specs/message-loop-name message-loop-name}))))
+                    ::reset-parent-callback (fn [state]
+                                              (-> state
+                                                  (update ::log/state
+                                                          #(log/warn %
+                                                                     ::action-trigger!
+                                                                     "Changing parent-callback"))
+                                                  (assoc ::specs/->parent (second next-action))))
+                    ::timed-out (fn [state]
+                                  (trigger-from-timer io-handle
+                                                      (update state
+                                                              ::log/state
+                                                              #(log/debug %
+                                                                          "Re-triggering Output due to timeout"
+                                                                          (assoc timing-details
+                                                                                 ::trigger-details prelog
+                                                                                 ::specs/message-loop-name message-loop-name))))))
+          state (assoc state
                        ::log/state
-                       #(log/warn %
-                                  ::action-trigger
-                                  "Updater returned"
-                                  (dissoc state' ::log/state)))
-        _ (assert (::specs/outgoing state') (str "After updating for " tag))
-        my-logs (::log/state state')
-        forked-logs (log/fork my-logs)
-        mid (System/currentTimeMillis)
+                       (log/debug log-state
+                                  ::action-trigger!
+                                  "Processing event"
+                                  {::tag tag
+                                   ::specs/message-loop-name message-loop-name}))
+          ;; At the end of the main ioloop in the reference
+          ;; implementation, there's a block that closes the pipe
+          ;; to the child if we're done.
+          ;; I think the point is that we'll quit polling on
+          ;; that and start short-circuiting out of the blocks
+          ;; that might do the send, once we've hit EOF
+          ;; Q: What can I do here to
+          ;; produce the same effect?
+          ;; TODO: Worry about that once the basic idea works.
+
+          ;; If the child sent a big batch of data to go out
+          ;; all at once, don't waste time setting up a timeout
+          ;; scheduler. The poll in the original would have
+          ;; returned immediately anyway.
+          ;; Except that n-sec-per-block puts a hard limit on how
+          ;; fast we can send.
+          start (System/currentTimeMillis)
+          ;; TODO: Break these pieces into something
+          ;; like the interceptor-chain idea. They should
+          ;; return a value that includes a key for a
+          ;; seq of functions to run to perform the
+          ;; side-effects.
+          ;; I'd still have to call updater, get
+          ;; that updating seq, and update the state
+          ;; to recurse.
+
+          ;; I'd prefer to do these next two
+          ;; pieces in a single step.
+
+          ;; TODO: Read up on Executors. I could wind up
+          ;; with really nasty interactions now that I
+          ;; don't have an agent to keep this single-
+          ;; threaded.
+          ;; Actually, it should be safe as written.
+          ;; Just be sure to keep everything synchronized
+          ;; around takes from the i/o handle. (Not
+          ;; needing to do that manually is
+          ;; a great reason to not introduce a second
+          ;; one for bytes travelling the other direction)
+
+          state (update state
+                        ::log/state
+                        #(log/warn %
+                                   ::action-trigger!
+                                   "Trying to run updater because of"
+                                   {::tag tag}))
+
+          state (try (updater state)
+                     (catch ExceptionInfo ex
+                       (update state
+                               ::log/state
+                               #(log/exception %
+                                               ex
+                                               ::action-trigger!
+                                               "Running updater failed"
+                                               {::details (.getData ex)
+                                                ::specs/message-loop-name message-loop-name})))
+                     (catch RuntimeException ex
+                       ;; The eternal question in this scenario:
+                       ;; Fail fast, or hope we can keep limping
+                       ;; along?
+                       ;; TODO: Add prod vs. dev environment options
+                       ;; to give the caller control over what
+                       ;; should happen here.
+                       ;; (Note that, either way, it really should
+                       ;; include a callback to some
+                       ;; currently-undefined status updater
+                       (comment state)
+                       (update state
+                               ::log/state
+                               #(log/exception %
+                                               ex
+                                               ::action-trigger!
+                                               "Running updater: low-level failure"
+                                               {::specs/message-loop-name message-loop-name}))))
+          state (update state
+                        ::log/state
+                        #(log/warn %
+                                   ::action-trigger!
+                                   "Updater returned"
+                                   (dissoc state ::log/state)))
+          _ (assert (::specs/outgoing state) (str "After updating for " tag))
+          my-logs (::log/state state)
+          forked-logs (log/fork my-logs)
+          mid (System/currentTimeMillis)]
+      (if (not (interrupted?))
         ;; This is taking a ludicrous amount of time.
         ;; Q: How much should I blame on logging?
-        _ (schedule-next-timeout! io-handle (assoc state'
-                                                   ::log/state
-                                                   forked-logs))
-        end (System/currentTimeMillis)
-        my-logs (log/debug  my-logs
-                            ::action-trigger
-                            "Handled a triggered action"
-                            {::tag tag
-                             ::handling-ms (- mid start)
-                             ::rescheduling-ms (- end mid)
-                             ::specs/message-loop-name message-loop-name})]
-    (reset! log-state-atom
-            (log/flush-logs! (::log/logger io-handle)
-                             my-logs)))
-  nil)
+        (schedule-next-timeout! io-handle (assoc state
+                                                 ::log/state
+                                                 forked-logs))
+        (println "FIXME: Debug only: message/action-trigger interrupted"))
+      (let [end (System/currentTimeMillis)
+            my-logs (log/debug  my-logs
+                                ::action-trigger!
+                                "Handled a triggered action"
+                                {::tag tag
+                                 ::handling-ms (- mid start)
+                                 ::rescheduling-ms (- end mid)
+                                 ::specs/message-loop-name message-loop-name})])
+      (reset! log-state-atom
+              (log/flush-logs! (::log/logger io-handle)
+                               my-logs)))
+    nil))
 
 (comment
   (let [delta_f ##Inf,
@@ -1029,6 +1068,75 @@
                (or actual-next -1)
                now
                success)))
+
+;; FIXME: Don't make this a global
+(def fast-spins (atom 0))
+(s/fdef pick-next-action
+        :args (s/cat :this ::specs/state
+               :dict (s/keys :req [::log/state
+                                         ::specs/recent
+                                         ::next-action-time
+                                         ::now]))
+        :ret (s/keys :req [::delta_f
+                           ::next-action
+                           ::log/state]))
+(defn pick-next-action
+  [this
+   {:keys [::now
+           ::specs/recent
+           ::specs/stream]
+    actual-next ::next-action-time
+    log-state ::log/state}]
+  (if actual-next
+    ;; TODO: add an optional debugging step that stores state and the
+    ;; calculated time so I can just look at exactly what I have
+    ;; when everything goes sideways
+    (let [;; It seems like it would make more sense to have the delay happen from
+          ;; "now" instead of "recent"
+          ;; Doing that throws lots of sand into the gears.
+          ;; Stick with this approach for now, because it *does*
+          ;; match the reference implementation.
+          ;; It seems very incorrect, but it also supplies an adjustment
+          ;; for the time it took this event loop iteration to process.
+          ;; Q: Is that fair/accurate?
+          scheduled-delay (- actual-next recent)
+          ;; Make sure that at least it isn't negative
+          ;; (I keep running across bugs that have issues with this,
+          ;; and it wreaks havoc with my REPL)
+          delta-nanos (max 0 scheduled-delay)
+          delta (inc (utils/nanos->millis delta-nanos))
+          ;; For printing
+          delta_f (float delta)
+          log-state (log/debug log-state
+                               ::schedule-next-timeout!
+                               "Setting timer to trigger after an initially calculated scheduled delay"
+                               {::scheduled-delay scheduled-delay  ; Q: Convert to long?
+                                ::specs/recent recent
+                                ::now now
+                                ::actual-delay delta_f
+                                ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
+                                ::stream stream})]
+      (if (= delta 1)
+        (do
+          ;; Should really be more sophisticated about this.
+          ;; If the previous action-trigger was not a timeout,
+          ;; then we probably are not in a fast-spin loop.
+          (swap! fast-spins inc)
+          (when (> @fast-spins 5)
+            ;; Q: Does this ever happen if nothing's broken?
+            (println "FIXME: Exiting due to fast-spin loop. Debug only")
+            (throw (ex-info "Exiting to avoid fast-spin loop"
+                            (dissoc this ::log/state)))))
+        (reset! fast-spins 0))
+      {::delta_f delta_f
+       ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
+       ::log/state log-state})
+    ;; The i/o portion of this loop is finished.
+    ;; But we still need to wait on the caller to close the underlying stream.
+    ;; If nothing else, it may still want/need to query state.
+    {::delta_f ##Inf
+     ::next-action (strm/take! stream [::drained])
+     ::log/state log-state}))
 
 ;;; I really want to move schedule-next-timeout! to flow-control.
 ;;; But it has a circular dependency with trigger-from-timer.
@@ -1051,8 +1159,6 @@
 ;;; TODO: Definitely needs some refactoring to trim
 ;;; it down to a reasonable size.
 
-;; FIXME: Don't make this a global
-(def fast-spins (atom 0))
 ;;; TODO: Possible alt approach: use atoms with
 ;;; add-watch. That opens up a different can of
 ;;; worms, in terms of synchronizing the flow-control
@@ -1143,66 +1249,23 @@
                                              ::original-ns (- mid-time now)
                                              ::alt-ns (- scheduling-finished mid-time)
                                              ::state (dissoc state ::log/state
-                                                            ::to-child-done? to-child-done?)})))
+                                                             ::to-child-done? to-child-done?)})))
         (let [{:keys [::delta_f
                       ::next-action]
-               log-state ::log/state}
-              (if actual-next
-                ;; TODO: add an optional debugging step that stores state and the
-                ;; calculated time so I can just look at exactly what I have
-                ;; when everything goes sideways
-                (let [;; It seems like it would make more sense to have the delay happen from
-                      ;; "now" instead of "recent"
-                      ;; Doing that throws lots of sand into the gears.
-                      ;; Stick with this approach for now, because it *does*
-                      ;; match the reference implementation.
-                      ;; It seems very incorrect, but it also supplies an adjustment
-                      ;; for the time it took this event loop iteration to process.
-                      ;; Q: Is that fair/accurate?
-                      scheduled-delay (- actual-next recent)
-                      ;; Make sure that at least it isn't negative
-                      ;; (I keep running across bugs that have issues with this,
-                      ;; and it wreaks havoc with my REPL)
-                      delta-nanos (max 0 scheduled-delay)
-                      delta (inc (utils/nanos->millis delta-nanos))
-                      ;; For printing
-                      delta_f (float delta)
-                      log-state (log/debug log-state
-                                           ::schedule-next-timeout!
-                                           "Setting timer to trigger after an initially calculated scheduled delay"
-                                           {::scheduled-delay scheduled-delay  ; Q: Convert to long?
-                                            ::specs/recent recent
-                                            ::now now
-                                            ::actual-delay delta_f
-                                            ::delay-in-millis (float (utils/nanos->millis scheduled-delay))
-                                            ::stream stream})]
-                  (if (= delta 1)
-                    (do
-                      (swap! fast-spins inc)
-                      (when (> @fast-spins 5)
-                        ;; Q: Does this ever happen if nothing's broken?
-                        (println "FIXME: Debug only")
-                        (throw (ex-info "Exiting to avoid fast-spin lock"
-                                        state))))
-                    (reset! fast-spins 0))
-                  {::delta_f delta_f
-                   ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
-                   ::log/state log-state})
-                ;; The i/o portion of this loop is finished.
-                ;; But we still need to wait on the caller to close the underlying stream.
-                ;; If nothing else, it may still want/need to query state.
-                {::delta_f ##Inf
-                 ::next-action (strm/take! stream [::drained])
-                 ::log/state log-state})
+               log-state ::log/state} (pick-next-action state
+                                                        {::log/state log-state
+                                                         ::next-action-time actual-next
+                                                         ::now now
+                                                         ::specs/recent recent
+                                                         ::specs/stream stream})
               log-state (log/flush-logs! logger log-state)
               ;; Q: Why am I forking logs here?
               forked-logs (log/fork log-state)]
           (when-not (::specs/outgoing state)
             (println "Missing outgoing in" state)
             (throw (ex-info "Missing outgoing" state)))
-          (println "Setting up deferred to trigger on next action")
           (dfrd/on-realized next-action
-                            (partial action-trigger
+                            (partial action-trigger!
                                      {::actual-next actual-next
                                       ::delta_f delta_f
                                       ::scheduling-time now}
@@ -1284,12 +1347,13 @@
 ;;; Public
 
 (s/fdef initial-state
-        :args (s/cat :human-name ::specs/message-loop-name
-                     ;; Q: What (if any) is the difference to spec that this
-                     ;; argument is optional?
-                     :server? :boolean?
-                     :opts ::specs/state
-                     :logger ::log/logger)
+        :args (s/or :possibly-server (s/cat :human-name ::specs/message-loop-name
+                                            :server? :boolean?
+                                            :opts ::specs/state
+                                            :logger ::log/logger)
+                    :always-client (s/cat :human-name ::specs/message-loop-name
+                                            :opts ::specs/state
+                                            :logger ::log/logger))
         :ret ::specs/state)
 (defn initial-state
   "Put together an initial state that's ready to start!"
@@ -1410,14 +1474,21 @@
   ([human-name logger]
    (initial-state human-name {} false logger)))
 
-(s/fdef start!
+(s/fdef do-start
         :args (s/cat :state ::specs/state
                      :logger ::log/logger
                      :parent-callback ::specs/->parent
                      :child-callback ::specs/->child)
         :ret (s/keys :req [::log/state
                            ::specs/io-handle]))
-(defn start!
+(defn do-start
+   ;; I'd like to provide the option to build your own
+   ;; input loop.
+   ;; It seems like this would really need to be a function that
+   ;; takes the PipedInputStream and builds a future that contains
+   ;; the loop.
+   ;; It wouldn't be bad to write, but it doesn't seem worthwhile
+   ;; just now.
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/pipe-from-child-size]
      :or {pipe-from-child-size K/k-64}
@@ -1428,13 +1499,6 @@
     :as state}
    logger
    parent-cb
-   ;; I'd like to provide the option to build your own
-   ;; input loop.
-   ;; It seems like this would really need to be a function that
-   ;; takes the PipedInputStream and builds a future that contains
-   ;; the loop.
-   ;; It wouldn't be bad to write, but it doesn't seem worthwhile
-   ;; just now.
    child-cb]
   (let [state (update state
                       ::log/state
@@ -1514,7 +1578,8 @@
 
 (s/fdef get-state
         :args (s/cat :io-handle ::specs/io-handle
-                     :time-out any?)
+                     :time-out nat-int?
+                     :timed-out-value any?)
         :ret (s/or :success ::specs/state
                    :timed-out any?)
         ;; If this timed out, should return the supplied
@@ -1526,8 +1591,8 @@
                 (= failed (:time-out args))
                 (:success ret))))
 (defn get-state
-  "Synchronous equivalent to deref"
-  ;; This really involves side-effects
+  "Synchronous equivalent to a deref"
+  ;; This really does involves side-effects
   ;; Q: Rename to get-state!
   ([{:keys [::log/logger
             ::specs/message-loop-name
@@ -1542,15 +1607,14 @@
                       {::specs/message-loop-name message-loop-name
                        ::specs/stream stream}))
    (let [state-holder (dfrd/deferred)
-         req (strm/try-put! stream [::query-state state-holder] timeout)]
-     ;; FIXME: Switch to using dfrd/chain instead
+         req (strm/try-put! stream [::query-state state-holder] timeout failure-signal)]
+     ;; Q: Does dfrd/chain make this simpler/easier?
      (dfrd/on-realized req
                        (fn [success]
+                         ;; FIXME: Need to cope with a put! timeout (which is not
+                         ;; a failure)
+                         ;; i.e. (if (= success failure-signal) (short-circuit))
                          (swap! log-state-atom
-                                ;; Doing this inside a swap! seems risky,
-                                ;; since it isn't purely functional, or even
-                                ;; idempotent.
-                                ;; The alternatives seem worse.
                                 #(log/flush-logs! logger
                                                   (log/debug %
                                                              ::succeeded
@@ -1558,6 +1622,7 @@
                                                              {::result success
                                                               ::specs/message-loop-name message-loop-name}))))
                        (fn [failure]
+                         ;; Q: Can this ever fail?
                          (swap! log-state-atom
                                 #(log/flush-logs! logger
                                                   (if (instance? Throwable failure)
@@ -1579,8 +1644,7 @@
            main-log-state-atom (atom log-state)]
        (swap! log-state-atom (fn [io-log-state]
                                (let [[main-log-state io-log-state] (log/synchronize log-state io-log-state)]
-                                 (reset! main-log-state-atom main-log-state)
-                                 io-log-state)))
+                                 main-log-state)))
        (assoc result ::log/state @main-log-state-atom))))
   ([stream-holder]
    (get-state stream-holder 500 ::timed-out)))
@@ -1666,7 +1730,7 @@
     :as io-handle}
    array-o-bytes]
   (swap! log-state-atom
-         #(log/debug % ::child-> "Top" {::specs/message-loop-name message-loop-name}))
+         #(log/debug % ::child->! "Top" {::specs/message-loop-name message-loop-name}))
   (when-not from-child
     (let [prelog (utils/pre-log message-loop-name)]
       (throw (ex-info (str prelog "Missing PipedOutStream from child inside io-handle")
@@ -1682,7 +1746,7 @@
     ;; responses.
     (swap! log-state-atom
            #(log/debug %
-                       ::child->
+                       ::child->!
                        "Trying to send bytes from child"
                        {::message-size n
                         ::buffer-space-available buffer-space
@@ -1692,7 +1756,7 @@
             (do
               (swap! log-state-atom
                      #(log/warn %
-                                ::child->
+                                ::child->!
                                 "Not enough room to write.\nRefusing to block"))
               ;; TODO: Add an optional parameter to allow blocking.
               ;; TODO: Adjust the meaning of this return value.
@@ -1709,7 +1773,7 @@
               (.flush from-child)
               (swap! log-state-atom
                      #(log/debug %
-                                 ::child->
+                                 ::child->!
                                  "Buffered"
                                  {::specs/message-loop-name message-loop-name
                                   ::message-size n}))
@@ -1811,3 +1875,46 @@
   ;; detail
   #_(comment (child-> io-handle ::specs/normal))
   (.close from-child))
+
+(s/fdef swap-parent-callback!
+        :args (s/or :with-timeout (s/cat :io-handle ::specs/io-handle
+                                         :time-out nat-int?
+                                         :timed-out-value any?
+                                         :new-callback ::specs/->parent)
+                    :sans-timeout (s/cat :io-handle ::specs/io-handle
+                                         :new-callback ::specs/->parent))
+        :ret (s/or :succeeded ::specs/state
+                   :timed-out-value any?))
+;; Q: Do I want to set an alternative that blocks?
+(defn swap-parent-callback!
+  ([{:keys [::log/logger
+             ::specs/message-loop-name
+            ::specs/stream]
+     log-state-atom ::log/state-atom
+     :as io-loop}
+    time-out
+    timed-out-value
+    new-callback]
+   (let [start-time (System/currentTimeMillis)]
+     (swap! log-state-atom
+            #(log/debug %
+                        ::swap-parent-callback!
+                        "Swapping out the parent-callback"
+                        {::specs/message-loop-name message-loop-name
+                         ::specs/stream stream}))
+     (let [sent (strm/try-put! stream
+                               [::reset-parent-callback new-callback]
+                               time-out
+                               timed-out-value)
+           successfully-sent (deref sent time-out ::timed-out)]
+       (if (not= successfully-sent ::timed-out)
+         (let [sent-time (System/currentTimeMillis)
+               remaining-time (- time-out sent-time)]
+           (swap! log-state-atom
+                  #(log/debug %
+                              ::swap-parent-callback!
+                              "Querying for new client state"))
+           (get-state io-loop remaining-time timed-out-value))
+         timed-out-value))))
+  ([io-handle new-callback]
+   (swap-parent-callback! io-handle 5000 ::timed-out new-callback)))
