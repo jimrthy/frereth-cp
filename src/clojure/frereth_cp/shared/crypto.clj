@@ -7,13 +7,14 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            [io.netty.buffer ByteBuf Unpooled]
-           [java.io File RandomAccessFile]
+           [java.io File IOException RandomAccessFile]
            java.nio.channels.FileChannel
            java.security.SecureRandom
            java.security.spec.AlgorithmParameterSpec
@@ -41,6 +42,17 @@
 (s/def ::legal-key-algorithms #{"AES"})
 (s/def ::long-short #{::long ::short})
 (s/def ::unboxed #(instance? ByteBuf %))
+
+(s/def ::counter-low nat-int?)
+(s/def ::counter-high nat-int?)
+(s/def ::key-loaded? boolean?)
+(s/def ::nonce-key (s/and bytes?
+                          #(= (count %) nonce-key-length)))
+(s/def ::nonce-state (s/keys :req [::counter-low
+                                   ::counter-high
+                                   ::data
+                                   ::key-loaded?
+                                   ::nonce-key]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
@@ -72,19 +84,28 @@
     (count (.getEncoded k))
     (class k)))
 
+(s/fdef initial-nonce-agent-state
+        :args nil
+        :ret ::nonce-state)
 (defn initial-nonce-agent-state
   []
   {::counter-low 0
    ::counter-high 0
    ::data (byte-array 16)
    ::key-loaded? (promise)
+   ;; FIXME: Needs a log-state
    ::nonce-key (byte-array K/key-length)})
 
+(s/fdef load-nonce-key
+        :args (s/cat :this ::nonce-state
+                     :key-dir string?)
+        :ret ::nonce-state)
 (defn load-nonce-key
   [{:keys [::key-loaded?]
     :as this}
    key-dir]
-  (println "Opening file in" key-dir)
+  ;; FIXME: Need real logging
+  (log/debug "Loading nonce-key from" key-dir)
   (if-let [file-resource (io/resource (str key-dir
                                            "/.expertsonly/noncekey"))]
     (with-open [key-file (io/input-stream file-resource)]
@@ -137,32 +158,56 @@
     :as this}
    key-dir
    long-term?]
-  (let [path (str key-dir "/.expertsonly/")]
-    (let [f (File. (str path "lock"))
-          channel (.getChannel (RandomAccessFile. f "rw"))]
+  (let [raw-path (str key-dir "/.expertsonly/")
+        path (io/resource raw-path)]
+    (let [f (io/file path "lock")]
       (try
-        (let [lock (.lock channel 0 Long/MAX_VALUE false)]
-          (try
-            (let [counter-file-name (str path "noncecounter")]
-              (with-open [counter (io/reader counter-file-name)]
-                (let [bytes-read (.read counter data 0 8)]
-                  (when (not= bytes-read 8)
-                    (throw (ex-info "Nonce counter file too small"
-                                    {::contents (b-t/->string data)
-                                     ::length bytes-read})))))
-              (let [counter-low (b-t/uint64-unpack data)
-                    counter-high (+ counter-low (if long-term?
-                                                  K/m-1
-                                                  1))]
-                (b-t/uint64-pack! data 0 counter-high))
-              (with-open [counter (io/writer counter-file-name)]
-                (.write counter (String. data))))
-            (finally
-              ;; Closing the channel should release the lock,
-              ;; but being explicit about this doesn't hurt
-              (.release lock))))
-        (finally
-          (.close channel))))))
+        (.createNewFile f)
+        (try
+          (let [channel (.getChannel (RandomAccessFile. f "rw"))]
+            (try
+              (let [lock (.lock channel 0 Long/MAX_VALUE false)]
+                (log/info "Lock acquired")
+                (try
+                  (let [nonce-counter (io/file path "noncecounter")]
+                    (when-not (.exists nonce-counter)
+                      (.createNewFile nonce-counter)
+                      (with-open [counter (io/output-stream nonce-counter)]
+                        ;; FIXME: What's a good initial value?
+                        (.write counter (byte-array 8))))
+                    (log/debug "Opening" nonce-counter)
+                    (with-open [counter (io/reader nonce-counter)]
+                      (log/debug "Nonce counter file opened for reading")
+                      (let [bytes-read (.read counter data 0 8)]
+                        (when (not= bytes-read 8)
+                          (throw (ex-info "Nonce counter file too small"
+                                          {::contents (b-t/->string data)
+                                           ::length bytes-read})))))
+                    (let [counter-low (b-t/uint64-unpack data)
+                          counter-high (+ counter-low (if long-term?
+                                                        K/m-1
+                                                        1))]
+                      (b-t/uint64-pack! data 0 counter-high))
+                    (with-open [counter (io/writer nonce-counter)]
+                      (.write counter (String. data))))
+                  (finally
+                    ;; Closing the channel should release the lock,
+                    ;; but being explicit about this doesn't hurt
+                    (.release lock))))
+              (finally
+                (.close channel))))
+          (catch IOException ex
+            (throw (ex-info "Failed to acquire exclusive access to lock file"
+                            {::io-path f
+                             ::raw-path raw-path
+                             ::resource path}
+                            ex))))
+        (catch IOException ex
+          (throw (ex-info "Failed to create a new lock file "
+                          {::io-path f
+                           ::raw-path raw-path
+                           ::resource path}
+                          ex)))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -236,6 +281,15 @@
     (TweetNaclFast/crypto_box_beforenm shared public secret)
     shared))
 
+(s/fdef build-crypto-box
+        ;; FIXME: Specify the any? args
+        :args (s/cat :template any?
+                     :source any?
+                     :dst ::specs/byte-buf
+                     :key-pair any?
+                     :nonce-prefix bytes?
+                     :nonce-suffix bytes?)
+        :ret bytes?)
 (defn build-crypto-box
   "Compose a map into bytes and encrypt it
 
@@ -268,6 +322,8 @@ But it depends on compose, which would set up circular dependencies"
    ^bytes clear-text]
   ;; Q: Which cipher mode is appropriate here?
   (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
+        ;; FIXME: Read https://www.synopsys.com/blogs/software-security/proper-use-of-javas-securerandom/
+        ;; This is almost definitely wrong.
         rng (SecureRandom.)
         ^AlgorithmParameterSpec iv (build-random-iv 16)]
     ;; Q: Does it make sense to create and init a new
@@ -356,7 +412,8 @@ But it depends on compose, which would set up circular dependencies"
   (new-nonce-key! path))
 
 (s/fdef open-after
-        :args (s/cat :box bytes?
+        :args (s/cat :log-state ::log2/state
+                     :box bytes?
                      :box-offset integer?
                      :box-length integer?
                      :nonce bytes?
@@ -374,7 +431,8 @@ But it depends on compose, which would set up circular dependencies"
                        (- (+ (-> % :args :box-offset)
                              (-> % :args :box-length))
                           K/nonce-length)))
-        :ret ::unboxed)
+        :ret (s/keys :req [::log2/state
+                           ::unboxed]))
 (defn open-after
   "Low-level direct crypto box opening
 
@@ -402,16 +460,23 @@ array destination that could just be reused without GC.
 
 That looks like it would get into the gory implementation details
 which I'm really not qualified to touch."
-  [^bytes box box-offset box-length nonce shared-key]
+  [log-state
+   ^bytes box
+   box-offset
+   box-length
+   nonce
+   shared-key]
   {:pre [(bytes? shared-key)]}
   (if (and (not (nil? box))
            (>= (count box) (+ box-offset box-length))
            (>= box-length K/box-zero-bytes))
-    (do
-      (log/debug "Box is large enough")
+    (let [log-state (log2/debug log-state
+                                ::open-after
+                                "Box is large enough")]
       (let [n (+ box-length K/box-zero-bytes)
             cipher-text (byte-array n)
             plain-text (byte-array n)]
+        ;; Q: Is this worth being smarter about the array copies?
         (doseq [i (range box-length)]
           (aset-byte cipher-text
                      (+ K/box-zero-bytes i)
@@ -434,9 +499,10 @@ which I'm really not qualified to touch."
           (comment (-> plain-text
                        vec
                        (subvec K/decrypt-box-zero-bytes)))
-          (Unpooled/wrappedBuffer plain-text
-                                  K/decrypt-box-zero-bytes
-                                  ^Long (- box-length K/box-zero-bytes)))))
+          {::log2/state log-state
+           ::unboxed (Unpooled/wrappedBuffer plain-text
+                                             K/decrypt-box-zero-bytes
+                                             ^Long (- box-length K/box-zero-bytes))})))
     (throw (ex-info "Box too small" {::box box
                                      ::offset box-offset
                                      ::length box-length
@@ -444,7 +510,8 @@ which I'm really not qualified to touch."
                                      ::shared-key shared-key}))))
 
 (s/fdef open-crypto-box
-        :args (s/cat :prefix-bytes (s/and bytes?
+        :args (s/cat :log-state ::log2/state
+                     :prefix-bytes (s/and bytes?
                                           #(let [n (count %)]
                                              (or (= K/client-nonce-prefix-length n)
                                                  (= K/server-nonce-prefix-length n))))
@@ -461,10 +528,11 @@ which I'm really not qualified to touch."
         ;; whichever spec is wrong.
         ;; Although having both return (s/nilable bytes?) is
         ;; starting to look like the best option.
-        :ret (s/nilable ::unboxed))
+        :ret (s/keys :req [::log2/state]
+                     :opt [::unboxed]))
 (defn open-crypto-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
-  [prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
+  [log-state prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
   (let [nonce (byte-array K/nonce-length)
         crypto-length (count crypto-box)]
     (b-t/byte-copy! nonce prefix-bytes)
@@ -474,13 +542,12 @@ which I'm really not qualified to touch."
                       ^Long (- K/nonce-length prefix-length)
                       suffix-bytes))
     (try
-      (open-after crypto-box 0 crypto-length nonce shared-key)
+      (open-after log-state crypto-box 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
-        (log/error ex
-                   (str "Failed to open box\n"
-                        (util/pretty (.getData ex))))
-        ;; Be explicit about this
-        nil))))
+        {::log2/state (log2/exception ex
+                                      ::open-crypto-box
+                                      (str "Failed to open box\n")
+                                      (.getData ex))}))))
 
 (defn random-array
   "Returns an array of n random bytes"
@@ -558,6 +625,7 @@ Or maybe that's (dec n)"
                                                 #(<= K/key-length (count %)))
                                       :offset (complement neg-int?)))
         :ret any?)
+;; TODO: Needs ::log2/state (and a way to flush it)
 (let [nonce-writer (agent (initial-nonce-agent-state))
       random-portion (byte-array 8)]
   (defn get-nonce-agent-state
@@ -586,13 +654,16 @@ Or maybe that's (dec n)"
      ;; Read the last saved version from keydir
      (when-not (-> nonce-writer deref ::key-loaded? realized?)
        (send nonce-writer load-nonce-key key-dir))
-
      (let [{:keys [::counter-low
                    ::counter-high]} @nonce-writer]
        (when (>= counter-low counter-high)
          (send nonce-writer reload-nonce key-dir long-term?)))
      (random-bytes! random-portion)
-     (send nonce-writer obscure-nonce random-portion))
+     (send nonce-writer obscure-nonce random-portion)
+     ;; Tempting to do an await here, but we're inside an
+     ;; agent action, so that isn't legal.
+     (when-let [ex (agent-error nonce-writer)]
+       (log/error ex "System is down")))
     ([dst offset]
      ;; The 16-byte nonce length is very implementation
      ;; dependent and brittle

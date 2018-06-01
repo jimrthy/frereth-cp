@@ -470,6 +470,12 @@
                                                 "I/O triggered by timer"
                                                 {::specs/message-loop-name message-loop-name}))))
 
+(s/fdef condensed-choose-next-scheduled-time
+        :args (s/cat :outgoing ::specs/outgoing
+                     :state ::specs/state
+                     :to-child-done? ::specs/to-child-done?)
+        :ret (s/keys :req [::next-action-time
+                           ::log/state]))
 (defn condensed-choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
             ::specs/rtt-timeout]} ::specs/flow-control
@@ -485,6 +491,7 @@
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name
            ::specs/recent]
+    log-state ::log/state
     :as state}
    to-child-done?]
   ;;; This amounts to lines 286-305
@@ -511,67 +518,70 @@
         un-sent-count(count un-sent-blocks)
         default-next (+ recent (utils/seconds->nanos 60))  ; by default, wait 1 minute
         send-eof-processed (to-parent/send-eof-buffered? outgoing)
-        rtt-resend-time (+ earliest-time rtt-timeout)]
-    (cond-> default-next
-      ;; The first clause is weird. 1 second is always going to happen more
-      ;; quickly than the 1 minute initial default.
-      ;; Sticking with the min pattern because of the way the threading macro works
-      (= want-ping ::specs/second-1) (min (+ recent (utils/seconds->nanos 1)))
-      (= want-ping ::specs/immediate) (min min-resend-time)
-      ;; If the outgoing buffer is not full
-      ;; And:
-      ;;   If sendeof, but not sendeofprocessed
-      ;;   else (!sendeof):
-      ;;     if there are buffered bytes that have not been sent yet
+        rtt-resend-time (+ earliest-time rtt-timeout)
+        next-time
+        (cond-> default-next
+          ;; The first clause is weird. 1 second is always going to happen more
+          ;; quickly than the 1 minute initial default.
+          ;; Sticking with the min pattern because of the way the threading macro works
+          (= want-ping ::specs/second-1) (min (+ recent (utils/seconds->nanos 1)))
+          (= want-ping ::specs/immediate) (min min-resend-time)
+          ;; If the outgoing buffer is not full
+          ;; And:
+          ;;   If sendeof, but not sendeofprocessed
+          ;;   else (!sendeof):
+          ;;     if there are buffered bytes that have not been sent yet
 
-      ;; Lines 290-292
-      ;; Q: What is the actual point to this?
-      ;; (the logic seems really screwy, but that's almost definitely
-      ;; a lack of understanding on my part)
-      ;; A: There are at least 3 different moving parts involved here
-      ;; 1. Are there unsent blocks that need to be sent?
-      ;; 2. Do we have previously sent blocks that might need to re-send?
-      ;; 3. Have we sent an un-ACK'd EOF?
-      (and (< (+ un-ackd-count
-                 un-sent-count)
-              K/max-outgoing-blocks)
-           (if (not= ::specs/false send-eof)
-             (not send-eof-processed)
-             (< 0 un-sent-count))) (min min-resend-time)
-      ;; Lines 293-296
-      (and (not= 0 un-ackd-count)
-           (> rtt-resend-time
-              min-resend-time)) (min rtt-resend-time)
-      ;; There's one last caveat, from 298-300:
-      ;; It all swirls around watchtochild, which gets set up
-      ;; between lines 276-279.
-      ;; Basic point:
-      ;; If there are incoming messages, but the pipe to child is closed,
-      ;; short-circuit so we can exit.
-      ;; That seems like a fairly major error condition.
-      ;; Q: What's the justification?
-      ;; Hypothesis: It's based around the basic idea of
-      ;; being lenient about accepting garbage.
-      ;; This seems like the sort of garbage that would be
-      ;; worth capturing for future analysis.
-      ;; Then again...if extra UDP packets arrive out of order,
-      ;; it probably isn't all *that* surprising.
-      ;; Still might be worth tracking for the sake of security.
-      (and (not= 0 (+ (count gap-buffer)
-                      (count ->child-buffer)))
-           ;; This looks backward. It isn't.
-           ;; If there are bytes to forward to the
-           ;; child, and the pipe is still open, then
-           ;; try to send them.
-           ;; However, the logic *is* broken:
-           ;; The check for gap-buffer really needs
-           ;; to be based around closed gaps
-           (not (realized? to-child-done?))) 0
-      ;; Lines 302-305
-      true (max recent))))
+          ;; Lines 290-292
+          ;; Q: What is the actual point to this?
+          ;; (the logic seems really screwy, but that's almost definitely
+          ;; a lack of understanding on my part)
+          ;; A: There are at least 3 different moving parts involved here
+          ;; 1. Are there unsent blocks that need to be sent?
+          ;; 2. Do we have previously sent blocks that might need to re-send?
+          ;; 3. Have we sent an un-ACK'd EOF?
+          (and (< (+ un-ackd-count
+                     un-sent-count)
+                  K/max-outgoing-blocks)
+               (if (not= ::specs/false send-eof)
+                 (not send-eof-processed)
+                 (< 0 un-sent-count))) (min min-resend-time)
+          ;; Lines 293-296
+          (and (not= 0 un-ackd-count)
+               (> rtt-resend-time
+                  min-resend-time)) (min rtt-resend-time)
+          ;; There's one last caveat, from 298-300:
+          ;; It all swirls around watchtochild, which gets set up
+          ;; between lines 276-279.
+          ;; Basic point:
+          ;; If there are incoming messages, but the pipe to child is closed,
+          ;; short-circuit so we can exit.
+          ;; That seems like a fairly major error condition.
+          ;; Q: What's the justification?
+          ;; Hypothesis: It's based around the basic idea of
+          ;; being lenient about accepting garbage.
+          ;; This seems like the sort of garbage that would be
+          ;; worth capturing for future analysis.
+          ;; Then again...if extra UDP packets arrive out of order,
+          ;; it probably isn't all *that* surprising.
+          ;; Still might be worth tracking for the sake of security.
+          (and (not= 0 (+ (count gap-buffer)
+                          (count ->child-buffer)))
+               ;; This looks backward. It isn't.
+               ;; If there are bytes to forward to the
+               ;; child, and the pipe is still open, then
+               ;; try to send them.
+               ;; However, the logic *is* broken:
+               ;; The check for gap-buffer really needs
+               ;; to be based around closed gaps
+               (not (realized? to-child-done?))) 0)]
+    ;; Lines 302-305
+    {::next-action-time (max recent next-time)
+     ::log/state log-state}))
 
 (s/fdef choose-next-scheduled-time
-        :args (s/cat :state ::specs/state
+        :args (s/cat :outgoing ::specs/outgoing
+                     :state ::specs/state
                      :to-child-done? ::specs/to-child-done?)
         :ret (s/keys :req [::next-action-time
                            ::log/state]))
@@ -889,7 +899,7 @@
                                                     (update state
                                                             ::log/state
                                                             #(log/debug %
-                                                                        "Re-triggering Output due to timeot"
+                                                                        "Re-triggering Output due to timeout"
                                                                         (assoc timing-details
                                                                                ::trigger-details prelog
                                                                                ::specs/message-loop-name message-loop-name))))))
@@ -1297,101 +1307,106 @@
      :as opts}
     logger]
    {:pre [log-state]}
-    ;; FIXME: Really also needs an initial log-state I can fork from that instead
-   (let [log-state (log/debug (log/init human-name 0)
+   ;; This version throws away the updated parent-logs.
+   ;; That's a mistake.
+   ;; It doesn't seem like one that's worth rectifying
+   (let [[child-logs parent-logs] (log/fork log-state human-name)
+         child-logs (log/debug child-logs
                               ::initialization
                               "Building state for initial loop based around options"
-                              (assoc opts ::overrides {::->child-size pipe-to-child-size
-                                                       ::child->size pipe-from-child-size}))]
-     (let [pending-client-response (promise)]
-       (when server?
-         (deliver pending-client-response ::never-waited))
-       {::specs/flow-control {::specs/client-waiting-on-response pending-client-response
-                              ::specs/last-doubling (long 0)
-                              ::specs/last-edge (long 0)
-                              ::specs/last-speed-adjustment (long 0)
-                              ::specs/n-sec-per-block K/sec->n-sec
-                              ::specs/rtt (long 0)
-                              ::specs/rtt-average (long 0)
-                              ::specs/rtt-deviation (long 0)
-                              ::specs/rtt-highwater (long 0)
-                              ::specs/rtt-lowwater (long 0)
-                              ::specs/rtt-phase false
-                              ::specs/rtt-seen-older-high false
-                              ::specs/rtt-seen-older-low false
-                              ::specs/rtt-seen-recent-high false
-                              ::specs/rtt-seen-recent-low false
-                              ::specs/rtt-timeout K/sec->n-sec}
-        ::specs/incoming {::specs/->child-buffer []
-                          ::specs/contiguous-stream-count 0
-                          ::specs/gap-buffer (to-child/build-gap-buffer)
-                          ::specs/pipe-to-child-size pipe-to-child-size
-                          ::specs/receive-eof ::specs/false
-                          ::specs/receive-total-bytes 0
-                          ::specs/receive-written 0
-                          ;; Note that the reference implementation
-                          ;; tracks receivebytes instead of the
-                          ;; address.
-                          ::specs/strm-hwm -1}
-        ::specs/outgoing {::specs/ackd-addr 0
-                          ::specs/earliest-time 0
-                          ;; Start with something that's vaguely sane to
-                          ;; avoid 1-ms idle spin waiting for first
-                          ;; incoming message
-                          ::specs/last-block-time (System/nanoTime)
-                          ;; FIXME: Move this to flow-control
-                          ::specs/last-panic 0
-                          ;; Peers started as servers start out
-                          ;; with standard-max-block-length instead.
-                          ;; TODO: This needs to be replaced with a
-                          ;; promise named client-waiting-on-response
-                          ;; (used in message/start-child-monitor!)
-                          ;; that we can use as a flag to control this
-                          ;; directly instead of handling the state
-                          ;; management this way.
-                          ::specs/max-block-length (if server?
-                                                     K/standard-max-block-length
-                                                     ;; TODO: Refactor/rename this to
-                                                     ;; initial-client-max-block-length
-                                                     K/max-bytes-in-initiate-message)
-                          ::specs/next-message-id 1
-                          ::specs/pipe-from-child-size pipe-from-child-size
-                          ;; Q: Does this make any sense at all?
-                          ;; It isn't ever going to change, so I might
-                          ;; as well just use the hard-coded value
-                          ;; in constants and not waste the extra time/space
-                          ;; sticking it in here.
-                          ;; That almost seems like premature optimization,
-                          ;; but this approach seems like serious YAGNI.
-                          ::specs/send-buf-size K/send-byte-buf-size
-                          ::specs/send-eof ::specs/false
-                          ::specs/send-eof-acked false
-                          ::specs/strm-hwm 0
-                          ::specs/total-blocks 0
-                          ::specs/total-block-transmissions 0
-                          ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
-                                                                        ::log/state log-state})
-                          ::specs/un-sent-blocks PersistentQueue/EMPTY
-                          ::specs/want-ping (if server?
-                                              ::specs/false
-                                              ;; TODO: Add option for a
-                                              ;; client that started before the
-                                              ;; server, meaning that it waits
-                                              ;; for 1 second at a time before
-                                              ;; trying to send the next
-                                              ;; message
-                                              ::specs/immediate)}
-        ::log/state log-state
-        ::specs/message-loop-name human-name
-        ;; In the original, this is a local in main rather than a global
-        ;; Q: Is there any difference that might matter to me, other
-        ;; than being allocated on the stack instead of the heap?
-        ;; (Assuming globals go on the heap. TODO: Look that up)
-        ;; Ironically, this may be one of the few pieces that counts
-        ;; as "global", since it really is involved whether we're
-        ;; talking about incoming/outgoing buffer management or
-        ;; flow control.
-        ::specs/recent 0})))
+                              (dissoc
+                               (assoc opts ::overrides {::->child-size pipe-to-child-size
+                                                        ::child->size pipe-from-child-size})
+                               ::log/state))
+         pending-client-response (promise)]
+     (when server?
+       (deliver pending-client-response ::never-waited))
+     {::specs/flow-control {::specs/client-waiting-on-response pending-client-response
+                            ::specs/last-doubling (long 0)
+                            ::specs/last-edge (long 0)
+                            ::specs/last-speed-adjustment (long 0)
+                            ::specs/n-sec-per-block K/sec->n-sec
+                            ::specs/rtt (long 0)
+                            ::specs/rtt-average (long 0)
+                            ::specs/rtt-deviation (long 0)
+                            ::specs/rtt-highwater (long 0)
+                            ::specs/rtt-lowwater (long 0)
+                            ::specs/rtt-phase false
+                            ::specs/rtt-seen-older-high false
+                            ::specs/rtt-seen-older-low false
+                            ::specs/rtt-seen-recent-high false
+                            ::specs/rtt-seen-recent-low false
+                            ::specs/rtt-timeout K/sec->n-sec}
+      ::specs/incoming {::specs/->child-buffer []
+                        ::specs/contiguous-stream-count 0
+                        ::specs/gap-buffer (to-child/build-gap-buffer)
+                        ::specs/pipe-to-child-size pipe-to-child-size
+                        ::specs/receive-eof ::specs/false
+                        ::specs/receive-total-bytes 0
+                        ::specs/receive-written 0
+                        ;; Note that the reference implementation
+                        ;; tracks receivebytes instead of the
+                        ;; address.
+                        ::specs/strm-hwm -1}
+      ::specs/outgoing {::specs/ackd-addr 0
+                        ::specs/earliest-time 0
+                        ;; Start with something that's vaguely sane to
+                        ;; avoid 1-ms idle spin waiting for first
+                        ;; incoming message
+                        ::specs/last-block-time (System/nanoTime)
+                        ;; FIXME: Move this to flow-control
+                        ::specs/last-panic 0
+                        ;; Peers started as servers start out
+                        ;; with standard-max-block-length instead.
+                        ;; TODO: This needs to be replaced with a
+                        ;; promise named client-waiting-on-response
+                        ;; (used in message/start-child-monitor!)
+                        ;; that we can use as a flag to control this
+                        ;; directly instead of handling the state
+                        ;; management this way.
+                        ::specs/max-block-length (if server?
+                                                   K/standard-max-block-length
+                                                   ;; TODO: Refactor/rename this to
+                                                   ;; initial-client-max-block-length
+                                                   K/max-bytes-in-initiate-message)
+                        ::specs/next-message-id 1
+                        ::specs/pipe-from-child-size pipe-from-child-size
+                        ;; Q: Does this make any sense at all?
+                        ;; It isn't ever going to change, so I might
+                        ;; as well just use the hard-coded value
+                        ;; in constants and not waste the extra time/space
+                        ;; sticking it in here.
+                        ;; That almost seems like premature optimization,
+                        ;; but this approach seems like serious YAGNI.
+                        ::specs/send-buf-size K/send-byte-buf-size
+                        ::specs/send-eof ::specs/false
+                        ::specs/send-eof-acked false
+                        ::specs/strm-hwm 0
+                        ::specs/total-blocks 0
+                        ::specs/total-block-transmissions 0
+                        ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
+                                                                      ::log/state log-state})
+                        ::specs/un-sent-blocks PersistentQueue/EMPTY
+                        ::specs/want-ping (if server?
+                                            ::specs/false
+                                            ;; TODO: Add option for a
+                                            ;; client that started before the
+                                            ;; server, meaning that it waits
+                                            ;; for 1 second at a time before
+                                            ;; trying to send the next
+                                            ;; message
+                                            ::specs/immediate)}
+      ::log/state child-logs
+      ::specs/message-loop-name human-name
+      ;; In the original, this is a local in main rather than a global
+      ;; Q: Is there any difference that might matter to me, other
+      ;; than being allocated on the stack instead of the heap?
+      ;; (Assuming globals go on the heap. TODO: Look that up)
+      ;; Ironically, this may be one of the few pieces that counts
+      ;; as "global", since it really is involved whether we're
+      ;; talking about incoming/outgoing buffer management or
+      ;; flow control.
+      ::specs/recent 0}))
   ([human-name logger]
    (initial-state human-name {} false logger)))
 

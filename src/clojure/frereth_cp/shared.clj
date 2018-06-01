@@ -61,7 +61,7 @@
 ;; Until they're loaded, we don't have anything to associate
 ;; with the long-/short-pairs.
 ;; TODO: Split this up.
-(s/def ::my-keys (s/keys :req [::keydir
+(s/def ::my-keys (s/keys :req [::keydir  ; Note that ::state/state may need to change when this stops being here
                                ::K/srvr-name]
                          :opt [::long-pair
                                ::short-pair]))
@@ -103,8 +103,8 @@
 ;; that has
 (s/def ::packet bytes?)
 
-(s/def ::packet-management (s/keys :req [::packet-nonce
-                                         ::packet]))
+(s/def ::packet-management (s/keys :opt [::packet]
+                                   :req [::packet-nonce]))
 
 ;;; Want some sort of URI-foundation scheme for
 ;;; building the actual connection strings like I
@@ -158,29 +158,12 @@
         :ret ::packet-management)
 (defn default-packet-manager
   []
-  (let [packet (Unpooled/directBuffer 4096)]
-    ;; TODO: Really need a corresponding .release when we're done
-    (.retain packet)
-    ;; Highly important:
-    ;; Absolutely must verify that using a directBuffer provides
-    ;; a definite speed increase over a heap buffer.
-    ;; Or, for that matter, just wrapping a Byte Array.
-    {::packet packet
-     ;; Note that this is distinct from the working-area's nonce
-     ;; And it probably needs to be an atom
-     ;; Or maybe even a ref (although STM would be a disaster here...
-     ;; actually, trying to cope with this in multiple threads
-     ;; seems like a train wreck waiting to happen)
-     ::packet-nonce 0}))
-
-(s/fdef release-packet-manager!
-        :args (s/cat :p-m ::packet-management))
-(defn release-packet-manager!
-  "Be sure to call this when you're done with something
-allocated using default-packet-manager"
-  [p-m]
-  (let [^ByteBuf packet (::packet p-m)]
-    (.release packet)))
+  {;; Note that this is distinct from the working-area's nonce
+   ;; And it probably needs to be an atom
+   ;; Or maybe even a ref (although STM would be a disaster here...
+   ;; actually, trying to cope with this in multiple threads
+   ;; seems like a train wreck waiting to happen)
+   ::packet-nonce 0})
 
 (s/fdef default-work-area
         :args (s/cat)

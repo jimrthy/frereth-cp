@@ -98,10 +98,7 @@ To be fair, this layer *is* pretty special."
             (if-let [plain-text (decrypt-initiate-vouch! shared-key
                                                          packet-nonce-bytes
                                                          vouch)]
-              (do
-                (swap! (::active-clients state)
-                       update-in [client-short-key ::received-nonce]
-                       packet-nonce)
+              (let [state (update-in state [client-short-key ::received-nonce] packet-nonce)]
                 ;; That takes us down to line 352.
                 ;; Q: What's going on there?
                 ;; text[383] = (r - 544) >> 4;
@@ -449,7 +446,7 @@ Note that that includes TODOs re:
                                      ;; I'm responsible for writing to it, which means I should control
                                      ;; when it closes...but it feels more than a little silly
                                      writer (strm/stream)
-                                     spawner (::state/child-spawner state)
+                                     spawner (::state/child-spawner! state)
                                      child (spawner writer)
                                      client-with-child (assoc active-client
                                                               ::state/child-interaction (assoc child

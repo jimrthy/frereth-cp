@@ -35,6 +35,14 @@
   (flush! [this] "Some loggers need to do this at the end of a batch"))
 (s/def ::logger #(satisfies? Logger %))
 
+;; It's tempting to pass around this instead of a ::logger
+;; instance directly.
+;; To create Logger instances on demand and then discard them.
+;; The temptation seems dumb.
+;; Q: So why am I still tempted?
+(s/def ::log-builder (s/fspec :args nil
+                              :ret ::logger))
+
 ;;; TODO: I need a map of these keys to numeric values to make
 ;;; things like removing unwanted messages trivial.
 (def log-levels #{::trace
@@ -85,18 +93,23 @@
 ;;;; Internal
 
 (s/fdef build-log-entry
-        :args (s/cat :label ::label
-                     :lamport ::lamport
-                     :level ::level
-                     :message ::message))
+        :args (s/or :with-msg (s/cat :label ::label
+                                     :lamport ::lamport
+                                     :level ::level
+                                     :message ::message)
+                    :sans-msg (s/cat :label ::label
+                                     :lamport ::lamport
+                                     :level ::level)))
 (defn build-log-entry
-  [label lamport level message]
-  {::current-thread (utils/get-current-thread)
-   ::label label
-   ::lamport lamport
-   ::level level
-   ::time (System/currentTimeMillis)
-   ::message message})
+  ([label lamport level]
+   {::current-thread (utils/get-current-thread)
+    ::label label
+    ::lamport lamport
+    ::level level
+    ::time (System/currentTimeMillis)})
+  ([label lamport level message]
+   (assoc (build-log-entry label lamport level)
+          ::message message)))
 
 (s/fdef add-log-entry
         :args (s/cat :log-state ::state
@@ -106,7 +119,21 @@
                      :details ::details)
         :ret ::entries)
 (defn add-log-entry
-    ([{:keys [::lamport]
+  ([{:keys [::lamport]
+     :as log-state}
+    level
+    label]
+   (when-not lamport
+     (let [ex (ex-info "Desperation warning: missing clock among" (or {::problem log-state}
+                                                                      {::problem "falsey log-state"}))]
+       (s-t/print-stack-trace ex)))
+   (-> log-state
+       (update
+        ::entries
+        conj
+        (build-log-entry label lamport level))
+       (update ::lamport inc)))
+  ([{:keys [::lamport]
      :as log-state}
     level
     label
@@ -173,7 +200,10 @@
        ([log-state#
          label#
          message#]
-        (add-log-entry log-state# ~tag label# message#)))))
+        (add-log-entry log-state# ~tag label# message#))
+       ([log-state#
+         label#]
+        (add-log-entry log-state# ~tag label#)))))
 
 (defn exception-details
   [ex]
@@ -213,9 +243,10 @@
   ;; safe to use from multiple threads at once.
   (log! [{writer :writer
           :as this}
-         msg]
-    ;; TODO: Refactor this to use format-log-string
-    (.write writer (prn-str msg)))
+         entry]
+    (let [get-caller-stack (RuntimeException. "Q: Is there a cheaper way to get the call stack?")
+          formatted (format-log-string get-caller-stack entry)]
+      (.write writer formatted)))
   (flush! [{^BufferedWriter writer :writer
             :as this}]
     (.flush writer)))
@@ -229,9 +260,10 @@
   Logger
   (log! [{^OutputStream stream :stream
           :as this}
-         msg]
-    ;; TODO: Refactor this to use format-log-string
-    (.write stream (prn-str msg)))
+         entry]
+    (let [get-caller-stack (RuntimeException. "Q: Is there a cheaper way to get the call stack?")
+          formatted (format-log-string get-caller-stack entry)]
+      (.write stream formatted)))
   (flush! [{^OutputStream stream :stream
             :as this}]
     (.flush stream)))
@@ -277,8 +309,11 @@
 (deflogger error)
 
 (defn exception
+  ([log-state ex label]
+   (add-log-entry log-state ::exception label))
   ([log-state ex label message]
-   (exception log-state ex label message nil))
+   (add-log-entry log-state ::exception label message
+                  (exception-details ex)))
   ([log-state ex label message original-details]
    (let [details {::original-details original-details
                   ::problem (exception-details ex)}]
@@ -345,11 +380,14 @@
     ;; old entries anyway.
     ;; But it seems like the latter might get a minor
     ;; win by avoiding the overhead of the update call
+    ;; Note that the difference is obsolete if I don't
+    ;; increment the clock here, and it very much looks
+    ;; as though I shouldn't.
+    ;; At that point, the plain assoc really should be
+    ;; the clear winner
     (comment
-      (-> log-state
-          (update ::lamport inc)
-          (assoc ::entries [])))
-    (init context (inc lamport))))
+      (assoc log-state ::entries []))
+    (init context lamport)))
 
 (s/fdef synchronize
         :args (s/cat :lhs ::state
@@ -368,7 +406,7 @@
                          (ret second ::lamport)
                          (max (::lamport lhs)
                               (::lamport rhs)))))
-        :ret (s/tuple ::log-state ::state))
+        :ret (s/tuple ::state ::state))
 (defn synchronize
   "Fix 2 clocks that have probably drifted apart"
   [{l-clock ::lamport
@@ -377,26 +415,49 @@
     :as rhs}]
   {:pre [l-clock
          r-clock]}
-  (let [synced (inc (max l-clock r-clock))
+  (let [synced (max l-clock r-clock)
         lhs (assoc lhs ::lamport synced)
         rhs (assoc rhs ::lamport synced)]
     [(debug lhs ::synchronized "")
      (debug rhs ::synchronized "")]))
 
-(s/fdef fork
+(s/fdef clean-fork
         :args (s/cat :source ::state
                      :child-context ::context)
+        :ret ::state)
+(defn clean-fork
+  "Fork the context/lamport clock without the logs.
+
+Main use-case is exception handlers in weird side-effecty places
+where it isn't convenient to propagate a log line or 2 that will
+show up later."
+  [src child-context]
+  (let [parent-ctx (::context src)
+        combiner (if (seq? parent-ctx)
+                   conj
+                   list)]
+    (init (combiner parent-ctx child-context)
+          (inc (::lamport src)))))
+
+(s/fdef fork
+        :args (s/or :with-child-ctx (s/cat :source ::state
+                                           :child-context ::context)
+                    :without-child-ctx (s/cat :source ::state))
         ;; Note that the return value really depends
-        ;; on the caller arity
+        ;; on the caller arity.
+        ;; TODO: Need to write the :fn arity to reflect this.
         :ret (s/or :with-nested-context (s/tuple ::state ::state)
                    :keep-parent-context ::state))
 (defn fork
+  "Returns [forkee forked] <- because it increments forked's clock"
   ([src child-context]
-   (let [src-ctx (::context src)
-         combiner (if (seq? src-ctx)
+   (let [parent-ctx (::context src)
+         ;; Q: Am I really not using this at all?
+         ;; Where did src-ctx come from?
+         combiner (if (seq? parent-ctx)
                     conj
                     list)
-         forked (init (combiner src-ctx child-context)
+         forked (init (combiner parent-ctx child-context)
                       (::lamport src))]
      (synchronize src forked)))
   ([src]

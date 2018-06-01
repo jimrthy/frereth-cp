@@ -7,6 +7,7 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
+            [frereth-cp.shared.logging :as log2]
             [frereth-cp.shared.specs :as shared-specs]
             [manifold.stream :as strm]))
 
@@ -32,24 +33,43 @@
                                        ::shared-specs/public-short
                                        ::server-short-sk]))
 
+;; Yes, this seems silly. And will probably cause plenty of
+;; trouble/confusion. I'm not sure about alternatives for specing
+;; out client-read-chan/client-write chan.
+;; Actually, this demonstrates a poor design decision.
+;; Different channels used for different purposes should
+;; have different keys. Which is the purpose behind having
+;; ::client-read-chan distinct from ::client-write-chan.
+;; However:
+;; I remember thinking I had a good reason for the indirection
+;; that leaves each pointing to another map.
+;; FIXME: Revisit that reason and decide whether it's still
+;; valid.
+(s/def ::chan #(= % ::chan))
 ;; These definitions seem dubious.
 ;; Originally, I expected them to be core.async channels.
 ;; They should probably be manifold streams, in which
 ;; case read-chan seems like it should be a source?
 ;; and write-chan seems like it should be a sink?
-(s/def ::client-read-chan (s/keys :req [::chan]))
-(s/def ::client-write-chan (s/keys :req [::chan]))
+(s/def ::client-read-chan (s/map-of ::chan strm/sourceable?))
+(s/def ::client-write-chan (s/map-of ::chan strm/sinkable?))
 
+;;; Note that this has really changed drastically.
+;;; These are now really side-effecting functions
+;;; that accept byte-arrays to pass back and forth.
+;;; But I haven't had a chance to even start refactoring
+;;; the server side of this.
+;;; Right now, I'm still hip-deep in the client side.
+;;; I'm very hopeful that I'll be able to refactor that
+;;; implementation to shared to avoid duplication.
 ;; OK, now life starts getting interesting.
 ;; What, exactly, do we need to do here?
 (s/def ::child-id int?)
-(s/def ::write->child strm/stream?)
-;; Note that the frereth-cp.server ns also has one of
-;; these. That seems like a mistake.
+(s/def ::read<-child strm/sourceable?)
+(s/def ::write->child strm/sinkable?)
 (s/def ::child-interaction (s/keys :req [::child-id
                                          ::read<-child
-                                         ::write->child]
-                                   :opt [::reader-consumed]))
+                                         ::write->child]))
 
 (s/def ::client-short<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-short ::shared/shared-secret)
@@ -82,28 +102,80 @@
 (s/def ::current-client ::client-state)
 
 ;; Q: Does this really need to be an atom?
-(s/def ::active-clients (s/and #(instance? clojure.lang.Atom %)
-                               ;; TODO: Should probably verify that this is a map of
-                               ;; public-short-term-keys to ::client-state
-                               #(map? (deref %))))
+;; A: Well, technically not. That makes it tougher
+;; to get the currently active client list, but
+;; that isn't necessarily a bad thing.
+;; TODO: Ditch the atom
+(s/def ::active-clients (s/map-of ::shared/public-key ::client-state))
+(s/def ::max-active-clients nat-int?)
 
-(s/def ::child-spawner (s/fspec :args (s/cat)
-                                :ret ::child-interaction))
+(s/def ::child-spawner! (s/fspec :args (s/cat)
+                                 :ret ::child-interaction))
 
-(s/def ::state (s/keys :req [::active-clients
-                             ::child-spawner
-                             ::client-read-chan
-                             ::client-write-chan
-                             ::cookie-cutter
-                             ;; This doesn't particularly belong here
-                             ::current-client
-                             ::event-loop-stopper
-                             ::max-active-clients
-                             ::shared/extension
-                             ::shared/keydir
-                             ::shared/my-keys
-                             ::shared/packet-management
-                             ::shared/working-area]))
+(s/def ::event-loop-stopper! (s/fspec :args (s/cat)
+                                     :ret any?))
+
+;; This is almost copy/pasted straight from ::server/pre-state.
+;; But that's really about putting the pieces together in
+;; order to build this, which is what gets shared
+;; everywhere.
+;; The dichotomy illustrates a big part of my current (2018-MAR-30)
+;; conundrum:
+;; I think I want to be explicit about what fields each function
+;; really and truly needs.
+;; But the calls are really a very tightly coupled chain that I
+;; refactored from a single gigantic C function that takes advantage
+;; of a bunch of globals.
+;; The functions at the bottom of the call stack uses most of this
+;; state. Which means that everything that leads up to them
+;; also requires it. The differences are minor enough that it
+;; it doesn't seem worth the book-keeping effort to try to
+;; keep them sorted out.
+(let [fields-safe-to-validate [::active-clients
+                               ::client-read-chan
+                               ::client-write-chan
+                               ::max-active-clients
+                               ::log2/logger
+                               ::log2/state
+                               ::shared/extension
+                               ;; Q: Does this make any sense here?
+                               ;; A: Definitely not.
+                               ;; Especially since, given the current
+                               ;; implementation, it's also a part of
+                               ;; ::shared/my-keys
+                               ;; FIXME: Revisit this decision if/when
+                               ;; that stops being the case.
+                               #_::shared/keydir
+                               ::shared/working-area
+
+                               ;; Worth calling out for the compare/
+                               ;; contrast
+                               ;; These fields are optional in
+                               ;; server/handle
+                               ::cookie-cutter
+                               ::shared/my-keys
+                               ::shared/packet-management]]
+  ;; This is really just for documentation.
+  ;; If you try to validate this, it will make you very sad.
+  (s/def ::state (s/keys :req (conj fields-safe-to-validate
+                                    ::child-spawner!
+                                    ;; Checking the spec on this means calling
+                                    ;; it. Which really hoses the entire system
+                                    ;; if it happens more than once.
+                                    ;; OTOH, commenting it out doesn't fix my problem
+                                    ;; with the spec check just hanging
+                                    ::event-loop-stopper!)
+                         ;; This doesn't particularly belong here
+                         ;; (Or, for that matter, make much sense
+                         ;; as anything except a reference. And
+                         ;; even that seems questionable)
+                         :opt [::current-client]))
+  ;; Honestly, this is really just for documentation.
+  ;; If you want to validate a ::state, be sure to dissoc
+  ;; the unsafe function keys (because every namespaced key in
+  ;; the map that has a spec will be checked, whether it's listed
+  ;; as a key in here or not).
+  (s/def ::checkable-state (s/keys :req [fields-safe-to-validate])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -176,9 +248,10 @@
 
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
-  (let [p-m (::shared/packet-management this)]
-    (crypto/randomize-buffer! (::shared/packet p-m)))
-  (crypto/random-bytes! (-> this ::current-client ::client-security ::shared/short-pk))
+  (when-let [packet (get-in this [::shared/packet-management ::shared/packet])]
+    (crypto/randomize-buffer! packet))
+  (when-let [client (this ::current-client)]
+    (crypto/random-bytes! (get-in client [::client-security ::shared/short-pk])))
   ;; The shared secrets are all private, so I really can't touch them
   ;; Q: What *is* the best approach to clearing them then?
   ;; For now, just explicitly set my versions to nil once we get past these side-effects

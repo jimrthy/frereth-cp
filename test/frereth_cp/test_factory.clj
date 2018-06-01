@@ -12,7 +12,10 @@
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as shared-specs]
-            [manifold.stream :as strm]))
+            [manifold.executor :as exec]
+            [manifold.stream :as strm])
+  (:import clojure.lang.ExceptionInfo
+           java.net.InetAddress))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants
@@ -28,30 +31,51 @@
 ;;;; Helpers
 
 (defn server-options
-  []
-  {::cp-server {::shared/extension server-extension
-                ::shared/my-keys #::shared{::K/srvr-name server-name
-                                           :keydir "curve-test"}}})
+  [logger log-state]
+  (let [client-write-chan (strm/stream)
+        client-read-chan (strm/stream)
+        child-id-atom (atom 0)
+        executor (exec/fixed-thread-executor 4)]
+    {::cp-server {::log/logger logger
+                  ::log/state log-state
+                  ::shared/extension server-extension
+                  ::shared/my-keys #::shared{::K/srvr-name server-name
+                                             :keydir "curve-test"}
+                  ::srvr-state/client-read-chan {::srvr-state/chan client-read-chan}
+                  ::srvr-state/client-write-chan {::srvr-state/chan client-write-chan}
+                  ::srvr-state/child-spawner! (fn []
+                                                (println "FIXME: Server child state spawned")
+                                                ;; This needs to do something
+                                                ;; Then again, that "something" very much depends
+                                                ;; on the changes I'm currently making to the client
+                                                ;; child fork mechanism.
+                                                ;; FIXME: Get back to this once that is done.
+                                                {::srvr-state/child-id (swap! child-id-atom inc)
+                                                 ::srvr-state/read<-child (strm/stream 2 nil executor)
+                                                 ::srvr-state/write->child (strm/stream 2 nil executor)})}}))
 
 (defn build-server
-  []
-  {::cp-server (server/ctor (::cp-server (server-options)))
-   ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
-   ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}})
+  [logger log-state]
+  (try
+    (let [server (server/ctor (::cp-server (server-options logger log-state)))]
+      {::cp-server server
+       ::srvr-state/client-read-chan (::srvr-state/client-read-chan server)
+       ::srvr-state/client-write-chan (::srvr-state/client-write-chan server)})
+    (catch ExceptionInfo ex
+      (log/flush-logs! logger (log/exception log-state
+                                             ex
+                                             ::build-server
+                                             ""))
+      (throw ex))))
 
 (defn start-server
   [inited]
-  (let [client-write-chan (::srvr-state/client-write-chan inited)
-        client-read-chan (::srvr-state/client-read-chan inited)]
-    {::cp-server (server/start! (assoc (::cp-server inited)
-                                       ::srvr-state/client-read-chan client-read-chan
-                                       ::srvr-state/client-write-chan client-write-chan))
-     ::srvr-state/client-read-chan client-read-chan
-     ::srvr-state/client-write-chan client-write-chan}))
+  (update inited ::cp-server server/start!))
 
 (defn stop-server
   [started]
   (let [ch (get-in started [::srvr-state/client-read-chan ::srvr-state/chan])]
+    (println "Closing" ch)
     (strm/close! ch))
   (let [ch (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])]
     (strm/close! ch))
@@ -59,12 +83,25 @@
    ::srvr-state/client-read-chan {::srvr-state/chan nil}
    ::srvr-state/client-write-chan {::srvr-state/chan nil}})
 
+;; FIXME: This spec doesn't match the function signature at all
 (s/fdef raw-client
-        :args (s/cat :message-loop-name ::msg-specs/message-loop-name
-                     :child-spawner ::clnt/child-spawner
-                     :srvr-pk-long ::shared-specs/public-long
-                     :srvr-xtn-vec (s/and vector?
-                                          #(= (count %) K/extension-length)))
+        :args (s/or :with-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
+                                     :logger-init (s/fspec :args nil :ret ::log/logger)
+                                     :log-state ::log/state
+                                     ;; Q: is there a built-in predicate for byte?
+                                     :server-ip (s/tuple int? int? int? int?)
+                                     :srvr-port ::shared-specs/port
+                                     :srvr-pk-long ::shared-specs/public-long
+                                     :srvr-xtn-vec (s/and vector?
+                                                          #(= (count %) K/extension-length)))
+                    :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
+                                     :logger-init (s/fspec :args nil :ret ::log/logger)
+                                     :log-state ::log/state
+                                     :server-ip (s/tuple int? int? int? int?)
+                                     :srvr-port ::shared-specs/port
+                                     :srvr-pk-long ::shared-specs/public-long
+                                     :srvr-xtn-vec (s/and vector?
+                                                          #(= (count %) K/extension-length))))
         :ret ::client-state/state-agent)
 (defn raw-client
   ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long]
@@ -89,7 +126,12 @@
      (let [server-extension (byte-array srvr-xtn-vec)
            ;; FIXME: Honestly, we need to cope with multiple servers.
            ;; Each could be listening on a different port with a different
-           ;; long-term-pk
+           ;; long-term-pk.
+           ;; For starters, I should just add a test that tries, for example,
+           ;; 3 different addresses before it finds one that responds.
+           ;; Then again, that test should run in the background behind others,
+           ;; since it's basically just waiting for timeouts.
+           ;; Better choice: make the timeout customizable
            srvr-name (shared/encode-server-name "hypothet.i.cal")
            long-pair (crypto/random-key-pair)
            result (clnt/ctor {::msg-specs/->child (strm/stream)  ; This seems wrong. Q: Is it?
@@ -100,10 +142,11 @@
                                                 ::shared/long-pair long-pair
                                                 ::K/server-name server-name}
                               ::client-state/server-extension server-extension
-                              ::client-state/server-security {::K/server-name srvr-name
-                                                              ::K/server-ip srvr-ip
-                                                              ::K/server-port srvr-port
+                              ::client-state/server-ips [(InetAddress/getByAddress (byte-array srvr-ip))]
+                              ::client-state/server-security {::shared-specs/srvr-name srvr-name
+                                                              ::shared-specs/srvr-port srvr-port
                                                               ::shared-specs/public-long srvr-pk-long}}
                              logger-init)]
-       (clnt/start! result)
+       (future
+         (clnt/start! result))
        result))))

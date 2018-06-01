@@ -496,12 +496,12 @@
     {::server #::shared{:extension server-extension
                         :my-keys #::shared{::K/server-name server-name
                                            :keydir "curve-test"}
-                        ::srvr-state/child-spawner server-child-spawner}
+                        ::srvr-state/child-spawner! server-child-spawner}
      ::client {::shared/extension (byte-array [0x10 0x0f 0x0e 0x0d
                                                0x0c 0x0b 0x0a 0x09
                                                0x08 0x07 0x06 0x05
                                                0x04 0x03 0x02 0x01])
-               ::clnt-state/child-spawner client-child-spawner
+               ::clnt-state/child-spawner! client-child-spawner
                ;; Based on this, the client should be setting up
                ;; a random key pair every time.
                ;; Maybe I'm screwing something up royally and

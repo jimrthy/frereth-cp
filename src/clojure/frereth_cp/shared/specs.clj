@@ -2,7 +2,8 @@
   "For specs that make sense to share among all the pieces"
   (:require [clojure.spec.alpha :as s]
             [clojure.test.check.generators :as lo-gen]
-            [frereth-cp.util :as utils]))
+            [frereth-cp.util :as utils]
+            [manifold.deferred :as dfrd]))
 
 (defn class-predicate
   "Returns a predicate to check whether an object is an instance of the supplied class.
@@ -12,6 +13,8 @@ This really seems like a bad road to go down."
 
 (s/def ::atom (class-predicate (class (atom nil))))
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
+(s/def ::deferrable dfrd/deferrable?)
+(s/def ::exception-instance (class-predicate Exception))
 
 (def ^Integer key-length 32)
 ;; I really don't want to reference generators in here.
@@ -58,6 +61,7 @@ This really seems like a bad road to go down."
 (s/def ::srvr-xtn ::extension)
 (s/def ::clnt-xtn ::extension)
 
+(s/def ::srvr-ip (class-predicate java.net.SocketAddress))
 (def server-name-length 256)
 ;; This is a name suitable for submitting a DNS query.
 ;; 1. Its encoder starts with an array of zeros
