@@ -69,7 +69,8 @@ implementation. This is code that I don't understand yet"
   [this buffer]
   ;; FIXME: Don't eliminate completely yet. There's at least one
   ;; cross-reference to this in a comment in client.state.
-  ;; Have to eliminate that first
+  ;; Have to eliminate that first.
+  ;; TODO: Make that happen soon.
   (throw (RuntimeException. "obsolete"))
   (let [reducer (fn [{:keys [:buf-len
                              :msg-len
@@ -235,10 +236,14 @@ implementation. This is code that I don't understand yet"
     ;; This is an ugly situation.
     ;; Something has gone badly wrong
     ;; TODO: Write to a STDOUT logger instead
-    (println "Missing log-state among"
-             (keys this)
-             "\nin\n"
-             this))
+    (let [logger (if logger
+                   logger
+                   (log/std-out-log-factory))]
+      (log/warn (log/init ::servers-polled)
+                ::missing-log-state
+                ""
+                {::state/state this
+                 ::state-keys (keys this)})))
   (try
     (let [this (dissoc this ::specs/network-packet)
           log-state (log/info log-state
@@ -283,8 +288,11 @@ implementation. This is code that I don't understand yet"
                                      int?))
         ;; Hmm.
         ;; This deferrable will get delivered as either
-        ;; a) new State, after we get a hello response
+        ;; a) new State, after we get a Cookie response
         ;; b) a Exception, if the hello polling fails
+        ;; Option a needs to be refined: we really should
+        ;; just get back the log-state and the Cookie (assuming
+        ;; it was valid)
         :ret ::specs/deferrable)
 (defn set-up-server-hello-polling!
   "Start polling the server(s) with HELLO Packets"
@@ -302,16 +310,16 @@ implementation. This is code that I don't understand yet"
         ;; Note 2: Including the cookie/wait-for-cookie! callback
         ;; is the initial, most obvious reason that I haven't
         ;; moved this to the hello ns yet.
-        ;; TODO: Convert that to another parameter.
+        ;; TODO: Convert that to another parameter (soon).
         (hello/poll-servers! this timeout cookie/wait-for-cookie!)]
     (println "client: triggered hello! polling")
     (-> outcome
         (dfrd/chain #(into % (initiate/build-inner-vouch %))
                     servers-polled
                     ;; Based on what's written here, deferrable involves
-                    ;; the success of...what? Pulling the Vouch from
+                    ;; the success of...what? Getting the Cookie from
                     ;; the server?
-                    (fn [{:keys [::specs/deferrable  ; Q: What does deferrable represent here?
+                    (fn [{:keys [::specs/deferrable
                                  ::log/state]
                           :as this}]
                       (println "client: servers-polled succeeded:" (dissoc this ::log/state))
@@ -324,7 +332,7 @@ implementation. This is code that I don't understand yet"
                         ;; Q: How has this ever worked?
                         ;; Alt Q: Has it ever?
                         ;; A: I don't think I've ever gotten this far.
-                        ;; It's a crash and burn just waiting to happen.
+                        ;; It seems like a crash and burn just waiting to happen.
                         ;; FIXME: Get back to this.
                         (dfrd/chain deferrable
                                     (fn [sent]
@@ -355,16 +363,18 @@ implementation. This is code that I don't understand yet"
   [{:keys [::state/chan->server]
     :as this}]
   {:pre [chan->server]}
-  (println "Client: Top of start!")
   (try
     (let [timeout (state/current-timeout this)]
+      ;; FIXME: Log this instead
       (println "client/start! Wiring side-effects through chan->server")
       (strm/on-drained chan->server
                        (partial chan->server-closed this))
       (let [this (hello/do-build-packet this)]
-        (println "client/start! hello packet built")
         (set-up-server-hello-polling! this timeout)))
     (catch Exception ex
+      ;; Knee-jerk reaction is to switch this to a logger.
+      ;; But the point is that I can't.
+      ;; TODO: At least write to STDERR instead.
       (println "client: Failed before I could even get to a logger:\n"
                (log/exception-details ex)))))
 
@@ -373,8 +383,9 @@ implementation. This is code that I don't understand yet"
         :ret any?)
 (defn stop!
   [this]
-  (println "Top of client/stop!")
-  ;; FIXME: local-log-atom can/should go away
+  ;; FIXME: local-log-atom can/should go away.
+  ;; It's a leftover from the old era where I was shutting
+  ;; down an agent with lots of points of failure.
   (let [local-log-atom (atom (log/init ::stop!))
         stop-finished (dfrd/deferred)
         logger (log/std-out-log-factory)]
@@ -396,7 +407,7 @@ implementation. This is code that I don't understand yet"
                 (let [log-state (log/debug log-state
                                            ::stop!
                                            "Top of the real stopper")
-                      ;; Note that this signals the Child ioloop to stop
+                      ;; This is what signals the Child ioloop to stop
                       log-state (state/do-stop (assoc this
                                                       ::log/state log-state))
                       log-state
@@ -439,6 +450,7 @@ implementation. This is code that I don't understand yet"
               ;; It's very tempting to refactor the duplicate functionality into
               ;; its own function. This one is pretty unwieldy.
               ;; And I've botched the copy/paste between the two versions at least once.
+              ;; TODO: Clean this up.
               (try
                 (swap! local-log-atom
                        #(log/warn %
@@ -496,11 +508,11 @@ implementation. This is code that I don't understand yet"
                                  "(send)ing the close function to the client agent failed"))))
       (dfrd/on-realized stop-finished
                         ;; Flushing logs here should be totally redundant.
-                        ;; However: This is getting totally tangled up with the
+                        ;; However: This has gotten totally tangled up with the
                         ;; logs coming from somewhere else.
+                        ;; So be extra-cautious about what happens here.
                         (fn [success]
-                          (println "stop-finished realized at bottom client/stop!")
-                          (println "Flushing local log to logger" logger)
+                          (println "stop-finished successfully realized at bottom client/stop!")
                           (log/flush-logs! logger @local-log-atom))
                         (fn [fail]
                           (println "stop-finished failed at bottom of client/stop!")

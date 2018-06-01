@@ -83,7 +83,7 @@
    ::srvr-state/client-read-chan {::srvr-state/chan nil}
    ::srvr-state/client-write-chan {::srvr-state/chan nil}})
 
-;; FIXME: This spec doesn't match the function signature at all
+;; FIXME: This spec still doesn't match the function signature at all
 (s/fdef raw-client
         :args (s/or :with-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
                                      :logger-init (s/fspec :args nil :ret ::log/logger)

@@ -819,7 +819,8 @@
           state (assoc state ::specs/recent now)
           log-state @log-state-atom
           ;; This is used during exception handling
-          prelog (utils/pre-log message-loop-name)  ; might be on a different thread
+          ;; because that might happengg873 on a different thread
+          prelog (utils/pre-log message-loop-name)
           fmt (str "Awakening event loop that was sleeping for ~g ms "
                    "after ~:d at ~:d\n"
                    "at ~:d because: ~a")
@@ -870,7 +871,7 @@
                                           {::trigger-details prelog
                                            ::specs/message-loop-name message-loop-name})]))
           ;; TODO: Really should add something like an action ID to the state
-          ;; to assist in tracing the action. flow-control seems like a very
+          ;; to assist in tracing how data flows. flow-control seems like a very
           ;; likely place to put it.
           updater (case tag
                     ;; Q: Is this worth switching to something like core.match or a multimethod?
@@ -879,7 +880,9 @@
                     ::drained (fn [{log-state ::log/state
                                     :as state}]
                                 ;; Actually, this seems like a strong argument for
-                                ;; having a pair of streams. Child could still have
+                                ;; having a pair of 1-way streams (as opposed to
+                                ;; a bi-directional one)
+                                ;; Child could still have
                                 ;; bytes to send to the parent after the latter's
                                 ;; stopped sending, or vice versa.
                                 ;; I'm pretty sure the complexity I haven't finished
@@ -1013,8 +1016,11 @@
                        ;; should happen here.
                        ;; (Note that, either way, it really should
                        ;; include a callback to some
-                       ;; currently-undefined status updater
-                       (comment state)
+                       ;; currently-undefined status updater)
+                       ;; That really gets into bigger-picture monitoring
+                       ;; considerations that may not really be appropriate
+                       ;; at this level.
+                       ;; Then again, they totally might be.
                        (update state
                                ::log/state
                                #(log/exception %
@@ -1887,6 +1893,11 @@
                    :timed-out-value any?))
 ;; Q: Do I want to set an alternative that blocks?
 (defn swap-parent-callback!
+  ;; I'm fairly certain this is about switching modes from
+  ;; sending Initiate packets to sending Message packets.
+  ;; But only fairly.
+  ;; Q: What is this actually for?
+  ;; TODO: Definitely needs a docstring
   ([{:keys [::log/logger
              ::specs/message-loop-name
             ::specs/stream]

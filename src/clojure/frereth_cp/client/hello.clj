@@ -170,13 +170,14 @@
                                                                      ::sending-hello-timed-out
                                                                      raw-packet)
         send-packet-success (deref dfrd-send-success 1000 ::send-response-timed-out)
-        _ (println "client/do-polling-loop Hello sent:" send-packet-success)
         actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
         now (System/nanoTime)]
     ;; I don't think send-packet-success matters much
     ;; Although...actually, ::send-response-timed-out would be a big
     ;; deal.
     ;; FIXME: Add error handling for that.
+    ;; And convert this to a log message
+    ;; (although, admittedly, it's really helpful for debugging)
     (println "hello/do-polling-loop Sending HELLO returned:"
              send-packet-success
              "\nQ: Does that value matter?"
@@ -195,8 +196,12 @@
       ;; But that really isn't something we can ever really validate.
       ;; Maybe if I excluded all the problematic keys that cause serious headaches
       ;; (basically, all the functions it contains, especially the ones that
-      ;; cause side-effects)...but this is only tempting because it seemed like
-      ;; a quick/easy way to verify what I have.
+      ;; cause side-effects).
+      ;; Note that I *do* have specs for the safe pieces. And I
+      ;; could use something like (select-keys actual-success ...)
+      ;; where the ... is similar to server.state/fields-safe-to-validate.
+      ;; But that validation is only tempting because it
+      ;; seemed like a quick/easy way to verify what I have.
       (let [log-state (try
                         (log/info (::log/state actual-success)
                                   ::do-polling-loop

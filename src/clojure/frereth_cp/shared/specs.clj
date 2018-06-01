@@ -108,8 +108,8 @@ This really seems like a bad road to go down."
 ;; There is some confusion in places where I'm
 ;; specifying :timeout as nat-int?
 ;; Q: How many of those need to be that instead of this?
-(s/def ::timeout (s/and number?
-                        (complement neg?)))
+;; A: Pretty much all of them.
+(s/def ::timeout nat-int?)
 
 ;; Specify it this way because I waffle between
 ;; a byte-array vs. ByteBuf.

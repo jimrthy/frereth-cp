@@ -49,8 +49,17 @@
 ;;;; Tests
 
 (deftest step-1
+  ;; This test seems a little bit silly, as written.
+  ;; It was meant to be a jumping-off point to demonstrate basically
+  ;; what the client scaffolding needs to look like.
+  ;; It really can't get very far, since the bogus server can't
+  ;; send back a valid Cookie without getting as complicated as the
+  ;; server-test/handshake.
+
+  ;; However, there is value in an edge case that it revealed.
   (testing "The first basic thing that clnt/start does"
     ;; Q: Should I have run clnt/start! on this?
+    ;; A: Yes. Absolutely.
     ;; Q: What does that actually do?
     ;; A: It starts by sending a HELO
     ;; packet, then setting the client up to wait for a
@@ -91,6 +100,11 @@
                                                     ::chan<-server
                                                     "Channel from server drained"))))
       (let [cookie (byte-array 200)  ;  <---- Note that this is gibberish that should get discarded.
+            ;; The edge case: I'm currently failing to decrypt that Cookie, but then proceeding
+            ;; as though it succeeded. And then the Client fails to build the Initiate packet
+            ;; because it doesn't have access to the short-term key that should have arrived with
+            ;; the Cookie.
+            _ (throw (RuntimeException. "Start back with this"))
             cookie-wrapper {:host "10.0.0.12"
                             :port 48637
                             :message cookie}

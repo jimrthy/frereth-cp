@@ -115,6 +115,10 @@
          ;; two are equivalent.
          (= (bit-and r 0xf) 0))))
 
+;;; Q: Why isn't handle-hello! part of the hello ns?
+;;; A: Because it needs access to cookie/do-build-cookie-response
+;;; TODO: Add that as a callback param that I can set up in a
+;;; partial and then move it there
 (s/fdef handle-hello!
         :args (s/cat :state ::state/state
                      :packet ::shared/network-packet)
@@ -185,6 +189,7 @@
 
 (s/fdef verify-my-packet
         ;; FIXME: This spec doesn't match the actual parameters.
+        ;; Q: What are the actual args?
         :args (s/cat :packet bytes?)
         :ret boolean?)
 (defn verify-my-packet

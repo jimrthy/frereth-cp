@@ -84,7 +84,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                  :ret ::msg-specs/buf))
 
 ;; Because, for now, I need somewhere to hang onto the future.
-;; Q: So...what is this? a Future?
+;; Q: So...is this something like a Future ?
 (s/def ::child any?)
 
 ;; The parts that change really need to be stored in a mutable
@@ -484,6 +484,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                              ;; However, there's a different problem here:
                              ;; Sometimes this gets called with packet as a [B.
                              ;; Others, it's the network-packet spec.
+                             ;; That discrepancy should be fixed.
+                             ;; TODO: Verify that we always have a [B here.
                              ::human-readable-message (b-t/->string #_packet
                                                                     (if (bytes? packet)
                                                                       packet

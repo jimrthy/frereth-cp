@@ -85,11 +85,9 @@
      ::shared-secret shared-secret}))
 
 (s/fdef open-packet
-        ;; The thing about this approach is that, realistically,
+        ;; The thing about this approach to spec is that
         ;; we also need all the pieces in ::state/state
         ;; that open-hello-crypto-box needs.
-        ;; Q: Would s/and make sense to emphasize that we
-        ;; really want to be positive that we have log-state here?
         :args (s/cat :state (s/keys :req [::log2/state
                                           ::state/current-client])
                      :message bytes?)
@@ -148,6 +146,9 @@
     log-state ::log2/state
     :as state}
    ;; TODO: Evaluate the impact of just using bytes instead
+   ;; Especially since I've pretty thoroughly embraced that approach
+   ;; until/unless I have numbers that indicate it's a significant
+   ;; performance hit.
    ^ByteBuf message]
   (let [log-state (log2/debug log-state
                               ::do-handle

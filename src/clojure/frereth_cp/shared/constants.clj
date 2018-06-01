@@ -18,7 +18,7 @@
 (def client-key-length specs/client-key-length)
 ;; Might as well move these into specs for consistency
 ;; with server-nonce-suffix-length
-;; FIXME: Make it so
+;; FIXME: Make it so (soon)
 (def ^Integer client-nonce-prefix-length 16)
 (def ^Integer client-nonce-suffix-length 8)
 (def extension-length specs/extension-length)
@@ -203,7 +203,9 @@
 ;; FIXME: Switch to that name.
 (s/def ::message (s/and bytes?
                         ;; This predicate is nonsense.
-                        ;; FIXME: Switch to something sensible
+                        ;; Q: What's wrong with it?
+                        ;; A: comparing count against nothing, in last clause
+                        ;; FIXME: Switch to something sensible (soon)
                         #(<= max-vouch-message-length (count %))
                         #(<= (count %))))
 (s/def ::outer-i-nonce ::client-nonce-suffix)

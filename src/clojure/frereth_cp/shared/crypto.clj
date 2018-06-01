@@ -95,7 +95,7 @@
   []
   {::log2/state (log2/init ::nonce-agent)
    ;; FIXME: Needs a logger for flushing
-   ;; the log-state
+   ;; the log-state (soon)
    ::counter-low 0
    ::counter-high 0
    ::data (byte-array 16)
@@ -182,7 +182,6 @@
     :as this}
    key-dir
    long-term?]
-  (println "Reloading nonce")
   (log/debug "Reloading nonce")
   (let [raw-path (str key-dir "/.expertsonly/")
         path (io/resource raw-path)]
@@ -193,7 +192,6 @@
           (let [channel (.getChannel (RandomAccessFile. f "rw"))]
             (try
               (let [lock (.lock channel 0 Long/MAX_VALUE false)]
-                (println "Lock acquired")
                 (log/info "Lock acquired")
                 (try
                   (let [nonce-counter (io/file path "noncecounter")]
@@ -202,13 +200,11 @@
                       (with-open [counter (io/output-stream nonce-counter)]
                         ;; FIXME: What's a good initial value?
                         (.write counter (byte-array 8))))
-                    (println "Opening" nonce-counter)
                     (log/debug "Opening" nonce-counter)
                     (with-open [counter (io/input-stream nonce-counter)]
-                      (println "Nonce counter file opened for reading")
                       (log/debug "Nonce counter file opened for reading")
                       (let [bytes-read (.read counter data 0 8)]
-                        (println "Read the 8 bytes")
+                        (println "Read" bytes-read "bytes")
                         (when (not= bytes-read 8)
                           (throw (ex-info "Nonce counter file too small"
                                           {::contents (b-t/->string data)
@@ -348,16 +344,11 @@
   [^SecretKey secret-key
    ^bytes clear-text]
   (when-not secret-key
-    ;; After all of Tuesday's debugging/log combingy, I'm still winding up here.
-    ;; Note that there are 2 vital questions.
-    ;; The fact that anything makes it back to the server is honestly more
-    ;; worrisome.
-    (throw (RuntimeException. "FIXME: How is anything escaping the message loop?"))
-    (throw (RuntimeException. "FIXME: What's wrong with this key?")))
+    (throw (RuntimeException. "FIXME: What's wrong with the secret-key ?")))
   ;; Q: Which cipher mode is appropriate here?
   (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
         ;; FIXME: Read https://www.synopsys.com/blogs/software-security/proper-use-of-javas-securerandom/
-        ;; This is almost definitely wrong.
+        ;; This is still almost definitely wrong.
         rng (SecureRandom.)
         ^AlgorithmParameterSpec iv (build-random-iv 16)]
     ;; Q: Does it make sense to create and init a new
@@ -495,6 +486,8 @@ array destination that could just be reused without GC.
 That looks like it would get into the gory implementation details
 which I'm really not qualified to touch."
   [log-state
+   ;; TODO: Check the clojure docs re: optimizing primitives.
+   ;; This seems like it's totally wrong.
    ^bytes box
    box-offset
    box-length
@@ -697,19 +690,6 @@ Or maybe that's (dec n)"
                (send nonce-writer load-nonce-key key-dir)
                log-state)
              log-state)]
-       ;; Shouldn't need to do this.
-       ;; agent actions are guaranteed to happen sequentially,
-       ;; in the order they were send-ed.
-       ;; Besides, as noted below, we're inside an agent
-       ;; action and thus cannot.
-       ;; Actually, I'm pretty sure that's why I'm getting the NPE
-       ;; from the nonce key in obscure-nonce.
-       ;; This all has to complete before the various agent actions
-       ;; that I'm sending can take effect.
-       ;; Except that doesn't make any sense.
-       ;; Since they have to execute serially, load-nonce-key had
-       ;; to complete before we can get to obscure-nonce.
-       (comment (await nonce-writer))
        (let [{:keys [::counter-low
                      ::counter-high]} @nonce-writer]
          (when (>= counter-low counter-high)
@@ -718,6 +698,9 @@ Or maybe that's (dec n)"
        (send nonce-writer obscure-nonce random-portion)
        ;; Tempting to do an await here, but we're inside an
        ;; agent action, so that isn't legal.
+       ;; Q: Is that still true?
+       ;; Bigger Q: does an agent really make sense for the
+       ;; nonce-writer?
        (if-let [ex (agent-error nonce-writer)]
          (log2/exception log-state
                          ex

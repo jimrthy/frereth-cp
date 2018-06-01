@@ -12,7 +12,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(comment)
 ;; byte-streams doesn't seem to get inheritance.
 ;; TODO: Look into https://github.com/funcool/octet.
 ;; For that matter, look into byte-streams history.

@@ -208,18 +208,6 @@
           state
           gap-buffer))
 
-(defn obsolete-read-bytes-from-parent!
-  "Parent wrote bytes to its outbuffer. Read them."
-  [{:keys [::specs/child-in
-           ::specs/message-loop-name]
-    :as io-handle}
-   my-log-state
-   #^bytes buffer]
-  {:pre [buffer
-         child-in]}
-  ;; TODO: Go ahead and delete this
-  (throw (RuntimeException. "obsolete")))
-
 (s/fdef trigger-from-parent!
         :args (s/cat :io-handle ::specs/io-handle
                      :buffer bytes?

@@ -137,9 +137,10 @@
     ;; Well, it's slightly better than nothing.
     ;; But it's trivial to forge.
     ;; Q: How does the reference implementation handle this?
-    ;; Well, the proof *is* in the pudding.
+    ;; A: Well, the proof *is* in the pudding.
     ;; The most important point is whether the other side sent
     ;; us a cookie we can decrypt using our shared key.
+    ;; This is really just a quick finger-in-the-wind test.
     (when (and (b-t/bytes= K/cookie-header header)
                (b-t/bytes= extension client-extension)
                (b-t/bytes= server-extension server-extension))
@@ -181,7 +182,7 @@
           ;; Unless we're communicating with a server on someone's cell
           ;; phone.
           ;; Which, if this is successful, will totally happen.
-          ;; FIXME: Verify those before trying to proceed
+          ;; TODO: Verify those before trying to proceed
           (try
             (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
                                                                           [::shared/extension
@@ -229,6 +230,9 @@
                 ;;    next or a timeout
                 ;; The linear nature of a success/failure means this just got trickier
                 ;; than it seems like it should be.
+                ;; TODO: Change the semantics behind fulfillment here.
+                ;; Send back the log-state the cookie, if we managed to decipher.
+                ;; The rest should just be noise.
                 (dfrd/success! notifier (assoc this ::log/state log-state))))
             ;; TODO: Look into recovering from these
             (catch ExceptionInfo ex
@@ -273,6 +277,7 @@
                                                ex
                                                ::received-response))))))
 
+;; Q: Rename this to response-failed ?
 (s/fdef hello-response-failed
         :args (s/cat :wrapper ::state/state
                      :failure ::specs/throwable))
@@ -286,6 +291,7 @@
   ;; Note that this isn't an ordinary timeout: this was a true
   ;; failure in taking from the stream. And, realistically,
   ;; should never happen.
+  ;; TODO: This arguably *should* be fatal.
   (log/flush-logs! logger (log/exception state
                                          failure
                                          ::hello-response-failed!)))

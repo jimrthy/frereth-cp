@@ -340,10 +340,9 @@
   (let [writer (BufferedWriter. (FileWriter. file-name))]
     (->OutputWriterLogger writer)))
 
-(let [std-out-log-agent (agent {::flush-count 0})])
 (defn std-out-log-factory
   []
-  (->StdOutLogger #_std-out-log-agent (agent {::flush-count 0})))
+  (->StdOutLogger (agent {::flush-count 0})))
 
 (defn stream-log-factory
   [stream]
@@ -415,6 +414,7 @@
                          (ret second ::lamport)
                          (max (::lamport lhs)
                               (::lamport rhs)))))
+        ;; Yes. It really is a pair of them.
         :ret (s/tuple ::state ::state))
 (defn synchronize
   "Fix 2 clocks that have probably drifted apart"
@@ -456,15 +456,13 @@ show up later."
                     :without-child-ctx (s/cat :source ::state))
         ;; Note that the return value really depends
         ;; on the caller arity.
-        ;; TODO: Need to write the :fn arity to reflect this.
+        ;; TODO: Need to write the :fn value to reflect this.
         :ret (s/or :with-nested-context (s/tuple ::state ::state)
                    :keep-parent-context ::state))
 (defn fork
   "Return shape depends on arity"
   ([src child-context]
    (let [parent-ctx (::context src)
-         ;; Q: Am I really not using this at all?
-         ;; Where did src-ctx come from?
          combiner (if (seq? parent-ctx)
                     conj
                     list)
