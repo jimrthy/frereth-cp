@@ -170,6 +170,17 @@
                                                                      ::sending-hello-timed-out
                                                                      raw-packet)
         send-packet-success (deref dfrd-send-success 1000 ::send-response-timed-out)
+        ;; Note that this timeout actually needs to be quite long.
+        ;; In the original, it's in the ballpark of 46 seconds.
+        ;; It's probably acceptable for a single polling thread to block for that
+        ;; long.
+        ;; Or, at least, it probably was back in 2011 when the spec was written,
+        ;; or in 2013 when my copy of the reference implementation was published.
+        ;; It still seems like it would be better to do something like setting up
+        ;; a callback with a timeout here.
+        ;; Q: Is that an option?
+        ;; A: Yes, absolutely. That's what dfrd/timeout! is for.
+        ;; TODO: Rearrange to use that.
         actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
         now (System/nanoTime)]
     ;; I don't think send-packet-success matters much
@@ -218,13 +229,24 @@
                                    (log/exception-details ex))
                           (throw (ex-info "Log flush failure re: server response" {::actual-success actual-success} ex))))]
         (println "client: Should have a log message about possibly responsive server")
-        (if-let [{:keys [::specs/network-packet]} actual-success]
-          (do
+        ;; Original failing approach:
+        (when-let [{:keys [::specs/network-packet]} actual-success]
+          ;; This made things much more difficult to debug than they should have been.
+          ;; The problem with fixing this really ties into the child message state.
+          ;; I need to signal it to give up on sending future messages, because
+          ;; the consumer has gone away.
+          (assert network-packet "FIXME: Eliminate the fast-spin loop that follows"))
+        (if-let [network-packet (::specs/network-packet actual-success)]
+          (let [log-state (log/debug log-state
+                                     ::do-polling-loop
+                                     "Got back a usable cookie"
+                                     actual-success)]
             ;; Need to move on to Vouch. But there's already far
             ;; too much happening here.
             ;; So the deferred in completion should trigger servers-polled
-            (dfrd/success! completion (assoc actual-success
-                                             ::log/state log-state))
+            (as-> (into this actual-success) this
+              (assoc this ::log/state log-state)
+              (dfrd/success! completion this))
             log-state)
           (let [elapsed (- now start-time)
                 remaining (- timeout elapsed)]

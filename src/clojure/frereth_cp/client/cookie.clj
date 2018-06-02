@@ -148,12 +148,18 @@
                                     ::log/state log-state)
                              rcvd))))
 
-(s/fdef received-response
+(s/fdef received-response!
         :args (s/cat :this ::state/state
                      :notifier dfrd/deferrable?
                      :cookie ::specs/network-packet)
+        ;; The main point is the side-effect of "delivering" the notifier.
+        ;; That will become a map that includes a) the updated log-state
+        ;; (although, honestly, it should be a seq of functions for running
+        ;; those updates...and those functions need a way to specify
+        ;; the current time)
+        ;; and b) the cookie (if we managed to decrypt it)
         :ret any?)
-(defn received-response
+(defn received-response!
   [{log-state ::log/state
     :keys [::log/logger]
     :as this}
@@ -167,8 +173,9 @@
   ;; If they don't match, we need to discard this cookie
   ;; and go back to waiting (don't forget to reduce the
   ;; timeout based on elapsed time)
-  (let [log-state (log/info log-state
-                            ::received-response
+  (let [log-label ::received-response!
+        log-state (log/info log-state
+                            log-label
                             "Possibly got a response from server"
                             cookie)]
     (try
@@ -198,84 +205,72 @@
                                          [::state/server-security
                                           ::specs/public-short])
                     log-state (log/debug log-state
-                                         ::cookie->vouch
+                                         log-label
                                          "Managed to decrypt the cookie")]
-                (assert server-short (str "Missing ::specs/public-short among\n"
-                                          (keys (::state/server-security this))
-                                          "\namong bigger-picture\n"
-                                          (keys this)))
-                (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
-                      ;; line 327
-                      this (assoc-in this
-                                     [::state/shared-secrets ::state/client-short<->server-short]
-                                     (crypto/box-prepare
-                                      server-short
-                                      (.getSecretKey my-short-pair)))
-                      log-state (log/debug log-state
-                                           ::cookie->vouch
-                                           (str "Prepared shared short-term secret\n"
-                                                "Should resolve the cookie-response in client/poll-servers-with-hello!"))]
-                  (dfrd/success! notifier (assoc this
-                                                 ::log/state (log/flush-logs! logger log-state)
-                                                 ::specs/network-packet cookie))))
-              (let [log-state (log/warn log-state
-                                        ::received-response
-                                        "Unable to decrypt server cookie"
-                                        {::problem cookie})]
-                ;; This is a failure, really.
-                ;; Q: What does the reference implementation do here?
-                ;; Honestly, we should either
-                ;; a) forget about this potential server and move along to the next
-                ;; b) forget about this packet and go back to waiting for either the
-                ;;    next or a timeout
-                ;; The linear nature of a success/failure means this just got trickier
-                ;; than it seems like it should be.
-                ;; TODO: Change the semantics behind fulfillment here.
-                ;; Send back the log-state the cookie, if we managed to decipher.
-                ;; The rest should just be noise.
-                (dfrd/success! notifier (assoc this ::log/state log-state))))
+                (if server-short
+                  (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
+                        ;; line 327
+                        shared-secrets (assoc (::state/shared-secrets this)
+                                              ::state/client-short<->server-short
+                                              (crypto/box-prepare
+                                               server-short
+                                               (.getSecretKey my-short-pair)))]
+                    (dfrd/success! notifier {::log/state (log/debug log-state
+                                                                    log-label
+                                                                    (str "Prepared shared short-term secret\n"
+                                                                         "Should resolve the cookie-response in client/poll-servers-with-hello!"))
+                                             ::state/shared-secrets shared-secrets
+                                             ::specs/network-packet cookie}))
+                  (dfrd/error! notifier {::log/state (log/error log-state
+                                                                log-label
+                                                                (str "Missing ::specs/public-short among\n"
+                                                                     (keys (::state/server-security this))
+                                                                     "\namong bigger-picture\n"
+                                                                     (keys this)))})))
+              ;; This is a failure, really.
+              ;; Q: What does the reference implementation do here?
+              ;; A: Discards the packet, updates recent (and thus the polling timeout)
+              ;; and goes back to polling.
+              ;; TODO: Change the semantics behind fulfillment here.
+              ;; Send back the log-state and the cookie, if we managed to decipher.
+              ;; The rest should just be noise.
+              (dfrd/success! notifier {::log/state (log/warn log-state
+                                                             log-label
+                                                             "Unable to decrypt server cookie"
+                                                             {::problem cookie})}))
             ;; TODO: Look into recovering from these
             (catch ExceptionInfo ex
-              (let [log-state (log/exception log-state
-                                             ex
-                                             ::received-response
-                                             "High-level failure")
-                    log-state (log/flush-logs! logger log-state)]
-                (dfrd/error! notifier (assoc this ::log/state log-state))))
+              (dfrd/error! notifier (assoc this ::log/state (log/exception log-state
+                                                                           ex
+                                                                           log-label
+                                                                           "High-level failure"))))
             (catch RuntimeException ex
-              (let [log-state (log/exception log-state
-                                             ex
-                                             ::received-response
-                                             "Unexpected failure")
-                    log-state (log/flush-logs! logger log-state)]
-                (dfrd/error! notifier (assoc this ::log/state log-state))))
+              (dfrd/error! notifier {::log/state (log/exception log-state
+                                                                ex
+                                                                log-label
+                                                                "Unexpected failure")}))
             (catch Exception ex
-              (let [log-state (log/exception log-state
-                                             ex
-                                             ::received-response
-                                             "Low-level failure")
-                    log-state (log/flush-logs! logger log-state)]
-                (dfrd/error! notifier (assoc this ::log/state log-state))))
+              (dfrd/error! notifier {::log/state (log/exception log-state
+                                                                ex
+                                                                log-label
+                                                                "Low-level failure")}))
             (catch Throwable ex
-              (let [log-state (log/exception log-state
-                                             ex
-                                             ::received-response
-                                             "Serious Problem")
-                    log-state (log/flush-logs! logger log-state)]
-                (dfrd/error! notifier (assoc this ::log/state log-state)))))
-          (let [log-state (log/warn log-state
-                                    ::received-response
-                                    "Invalid response. Just discard and retry"
-                                    {::problem cookie})]
-            (dfrd/success! notifier (assoc this ::log/state (log/flush-logs! logger log-state)))))
+              (dfrd/error! notifier {::log/state (log/exception log-state
+                                                                ex
+                                                                log-label
+                                                                "Serious Problem")})))
+          (dfrd/success! notifier {::log/state (log/warn log-state
+                                                         log-label
+                                                         "Invalid response. Just discard and retry"
+                                                         {::problem cookie})}))
         (let [log-state (log/warn log-state
-                                  ::received-response
+                                  log-label
                                   "Server didn't respond to HELLO. Move on to next.")]
-          (dfrd/success! notifier (assoc this ::log/state log-state))))
+          (dfrd/success! notifier {::log/state log-state})))
       (catch Exception ex
-        (log/flush-logs! logger (log/exception log-state
-                                               ex
-                                               ::received-response))))))
+        (dfrd/error! {::log/state (log/exception log-state
+                                                 ex
+                                                 log-label)})))))
 
 ;; Q: Rename this to response-failed ?
 (s/fdef hello-response-failed
@@ -321,6 +316,6 @@
                                 timeout
                                 ::hello-response-timed-out)]
         (dfrd/on-realized d
-                          (partial received-response this notifier)
+                          (partial received-response! this notifier)
                           (partial hello-response-failed! this))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))

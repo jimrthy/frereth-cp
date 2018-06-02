@@ -104,7 +104,6 @@
             ;; as though it succeeded. And then the Client fails to build the Initiate packet
             ;; because it doesn't have access to the short-term key that should have arrived with
             ;; the Cookie.
-            _ (throw (RuntimeException. "Start back with this"))
             cookie-wrapper {:host "10.0.0.12"
                             :port 48637
                             :message cookie}
@@ -116,16 +115,17 @@
                                 ;; Mimic the server sending back its Cookie, which
                                 ;; we filled with garbage above.
                                 (fn [hello]
-                                  (update hello :message
-                                          (fn [current]
-                                            (if (bytes? current)
-                                              current
-                                              (let [^ByteBuf src current
-                                                    n (.readableBytes src)
-                                                    dst (byte-array n)]
-                                                (.readBytes src dst)
-                                                dst))))
-                                  (is (not (s/explain-data ::shared/network-packet hello)))
+                                  (let [hello
+                                        (update hello :message
+                                                (fn [current]
+                                                  (if (bytes? current)
+                                                    current
+                                                    (let [^ByteBuf src current
+                                                          n (.readableBytes src)
+                                                          dst (byte-array n)]
+                                                      (.readBytes src dst)
+                                                      dst))))]
+                                    (is (not (s/explain-data ::shared/network-packet hello))))
                                   (log/flush-logs! logger (log/info log-state
                                                                     "Sending garbage Cookie from mock-server to Client"
                                                                     ::step-1))
@@ -141,8 +141,11 @@
                                   (strm/try-take! chan->server ::nada 200 ::timed-out))
                                 (partial check-success client "Taking the vouch")
                                 (fn [buf]
+                                  ;; This is actually a PersistentArrayMap
+                                  ;; Probably a ::shared/network-packet
+                                  ;; TODO: Fix this next problem
                                   (is (instance? ByteBuf buf)
-                                      (str "Expected ByteBuf. Got" (class buf)))
+                                      (str "Expected ByteBuf. Got " (class buf)))
                                   ;; FIXME: Need to extract the cookie from the vouch that
                                   ;; we just received.
                                   (let [expected-n (count cookie)
