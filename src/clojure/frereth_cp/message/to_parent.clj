@@ -78,10 +78,15 @@
   [log-state
    {^Long start-pos ::specs/start-pos
     ^Integer next-message-id ::specs/message-id
-    ;; TODO: Switch this to either a bytes or a clojure
+    ;; TODO: Switch this to either a byte-array or a clojure
     ;; vector of bytes.
     ;; Then again...the bit about tracking the current
     ;; read position seems pretty worthwhile.
+    ;; Bigger TODO: Stop the insanity. Don't try to
+    ;; use this here.
+    ;; It *might* make a little sense, in certain really
+    ;; rare scenarios, to reuse a buffer, but this really
+    ;; isn't one of them.
     ^ByteBuf buf ::specs/buf
     :as block-to-send}]
   ;;; Lines 387-402
@@ -93,7 +98,12 @@
     ;; which just seems silly.
     (when (or (neg? length)
               (< K/k-1 length))
-      (throw (AssertionError. (str "illegal block length: " length))))
+      (throw (ex-info "Illegal block length"
+                      (-> block-to-send
+                          (select-keys [::specs/buf
+                                        ::specs/start-pos
+                                        ::specs/message-id])
+                          (assoc ::attempted-length length)))))
 
     ;; Comment rot. Q: *Which* concern?
     ;; For now, that concern is premature optimization.
@@ -137,8 +147,8 @@
 
       ;; Note that we're sending a fairly arbitrary amount of padding
       ;; This is the copy approach taken by the reference implementation
-      ;; Note that he's just skipping the padding bytes rather than
-      ;; filling them with zeros
+      ;; Note that the reference implementation just skips the padding
+      ;; bytes rather than filling them with zeros
       (comment
         (b-t/byte-copy! buf (+ 8 (- u block-length)) block-length send-buf (bit-and (::start-pos block-to-send)
                                                                                     (dec send-buf-size))))
@@ -148,11 +158,14 @@
         (.writerIndex send-buf data-start))
 
       ;; Q: What happens on the other side?
-      ;; A: The client, at least, is expecting a manifold stream that sends
-      ;; it ByteBuf instances.
-      ;; The server implementation has been waiting for me to
-      ;; decide what to do here.
-      ;; Which it immediately converts to byte arrays.
+      ;; A: It's pretty arbitrary. Aleph accepts anything that can
+      ;; convert to a direct(?) ByteBuf that it can write to the wire.
+      ;; We can configure the other side of that wire to spit out
+      ;; either ByteBuf or byte arrays.
+      ;; Byte arrays are generally preferred, since they're quite
+      ;; a bit simpler due to the lack of reference counting.
+      ;; Except in high-performance scenarios. The jury's out on
+      ;; whether this is one of those.
 
       ;; Need to save buf's initial read-index because we aren't ready
       ;; to discard the buffer until it's been ACK'd.
@@ -168,6 +181,8 @@
       (.resetReaderIndex buf)
       (let [result (byte-array (.readableBytes send-buf))]
         (.readBytes send-buf result)
+        ;; Q: Is this the point to decrement buf's refCnt
+        ;; because I'm done with it?
         {::log/state log-state
          ::specs/bs-or-eof result}))))
 
@@ -270,7 +285,8 @@
 ;;;                So everything else is shifted right by 8 bytes
 
     (let [q (next-block-queue outgoing)
-          current-message (first q)
+          {transmission-count ::specs/transmissions
+           :as current-message} (first q)
           ;; This is where message consolidation would be
           ;; a good thing, at least for new messages.
           ;; Really should pull all the bytes we can
@@ -292,7 +308,6 @@
                                {::next-block-queue-size (count q)
                                 ::specs/next-block-queue next-block-queue
                                 ::specs/outgoing (shared/format-map-for-logging outgoing)})
-          transmission-count (::specs/transmissions current-message)
           _ (assert transmission-count
                     (str prelog
                          "Missing ::transmissions under "
@@ -312,6 +327,7 @@
                               (if (= 0 n')
                                 1
                                 n')
+                              ;; FIXME: This can't be right.
                               (dec (- shared-K/max-32-int))))
           ;; It's tempting to pop that message off of whichever queue is its current home.
           ;; That doesn't make sense here/yet.
@@ -376,11 +392,6 @@
                                    label
                                    "Next block built and control state updated to"
                                    {::log/state (dissoc result ::log/state)}))]
-      ;; It's tempting to split this part up to avoid the conditional.
-      ;; Maybe turn the call into a multimethod.
-      ;; The latter would be a mistake, since there are
-      ;; really only 2 possibilities (I'm sending a new block or
-      ;; resending one that had its ACK timeout)
       (if (= ::specs/un-sent-blocks next-block-queue)
         (mark-block-sent result updated-message)
         (mark-block-resent result current-message updated-message)))))
@@ -492,7 +503,6 @@
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
     log-state ::log/state
     :as state}]
-  #_{:pre [strm-hwm]}
   (when-not strm-hwm
     (throw (ex-info "Missing strm-hwm"
                     {::among (keys outgoing)

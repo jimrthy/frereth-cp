@@ -1488,6 +1488,7 @@
         :ret (s/keys :req [::log/state
                            ::specs/io-handle]))
 (defn do-start
+  "Trigger side-effects to start a ::state"
    ;; I'd like to provide the option to build your own
    ;; input loop.
    ;; It seems like this would really need to be a function that
@@ -1654,41 +1655,6 @@
        (assoc result ::log/state @main-log-state-atom))))
   ([stream-holder]
    (get-state stream-holder 500 ::timed-out)))
-
-(s/fdef halt!
-        :args (s/cat :io-handle ::specs/io-handle)
-        :ret any?)
-(defn halt!
-  [{:keys [::log/logger
-           ::specs/message-loop-name
-           ::specs/stream
-           ::specs/from-child
-           ::specs/child-out]
-    :as io-handle}]
-  ;; TODO: We need the log-state here, so we can append to it.
-  ;; The obvious choice seems to involve calling get-state.
-  (let [{log-state ::log/state} (get-state io-handle)
-        my-logs (log/fork log-state)
-        my-logs (log/info my-logs
-                          ::halt!
-                          "I/O Loop Halt Requested"
-                          {::specs/message-loop-name message-loop-name})
-        my-logs (try
-                  (strm/close! stream)
-                  (doseq [pipe [from-child
-                                child-out]]
-                    (.close pipe))
-                  (log/info my-logs
-                            ::halt!
-                            "Halt initiated"
-                            {::specs/message-loop-name message-loop-name})
-                  (catch RuntimeException ex
-                    (log/exception my-logs
-                                   ex
-                                   ::halt!
-                                   "Signalling halt failed"
-                                   {::specs/message-loop-name message-loop-name})))]
-    (log/flush-logs! logger my-logs)))
 
 (s/fdef child->!
         :args (s/cat :io-handle ::specs/io-handle
@@ -1876,10 +1842,6 @@
   ;; The other side, really, controls when it sends EOF.
   ;; Once the final byte has been sent to child, that
   ;; code should control closing that pipe pair.
-
-  ;; The child-monitor loop should handle this
-  ;; detail
-  #_(comment (child-> io-handle ::specs/normal))
   (.close from-child))
 
 (s/fdef swap-parent-callback!
@@ -1891,6 +1853,7 @@
                                          :new-callback ::specs/->parent))
         :ret (s/or :succeeded ::specs/state
                    :timed-out-value any?))
+
 ;; Q: Do I want to set an alternative that blocks?
 (defn swap-parent-callback!
   ;; I'm fairly certain this is about switching modes from
@@ -1929,3 +1892,38 @@
          timed-out-value))))
   ([io-handle new-callback]
    (swap-parent-callback! io-handle 5000 ::timed-out new-callback)))
+
+(s/fdef halt!
+        :args (s/cat :io-handle ::specs/io-handle)
+        :ret any?)
+(defn halt!
+  "This is supposed to be a hard-stop that means we're totally done."
+  [{:keys [::log/logger
+           ::specs/message-loop-name
+           ::specs/stream
+           ::specs/from-child
+           ::specs/child-out]
+    :as io-handle}]
+  ;; TODO: We need the log-state here, so we can append to it.
+  ;; The obvious choice seems to involve calling get-state.
+  (let [{log-state ::log/state} (get-state io-handle)
+        log-state (log/info log-state
+                            ::halt!
+                            "I/O Loop Halt Requested"
+                            {::specs/message-loop-name message-loop-name})
+        log-state (try
+                    (strm/close! stream)
+                    (doseq [pipe [from-child
+                                  child-out]]
+                      (.close pipe))
+                    (log/info log-state
+                              ::halt!
+                              "Halt initiated"
+                              {::specs/message-loop-name message-loop-name})
+                    (catch RuntimeException ex
+                      (log/exception log-state
+                                     ex
+                                     ::halt!
+                                     "Signalling halt failed"
+                                     {::specs/message-loop-name message-loop-name})))]
+    (log/flush-logs! logger log-state)))

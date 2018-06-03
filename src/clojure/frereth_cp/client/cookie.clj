@@ -160,6 +160,7 @@
         ;; and b) the cookie (if we managed to decrypt it)
         :ret any?)
 (defn received-response!
+  "Hello triggers this when we hear back from the Server"
   [{log-state ::log/state
     :keys [::log/logger]
     :as this}

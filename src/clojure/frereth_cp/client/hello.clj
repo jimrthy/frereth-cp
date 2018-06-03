@@ -229,13 +229,6 @@
                                    (log/exception-details ex))
                           (throw (ex-info "Log flush failure re: server response" {::actual-success actual-success} ex))))]
         (println "client: Should have a log message about possibly responsive server")
-        ;; Original failing approach:
-        (when-let [{:keys [::specs/network-packet]} actual-success]
-          ;; This made things much more difficult to debug than they should have been.
-          ;; The problem with fixing this really ties into the child message state.
-          ;; I need to signal it to give up on sending future messages, because
-          ;; the consumer has gone away.
-          (assert network-packet "FIXME: Eliminate the fast-spin loop that follows"))
         (if-let [network-packet (::specs/network-packet actual-success)]
           (let [log-state (log/debug log-state
                                      ::do-polling-loop
