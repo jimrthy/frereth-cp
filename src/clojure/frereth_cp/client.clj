@@ -8,20 +8,24 @@
   (:require [byte-streams :as b-s]
             [clojure.data :as data]
             [clojure.spec.alpha :as s]
-            [frereth-cp.client.cookie :as cookie]
-            [frereth-cp.client.hello :as hello]
-            [frereth-cp.client.initiate :as initiate]
-            [frereth-cp.client.state :as state]
-            [frereth-cp.message.specs :as msg-specs]
+            [frereth-cp.client
+             [cookie :as cookie]
+             [hello :as hello]
+             [initiate :as initiate]
+             [state :as state]]
+            [frereth-cp.message
+             [specs :as msg-specs]]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.specs :as specs]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [specs :as specs]]
             [frereth-cp.util :as util]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            [io.netty.buffer ByteBuf Unpooled]))
@@ -248,19 +252,21 @@ implementation. This is code that I don't understand yet"
     (let [this (dissoc this ::specs/network-packet)
           log-state (log/info log-state
                               ::servers-polled!
-                              "Building/sending Vouch")]
-      ;; Got a Cookie response packet from server.
-      ;; Theory in the reference implementation is that this is
-      ;; a good signal that it's time to spawn the child to do
-      ;; the real work.
-      ;; Note that the packet-builder associated with this
-      ;; will start as a partial built frombuild-initiate-packet!
-      ;; The forked callback will call that until we get a response
-      ;; back from the server.
-      ;; At that point, we need to swap out packet-builder
-      ;; as the child will be able to start sending us full-
-      ;; size blocks to fill Message Packets.
-      (state/fork! this))
+                              "Building/sending Vouch")
+          ;; Got a Cookie response packet from server.
+          ;; Theory in the reference implementation is that this is
+          ;; a good signal that it's time to spawn the child to do
+          ;; the real work.
+          ;; Note that the packet-builder associated with this
+          ;; will start as a partial built frombuild-initiate-packet!
+          ;; The forked callback will call that until we get a response
+          ;; back from the server.
+          ;; At that point, we need to swap out packet-builder
+          ;; as the child will be able to start sending us full-
+          ;; size blocks to fill Message Packets.
+          {:keys [::state/child]
+           :as this} (state/fork! this)]
+      this)
     (catch Exception ex
       (let [log-state (log/exception log-state
                                      ex

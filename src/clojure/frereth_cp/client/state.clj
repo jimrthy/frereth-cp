@@ -5,18 +5,22 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [frereth-cp.message :as message]
-            [frereth-cp.message.specs :as msg-specs]
+            [frereth-cp.message
+             [registry :as registry]
+             [specs :as msg-specs]]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [serialization :as serial]
+             [specs :as specs]]
             [frereth-cp.util :as util]
-            [manifold.deferred :as dfrd]
-            [manifold.executor :as exec]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [executor :as exec]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
@@ -179,6 +183,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                 ::specs/inner-i-nonce]))
 (s/def ::child-send-state (s/merge ::initiate-building-params
                                    (s/keys :req [::chan->server])))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Globals
+
+(defonce io-loop-registry (atom (registry/ctor)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Implementation
@@ -725,6 +734,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                              "Child message loop initialized"
                              {::this (dissoc this ::log/state)
                               ::child (dissoc io-handle ::log/state)})]
+    (swap! io-loop-registry
+           #(registry/register % io-handle))
     (child-spawner! io-handle)
     (assoc this
            ::child io-handle
@@ -741,8 +752,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (if child
     (let [log-state (log/warn log-state
                               ::do-stop
-                              "Halting child's message io-loop")]
+                              "Halting child's message io-loop")
+          message-loop-name (::specs/message-loop-name child)]
       (message/halt! child)
+      (swap! io-loop-registry
+             #(registry/de-register % message-loop-name))
       (log/warn log-state
                 ::do-stop
                 "Child's message io-loop halted"))
