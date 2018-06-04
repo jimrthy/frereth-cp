@@ -5,12 +5,22 @@
             [frereth-cp.shared.specs :as shared-specs]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;; Specs
 
+;;; It's really tempting to make this an atom that holds the map.
+;;; But that complects concerns. Keep this ns nice and simple. Let
+;;; its callers worry about actually managing the state.
 (s/def ::registry (s/map-of ::msg-specs/message-loop-name ::msg-specs/io-handle))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;; Public
+
+(s/fdef ctor
+        :ret ::registry)
+(defn ctor
+  "Create a new registry"
+  []
+  {})
 
 (s/fdef register
         :args (s/cat :registry ::registry
@@ -48,10 +58,3 @@
   [registry
    message-loop-name]
   (get registry message-loop-name))
-
-(s/fdef ctor
-        :ret ::registry)
-(defn ctor
-  "Create a new registry"
-  []
-  {})

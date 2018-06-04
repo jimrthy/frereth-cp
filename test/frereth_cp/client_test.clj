@@ -8,7 +8,9 @@
              [hello :as hello]
              [state :as state]]
             [frereth-cp.message :as message]
-            [frereth-cp.message.specs :as msg-specs]
+            [frereth-cp.message
+             [registry :as registry]
+             [specs :as msg-specs]]
             [frereth-cp.server.cookie :as srvr-cookie]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
