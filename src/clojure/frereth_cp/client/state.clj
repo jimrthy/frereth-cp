@@ -755,6 +755,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               "Halting child's message io-loop")
           message-loop-name (::specs/message-loop-name child)]
       (message/halt! child)
+      ;; In theory, I should be able to just manually call halt!
+      ;; on entries in this registry that don't get stopped when
+      ;; things hit a bug.
+      ;; In practice, the problems probably go deeper:
+      ;; Either from-child or to-parent (more likely) keeps
+      ;; feeding un-ackd messages into the queue.
+      ;; So I need a way to manually halt that also.
       (swap! io-loop-registry
              #(registry/de-register % message-loop-name))
       (log/warn log-state

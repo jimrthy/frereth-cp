@@ -186,6 +186,7 @@
                                      ::shared/my-keys {::shared/keydir "curve-test"
                                                        ::K/srvr-name factory/server-name})]
         (println "Checking pre-state spec")
+        ;; FIXME: Start back here.
         (is (not (s/explain-data ::server/pre-state-options pre-state-options)))
         (println "pre-state spec passed")
         (testing

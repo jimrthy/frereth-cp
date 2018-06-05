@@ -139,23 +139,24 @@
                                 ;; Q: Is that because I just sent garbage in the Cookie?
                                 ;; Or is there a bigger problem?
                                 (fn [cookie]
-                                  (println "Cookie arrived. This should trigger the Initiate")
+                                  (println "Bogus cookie arrived from \"server.\" This would trigger the Initiate, if it weren't broken")
                                   (strm/try-take! chan->server ::nada 200 ::timed-out))
                                 (partial check-success client "Taking the vouch")
-                                (fn [buf]
+                                (fn [{:keys [:host :message :port]
+                                      :as network-packet}]
                                   ;; This is actually a PersistentArrayMap
                                   ;; Probably a ::shared/network-packet
                                   ;; TODO: Fix this next problem
-                                  (is (instance? ByteBuf buf)
-                                      (str "Expected ByteBuf. Got " (class buf)))
+                                  (is (instance? ByteBuf message)
+                                      (str "Expected ByteBuf. Got " (class message)))
                                   ;; FIXME: Need to extract the cookie from the vouch that
                                   ;; we just received.
                                   (let [expected-n (count cookie)
-                                        actual-n (.readableBytes buf)]
+                                        actual-n (.readableBytes message)]
                                     (is (= expected-n actual-n)))
-                                  (let [response (byte-array (.readableBytes buf))]
-                                    (.getBytes buf 0 response)
-                                    (is (= (vec response) (vec (.getBytes cookie))))
+                                  (let [response (byte-array (.readableBytes message))]
+                                    (.getBytes message 0 response)
+                                    (is (= (vec response) (vec cookie)))
                                     true)))]
         (is @success)))))
 (comment

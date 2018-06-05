@@ -288,68 +288,6 @@ implementation. This is code that I don't understand yet"
                    (log/warn (log/fork state)
                              ::chan->server-closed)))
 
-(s/fdef set-up-server-hello-polling!
-        :args (s/cat :this ::state/state
-                     :timeout (s/and #((complement neg?) %)
-                                     int?))
-        ;; Hmm.
-        ;; This deferrable will get delivered as either
-        ;; a) new State, after we get a Cookie response
-        ;; b) a Exception, if the hello polling fails
-        ;; Option a needs to be refined: we really should
-        ;; just get back the log-state and the Cookie (assuming
-        ;; it was valid)
-        :ret ::specs/deferrable)
-(defn set-up-server-hello-polling!
-  "Start polling the server(s) with HELLO Packets"
-  [{:keys [::log/logger]
-    :as this}
-   timeout]
-  (let [{log-state ::log/state
-         outcome ::specs/deferrable}
-        ;; Note that this is going to block the calling
-        ;; thread. Which is annoying, but probably not
-        ;; a serious issue outside of unit tests that
-        ;; are mimicking both client and server pieces,
-        ;; which need to run this function in a separate
-        ;; thread.
-        ;; Note 2: Including the cookie/wait-for-cookie! callback
-        ;; is the initial, most obvious reason that I haven't
-        ;; moved this to the hello ns yet.
-        ;; TODO: Convert that to another parameter (soon).
-        (hello/poll-servers! this timeout cookie/wait-for-cookie!)]
-    (println "client: triggered hello! polling")
-    (-> outcome
-        (dfrd/chain #(into % (initiate/build-inner-vouch %))
-                    servers-polled
-                    ;; Based on what's written here, deferrable involves
-                    ;; the success of...what? Getting the Cookie from
-                    ;; the server?
-                    (fn [{:keys [::specs/deferrable
-                                 ::log/state]
-                          :as this}]
-                      (println "client: servers-polled succeeded:" (dissoc this ::log/state))
-                      (let [log-state (log/flush-logs! logger state)]
-                        ;; This is at least a little twisty.
-                        ;; And seems pretty wrong. In the outer context, outcome
-                        ;; was a deferrable that got added to this by
-                        ;; hello/poll-servers!
-                        ;; That returns a ::log/state.
-                        ;; Q: How has this ever worked?
-                        ;; Alt Q: Has it ever?
-                        ;; A: I don't think I've ever gotten this far.
-                        ;; It seems like a crash and burn just waiting to happen.
-                        ;; FIXME: Get back to this.
-                        (dfrd/chain deferrable
-                                    (fn [sent]
-                                      (if (not (or (= sent ::state/sending-vouch-timed-out)
-                                                   (= sent ::state/drained)))
-                                        (state/->message-exchange-mode (assoc this
-                                                                              ::log/state log-state)
-                                                                       sent)
-                                        (throw (ex-info "Something about polling/sending Vouch failed"
-                                                        {::problem sent})))))))))))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -367,16 +305,22 @@ implementation. This is code that I don't understand yet"
   ;; mode.
   "Perform the side-effects to establish a connection with a server"
   [{:keys [::state/chan->server]
+    log-state ::log/state
     :as this}]
   {:pre [chan->server]}
   (try
-    (let [timeout (state/current-timeout this)]
-      ;; FIXME: Log this instead
-      (println "client/start! Wiring side-effects through chan->server")
       (strm/on-drained chan->server
                        (partial chan->server-closed this))
+      (let [timeout (state/current-timeout this)
+          log-state (log/info log-state
+                              ::start!
+                              "client/start! Wiring side-effects through chan->server")]
       (let [this (hello/do-build-packet this)]
-        (set-up-server-hello-polling! this timeout)))
+        (hello/set-up-server-polling! (assoc this ::log/state log-state)
+                                      timeout
+                                      cookie/wait-for-cookie!
+                                      initiate/build-inner-vouch
+                                      servers-polled)))
     (catch Exception ex
       ;; Knee-jerk reaction is to switch this to a logger.
       ;; But the point is that I can't.

@@ -174,6 +174,11 @@
   ;; If they don't match, we need to discard this cookie
   ;; and go back to waiting (don't forget to reduce the
   ;; timeout based on elapsed time)
+  ;; Realistically, it probably would have been better to do
+  ;; this as soon as we received the packet.
+  ;; It seems like that might introduce the possibility of timing
+  ;; attacks, though I don't see how.
+  ;; TODO: Check with a cryptographerp.
   (let [log-label ::received-response!
         log-state (log/info log-state
                             log-label
@@ -221,7 +226,7 @@
                                                                     (str "Prepared shared short-term secret\n"
                                                                          "Should resolve the cookie-response in client/poll-servers-with-hello!"))
                                              ::state/shared-secrets shared-secrets
-                                             ::specs/network-packet cookie}))
+                                             ::shared/network-packet cookie}))
                   (dfrd/error! notifier {::log/state (log/error log-state
                                                                 log-label
                                                                 (str "Missing ::specs/public-short among\n"
