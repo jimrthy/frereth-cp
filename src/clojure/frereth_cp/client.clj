@@ -67,152 +67,6 @@
         (assoc-in [::shared/work-area ::shared/working-nonce] "...FIXME: Decode nonce bytes")
         (assoc-in [::shared/work-area ::shared/text] "...plain/cipher text"))))
 
-(defn extract-child-message
-  "Pretty much blindly translated from the CurveCP reference
-implementation. This is code that I don't understand yet"
-  [this buffer]
-  ;; FIXME: Don't eliminate completely yet. There's at least one
-  ;; cross-reference to this in a comment in client.state.
-  ;; Have to eliminate that first.
-  ;; TODO: Make that happen soon.
-  (throw (RuntimeException. "obsolete"))
-  (let [reducer (fn [{:keys [:buf-len
-                             :msg-len
-                             :i
-                             :this]
-                      ^bytes buf :buf
-                      ^bytes msg :msg
-                      :as acc}
-                     b]
-                  (when (or (< msg-len 0)
-                            ;; This is the flag that the stream has exited.
-                            ;; Q: Is that what it's being used for here?
-                            (> msg-len 2048))
-                    (throw (ex-info "done" {})))
-                  ;; It seems silly to set this and then check the first byte
-                  ;; for the quit signal (assuming that's what it is)
-                  ;; every time through the loop.
-                  (aset msg msg-len (aget buf i))
-                  (let [msg-len (inc msg-len)
-                        length-code (aget msg 0)]
-                    (when (bit-and length-code 0x80)
-                      (throw (ex-info "done" {})))
-                    ;; This is really checking to see whether we've pulled
-                    ;; the promised number of bytes out of the child's read
-                    ;; pipe. This part of the code has been totally revamped
-                    ;; to reflect the fact that we're using the JVM instead of
-                    ;; raw C, and we don't have three different processes
-                    ;; communicating over anonymous pipes.
-                    ;; This code is a pretty strong indication
-                    ;; that this function should go away.
-                    (if (= msg-len (inc (* 16 length-code)))
-                      (let [{:keys [::shared/extension
-                                    ::shared/my-keys
-                                    ::shared/packet-management
-                                    ::state/server-extension
-                                    ::state/shared-secrets
-                                    ::state/server-security
-                                    ::shared/work-area
-                                    ::specs/inner-i-vouch]
-                             log-state ::log/state
-                             :as this} (state/clientextension-init this)
-                            {:keys [::shared/text]} work-area
-                            {:keys [::shared/packet
-                                    ::shared/packet-nonce]} packet-management
-                            _ (throw (RuntimeException. "this Component nonce isn't updated"))
-                            short-term-nonce (state/update-client-short-term-nonce
-                                              packet-nonce)
-                            working-nonce (::shared/working-nonce work-area)]
-                        (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length
-                                             short-term-nonce)
-                        ;; This is where the original splits, depending on whether
-                        ;; we've received a message back from the server or not.
-                        ;; According to the spec:
-                        ;; The server is free to send any number of Message packets
-                        ;; after it sees the Initiate packet.
-                        ;; The client is free to send any number of Message packets
-                        ;; after it sees the server's first Message packet.
-                        ;; At this point in time, we know we're still building the
-                        ;; Initiate packet.
-                        ;; It's tempting to try to avoid duplication the same
-                        ;; way the reference implementation does, by handling
-                        ;; both logical branches here.
-                        ;; And maybe there's a really good reason for doing so.
-                        ;; But this function feels far too complex as it is.
-                        (let [r (dec msg-len)
-                              ^TweetNaclFast$Box$KeyPair my-long-pair (::shared/long-pair my-keys)]
-                          (when (or (< r 16)
-                                    (> r 640))
-                            (throw (ex-info "done" {})))
-                          (b-t/byte-copy! working-nonce 0 K/client-nonce-prefix-length
-                                          K/initiate-nonce-prefix)
-                          ;; TODO: Use compose instead
-                          (shared/zero-out! text 0 K/decrypt-box-zero-bytes)
-                          ;; This 32-byte padding seems very surprising, since the
-                          ;; specs all seem to point to just needing 16.
-                          ;; That's just one of the fun little details about the
-                          ;; way the underlying library works.
-                          (b-t/byte-copy! text K/decrypt-box-zero-bytes
-                                          K/key-length
-                                          (.getPublicKey my-long-pair))
-                          (b-t/byte-copy! text 64 64 inner-i-vouch)
-                          (b-t/byte-copy! text
-                                          128
-                                          specs/server-name-length
-                                          (::specs/srvr-name server-security))
-                          ;; First byte is a magical length marker
-                          ;; TODO: Double-check the original.
-                          ;; This doesn't look right at all.
-                          ;; I think I need a 32-byte offset for the decryption
-                          ;; padding.
-                          ;; And the call to open-after really seems like it should start
-                          ;; at offset 384 instead of 0
-                          (b-t/byte-copy! text 384 r msg 1)
-                          (let [box (crypto/open-after (::state/client-short<->server-short shared-secrets)
-                                                       text
-                                                       0
-                                                       (+ r 384)
-                                                       working-nonce)
-                                offset K/server-nonce-prefix-length]
-                            ;; TODO: Switch to compose for this
-                            (b-t/byte-copy! packet
-                                            0
-                                            offset
-                                            K/initiate-header)
-                            (b-t/byte-copy! packet offset
-                                            K/extension-length server-extension)
-                            (let [offset (+ offset K/extension-length)]
-                              (b-t/byte-copy! packet offset
-                                              K/extension-length extension)
-                              (let [offset (+ offset K/extension-length)
-                                    ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)]
-                                (b-t/byte-copy! packet offset K/key-length
-                                                (.getPublicKey my-short-pair))
-                                (let [offset (+ offset K/key-length)]
-                                  (b-t/byte-copy! packet
-                                                  offset
-                                                  K/server-cookie-length
-                                                  (::state/server-cookie server-security))
-                                  (let [offset (+ offset K/server-cookie-length)]
-                                    (b-t/byte-copy! packet offset
-                                                    K/server-nonce-prefix-length
-                                                    working-nonce
-                                                    K/server-nonce-suffix-length)))))
-                            ;; Original version sends off the packet, updates
-                            ;; msg-len to 0, and goes back to pulling data from child/server.
-                            (throw (ex-info "How should this really work?"
-                                            {:problem "Need to break out of loop here"})))))
-                      (assoc acc :msg-len msg-len))))
-        extracted (reduce reducer
-                          {:buf (byte-array 4096)
-                           :buf-len 0
-                           :msg (byte-array 2048)
-                           :msg-len 0
-                           :i 0
-                           :this this}
-                          buffer)]
-    (assoc this ::state/outgoing-message (:child-msg extracted))))
-
 (defn child-exited!
   [this]
   (throw (ex-info "child exited" this)))
@@ -231,15 +85,18 @@ implementation. This is code that I don't understand yet"
         :args (s/cat :this ::state/state)
         :ret ::state/state)
 (defn servers-polled
+  ;; Q: Can I/would it make sense to move this into cookie?
+  "Got back a cookie. Respond with a vouch"
   [{log-state ::log/state
     logger ::log/logger
+    ;; Q: Is there a good way to pry this out
+    ;; so it's its own parameter?
     cookie ::specs/network-packet
     :as this}]
   (println "client: Top of servers-polled")
   (when-not log-state
     ;; This is an ugly situation.
     ;; Something has gone badly wrong
-    ;; TODO: Write to a STDOUT logger instead
     (let [logger (if logger
                    logger
                    (log/std-out-log-factory))]
@@ -258,7 +115,7 @@ implementation. This is code that I don't understand yet"
           ;; a good signal that it's time to spawn the child to do
           ;; the real work.
           ;; Note that the packet-builder associated with this
-          ;; will start as a partial built frombuild-initiate-packet!
+          ;; will start as a partial built from build-initiate-packet!
           ;; The forked callback will call that until we get a response
           ;; back from the server.
           ;; At that point, we need to swap out packet-builder
@@ -292,7 +149,7 @@ implementation. This is code that I don't understand yet"
 ;;; Public
 
 (s/fdef start!
-        :args (s/cat :this ::state/state-agent)
+        :args (s/cat :this ::state/state)
         ;; Q: Does this return anything meaningful at all?
         ;; A: Well, to remain consistent with the Component workflow,
         ;; it really should return the "started" agent.
@@ -321,12 +178,15 @@ implementation. This is code that I don't understand yet"
                                       cookie/wait-for-cookie!
                                       initiate/build-inner-vouch
                                       servers-polled)))
-    (catch Exception ex
-      ;; Knee-jerk reaction is to switch this to a logger.
-      ;; But the point is that I can't.
-      ;; TODO: At least write to STDERR instead.
-      (println "client: Failed before I could even get to a logger:\n"
-               (log/exception-details ex)))))
+      (catch Exception ex
+        ;; A std-out logger doesn't seem serious enough to
+        ;; cope with this
+        (let [logger (log/std-err-log-factory)
+              log-state (log/init ::DOA)]
+          (log/flush-logs! logger (log/exception log-state
+                                                 ex
+                                                 ::start!
+                                                 "Failed before I could even get to a logger"))))))
 
 (s/fdef stop!
         :args (s/cat :state ::state/state)
@@ -483,19 +343,55 @@ implementation. This is code that I don't understand yet"
         :ret ::state/state)
 (defn ctor
   [opts logger-initializer]
-  (-> opts
-      (state/initialize-immutable-values logger-initializer)
-      ;; This really belongs in state/initialize-immutable-values
-      ;; But that would create circular imports.
-      ;; This is a red flag.
-      ;; FIXME: Come up with a better place for it to live.
-      (assoc ::state/packet-builder initiate/build-initiate-packet!)
-      state/initialize-mutable-state!
-      (assoc
-       ;; This seems very cheese-ball, but they
-       ;; *do* need to be part of the agent.
-       ;; Assuming the agent just doesn't go completely away.
-       ;; We definitely don't want multiple threads
-       ;; messing with them.
-       ::shared/packet-management (shared/default-packet-manager)
-       ::shared/work-area (shared/default-work-area))))
+  (let [result
+        (-> opts
+            (state/initialize-immutable-values logger-initializer)
+            ;; This really belongs in state/initialize-immutable-values
+            ;; But that would create circular imports.
+            ;; This is a red flag.
+            ;; FIXME: Come up with a better place for it to live.
+            (assoc ::state/packet-builder initiate/build-initiate-packet!)
+            state/initialize-mutable-state!
+            (assoc
+             ;; This seems very cheese-ball, but they
+             ;; *do* need to be part of the agent.
+             ;; Assuming the agent just doesn't go completely away.
+             ;; We definitely don't want multiple threads
+             ;; messing with them.
+             ::shared/packet-management (shared/default-packet-manager)
+             ::shared/work-area (shared/default-work-area)))]
+    (dfrd/on-realized (::state/terminated result)
+                      (fn [unexpected]
+                        ;; terminated is for something really extreme,
+                        ;; when you really want to kill the client,
+                        ;; can't, and are not quite in a position
+                        ;; to do anything short of terminating
+                        ;; the JVM.
+                        ;; There should never be a "success"
+                        ;; condition that leads to termination.
+                        (let [logger (log/std-err-log-factory)
+                              log-state (log/init ::ctor)]
+                          ;; It's very tempting to completely kill the JVM
+                          ;; as a way to discourage this sort of behavior.
+                          (log/flush-logs! logger
+                                           (log/error log-state
+                                                      ::successful-termination
+                                                      "Don't ever do this"
+                                                      {::details unexpected})))
+                        (stop! result))
+                      (fn [outcome]
+                        (stop! result)
+                        (let [logger (log/std-err-log-factory)
+                              log-state (log/init ::ctor)]
+                          ;; It's very tempting to completely kill the JVM
+                          ;; as a way to discourage this sort of behavior.
+                          (log/flush-logs! logger
+                                           (if (instance? Throwable outcome)
+                                             (log/exception log-state
+                                                            outcome
+                                                            ::botched-termination)
+                                             (log/error log-state
+                                                        ::expected-termination
+                                                        "If you have to do this, provide copious details"
+                                                        {::details outcome}))))))
+    result))

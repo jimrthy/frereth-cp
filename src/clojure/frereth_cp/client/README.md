@@ -84,9 +84,7 @@ If not, it works through some possibly-retry logic.
 This doesn't do anything except flush the logs.
 
 hello/do-polling-loop includes a comment that this
-*should* trigger servers-polled.
-
-That rolls back up into client/set-up-server-hello-polling!
+*should* trigger client/servers-polled.
 
 ## hello/set-up-server-polling!
 
@@ -96,4 +94,16 @@ state).
 
 We finally stick that into a deferred/chain.
 
-It starts by calling
+That starts by calling build-inner-vouch.
+
+And then servers-polled.
+
+## client/servers-polled
+
+That's part of a deferred chain that rolls back out of
+hello/set-up-server-hello-polling!
+
+The main point to this (after you unwrap all the logging
+and error handling) is to call child.state/fork!
+
+## state/fork!

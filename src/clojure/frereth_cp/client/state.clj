@@ -78,11 +78,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                       ::client-short<->server-long
                                       ::client-short<->server-short]))
 
-;; Q: What is this, and how is it used?
-;; A: Well, it has something to do with messages from the Child to the Server.
-;; c.f. client/extract-child-message
-(s/def ::outgoing-message any?)
-
 (s/def ::packet-builder (s/fspec :args (s/cat :state ::child-send-state
                                               :msg-packet bytes?)
                                  :ret ::msg-specs/buf))
@@ -90,6 +85,15 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; Because, for now, I need somewhere to hang onto the future.
 ;; Q: So...is this something like a Future ?
 (s/def ::child any?)
+
+;; This is for really extreme conditions where sanity has flown
+;; out the window.
+;; In a standard synchronous application, this is where an assert
+;; should fail.
+;; Use this when you can't do that meaningfully because you're
+;; in an async callback and it will just get swallowed.
+;; There's never a valid reason for fulfilling this successfully.
+(s/def ::terminated ::specs/deferrable)
 
 ;; The parts that change really need to be stored in a mutable
 ;; data structure.
@@ -122,6 +126,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ::server-security
                                      ;; The only thing mutable about this is that I don't have it all in beginning
                                      ::shared-secrets
+                                     ::terminated
                                      ;; FIXME: Tracking this here doesn't really make
                                      ;; any sense at all.
                                      ;; It's really a member variable of the IOLoop
@@ -270,7 +275,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                {::srvr-long-pk (b-t/->string server-long-term-pk)
                                 ::my-long-pk (b-t/->string (.getPublicKey long-pair))
                                 ;; FIXME: Don't log this
-                                ::shared-key (b-t/->string long-shared)})]
+                                ::shared-key (b-t/->string long-shared)})
+          terminated (dfrd/deferred)]
       (into this
             {::child-packets []
              ::client-extension-load-time 0
@@ -289,7 +295,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              server-long-term-pk
                                                              (.getSecretKey short-pair))}
              ::server-security server-security
-             ::log/state log-state}))))
+             ::log/state log-state
+             ::terminated terminated}))))
 
 (s/fdef ->message-exchange-mode
         :args (s/cat :this ::state

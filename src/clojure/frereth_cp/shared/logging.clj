@@ -298,6 +298,37 @@
   (flush! [_]
     (send state-agent #(update % ::flush-count inc))))
 
+(defrecord StdErrLogger [state-agent]
+  ;; Really just a StreamLogger
+  ;; where stream is STDOUT.
+  ;; But it's simple/easy enough that it seemed
+  ;; worth writing this way instead
+  Logger
+  (log! [{:keys [:state-agent]
+          :as this} msg]
+    (binding [*out* *err*]
+      (when-let [ex (agent-error state-agent)]
+        (println "Logging Agent Failed:\n"
+                 (exception-details ex))
+        ;; Q: What are the odds this will work?
+        (let [last-state @state-agent]
+          (println "Logging Agent State:\n"
+                   last-state)
+          (restart-agent state-agent last-state)))
+      ;; Creating an exception that we're going to throw away
+      ;; for almost every log message seems really wasteful.
+      (let [get-caller-stack (RuntimeException. "Q: Is there a cheaper way to get the call stack?")]
+        (send state-agent (fn [state entry]
+                            (print (format-log-string get-caller-stack entry))
+                            state)
+              msg))))
+  ;; Q: Is there any point to calling .flush
+  ;; on STDOUT?
+  ;; A: Not according to stackoverflow.
+  ;; It flushes itself after every CR/LF
+  (flush! [_]
+    (send state-agent #(update % ::flush-count inc))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -343,6 +374,10 @@
 (defn std-out-log-factory
   []
   (->StdOutLogger (agent {::flush-count 0})))
+
+(defn std-err-log-factory
+  []
+  (->StdErrLogger (agent {::flush-count 0})))
 
 (defn stream-log-factory
   [stream]

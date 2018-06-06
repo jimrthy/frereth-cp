@@ -231,7 +231,7 @@
                                        actual-success)]
               ;; Need to move on to Vouch. But there's already far
               ;; too much happening here.
-              ;; So the deferred in completion should trigger servers-polled
+              ;; So the deferred in completion should trigger client/servers-polled
               (as-> (into this actual-success) this
                 (assoc this ::log/state log-state)
                 (dfrd/success! completion this))
@@ -266,6 +266,8 @@
                          raw-packet
                          cookie-sent-callback
                          now
+                         ;; TODO: I'm missing that module against a random 32-byte number
+                         ;; mentioned above.
                          (* 1.5 timeout)
                          remaining-ips)
                   (do
@@ -416,13 +418,6 @@
                      ;; TODO: Spec this out
                      :build-inner-vouch any?
                      :servers-polled any?)
-        ;; Hmm.
-        ;; This deferrable will get delivered as either
-        ;; a) new State, after we get a Cookie response
-        ;; b) a Exception, if the hello polling fails
-        ;; Option a needs to be refined: we really should
-        ;; just get back the log-state and the Cookie (assuming
-        ;; it was valid)
         :ret ::specs/deferrable)
 (defn set-up-server-polling!
   "Start polling the server(s) with HELLO Packets"
@@ -440,18 +435,14 @@
         ;; are mimicking both client and server pieces,
         ;; which need to run this function in a separate
         ;; thread.
-        ;; Note 2: Including the cookie/wait-for-cookie! callback
-        ;; is the initial, most obvious reason that I haven't
-        ;; moved this function definition to the hello ns yet.
-        ;; TODO: Convert that to another parameter (soon).
         (poll-servers! this timeout wait-for-cookie!)]
     (println "client: triggered hello! polling")
     (-> outcome
         (dfrd/chain #(into % (build-inner-vouch %))
+                    ;; Got a Cookie back. Set things up to send a vouch
                     servers-polled
-                    ;; Based on what's written here, deferrable involves
-                    ;; the success of...what? Getting the Cookie from
-                    ;; the server?
+                    ;; Cope with that send returning more than just the
+                    ;; next deferred in the chain
                     (fn [{:keys [::specs/deferrable
                                  ::log/state]
                           :as this}]

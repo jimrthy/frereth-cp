@@ -178,7 +178,7 @@
   ;; this as soon as we received the packet.
   ;; It seems like that might introduce the possibility of timing
   ;; attacks, though I don't see how.
-  ;; TODO: Check with a cryptographerp.
+  ;; TODO: Check with a cryptographer.
   (let [log-label ::received-response!
         log-state (log/info log-state
                             log-label
@@ -234,12 +234,8 @@
                                                                      "\namong bigger-picture\n"
                                                                      (keys this)))})))
               ;; This is a failure, really.
-              ;; Q: What does the reference implementation do here?
-              ;; A: Discards the packet, updates recent (and thus the polling timeout)
-              ;; and goes back to polling.
-              ;; TODO: Change the semantics behind fulfillment here.
-              ;; Send back the log-state and the cookie, if we managed to decipher.
-              ;; The rest should just be noise.
+              ;; Discards the packet, update recent (and thus the polling timeout)
+              ;; and go back to polling.
               (dfrd/success! notifier {::log/state (log/warn log-state
                                                              log-label
                                                              "Unable to decrypt server cookie"
@@ -278,13 +274,18 @@
                                                  ex
                                                  log-label)})))))
 
-;; Q: Rename this to response-failed ?
-(s/fdef hello-response-failed
+;; The name makes this seem like it doesn't belong in here.
+;; It totally does.
+;; A better name would be nice.
+(s/fdef hello-response-failed!
         :args (s/cat :wrapper ::state/state
-                     :failure ::specs/throwable))
+                     :failure ::specs/throwable)
+        :ret any?)
 (defn hello-response-failed!
+  "Waiting for the cookie failed"
   [{:keys [::log/logger
-           ::log/state]
+           ::log/state
+           ::state/terminated]
     :as this}
    failure]
   ;; FIXME: Really need to signal the outer client that
@@ -292,10 +293,10 @@
   ;; Note that this isn't an ordinary timeout: this was a true
   ;; failure in taking from the stream. And, realistically,
   ;; should never happen.
-  ;; TODO: This arguably *should* be fatal.
   (log/flush-logs! logger (log/exception state
                                          failure
-                                         ::hello-response-failed!)))
+                                         ::hello-response-failed!))
+  (dfrd/error! terminated failure))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
