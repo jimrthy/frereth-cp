@@ -301,6 +301,58 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
+(s/fdef servers-polled
+        :args (s/cat :this ::state/state)
+        :ret ::state/state)
+(defn servers-polled
+  "Got back a cookie. Respond with a vouch"
+  [{log-state ::log/state
+    logger ::log/logger
+    ;; Q: Is there a good way to pry this out
+    ;; so it's its own parameter?
+    cookie ::specs/network-packet
+    :as this}]
+  (println "client: Top of servers-polled")
+  (when-not log-state
+    ;; This is an ugly situation.
+    ;; Something has gone badly wrong
+    (let [logger (if logger
+                   logger
+                   (log/std-out-log-factory))]
+      (log/warn (log/init ::servers-polled)
+                ::missing-log-state
+                ""
+                {::state/state this
+                 ::state-keys (keys this)})))
+  (try
+    (let [this (dissoc this ::specs/network-packet)
+          log-state (log/info log-state
+                              ::servers-polled!
+                              "Forking child")
+          ;; Got a Cookie response packet from server.
+          ;; Theory in the reference implementation is that this is
+          ;; a good signal that it's time to spawn the child to do
+          ;; the real work.
+          ;; Note that the packet-builder associated with this
+          ;; will start as a partial built from build-initiate-packet!
+          ;; The forked callback will call that until we get a response
+          ;; back from the server.
+          ;; At that point, we need to swap out packet-builder
+          ;; as the child will be able to start sending us full-
+          ;; size blocks to fill Message Packets.
+          {:keys [::state/child]
+           :as this} (state/fork! this)]
+      this)
+    (catch Exception ex
+      (let [log-state (log/exception log-state
+                                     ex
+                                     ::servers-polled)
+            log-state (log/flush-logs! logger log-state)
+            failure (dfrd/error-deferred ex)]
+        (assoc this
+               ::log/state log-state
+               ::specs/deferrable failure)))))
+
 (s/fdef wait-for-cookie!
         :args (s/cat :this ::state/state
                      :notifier dfrd/deferrable?
