@@ -11,10 +11,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(s/def ::ctx-atom (s/or :string string?
+(s/def ::ctx-atom (s/or :int int?
                         :keyword keyword?
-                        :uuid uuid?
-                        :int int?))
+                        :string string?
+                        :symbol symbol?
+                        :uuid uuid?))
 (s/def ::ctx-seq (s/coll-of ::ctx-atom))
 (s/def ::context (s/or :atom ::ctx-atom
                        :seq ::ctx-seq))

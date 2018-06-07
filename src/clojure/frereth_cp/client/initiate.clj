@@ -141,17 +141,21 @@
   FIXME: Eliminate that"
   [{log-state ::log/state
     :keys [::log/logger
-           ::msg-specs/message-loop-name]
+           ::msg-specs/message-loop-name
+           ::state/server-security]
     :as this}
    ^bytes msg]
-
   (let [log-state (log/debug log-state
                              ::build-initiate-packet!
                              "Trying to build initiated packet"
                              {::msg-specs/message-loop-name (or message-loop-name
                                                                 (str "'Name Missing', among:\n" (keys this)))
                               ::message-length (count msg)
-                              ::incoming-bytes-in msg})]
+                              ::incoming-bytes-in msg})
+        {:keys [::state/server-cookie]} server-security]
+    (when-not server-cookie
+      (throw (ex-info "Missing server-cookie"
+                      {::state/server-security server-security})))
     (if msg
       (if (K/legal-vouch-message-length? msg)
         ;; I really don't like this approach to a shared work-area.

@@ -193,6 +193,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;; Globals
 
 (defonce io-loop-registry (atom (registry/ctor)))
+(comment
+  @io-loop-registry
+  (-> io-loop-registry deref keys)
+  (swap! io-loop-registry registry/de-register "client-hand-shaker")
+  )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Implementation

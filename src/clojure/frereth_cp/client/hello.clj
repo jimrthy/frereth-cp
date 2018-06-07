@@ -213,7 +213,11 @@
                      ::awaiting-cookie-timed-out
                      ::send-response-timed-out} actual-success)))
       (do
-        (assert (not (s/explain-data ::cookie-response actual-success)))
+        (when-let [problem (s/explain-data ::cookie-response actual-success)]
+          (println "Bad cookie:" problem)
+          (throw (ex-info "Bad cookie response"
+                          {::error problem})))
+        (println "Cookie response was OK")
         (let [log-state (try
                           (log/info (::log/state actual-success)
                                     ::do-polling-loop
@@ -435,35 +439,36 @@
         ;; are mimicking both client and server pieces,
         ;; which need to run this function in a separate
         ;; thread.
-        (poll-servers! this timeout wait-for-cookie!)]
+        (poll-servers! this timeout wait-for-cookie!)
+        log-state-atom (atom log-state)]
     (println "client: triggered hello! polling")
-    (-> outcome
-        (dfrd/chain #(into % (build-inner-vouch %))
-                    ;; Got a Cookie back. Set things up to send a vouch
-                    servers-polled
-                    ;; Cope with that send returning more than just the
-                    ;; next deferred in the chain
-                    (fn [{:keys [::specs/deferrable
-                                 ::log/state]
-                          :as this}]
-                      (println "client: servers-polled succeeded:" (dissoc this ::log/state))
-                      (let [log-state (log/flush-logs! logger state)]
-                        ;; This is at least a little twisty.
-                        ;; And seems pretty wrong. In the outer context, outcome
-                        ;; was a deferrable that got added to this by
-                        ;; hello/poll-servers!
-                        ;; That returns a ::log/state.
-                        ;; Q: How has this ever worked?
-                        ;; Alt Q: Has it ever?
-                        ;; A: I don't think I've ever gotten this far.
-                        ;; It seems like a crash and burn just waiting to happen.
-                        ;; FIXME: Get back to this.
-                        (dfrd/chain deferrable
-                                    (fn [sent]
-                                      (if (not (or (= sent ::state/sending-vouch-timed-out)
-                                                   (= sent ::state/drained)))
-                                        (state/->message-exchange-mode (assoc this
-                                                                              ::log/state log-state)
-                                                                       sent)
-                                        (throw (ex-info "Something about polling/sending Vouch failed"
-                                                        {::problem sent})))))))))))
+    (dfrd/chain outcome
+                #(into % (build-inner-vouch %))
+                ;; Got a Cookie back. Set things up to send a vouch
+                servers-polled
+                ;; Cope with that send returning more than just the
+                ;; next deferred in the chain
+                (fn [{:keys [::specs/deferrable
+                             ::log/state]
+                      :as this}]
+                  (println "hello: servers-polled succeeded:" (dissoc this ::log/state))
+                  (reset! log-state-atom (log/flush-logs! logger state))
+                  deferrable)
+                (fn [sent]
+                  (swap! log-state-atom #(log/flush-logs! logger
+                                                          (log/info %
+                                                                    ::set-up-server-polling!
+                                                                    "Vouch sent (maybe)"
+                                                                    {::sent sent})))
+                  (if (not (or (= sent ::state/sending-vouch-timed-out)
+                               (= sent ::state/drained)))
+                    (state/->message-exchange-mode (assoc this
+                                                          ::log/state @log-state-atom)
+                                                   sent)
+                    (let [failure (ex-info "Something about polling/sending Vouch failed"
+                                           {::problem sent})]
+                      (swap! log-state-atom #(log/flush-logs! logger
+                                                              (log/exception %
+                                                                             failure
+                                                                             ::set-up-server-polling!)))
+                      (assoc this ::log/state @log-state-atom)))))))

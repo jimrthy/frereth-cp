@@ -238,7 +238,7 @@
               clnt-log-state (log/init ::shake-hands.client)
               clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log.edn")
               internal-client-chan (strm/stream)
-              client (factory/raw-client "client-hand-shaker"
+              client (factory/raw-client (gensym "client-hand-shaker")
                                          (constantly clnt-logger)
                                          clnt-log-state
                                          server-ip
@@ -437,7 +437,7 @@
                 (client/stop! client)
                 (catch Exception ex
                   (println "stop! failed:\n" (log/exception-details ex))))
-              (println "client-agent stopped")
+              (println "client stopped")
               (try
                 (println "Trying to print out the client state")
                 (pprint (dissoc client

@@ -2,8 +2,6 @@
   "Implement the server half of the CurveCP protocol"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            ;; TODO: Really need millisecond precision (at least)
-            ;; associated with this log formatter
             [clojure.tools.logging :as log]
             [frereth-cp.server
              [cookie :as cookie]
@@ -268,7 +266,7 @@
                                      ""
                                      {::packet-type-id packet-type-id})
                 this (assoc this ::log2/state log-state)]
-            (println "My packet" this)
+            (println "Packet for me:" this)
             (try
               (.flush System/out)
               (case packet-type-id
@@ -500,14 +498,14 @@
                                                           "Clearing secrets"))
             outcome (-> (try
                              (state/hide-secrets! this)
-                             (catch RuntimeException ex
-                               (log/error "ERROR: " ex)
-                               this)
                              (catch Exception ex
-                               (log/fatal "FATAL:" ex)
-                               ;; TODO: This really should be fatal.
-                               ;; Make the error-handling go away once hiding secrets actually works
-                               this))
+                               ;; Very tempting to split RuntimeException
+                               ;; away from Exception. And then make Exception
+                               ;; fatal
+                               (update this ::log2/state
+                                       #(log2/exception %
+                                                        ex
+                                                        ::stop!))))
                         (dissoc ::state/event-loop-stopper!
                                 ;; This doesn't make any sense here anyway.
                                 ;; But it's actually breaking my spec
