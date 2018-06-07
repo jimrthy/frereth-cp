@@ -96,9 +96,9 @@ We finally stick that into a deferred/chain.
 
 That starts by calling build-inner-vouch.
 
-And then servers-polled.
+And then cookie/servers-polled.
 
-## client/servers-polled
+## cookie/servers-polled
 
 That's part of a deferred chain that rolls back out of
 hello/set-up-server-hello-polling!
@@ -107,3 +107,29 @@ The main point to this (after you unwrap all the logging
 and error handling) is to call child.state/fork!
 
 ## state/fork!
+
+This triggers off the "child" message loop.
+
+In the original, that's really a buffer process that acts
+as middleware between the
+
+* outer protocol/encryption pieces
+  that handle the handshake and message packet exchange
+* inner process being wrapped that just produces/consumes
+  byte streams
+
+It also handles all the fun, mostly undocumented details
+about things like flow control and retries.
+
+For our purposes, this mainly amounts to calling
+
+* message/initial-state
+* message/do-start
+
+Where one of the parameters to message-do-start is a
+partial built from child-> and the portions of the
+"this" state that it needs to build its outgoing
+packet.
+
+The details about the latter change depending on whether
+we've gotten a response back from the server or not.

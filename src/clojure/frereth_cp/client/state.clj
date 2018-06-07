@@ -67,7 +67,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                           ;; A: Yes.
                                           ;; Q: Do I want to?
                                           ;; A: Well...keeping it seems like a potential security hole
-                                          ;; TODO: Make it go away
+                                          ;; TODO: Make it go away once I'm done with it.
+                                          ;; (i.e. once a server's sent a response to an Initiate
+                                          ;; packet).
                                           :opt [::server-cookie
                                                 ::specs/srvr-ip])))
 
@@ -535,7 +537,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
         ;; So we really can't count on anything safe happening
         ;; with the return value.
         ;; Although in this case the "child" is the message ioloop,
-        ;; so we can couple it as tightly as we like
+        ;; so we can couple it as tightly as we like.
+        ;; Still, it would be nice to keep it isolated.
         :ret dfrd/deferrable?)
 (defn child->
   "Handle packets streaming out of child"
@@ -573,7 +576,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
    ^bytes message-block]
   {:pre [packet-builder]}
   (let [log-state (log/do-sync-clock log-state)
-        {:keys [::specs/srvr-name ::specs/srvr-port]} server-security]
+        {:keys [::server-cookie
+                ::specs/srvr-name
+                ::specs/srvr-port]} server-security]
+    (when-not server-cookie
+      ;; FIXME: Debug only, while I'm trying to sort through
+      ;; how the server cookie's supposed to get where it needs
+      ;; to be
+      (binding [*out* *err*]
+        (println "WARNING: Missing the server-cookie in server-security.\n"
+                 "This doesn't matter once we can start sending message\n"
+                 "packets, but it means we cannot possibly build an\n"
+                 "Initiate.")))
     ;; This flag is stored in the child state.
     ;; I can retrieve that from the io-handle, but that's
     ;; terribly inefficient.

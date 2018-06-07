@@ -205,7 +205,9 @@
                                                                            ::state/shared-secrets])
                                                              ::log/state log-state
                                                              ::shared/packet message))]
-              (let [this (into this decrypted)
+              ;; It seems highly likely that I'm either messing up a) where the cookie
+              ;; wound up in decrypted or b) just discarding it
+              (let [this (merge-with into this decrypted)
                     {:keys [::shared/my-keys]} this
                     server-short (get-in this
                                          [::state/server-security
