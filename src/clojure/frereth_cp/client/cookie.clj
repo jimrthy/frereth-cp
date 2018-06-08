@@ -19,6 +19,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
+(s/fdef decrypt-actual-cookie
+        :args (s/cat :this ::state/state
+                     :received ::K/cookie-frame)
+        :ret ::state/state)
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet
            ;; Having a shared work-area is probably
@@ -93,6 +97,7 @@
                     server-security (assoc (::state/server-security this)
                                            ::specs/public-short server-short-pk,
                                            ::state/server-cookie server-cookie)]
+                (assert server-cookie)
                 (assoc this
                        ::state/server-security server-security
                        ::log/state log-state))
@@ -104,6 +109,14 @@
                                                   "Decryption failed"
                                                   (.getData ex)))))))))))
 
+;; TODO: Split out the parameters we actually need instead of
+;; just bundling the entire state all the way up and down the
+;; call chain.
+;; Sure, this approach qualifies as purely functional, but it's
+;; a weak qualification.
+(s/fdef decrypt-cookie-packet
+        :args (s/cat :this ::state/state)
+        :ret ::state/state)
 (defn decrypt-cookie-packet
   [{:keys [::shared/extension
            ::shared/packet
@@ -207,7 +220,8 @@
                                                              ::shared/packet message))]
               ;; It seems highly likely that I'm either messing up a) where the cookie
               ;; wound up in decrypted or b) just discarding it
-              (let [this (merge-with into this decrypted)
+              ;; Q: Is merge-with really more appropriate than plain into ?
+              (let [this (merge this decrypted)
                     {:keys [::shared/my-keys]} this
                     server-short (get-in this
                                          [::state/server-security
@@ -215,6 +229,13 @@
                     log-state (log/debug log-state
                                          log-label
                                          "Managed to decrypt the cookie")]
+                (println "Decrypted cookie and failing:\n")
+                (pprint decrypted)
+                (comment
+                  ;; This was not my problem
+                  (throw (ex-info "This is probably where I'm dropping the ball"
+                                  {::decrypted decrypted
+                                   ::verify "That needs ::state/server-cookie under ::state/server-security"})))
                 (if server-short
                   (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
                         ;; line 327
@@ -227,6 +248,7 @@
                                                                     log-label
                                                                     (str "Prepared shared short-term secret\n"
                                                                          "Should resolve the cookie-response in client/poll-servers-with-hello!"))
+                                             ::state/server-security (::state/server-security decrypted)
                                              ::state/shared-secrets shared-secrets
                                              ::shared/network-packet cookie}))
                   (dfrd/error! notifier {::log/state (log/error log-state

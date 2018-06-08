@@ -151,6 +151,8 @@
 (def ^Integer cookie-packet-length 200)
 (def unboxed-crypto-cookie-length 128)
 
+;; FIXME: Add a macro for defining both the template
+;; and the spec at the same time
 (def cookie-frame
   "The boiler plate around a cookie"
   ;; Header is only a "string" in the ASCII sense
@@ -165,6 +167,11 @@
                                     ::length specs/server-nonce-suffix-length}
              ::cookie {::type ::bytes
                        ::length cookie-frame-length}))
+(s/def ::cookie-frame (s/keys :req [::header
+                                    ::client-extension
+                                    ::server-extension
+                                    ::client-nonce-suffix
+                                    ::cookie]))
 
 (def black-box-dscr (array-map ::padding {::type ::zeroes ::length decrypt-box-zero-bytes}
                                ::clnt-short-pk {::type ::bytes ::length client-key-length}

@@ -19,7 +19,8 @@
 ;;;; Specs
 
 (s/def ::cookie-response (s/keys :req [::log/state]
-                                 :opt [::state/shared-secrets
+                                 :opt [::state/security
+                                       ::state/shared-secrets
                                        ::shared/network-packet]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -79,7 +80,7 @@
         (if-let [{:keys [::state/server-security]} this]
           (log/debug log-state
                      ::build-raw
-                     "server-security for raw-hello:" server-security)
+                     "server-security" server-security)
           (log/warn log-state
                     ::build-raw
                     "Missing server-security"
@@ -191,7 +192,16 @@
         ;; A: Yes, absolutely. That's what dfrd/timeout! is for.
         ;; TODO: Rearrange to use that.
         ;; (This gets more difficult due to the recur).
-        actual-success (deref cookie-response timeout ::awaiting-cookie-timed-out)
+        actual-success (try
+                         (deref cookie-response timeout ::awaiting-cookie-timed-out)
+                         (catch ClassCastException ex
+                           (log/flush-logs! logger
+                                            (log/exception log-state
+                                                           ex
+                                                           ::do-polling-loop
+                                                           "Calling deref on Cookie Response failed"
+                                                           {::wrapper cookie-response}))
+                           (throw ex)))
         now (System/nanoTime)]
     ;; I don't think send-packet-success matters much
     ;; Although...actually, ::send-response-timed-out would be a big
@@ -228,18 +238,29 @@
                                      (log/exception-details ex))
                             (throw (ex-info "Logging failure re: server response" {::actual-success actual-success} ex))))]
           (println "client: Should have a log message about possibly responsive server")
+          ;; I'm definitely getting here
           (if-let [network-packet (::shared/network-packet actual-success)]
-            (let [log-state (log/debug log-state
-                                       ::do-polling-loop
-                                       "Got back a usable cookie"
-                                       actual-success)]
-              ;; Need to move on to Vouch. But there's already far
-              ;; too much happening here.
-              ;; So the deferred in completion should trigger client/servers-polled
-              (as-> (into this actual-success) this
-                (assoc this ::log/state log-state)
-                (dfrd/success! completion this))
-              log-state)
+            (let [{:keys [::state/security ::state/shared-secrets]} actual-success]
+              (println "Do we have both security and shared-secrets?")
+              (when-not (and security shared-secrets)
+                ;; A: We do not.
+                ;; TODO: Fix the ::cookie-response spec. s/keys just doesn't cut it.
+                (log/flush-logs! logger (log/error log-state
+                                                   ::do-polling-loop
+                                                   "Got back a network-packet but missing something else"
+                                                   {::cookie-response actual-success}))
+                (assert false))
+              (println "We do!")
+              (let [log-state (log/debug log-state
+                                         ::do-polling-loop
+                                         "Got back a usable cookie"
+                                         (dissoc actual-success ::log/state))]
+                ;; Need to move on to Vouch. But there's already far
+                ;; too much happening here.
+                ;; So the deferred in completion should trigger client/servers-polled
+                (as-> (into this actual-success) this
+                  (dfrd/success! completion this))
+                log-state))
             (let [elapsed (- now start-time)
                   remaining (- timeout elapsed)
                   log-state (log/info log-state

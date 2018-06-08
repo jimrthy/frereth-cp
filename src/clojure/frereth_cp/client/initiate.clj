@@ -229,12 +229,11 @@
           (log/flush-logs! logger (log/warn log-state
                                             ::build-initiate-packet!
                                             "Invalid message length from child"
-                                            {::message-length (count msg)}))
-          nil))
+                                            {::message-length (count msg)}))))
       (do
         (log/flush-logs! logger log-state)
-        (throw (ex-info
-                {::specs/msg-bytes msg}))"Missing outgoing message"))))
+        (throw (ex-info "Missing outgoing message"
+                {::specs/msg-bytes msg}))))))
 
 (s/fdef do-send-vouch
         :args (s/cat :this ::state/state

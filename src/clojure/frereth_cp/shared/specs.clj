@@ -92,7 +92,8 @@ This really seems like a bad road to go down."
 (s/def ::srvr-xtn ::extension)
 (s/def ::clnt-xtn ::extension)
 
-(s/def ::srvr-ip (class-predicate java.net.SocketAddress))
+;; Note that this includes the port
+(s/def ::srvr-ip (class-predicate java.net.InetAddress))
 (def server-name-length 256)
 ;; This is a name suitable for submitting a DNS query.
 ;; 1. Its encoder starts with an array of zeros
