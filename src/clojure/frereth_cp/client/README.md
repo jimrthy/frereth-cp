@@ -60,11 +60,11 @@ Server.
 
 Run some basic checks, then try to decrypt it.
 
-It's going to set its notifier deferred to a map that includes the
-log-state we've been accumulating.
+One of its parameters is a callback that will be called with a map
+that includes the log-state we've been accumulating.
 
 If we got back a valid Cookie Packet (which mostly means we were
-able to open its crypto box), that delivery will also include
+able to open its crypto box), that map will also include
 the network packet and the shared secrets.
 
 This takes us back to hello/do-polling-loop.

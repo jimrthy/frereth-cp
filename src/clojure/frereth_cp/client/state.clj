@@ -455,7 +455,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef do-send-packet
         :args (s/cat :this ::state
-                     :on-success (s/fspec :args (s/cat :result any?)
+                     :on-success (s/fspec :args (s/cat :result boolean?)
                                           :ret any?)
                      :on-failure (s/fspec :args (s/cat :failure ::specs/exception-instance)
                                           :ret any?)
@@ -469,12 +469,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :ret (s/keys :req [::log/state ::specs/deferrable]))
 (defn do-send-packet
   "Send a ByteBuf (et al) as UDP to the server"
+  ;; Q: How tough to make this generic enough to use
+  ;; on both sides?
+  ;; Actually, all we really need to do is make the key
+  ;; names generic, move this into a shared ns, then make
+  ;; the specific versions translate the keys as needed.
+  ;; TODO: Make that happen
   [{log-state ::log/state
-    {:keys [::log/logger
-            ::specs/srvr-ip
+    {:keys [::specs/srvr-ip
             ::specs/srvr-port]
      :as server-security} ::server-security
-    :keys [::chan->server]
+    :keys [::chan->server
+           ::log/logger]
     :as this}
    on-success
    on-failure

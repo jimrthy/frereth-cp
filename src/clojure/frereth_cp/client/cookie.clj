@@ -17,7 +17,16 @@
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal
+;;;; Specs
+
+;; FIXME: The args are really ::hello/cookie-response
+;; Which means that it needs to move somewhere
+;; shared
+(s/def ::succss-callback (s/fspec :args any?
+                                  :ret any?))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Internal
 
 (s/fdef decrypt-actual-cookie
         :args (s/cat :this ::state/state
@@ -163,21 +172,16 @@
 
 (s/fdef received-response!
         :args (s/cat :this ::state/state
-                     :notifier dfrd/deferrable?
+                     :callback ::success-callback
                      :cookie ::specs/network-packet)
-        ;; The main point is the side-effect of "delivering" the notifier.
-        ;; That will become a map that includes a) the updated log-state
-        ;; (although, honestly, it should be a seq of functions for running
-        ;; those updates...and those functions need a way to specify
-        ;; the current time)
-        ;; and b) the cookie (if we managed to decrypt it)
+        ;; The main point is the side-effect of the callback.
         :ret any?)
 (defn received-response!
   "Hello triggers this when we hear back from the Server"
   [{log-state ::log/state
     :keys [::log/logger]
     :as this}
-   notifier
+   callback
    {:keys [:host :message :port]
         :or {message (byte-array 0)}
         :as cookie}]
@@ -218,9 +222,7 @@
                                                                            ::state/shared-secrets])
                                                              ::log/state log-state
                                                              ::shared/packet message))]
-              ;; It seems highly likely that I'm either messing up a) where the cookie
-              ;; wound up in decrypted or b) just discarding it
-              ;; Q: Is merge-with really more appropriate than plain into ?
+              ;; Q: Would merge-with be more appropriate?
               (let [this (merge this decrypted)
                     {:keys [::shared/my-keys]} this
                     server-short (get-in this
@@ -237,59 +239,59 @@
                                               (crypto/box-prepare
                                                server-short
                                                (.getSecretKey my-short-pair)))]
-                    (dfrd/success! notifier {::log/state (log/debug log-state
-                                                                    log-label
-                                                                    (str "Prepared shared short-term secret\n"
-                                                                         "Should resolve the cookie-response in client/poll-servers-with-hello!"))
-                                             ::state/server-security (::state/server-security decrypted)
-                                             ::state/shared-secrets shared-secrets
-                                             ::shared/network-packet cookie}))
-                  (dfrd/error! notifier {::log/state (log/error log-state
-                                                                log-label
-                                                                (str "Missing ::specs/public-short among\n"
-                                                                     (keys (::state/server-security this))
-                                                                     "\namong bigger-picture\n"
-                                                                     (keys this)))})))
+                    (callback {::log/state (log/debug log-state
+                                                      log-label
+                                                      (str "Prepared shared short-term secret\n"
+                                                           "Should resolve the cookie-response in client/poll-servers-with-hello!"))
+                               ::state/server-security (::state/server-security decrypted)
+                               ::state/shared-secrets shared-secrets
+                               ::shared/network-packet cookie}))
+                  (callback {::log/state (log/error log-state
+                                                    log-label
+                                                    (str "Missing ::specs/public-short among\n"
+                                                         (keys (::state/server-security this))
+                                                         "\namong bigger-picture\n"
+                                                         (keys this)))})))
               ;; This is a failure, really.
               ;; Discards the packet, update recent (and thus the polling timeout)
               ;; and go back to polling.
-              (dfrd/success! notifier {::log/state (log/warn log-state
-                                                             log-label
-                                                             "Unable to decrypt server cookie"
-                                                             {::problem cookie})}))
+              (callback {::log/state (log/warn log-state
+                                               log-label
+                                               "Unable to decrypt server cookie"
+                                               {::problem cookie})}))
             ;; TODO: Look into recovering from these
             (catch ExceptionInfo ex
-              (dfrd/error! notifier (assoc this ::log/state (log/exception log-state
-                                                                           ex
-                                                                           log-label
-                                                                           "High-level failure"))))
+              (callback (assoc this ::log/state (log/exception log-state
+                                                               ex
+                                                               log-label
+                                                               "High-level failure"))))
             (catch RuntimeException ex
-              (dfrd/error! notifier {::log/state (log/exception log-state
-                                                                ex
-                                                                log-label
-                                                                "Unexpected failure")}))
+              (callback {::log/state (log/exception log-state
+                                                    ex
+                                                    log-label
+                                                    "Unexpected failure")}))
             (catch Exception ex
-              (dfrd/error! notifier {::log/state (log/exception log-state
-                                                                ex
-                                                                log-label
-                                                                "Low-level failure")}))
+              (callback {::log/state (log/exception log-state
+                                                    ex
+                                                    log-label
+                                                    "Low-level failure")}))
             (catch Throwable ex
-              (dfrd/error! notifier {::log/state (log/exception log-state
-                                                                ex
-                                                                log-label
-                                                                "Serious Problem")})))
-          (dfrd/success! notifier {::log/state (log/warn log-state
-                                                         log-label
-                                                         "Invalid response. Just discard and retry"
-                                                         {::problem cookie})}))
+              (callback {::log/state (log/exception log-state
+                                                    ex
+                                                    log-label
+                                                    "Serious Problem")})))
+          (callback {::log/state (log/warn log-state
+                                           log-label
+                                           "Invalid response. Just discard and retry"
+                                           {::problem cookie})}))
         (let [log-state (log/warn log-state
                                   log-label
                                   "Server didn't respond to HELLO. Move on to next.")]
-          (dfrd/success! notifier {::log/state log-state})))
+          (callback {::log/state log-state})))
       (catch Exception ex
-        (dfrd/error! {::log/state (log/exception log-state
-                                                 ex
-                                                 log-label)})))))
+        (callback {::log/state (log/exception log-state
+                                              ex
+                                              log-label)})))))
 
 ;; The name makes this seem like it doesn't belong in here.
 ;; It totally does.
@@ -316,7 +318,7 @@
   (dfrd/error! terminated failure))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;; Public
 
 (s/fdef servers-polled
         :args (s/cat :this ::state/state)
@@ -372,13 +374,13 @@
 
 (s/fdef wait-for-cookie!
         :args (s/cat :this ::state/state
-                     :notifier dfrd/deferrable?
+                     :callback ::success-callback
                      :timeout (s/and number?
                                      (complement neg?))
                      :sent ::specs/network-packet)
         :ret ::specs/deferrable)
 (defn wait-for-cookie!
-  [this notifier timeout sent]
+  [this callback timeout sent]
   (if (not= sent ::sending-hello-timed-out)
     (let [this (update this
                        ::log/state
@@ -392,6 +394,6 @@
                                 timeout
                                 ::hello-response-timed-out)]
         (dfrd/on-realized d
-                          (partial received-response! this notifier)
+                          (partial received-response! this callback)
                           (partial hello-response-failed! this))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
