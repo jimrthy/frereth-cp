@@ -240,11 +240,12 @@
           (println "client: Should have a log message about possibly responsive server")
           ;; I'm definitely getting here
           (if-let [network-packet (::shared/network-packet actual-success)]
-            (let [{:keys [::state/security ::state/shared-secrets]} actual-success]
+            (let [{:keys [::state/server-security ::state/shared-secrets]} actual-success]
               (println "Do we have both security and shared-secrets?")
-              (when-not (and security shared-secrets)
+              (when-not (and server-security shared-secrets)
                 ;; A: We do not.
                 ;; TODO: Fix the ::cookie-response spec. s/keys just doesn't cut it.
+                ;; If we have any of the "optional" keys, we must have all 3
                 (log/flush-logs! logger (log/error log-state
                                                    ::do-polling-loop
                                                    "Got back a network-packet but missing something else"

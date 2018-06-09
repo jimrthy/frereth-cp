@@ -229,13 +229,6 @@
                     log-state (log/debug log-state
                                          log-label
                                          "Managed to decrypt the cookie")]
-                (println "Decrypted cookie and failing:\n")
-                (pprint decrypted)
-                (comment
-                  ;; This was not my problem
-                  (throw (ex-info "This is probably where I'm dropping the ball"
-                                  {::decrypted decrypted
-                                   ::verify "That needs ::state/server-cookie under ::state/server-security"})))
                 (if server-short
                   (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
                         ;; line 327
