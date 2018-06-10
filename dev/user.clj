@@ -5,6 +5,7 @@
             [clojure.repl :refer (apropos dir doc pst root-cause source)]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
+            [clojure.spec.test.alpha :as test]
             [clojure.test.check :refer (quick-check)]
             [clojure.test.check.clojure-test :refer (defspec)]
             [clojure.test.check.generators :as lo-gen]

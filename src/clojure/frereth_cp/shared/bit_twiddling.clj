@@ -4,13 +4,21 @@
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [frereth-cp.shared.constants :as K])
-  (:import io.netty.buffer.ByteBuf
-           io.netty.buffer.UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf))
+  (:import clojure.lang.BigInt
+           io.netty.buffer.ByteBuf
+           io.netty.buffer.UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf
+           java.math.BigInteger))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Globals
 
 (set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;; Specs
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
 
 ;; byte-streams doesn't seem to get inheritance.
 ;; TODO: Look into https://github.com/funcool/octet.
@@ -99,26 +107,13 @@
     (and (not= 0 (unsigned-bit-shift-right (- (inc K/max-8-uint) diff) 8))
          (= nx ny))))
 
-(defn sub-byte-array
-  "Return an array that copies a portion of the source"
-  ([src beg]
-   (-> src
-       vec
-       (subvec beg)
-       byte-array))
-  ([src beg end]
-   (-> src
-       vec
-       (subvec beg end)
-       byte-array)))
-
 (defn extract-rightmost-byte
   "Since bytes are signed in java"
   [n]
   (byte (- (bit-and n K/max-8-uint) K/max-8-int)))
 
 (defn possibly-2s-complement-8
-  "If an unsigned byte is greater than 127, it needs to be negated.
+  "If an unsigned byte is greater than 127, it needs to be negated to fit into a signed byte.
 
 Thanks, java, for having a crippled numeric stack."
   ;; It seems ridiculous to need to do this
@@ -150,7 +145,7 @@ Thanks, java, for having a crippled numeric stack."
       (throw ex))))
 
 (defn possibly-2s-uncomplement-n
-  "Uncomplement n, for size maximum"
+  "Convert [signed] complemented n into unsigned that fits maximum"
   [n maximum]
   (if (<= 0 n)
     n
@@ -186,6 +181,52 @@ Thanks, java, for having a crippled numeric stack."
   [n]
   (let [^:const k (inc K/max-64-uint)]
     (possibly-2s-uncomplement-n n k)))
+
+(s/fdef secure-mod
+         :args (s/cat :numerator integer?
+                      :denominator (s/and integer?
+                                          pos?))
+         :fn (fn [{:keys [:args]
+                   ^BigInt ret :ret}]
+               (let [d (biginteger (:denominator args))
+                     n (:numerator args)]
+                 (if (= n 0)
+                   (= ret 0)
+                   (<= (.abs (biginteger ret)) (.abs d)))))
+         :ret integer?)
+(defn secure-mod
+  "DJB sort-of uses this approach in randommod
+
+  It's significantly slower than ordinary mod"
+  [numerator denominator]
+  (let [^BigInteger numerator (if (instance? BigInteger numerator)
+                                numerator
+                                (biginteger numerator))
+        numerator (.toByteArray numerator)]
+    (reduce (fn [acc b]
+              ;; Lack of unsigned numeric types strikes again
+              (let [unsigned (possibly-2s-uncomplement-8 b)]
+                (mod (+ (* acc 256)
+                        unsigned)
+                     denominator)))
+            0N
+            numerator)))
+(comment
+  (secure-mod 144 4857)
+  )
+
+(defn sub-byte-array
+  "Return an array that copies a portion of the source"
+  ([src beg]
+   (-> src
+       vec
+       (subvec beg)
+       byte-array))
+  ([src beg end]
+   (-> src
+       vec
+       (subvec beg end)
+       byte-array)))
 
 (defn uint-pack!
   [^bytes dst ^Long index src ^Integer size]

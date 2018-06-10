@@ -721,10 +721,14 @@ Or maybe that's (dec n)"
   (reset-safe-nonce-state!))
 
 (s/fdef random-mod
-        :args (s/cat :n integer?)
+        :args (s/cat :n nat-int?)
         :fn (fn [{:keys [:args :ret]}]
-              (< ret (:n args)))
-        :ret integer?)
+              (let [n (:n args)]
+                (if (not= n 0)
+                  (< ret n)
+                  (= ret n))))
+        :ret (s/and integer?
+                    (complement neg?)))
 (let [;; FIXME: Set the seed securely
       ;; This really should be used for anything
       ;; that needs a random number
@@ -732,14 +736,14 @@ Or maybe that's (dec n)"
   (defn random-mod
     "Picks a big random number and securely "
     [denominator]
-    ;; This seems like the obvious approach
-    ;; Q: How much different is this from the actual version?
-    (comment) (let [numerator (BigInteger. 256 (java.util.Random.))]
-                (mod numerator denominator))
-    ;; But the reference version actually does this:
-    (binding [*out* *err*]
-      ;; FIXME: Translate this part
-      (println "Insecure mod"))))
+    (if (not= 0 denominator)
+      (let [numerator (BigInteger. 256 (java.util.Random.))]
+        ;; This seems like the obvious approach
+        ;; Q: How much different is this from the actual version?
+        (comment (mod numerator denominator))
+        ;; But the reference version actually does this:
+        (b-t/secure-mod numerator denominator))
+      0)))
 
 (defn secret-box
   "Symmetric encryption

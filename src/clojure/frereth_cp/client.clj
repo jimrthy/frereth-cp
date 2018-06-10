@@ -92,7 +92,7 @@
                              ::chan->server-closed)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;; Public
 
 (s/fdef start!
         :args (s/cat :this ::state/state)

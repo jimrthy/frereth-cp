@@ -42,7 +42,7 @@
   [logger this]
   (as-> (::log/state this) x
     (log/info x
-              ::hello-succeeded!
+              ::send-succeeded!
               "Polling complete. Child should be able to trigger Initiate/Vouch"
               {::result (dissoc this ::log/state)})
     ;; Note that the log-flush gets discarded, except
@@ -152,9 +152,10 @@
                               [(util/seconds->nanos 1)]
                               (range max-server-attempts))]
   (defn pick-next-timeout
+    ;; FIXME: Needs unit test
     [n-remaining]
     (let [n (- (count hello-wait-time))
-          timeout (nth )]
+          timeout (nth hello-wait-time n)]
       (+ timeout (crypto/random-mod timeout)))))
 
 (declare do-polling-loop)
@@ -198,6 +199,41 @@
                                                              ;; we probably don't have a way
                                                              ;; to recover
                                                              ::outcome actual-success})}))))
+
+(declare do-polling-loop)
+(s/fdef possibly-recurse
+        :args (s/cat :completion ::specs/deferrable
+                     :this ::state/state)
+        :fn (s/or :recursion (s/fspec :args nil?
+                                      :ret ::log/state)
+                  :giving-up ::log/state))
+(defn possibly-recurse
+  [completion
+   {:keys [::log/logger
+           ::state/server-ips]
+    log-state ::log/state
+    :as this}
+   cookie-sent-callback
+   raw-packet]
+  ;; Sending the packet probably isn't going to fail. But it's good
+  ;; to handle the possibility
+  (let [remaining-ips (next server-ips)
+        log-state (log/flush-logs! logger (log/warn log-state
+                                                    ::do-polling-loop
+                                                    "Sending HELLO failed. Will try the next (if any) in the list"
+                                                    {::state/server-ips remaining-ips}))]
+    (if remaining-ips
+      (partial do-polling-loop completion
+               (assoc this
+                      ::log-state log-state)
+               raw-packet
+               cookie-sent-callback
+               (System/nanoTime)
+               (pick-next-timeout (count remaining-ips))
+               remaining-ips)
+      (do
+        (dfrd/error! completion (ex-info "Giving up" this))
+        log-state))))
 
 (s/fdef do-polling-loop
         :args (s/cat :completion ::specs/deferrable
@@ -243,118 +279,90 @@
                                                                      timeout
                                                                      ::sending-hello-timed-out
                                                                      raw-packet)
-        ;; Give do-send-packet a chance to do its thing
-        send-packet-success (deref dfrd-send-success 1000 ::send-response-timed-out)]
-    (if send-packet-success
-      (let [;; Note that this timeout actually can grow to be quite long.
-            ;; In the original, they add up to a ballpark of 46 seconds.
-            ;; It's probably acceptable for a single polling thread to block for that
-            ;; long.
-            ;; Or, at least, it probably was back in 2011 when the spec was written,
-            ;; or in 2013 when my copy of the reference implementation was published.
-            ;; It still seems like it would be better to do something like setting up
-            ;; a callback with a timeout here.
-            ;; Q: Is that an option?
-            ;; A: Yes, absolutely. That's what dfrd/timeout! is for.
-            ;; TODO: Rearrange to use that.
-            ;; (This gets more difficult due to the recur).
-            actual-success (try
-                             (deref cookie-response timeout ::awaiting-cookie-timed-out)
-                             (catch ClassCastException ex
-                               (log/flush-logs! logger
-                                                (log/exception log-state
-                                                               ex
-                                                               ::do-polling-loop
-                                                               "Calling deref on Cookie Response failed"
-                                                               {::wrapper cookie-response
-                                                                ::state/srvr-ips ip}))
-                               (throw ex)))
-            now (System/nanoTime)]
-        (println "hello/do-polling-loop Sent HELLO actual-success:\n"
-                 (dissoc actual-success ::log/state)
-                 "\nTop-level keys:\n"
-                 (keys actual-success)
-                 "\nServer:"
-                 ip)
-        (if-let [network-packet (::shared/network-packet actual-success)]
-          (let [{:keys [::state/server-security ::state/shared-secrets]} actual-success]
-            (when-not (and server-security shared-secrets)
-              (log/flush-logs! logger (log/error log-state
-                                                 ::do-polling-loop
-                                                 "Got back a network-packet but missing something else"
-                                                 {::cookie-response actual-success}))
-              (assert (and server-security shared-secrets)
-                      (str "Network-packet missing either security or shared-secrets:\n"
-                           (util/pretty actual-success))))
-            (let [log-state (log/debug log-state
-                                       ::do-polling-loop
-                                       "Got back a usable cookie"
-                                       (dissoc actual-success ::log/state))]
-              ;; Need to move on to Vouch. But there's already far
-              ;; too much happening here.
-              ;; So the deferred in completion should trigger client/servers-polled
-              (as-> (into this actual-success) this
-                ;; FIXME: Untangle this chain.
-                ;; We can't really call this synchronously because of the way
-                ;; aleph and state/do-send-packet work.
-                ;; But this spooky action at a distance stinks.
-                (dfrd/success! completion this))
-              log-state))
-          (let [elapsed (- now start-time)
-                remaining (- timeout elapsed)
-                log-state (log/info log-state
-                                    ::do-polling-loop
-                                    "Discarding garbage cooke")]
-            (if (< 0 remaining)
-              (recur completion
-                     (assoc this ::log/state (log/flush-logs! logger (log/info log-state
-                                                                               ::do-polling-loop
-                                                                               "Still waiting on server"
-                                                                               {::shared/host ip
-                                                                                ::millis-remaining remaining})))
-                     raw-packet
-                     cookie-sent-callback
-                     start-time
-                     ;; Note that this jacks up the orderly timeout progression
-                     ;; Not that the progression is quite as orderly as it looked
-                     ;; at first glance:
-                     ;; there's a modulo against a random 32-byte number involved
-                     ;; (line 289)
-                     remaining
-                     ips)
-              (if-let [remaining-ips (next ips)]
-                (recur completion
-                       (assoc this ::log/state (log/flush-logs! logger (log/info log-state
-                                                                                 ::do-polling-loop
-                                                                                 "Moving on to next ip")))
-                       raw-packet
-                       cookie-sent-callback
-                       now
-                       ;; TODO: I'm missing that module against a random 32-byte number
-                       ;; mentioned above.
-                       (pick-next-timeout timeout)
-                       remaining-ips)
-                (do
-                  (dfrd/error! completion (ex-info "Giving up" this))
-                  log-state))))))
-      (let [remaining-ips (next ips)
-            log-state (log/flush-logs! logger (log/warn log-state
-                                                        ::do-polling-loop
-                                                        "Sending HELLO failed. Will try the next (if any) in the list"
-                                                        {::state/srvr-ips remaining-ips}))
-            now (System/nanoTime)]
-        (if remaining-ips
-          (recur completion
-                 (assoc this
-                        ::log-state log-state)
-                 raw-packet
-                 cookie-sent-callback
-                 now
-                 (pick-next-timeout timeout)
-                 remaining-ips)
-          (do
-            (dfrd/error! completion (ex-info "Giving up" this))
-            log-state))))))
+        log-state-atom (atom log-state)]
+    (-> dfrd-send-success
+        (dfrd/timeout!  1000)
+        (dfrd/chain
+         (fn [send-packet-success]
+           (if send-packet-success
+             ;; Note that this timeout actually can grow to be quite long.
+             ;; In the original, they add up to a ballpark of 46 seconds.
+             ;; It's probably acceptable for a single polling thread to block for that
+             ;; long.
+             ;; Or, at least, it probably was back in 2011 when the spec was written,
+             ;; or in 2013 when my copy of the reference implementation was published.
+             (dfrd/timeout! cookie-response timeout ::awaiting-cookie-timed-out)
+             (trampoline possibly-recurse this completion ips cookie-sent-callback raw-packet)))
+         (fn [actual-success]
+           (let [now (System/nanoTime)]
+             (println "hello/do-polling-loop Sent HELLO actual-success:\n"
+                      (dissoc actual-success ::log/state)
+                      "\nTop-level keys:\n"
+                      (keys actual-success)
+                      "\nServer:"
+                      ip)
+             (if-let [network-packet (::shared/network-packet actual-success)]
+               (let [{:keys [::state/server-security ::state/shared-secrets]} actual-success]
+                 (when-not (and server-security shared-secrets)
+                   (log/flush-logs! logger (log/error log-state
+                                                      ::do-polling-loop
+                                                      "Got back a network-packet but missing something else"
+                                                      {::cookie-response actual-success}))
+                   (assert (and server-security shared-secrets)
+                           (str "Network-packet missing either security or shared-secrets:\n"
+                                (util/pretty actual-success))))
+                 (let [log-state (log/debug log-state
+                                            ::do-polling-loop
+                                            "Got back a usable cookie"
+                                            (dissoc actual-success ::log/state))]
+                   ;; Need to move on to Vouch. But there's already far
+                   ;; too much happening here.
+                   ;; So the deferred in completion should trigger client/servers-polled
+                   (as-> (into this actual-success) this
+                     ;; FIXME: Untangle this chain.
+                     ;; We can't really call this synchronously because of the way
+                     ;; aleph and state/do-send-packet work.
+                     ;; But this spooky action at a distance stinks.
+                     (dfrd/success! completion this))
+                   log-state))
+               (let [elapsed (- now start-time)
+                     remaining (- timeout elapsed)
+                     log-state (log/info log-state
+                                         ::do-polling-loop
+                                         "Discarding garbage cooke")]
+                 (if (< 0 remaining)
+                   (do-polling-loop completion
+                          (assoc this ::log/state (log/flush-logs! logger (log/info log-state
+                                                                                    ::do-polling-loop
+                                                                                    "Still waiting on server"
+                                                                                    {::shared/host ip
+                                                                                     ::millis-remaining remaining})))
+                          raw-packet
+                          cookie-sent-callback
+                          start-time
+                          ;; Note that this jacks up the orderly timeout progression
+                          ;; Not that the progression is quite as orderly as it looked
+                          ;; at first glance:
+                          ;; there's a modulo against a random 32-byte number involved
+                          ;; (line 289)
+                          remaining
+                          ips)
+                   (possibly-recurse completion
+                                     (assoc this ::log/state (log/flush-logs! logger (log/info log-state
+                                                                                               ::do-polling-loop
+                                                                                               "Moving on to next ip")))
+                                     raw-packet
+                                     cookie-sent-callback
+                                     now
+                                     ;; TODO: I'm missing that module against a random 32-byte number
+                                     ;; mentioned above.
+                                     (pick-next-timeout timeout)
+                                     ips)))))))
+        (dfrd/catch (fn [ex]
+                      (log/flush-logs! (log/exception @log-state-atom
+                                                      ex
+                                                      ::do-polling-loop))))
+        (deref timeout ::polling-timed-out))))
 
 (s/fdef poll-servers!
         :args (s/cat :this ::state/state
@@ -414,12 +422,8 @@
                   (log/exception log-state
                                  ex
                                  ::poll-servers!)))]
+        (assert log-state "do-polling-loop returned badly")
         {::specs/deferrable completion
-         ;; FIXME: Move this back into hello (actually
-         ;; that's problematic because it uses a function in
-         ;; the cookie ns. And another in here. That really just
-         ;; means another indirection layer of callbacks, but
-         ;; it's annoying).
          ::log/state (log/flush-logs! logger log-state)}))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
