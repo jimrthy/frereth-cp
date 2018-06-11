@@ -44,15 +44,16 @@
 (s/def ::log-builder (s/fspec :args nil
                               :ret ::logger))
 
-;;; TODO: I need a map of these keys to numeric values to make
-;;; things like removing unwanted messages trivial.
-(def log-levels #{::trace
-                  ::debug
-                  ::info
-                  ::warn
-                  ::error
-                  ::exception
-                  ::fatal})
+(def log-level-values
+  "name -> priority to assist in prioritizing and filtering"
+  {::trace 100
+   ::debug 200
+   ::info 300
+   ::warn 400
+   ::error 500
+   ::exception 600
+   ::fatal 700})
+(def log-levels (set (keys log-level-values)))
 (s/def ::level log-levels)
 
 (s/def ::label keyword?)
@@ -330,6 +331,37 @@
   (flush! [_]
     (send state-agent #(update % ::flush-count inc))))
 
+(s/fdef merge-entries
+        :args (s/cat :xs ::entries
+                     :ys ::entries)
+        :fn (fn [{:keys [:args :ret]}]
+              (let [{:keys [:xs :ys]} args
+                    combined (distinct (concat xs ys))]
+                (= (count combined)
+                   (count ret))))
+        :ret ::entries)
+(defn merge-entries
+  "Note that this is a relatively expensive operation"
+  [xs ys]
+  ;; This is something that's fairly trivial with
+  ;; c++ and iterators.
+  ;; Note that concatenating vectors is probably the
+  ;; expensive part.
+  ;; TODO: Try experimenting with
+  ;; a) converting to lists
+  ;; b) running concat
+  ;; c) doing the sort
+  ;; d) converting back to vectors
+  ;; Then again, if you're letting your logs build deeply
+  ;; enough in memories between flushes, you should probably
+  ;; consider the dangers of losing entries to things like
+  ;; exceptions
+  (let [result (concat xs ys)]
+    (sort (fn [x y]
+            (compare [(::lamport x) (::time x) (log-level-values (::level x)) (::message x)]
+                     [(::lamport y) (::time y) (log-level-values (::level y)) (::message y)]))
+          result)))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -393,6 +425,7 @@
   (defn get-official-clock
     []
     @my-lamport)
+  ;; Just for debugging and REPL development
   (comment (get-official-clock))
 
   (s/fdef do-sync-clock
@@ -513,6 +546,14 @@ show up later."
                      :logs2 ::state)
         :ret ::state)
 (defn merge-state
-  "Combine the entries of two log states"
+  "Combine the entries of two log states
+
+  This is mostly meant for logs that have diverged from the same context."
   [x y]
-  (throw (RuntimeException. "Write this")))
+  (let [combined-entries (merge-entries (::entries x) (::entries y))
+        result
+        ;; There really isn't a good way to pick a winner if this conflicts
+        {::context (::context x)
+         ::entries combined-entries
+         ::lamport (max (::lamport x) (::lamport y))}]
+    (debug result ::top "Merged entries")))
