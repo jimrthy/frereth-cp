@@ -139,7 +139,10 @@
                                 ;; Q: Is that because I just sent garbage in the Cookie?
                                 ;; Or is there a bigger problem?
                                 (fn [cookie]
-                                  (println "Bogus cookie arrived from \"server.\" This would trigger the Initiate, if it weren't broken")
+                                  (println (str "Bogus cookie sent to Client.\n"
+                                                "In the real world, this would trigger the\n"
+                                                "client's Initiate packet, if the incoming\n"
+                                                "packet weren't deliberately broken"))
                                   (strm/try-take! chan->server ::nada 200 ::timed-out))
                                 (partial check-success client "Taking the vouch")
                                 (fn [{:keys [:host :message :port]
