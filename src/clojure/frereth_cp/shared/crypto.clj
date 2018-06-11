@@ -738,11 +738,15 @@ Or maybe that's (dec n)"
     [denominator]
     (if (not= 0 denominator)
       (let [numerator (BigInteger. 256 (java.util.Random.))]
-        ;; This seems like the obvious approach
-        ;; Q: How much different is this from the actual version?
-        (comment (mod numerator denominator))
-        ;; But the reference version actually does this:
-        (b-t/secure-mod numerator denominator))
+        (comment
+          ;; The reference version actually does this:
+          (b-t/secure-mod numerator denominator))
+        ;; Note this this approach is significantly
+        ;; faster.
+        ;; I'm 90% certain that it's just because there's
+        ;; nothing built into C to just handle it this way.
+        ;; TODO: Check with a cryptographer.
+        (mod numerator denominator))
       0)))
 
 (defn secret-box

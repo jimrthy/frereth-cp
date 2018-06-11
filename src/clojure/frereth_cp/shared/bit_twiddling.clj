@@ -195,10 +195,23 @@ Thanks, java, for having a crippled numeric stack."
                    (<= (.abs (biginteger ret)) (.abs d)))))
          :ret integer?)
 (defn secure-mod
-  "DJB sort-of uses this approach in randommod
+  "DJB sort-of uses this approach in randommod.
 
-  It's significantly slower than ordinary mod"
+  Do not use.
+
+  It's significantly slower than ordinary mod
+
+  I'm pretty sure its only purpoe in life is
+  that C doesn't support really big numbers.
+
+  On lots of platforms, a long long is only 64 bits.
+
+  Since we're looking at 256 bits right off the
+  bat, java wins here."
   [numerator denominator]
+  (binding [*out* *err*]
+    (println "Deprecated: secure-mod"))
+  ;; TODO: Verify with a cryptographer, then delete this.
   (let [^BigInteger numerator (if (instance? BigInteger numerator)
                                 numerator
                                 (biginteger numerator))
@@ -212,8 +225,7 @@ Thanks, java, for having a crippled numeric stack."
             0N
             numerator)))
 (comment
-  (secure-mod 144 4857)
-  )
+  (secure-mod 144 4857))
 
 (defn sub-byte-array
   "Return an array that copies a portion of the source"
