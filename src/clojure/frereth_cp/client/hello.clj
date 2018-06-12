@@ -255,6 +255,54 @@
                remaining-ips)
       (throw (ex-info "Giving up" this)))))
 
+(s/fdef cookie-sent
+        :args (s/cat :this ::state/state
+                     :raw-packet ::specs/network-packet
+                     :log-state-atom ::log/state-atom
+                     :cookie-response dfrd/deferrable?
+                     :cookie-sent-callback (s/fspec :args (s/cat :this ::state/state
+                                                                 :result dfrd/deferrable?
+                                                                 :timeout nat-int?
+                                                                 :sent ::specs/network-packet)
+                                                    :ret any?)
+                     :send-packet-success boolean?)
+        ;; Actually, it should return a deferrable
+        ;; that resolves to a ::cookie-response
+        :ret (s/or :response dfrd/deferrable?
+                   :recursed ::cookie-response))
+(defn cookie-sent
+  ;; TODO: Come up with a better name. do-polling-loop
+  ;; needs both this and a callback from the cookie
+  ;; ns that it's named cookie-sent-callback.
+  ;; Need to make them different enough that I won't
+  ;; get them snarled up.
+  [{:keys [::state/timeout
+           :state/server-ips]
+    :as this}
+   raw-packet
+   log-state-atom
+   cookie-response
+   ;; Yeah. This is where the names go haywire
+   cookie-sent-callback
+   raw-packet
+   send-packet-success]
+  (if send-packet-success
+    ;; Note that this timeout actually can grow to be quite long.
+    ;; In the original, they probably add up to a ballpark of a minute.
+    ;; It's probably acceptable for a single polling thread to block for that
+    ;; long.
+    ;; Or, at least, it probably was back in 2011 when the spec was written,
+    ;; or in 2013 when my copy of the reference implementation was published.
+    ;; Q: Is that still reasonable today?
+    ;; Better Q: Is there a better alternative?
+    (dfrd/timeout! cookie-response timeout ::awaiting-cookie-timed-out)
+    ;; I'd really like to trampoline this. Realistically, we can't, because
+    ;; we're inside a deferred chain.
+    ;; TODO: Prove that, one way or another
+    (trampoline possibly-recurse
+                (assoc this ::log/state @log-state-atom)
+                server-ips cookie-sent-callback raw-packet)))
+
 (s/fdef do-polling-loop
         :args (s/cat :this ::state/state
                      :raw-packet ::specs/network-packet
@@ -318,24 +366,18 @@
     (-> dfrd-send-success
         (dfrd/timeout!  1000)
         (dfrd/chain
-         (fn [send-packet-success]
-           (if send-packet-success
-             ;; Note that this timeout actually can grow to be quite long.
-             ;; In the original, they probably add up to a ballpark of a minute.
-             ;; It's probably acceptable for a single polling thread to block for that
-             ;; long.
-             ;; Or, at least, it probably was back in 2011 when the spec was written,
-             ;; or in 2013 when my copy of the reference implementation was published.
-             ;; Q: Is that still reasonable today?
-             ;; Better Q: Is there a better alternative?
-             (dfrd/timeout! cookie-response timeout ::awaiting-cookie-timed-out)
-             (trampoline possibly-recurse
-                         (assoc this ::log/state @log-state-atom)
-                         ips cookie-sent-callback raw-packet)))
+         (partial cookie-sent this raw-packet log-state-atom cookie-response cookie-sent-callback)
          (fn [actual-success]
            (let [now (System/nanoTime)]
              (swap! log-state-atom (fn [local]
                                      (log/merge-state local (::log/state actual-success))))
+             ;; This really should be a log message. Time after time, it's shown up in STDOUT
+             ;; as a marker when my logs disappear.
+             ;; That isn't an endorsement of using the print.
+             ;; It's probably more of a sign that maybe logs simply are not meant to be
+             ;; accrued this way.
+             ;; Then again, logs are really for diagnosing production issues, not debugging
+             ;; problems at dev time
              (println "hello/do-polling-loop Sent HELLO actual-success:\n"
                       (dissoc actual-success ::log/state)
                       "\nTop-level keys:\n"
@@ -350,9 +392,8 @@
                                                                              ::do-polling-loop
                                                                              "Got back a network-packet but missing something else"
                                                                              {::cookie-response actual-success}))))
-                   (assert (and server-security shared-secrets)
-                           (str "Network-packet missing either security or shared-secrets:\n"
-                                (util/pretty actual-success))))
+                   (throw (ex-info "Network-packet missing either security or shared-secrets"
+                                   actual-success)))
                  (swap! log-state-atom #(log/debug %
                                                    ::do-polling-loop
                                                    "Got back a usable cookie"
@@ -371,6 +412,8 @@
                                          "Discarding garbage cooke")]
                  (if (< 0 remaining)
                    ;; Q: Use trampoline instead?
+                   ;; A: That would get into all sorts of weirdness, because this
+                   ;; is nested inside a deferred
                    (do-polling-loop
                     (assoc this ::log/state (log/flush-logs! logger (log/info @log-state-atom
                                                                               ::do-polling-loop
@@ -388,8 +431,6 @@
                                      raw-packet
                                      cookie-sent-callback
                                      now
-                                     ;; TODO: I'm missing that module against a random 32-byte number
-                                     ;; mentioned above.
                                      (pick-next-timeout timeout)
                                      ips)))))))
         (dfrd/catch ExceptionInfo
@@ -411,7 +452,8 @@
             (fn [ex]
               (assoc this
                      ::log/state (swap! log-state-atom
-                                        #(log/flush-logs! (log/exception %
+                                        #(log/flush-logs! logger
+                                                          (log/exception %
                                                                          ex
                                                                          ::do-polling-loop))))))
         (deref timeout ::polling-timed-out))))
@@ -445,7 +487,7 @@
                              ::poll-servers!
                              "Putting hello(s) onto ->server channel"
                              {::raw-packet raw-packet})]
-    (println "Client: Entering the hello polling loop")
+    (println "Hello: Entering the server polling loop")
     (let [this
           (try
             (do-polling-loop (assoc this ::log/state log-state)
@@ -462,10 +504,9 @@
                              ;; Stick with the reference implementation version for now.
                              (take max-server-attempts (cycle server-ips)))
             (catch Exception ex
-              (log/exception log-state
-                             ex
-                             ::poll-servers!)
-              (assoc this ::log/state (log/flush-logs! logger log-state))))]
+              (assoc this ::log/state (log/exception log-state
+                                                     ex
+                                                     ::poll-servers!))))]
       (assert (::log-state this) "do-polling-loop returned badly")
       (update this ::log/state
               #(log/flush-logs! logger %)))))
@@ -547,21 +588,25 @@
    wait-for-cookie!
    build-inner-vouch
    servers-polled]
-  (let [{log-state ::log/state
-         :as this}
-        ;; Note that this is going to block the calling
-        ;; thread. Which is annoying, but probably not
-        ;; a serious issue outside of unit tests that
-        ;; are mimicking both client and server pieces,
-        ;; which need to run this function in a separate
-        ;; thread.
-        (poll-servers! this timeout wait-for-cookie!)
-        log-state-atom (atom log-state)]
-    (println "client: triggered hello! polling")
-    (dfrd/chain #(into this (build-inner-vouch this))
-                ;; Got a Cookie back. Set things up to send a vouch
+  (println "hello: polling triggered")
+  ;; Note that this is going to block the calling
+  ;; thread. Which is annoying, but probably not
+  ;; a serious issue outside of unit tests that
+  ;; are mimicking both client and server pieces,
+  ;; which need to run this function in a separate
+  ;; thread.
+  (let [this (poll-servers! this timeout wait-for-cookie!)
+        ;; The flow-control below gets twisty
+        log-state-atom (atom nil)
+        inner-vouch-pieces (build-inner-vouch this)
+        this (into this inner-vouch-pieces)]
+    (dfrd/chain this  ; Q: What about the log-state-atom?
+                ;; Got a Cookie back. Set things up to send a vouch.
+                ;; This should trigger state/fork!
+                ;; But we're no longer getting back an Initiate
+                ;; packet.
                 servers-polled
-                ;; Cope with that send returning more than just the
+                ;; Cope with the fact that that send returns more than just the
                 ;; next deferred in the chain
                 (fn [{:keys [::specs/deferrable
                              ::log/state]
@@ -577,6 +622,8 @@
                                                                     {::sent sent})))
                   (if (not (or (= sent ::state/sending-vouch-timed-out)
                                (= sent ::state/drained)))
+                    ;; This feels more and more like it should move back into
+                    ;; the top-level client
                     (state/->message-exchange-mode (assoc this
                                                           ::log/state @log-state-atom)
                                                    sent)
