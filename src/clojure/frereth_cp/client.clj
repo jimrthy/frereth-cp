@@ -111,28 +111,43 @@
     log-state ::log/state
     :as this}]
   {:pre [chan->server]}
-  (try
+  (let [major-problem (fn [how-bad ex]
+                        ;; A std-out logger doesn't seem serious enough to
+                        ;; cope with this
+                        (let [logger (log/std-err-log-factory)
+                              log-state (log/init how-bad)]
+                          (log/flush-logs! logger (log/exception log-state
+                                                                 ex
+                                                                 ::start!
+                                                                 "Failed before I could even get to a logger"))))]
+    (try
       (strm/on-drained chan->server
                        (partial chan->server-closed this))
       (let [timeout (state/current-timeout this)
-          log-state (log/info log-state
-                              ::start!
-                              "client/start! Wiring side-effects through chan->server")]
-      (let [this (hello/do-build-packet this)]
+            log-state (log/info log-state
+                                ::start!
+                                "client/start! Wiring side-effects through chan->server")
+            this (hello/do-build-packet this)]
+        (comment)
         (hello/set-up-server-polling! (assoc this ::log/state log-state)
                                       timeout
                                       cookie/wait-for-cookie!
                                       initiate/build-inner-vouch
-                                      cookie/servers-polled)))
+                                      cookie/servers-polled)
+        ;; FIXME: Split that up and control the post-cookie flow in here
+        )
+      (catch ExceptionInfo ex
+        (major-problem ::unhandled-ex-info ex))
+      (catch RuntimeException ex
+        (major-problem ::unhandled-runtime ex))
       (catch Exception ex
-        ;; A std-out logger doesn't seem serious enough to
-        ;; cope with this
-        (let [logger (log/std-err-log-factory)
-              log-state (log/init ::DOA)]
-          (log/flush-logs! logger (log/exception log-state
-                                                 ex
-                                                 ::start!
-                                                 "Failed before I could even get to a logger"))))))
+        (major-problem ::unhandled-low-level-exception ex))
+      (catch AssertionError ex
+        (major-problem ::definitely-a-bug ex))
+      (catch Error ex
+        (major-problem ::this-is-scary ex))
+      (catch Throwable ex
+        (major-problem ::DOA ex)))))
 
 (s/fdef stop!
         :args (s/cat :state ::state/state)
@@ -222,6 +237,7 @@
              ::shared/packet-management (shared/default-packet-manager)
              ::shared/work-area (shared/default-work-area)))]
     (dfrd/on-realized (::state/terminated result)
+                      ;; Q: Worth refactoring into top-level functions?
                       (fn [unexpected]
                         ;; terminated is for something really extreme,
                         ;; when you really want to kill the client,

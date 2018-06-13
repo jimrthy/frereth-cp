@@ -357,10 +357,10 @@
   ;; consider the dangers of losing entries to things like
   ;; exceptions
   (let [result (concat xs ys)]
-    (vec (sort (fn [x y]
-                 (compare [(::lamport x) (::time x) (log-level-values (::level x)) (::message x)]
-                          [(::lamport y) (::time y) (log-level-values (::level y)) (::message y)]))
-               result))))
+    (vec (distinct (sort (fn [x y]
+                           (compare [(::lamport x) (::time x) (log-level-values (::level x)) (::message x)]
+                                    [(::lamport y) (::time y) (log-level-values (::level y)) (::message y)]))
+                         result)))))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

@@ -284,7 +284,6 @@
    cookie-response
    ;; Yeah. This is where the names go haywire
    cookie-sent-callback
-   raw-packet
    send-packet-success]
   (if send-packet-success
     ;; Note that this timeout actually can grow to be quite long.
@@ -317,6 +316,7 @@
                      :ips ::state/server-ips)
         :ret ::state/state)
 (defn do-polling-loop
+  ;; FIXME: This is ridiculously long
   [{:keys [::log/logger
            ::specs/executor]
     :as this}
@@ -364,7 +364,7 @@
                                                                      raw-packet)
         log-state-atom (atom log-state)]
     (-> dfrd-send-success
-        (dfrd/timeout!  1000)
+        (dfrd/timeout! 1000)
         (dfrd/chain
          (partial cookie-sent this raw-packet log-state-atom cookie-response cookie-sent-callback)
          (fn [actual-success]
@@ -466,7 +466,7 @@
                                                                           (complement neg?))
                                                           :this ::state/state
                                                           :sent ::specs/network-packet)))
-        :ret (s/keys :req [::state/state]))
+        :ret ::state/state)
 (defn poll-servers!
   "Send hello packet to a seq of server IPs associated with a single server name."
   ;; Ping a bunch of potential servers (listening on an appropriate port with the
@@ -507,7 +507,7 @@
               (assoc this ::log/state (log/exception log-state
                                                      ex
                                                      ::poll-servers!))))]
-      (assert (::log-state this) "do-polling-loop returned badly")
+      (assert (::log/state this) "do-polling-loop returned badly")
       (update this ::log/state
               #(log/flush-logs! logger %)))))
 
@@ -521,6 +521,13 @@
         ;; Since that involves tracing down everything
         ;; it calls (et al), that isn't quite trivial.
         :args (s/cat :this ::state/state)
+        ;; However:
+        ;; It absolutely should not return much more than
+        ;; the bytes of the packet.
+        ;; And probably things like the nonce generator
+        ;; state.
+        ;; Probably the short-term key.
+        ;; But definitely not the full state
         :ret ::state/state)
 (defn do-build-packet
   "Puts plain-text hello packet into packet-management
@@ -596,8 +603,10 @@
   ;; which need to run this function in a separate
   ;; thread.
   (let [this (poll-servers! this timeout wait-for-cookie!)
-        ;; The flow-control below gets twisty
+        ;; The flow-control below gets twisty.
+        ;; This makes losing logs a little less likely
         log-state-atom (atom nil)
+        ;; FIXME: Honestly, this does not belong here.
         inner-vouch-pieces (build-inner-vouch this)
         this (into this inner-vouch-pieces)]
     (dfrd/chain this  ; Q: What about the log-state-atom?
@@ -605,7 +614,12 @@
                 ;; This should trigger state/fork!
                 ;; But we're no longer getting back an Initiate
                 ;; packet.
-                servers-polled
+                ;; FIXME: Gank this out. We have no business calling
+                ;; it here, and it really just leads to pain and
+                ;; suffering.
+                (fn [this]
+                  (comment) (throw (RuntimeException. "We're done here."))
+                  (servers-polled this))
                 ;; Cope with the fact that that send returns more than just the
                 ;; next deferred in the chain
                 (fn [{:keys [::specs/deferrable
