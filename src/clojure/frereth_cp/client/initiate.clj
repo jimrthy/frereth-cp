@@ -550,3 +550,33 @@
                                                                       ::build-and-send-vouch!))))))
     (throw (ex-info "Should have a valid cookie response packet, but do not"
                             {::state/state this}))))
+
+(s/fdef initial-packet-sent
+        :args (s/cat :logger ::log/logger
+                     :log-state-atom ::log/state-atom
+                     :this ::state/state)
+        :ret ::state/state)
+(defn initial-packet-sent
+  ""
+  [{log-state ::log/state
+    :as this}]
+  (if (not (or (= this ::state/sending-vouch-timed-out)
+               (= this ::state/drained)))
+    (let [log-state (log/flush-logs! logger
+                                     (log/info log-state
+                                               ::initial-packet-sent
+                                               "Vouch sent (maybe)"
+                                               {::sent this}))]
+      ;; These parameters seem wrong
+      ;; And we can't do this yet: have to wait for a Message
+      ;; Packet to come back.
+      (state/->message-exchange-mode (assoc this
+                                            ::log/state log-state)
+                                     this))
+    (let [failure (ex-info "Something about polling/sending Initiate failed"
+                           {::problem this})]
+      (swap! log-state-atom #(log/flush-logs! logger
+                                              (log/exception %
+                                                             failure
+                                                             ::set-up-server-polling!)))
+      (assoc this ::log/state @log-state-atom))))

@@ -453,6 +453,29 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (-> this ::timeout
       (or default-timeout)))
 
+(s/fdef put-packet
+        :args (s/cat :chan->server ::chan->server
+                     :srvr-ip ::specs/srvr-ip
+                     ;; This is copy/pasted from the do-send-packet
+                     ;; spec.
+                     ;; FIXME: Eliminate the duplication
+                     :packet (s/or :bytes bytes?
+                                   ;; Honestly, an nio.ByteBuffer would probably be
+                                   ;; just fine here also
+                                   :byte-buf ::specs/byte-buf)
+                     :srvr-port ::specs/srvr-port
+                     :timeout ::specs/timeout
+                     :timeout-key any?)
+        :ret dfrd/deferrable?)
+(defn put-packet
+  [chan->server srvr-ip packet srvr-port timeout timeout-key]
+  (strm/try-put! chan->server
+                 {:host srvr-ip
+                  :message packet
+                  :port srvr-port}
+                 timeout
+                 timeout-key))
+
 (s/fdef do-send-packet
         :args (s/cat :this ::state
                      :on-success (s/fspec :args (s/cat :result boolean?)
@@ -493,15 +516,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
     (throw (RuntimeException. "Trying to send nil bytes")))
   (let [log-state (log/debug log-state
                              ::do-send-packet
-                             "Incoming message packet. Should be a binary we can put on the wire"
+                             "Outgoing message packet. Should be a binary we can put on the wire"
                              {::shared/packet packet
                               ::payload-class (class packet)})
-        d (strm/try-put! chan->server
-                         {:host srvr-ip
-                          :message packet
-                          :port srvr-port}
-                         timeout
-                         timeout-key)
+        d (put-packet chan->server srvr-ip packet srvr-port timeout timeout-key)
         log-state (log/info log-state
                             ::do-send-packet
                             ""
@@ -511,9 +529,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                              ;; adding a byte-streams/def-conversion.
                              ;; TODO: I should probably do that.
                              ;; However, there's a different problem here:
-                             ;; Sometimes this gets called with packet as a [B.
-                             ;; Others, it's the network-packet spec.
-                             ;; That discrepancy should be fixed.
                              ;; TODO: Verify that we always have a [B here.
                              ::human-readable-message (b-t/->string #_packet
                                                                     (if (bytes? packet)

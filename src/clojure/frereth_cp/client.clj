@@ -107,47 +107,60 @@
   ;; happens here, up to the point of switching into message-exchange
   ;; mode.
   "Perform the side-effects to establish a connection with a server"
-  [{:keys [::state/chan->server]
+  [{:keys [::log/logger
+           ::state/chan->server]
     log-state ::log/state
     :as this}]
-  {:pre [chan->server]}
-  (let [major-problem (fn [how-bad ex]
-                        ;; A std-out logger doesn't seem serious enough to
-                        ;; cope with this
-                        (let [logger (log/std-err-log-factory)
-                              log-state (log/init how-bad)]
-                          (log/flush-logs! logger (log/exception log-state
-                                                                 ex
-                                                                 ::start!
-                                                                 "Failed before I could even get to a logger"))))]
+  {:pre [chan->server
+         log-state
+         logger]}
+  (let [log-state-atom (atom (log/clean-fork log-state ::for-exception-handling))
+        major-problem (fn [ex]
+                        (log/flush-logs! logger ))]
     (try
       (strm/on-drained chan->server
                        (partial chan->server-closed this))
       (let [timeout (state/current-timeout this)
             log-state (log/info log-state
                                 ::start!
-                                "client/start! Wiring side-effects through chan->server")
-            this (hello/do-build-packet this)]
-        (comment)
-        (hello/set-up-server-polling! (assoc this ::log/state log-state)
-                                      timeout
-                                      cookie/wait-for-cookie!
-                                      initiate/build-inner-vouch
-                                      cookie/servers-polled)
-        ;; FIXME: Split that up and control the post-cookie flow in here
-        )
-      (catch ExceptionInfo ex
-        (major-problem ::unhandled-ex-info ex))
-      (catch RuntimeException ex
-        (major-problem ::unhandled-runtime ex))
-      (catch Exception ex
-        (major-problem ::unhandled-low-level-exception ex))
-      (catch AssertionError ex
-        (major-problem ::definitely-a-bug ex))
-      (catch Error ex
-        (major-problem ::this-is-scary ex))
+                                "client/start! Wiring side-effects through chan->server")]
+        (-> (assoc this ::log/state log-state)
+            (dfrd/chain
+             (fn [this]
+               (hello/set-up-server-polling! this
+                                             log-state-atom
+                                             timeout
+                                             cookie/wait-for-cookie!))
+             (fn [this]
+               ;; This construct's an argument in favor of just passing the
+               ;; ::state/state through everything.
+               (into this
+                     (initiate/build-inner-vouch this)))
+             cookie/servers-polled
+             ;; Cope with the fact that that send returns more than just the
+             ;; next deferred in the chain
+             (fn [{:keys [::specs/deferrable
+                          ::log/state]
+                   :as this}]
+               (println "client/start!: cookie/servers-polled succeeded:" (dissoc this ::log/state))
+               (log/flush-logs! logger state)
+               (swap! log-state-atom #(log/flush-logs! logger %))
+               deferrable)
+             initiate/initial-packet-sent)
+            (dfrd/catch (fn [ex]
+                          (assoc this
+                                 ::log/state (log/exception @log-state-atom
+                                                            ex
+                                                            ::start!))))))
       (catch Throwable ex
-        (major-problem ::DOA ex)))))
+        (update this
+               ::log/state #(log/exception %
+                                           ex
+                                           ::start!)))
+      (finally
+        (log/flush-logs! logger (log/debug @log-state-atom
+                                           ::start!
+                                           "End"))))))
 
 (s/fdef stop!
         :args (s/cat :state ::state/state)

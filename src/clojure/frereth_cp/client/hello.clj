@@ -192,8 +192,8 @@
   (let [now (System/nanoTime)]
     ;; TODO: convert this to a log message
     ;; (although, admittedly, it's really helpful for debugging)
-    (println "hello/cookie-result-callback: Received network packet:\n"
-             (::shared/network-packet actual-success))
+    (println "hello/cookie-result-callback: Received network packet:\n
+             (::shared/network-packet actual-success)")
     (if (and (not (instance? Throwable actual-success))
              (not (#{::sending-hello-timed-out
                      ::awaiting-cookie-timed-out
@@ -276,6 +276,9 @@
   ;; ns that it's named cookie-sent-callback.
   ;; Need to make them different enough that I won't
   ;; get them snarled up.
+
+  ;; Q: Is there enough going on in here to justify
+  ;; having a stand-alone top-level function?
   [{:keys [::state/timeout
            :state/server-ips]
     :as this}
@@ -315,7 +318,7 @@
                                      (complement neg?))
                      :ips ::state/server-ips)
         :ret ::state/state)
-(defn do-polling-loop
+(defn do-polling-loop-original
   ;; FIXME: This is ridiculously long
   [{:keys [::log/logger
            ::specs/executor]
@@ -398,12 +401,16 @@
                                                    ::do-polling-loop
                                                    "Got back a usable cookie"
                                                    (dissoc actual-success ::log/state)))
+                 ;; Sometime between now and state/child-> the ::state/state should get
+                 ;; a ::state/server-cookie key added to its ::state/server-security
+                 ;; structure.
+                 ;; Spoiler: it's supposed to happen after the cookie gets decrypted,
+                 ;; just before state/fork!
+                 ;; That's stopped happening again.
+                 ;; It was probably a prime motivation behind the contortions I just
+                 ;; ironed out.
                  ;; Need to move on to Vouch. But there's already far
                  ;; too much happening here.
-                 ;; This was the 2nd point behind the completion deferred:
-                 ;; put that chain of events into motion.
-                 (comment (as-> (into this actual-success)
-                              (dfrd/success! completion this)))
                  (assoc this ::log/state @log-state-atom))
                (let [elapsed (- now start-time)
                      remaining (- timeout elapsed)
@@ -458,6 +465,131 @@
                                                                          ::do-polling-loop))))))
         (deref timeout ::polling-timed-out))))
 
+(s/fdef cookie-retrieved
+        :args (s/cat :actual-success ::state/state)
+        :ret ::state/state)
+(defn cookie-retrieved
+  ;; FIXME: Make sure the parameter order is consistent with do-polling-loop
+  [{log-state ::log/state
+    :keys [::log/logger
+           ::shared/network-packet
+           ::state/server-security
+           ::state/shared-secrets]
+    :as this}
+   cookie-sent-callback
+   start-time
+   timeout
+   raw-packet
+   ips]
+  (let [now (System/nanoTime)
+        {:keys [::specs/srvr-ip]} server-security]
+    ;; This really should be a log message. Time after time, it's shown up in STDOUT
+    ;; as a marker when my logs disappear.
+    ;; That isn't an endorsement of using the print.
+    ;; It's probably more of a sign that maybe logs simply are not meant to be
+    ;; accrued this way.
+    ;; Then again, logs are really for diagnosing production issues, not debugging
+    ;; problems at dev time
+    (println "hello/cookie-retrieved:\n"
+             (dissoc this ::log/state)
+             "\nTop-level keys:\n"
+             (keys this)
+             "\nServer:"
+             srvr-ip)
+    (if network-packet
+      (do
+        (if (and server-security shared-secrets)
+
+          ;; Sometime between now and state/child-> the ::state/state should get
+          ;; a ::state/server-cookie key added to its ::state/server-security
+          ;; structure.
+          ;; Spoiler: it's supposed to happen after the cookie gets decrypted,
+          ;; just before state/fork!
+          ;; That's stopped happening again.
+          ;; It was probably a prime motivation behind the contortions I just
+          ;; ironed out.
+          ;; Need to move on to Vouch. But there's already far
+          ;; too much happening here.
+          (assoc this ::log/state (log/debug log-state
+                                             ::cookie-retrieved
+                                             "Got back a usable cookie"
+                                             (dissoc this ::log/state)))
+          (do
+            (log/flush-logs! logger (log/error log-state
+                                               ::cookie-retrieved
+                                               "Got back a network-packet but missing something else"
+                                               {::cookie-response this}))
+            (throw (ex-info "Network-packet missing either security or shared-secrets"
+                            {::problem this})))))
+      (let [elapsed (- now start-time)
+            remaining (- timeout elapsed)
+            log-state (log/info log-state
+                                ::cookie-retrieved
+                                "Discarding garbage cookie")]
+        (if (< 0 remaining)
+          ;; Q: Use trampoline instead?
+          ;; A: That would get into all sorts of weirdness, because this
+          ;; is nested inside a deferred handler.
+          ;; Famous Last Words:
+          ;; The call stack on this should never get all that deep.
+          (do-polling-loop
+           (assoc this ::log/state (log/flush-logs! logger (log/info log-state
+                                                                     ::cookie-retrieved
+                                                                     "Still waiting on server"
+                                                                     {::shared/host srvr-ip
+                                                                      ::millis-remaining remaining})))
+           raw-packet
+           cookie-sent-callback
+           start-time
+           remaining
+           ips)
+          (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
+                                                                                      ::cookie-retrieved
+                                                                                      "Moving on to next ip")))
+                            raw-packet
+                            cookie-sent-callback
+                            now
+                            (pick-next-timeout timeout)
+                            ips))))))
+
+(defn do-polling-loop
+  ;; FIXME: This is ridiculously long
+  [{:keys [::log/logger
+           ::specs/executor
+           ::state/chan->server
+           ::state/server-security]
+    :as this}
+   raw-packet cookie-sent-callback start-time timeout ips]
+  (let [srvr-ip (first ips)
+        log-state (log/info (::log/state this)
+                            ::do-polling-loop
+                            "Polling server"
+                            {::specs/srvr-ip srvr-ip})
+        {:keys [::specs/srvr-port]} server-security
+        this (-> this
+                 (assoc ::log/state log-state)
+                 (assoc-in [::state/server-security ::specs/srvr-ip] srvr-ip))]
+    (-> chan->server
+        (strm/try-put! {:host srvr-ip
+                        :message raw-packet
+                        :port srvr-port}
+                       timeout
+                       ::state/sending-hello-timed-out)
+        (dfrd/chain
+         ;; Note that this is actually cookie/wait-for-cookie!
+         #(cookie-sent-callback this
+                                timeout
+                                %)
+         #(cookie-retrieved % cookie-sent-callback start-time timeout raw-packet ips))
+        (dfrd/catch (fn [ex]
+                      (assoc this
+                             ;; FIXME: This is where the log-state-atom would come in handy
+                             ::log/state (swap! #_log-state-atom log-state
+                                                #(log/flush-logs! logger
+                                                                  (log/exception %
+                                                                                 ex
+                                                                                 ::do-polling-loop)))))))))
+
 (s/fdef poll-servers!
         :args (s/cat :this ::state/state
                      :timeout nat-int?
@@ -507,7 +639,7 @@
               (assoc this ::log/state (log/exception log-state
                                                      ex
                                                      ::poll-servers!))))]
-      (assert (::log/state this) "do-polling-loop returned badly")
+      (assert (::log/state this) "do-polling-loop returned without state")
       (update this ::log/state
               #(log/flush-logs! logger %)))))
 
@@ -591,60 +723,9 @@
   "Start polling the server(s) with HELLO Packets"
   [{:keys [::log/logger]
     :as this}
+   log-state-atom
    timeout
-   wait-for-cookie!
-   build-inner-vouch
-   servers-polled]
+   wait-for-cookie!]
   (println "hello: polling triggered")
-  ;; Note that this is going to block the calling
-  ;; thread. Which is annoying, but probably not
-  ;; a serious issue outside of unit tests that
-  ;; are mimicking both client and server pieces,
-  ;; which need to run this function in a separate
-  ;; thread.
-  (let [this (poll-servers! this timeout wait-for-cookie!)
-        ;; The flow-control below gets twisty.
-        ;; This makes losing logs a little less likely
-        log-state-atom (atom nil)
-        ;; FIXME: Honestly, this does not belong here.
-        inner-vouch-pieces (build-inner-vouch this)
-        this (into this inner-vouch-pieces)]
-    (dfrd/chain this  ; Q: What about the log-state-atom?
-                ;; Got a Cookie back. Set things up to send a vouch.
-                ;; This should trigger state/fork!
-                ;; But we're no longer getting back an Initiate
-                ;; packet.
-                ;; FIXME: Gank this out. We have no business calling
-                ;; it here, and it really just leads to pain and
-                ;; suffering.
-                (fn [this]
-                  (comment) (throw (RuntimeException. "We're done here."))
-                  (servers-polled this))
-                ;; Cope with the fact that that send returns more than just the
-                ;; next deferred in the chain
-                (fn [{:keys [::specs/deferrable
-                             ::log/state]
-                      :as this}]
-                  (println "hello: servers-polled succeeded:" (dissoc this ::log/state))
-                  (reset! log-state-atom (log/flush-logs! logger state))
-                  deferrable)
-                (fn [sent]
-                  (swap! log-state-atom #(log/flush-logs! logger
-                                                          (log/info %
-                                                                    ::set-up-server-polling!
-                                                                    "Vouch sent (maybe)"
-                                                                    {::sent sent})))
-                  (if (not (or (= sent ::state/sending-vouch-timed-out)
-                               (= sent ::state/drained)))
-                    ;; This feels more and more like it should move back into
-                    ;; the top-level client
-                    (state/->message-exchange-mode (assoc this
-                                                          ::log/state @log-state-atom)
-                                                   sent)
-                    (let [failure (ex-info "Something about polling/sending Vouch failed"
-                                           {::problem sent})]
-                      (swap! log-state-atom #(log/flush-logs! logger
-                                                              (log/exception %
-                                                                             failure
-                                                                             ::set-up-server-polling!)))
-                      (assoc this ::log/state @log-state-atom)))))))
+  (let [this (do-build-packet this)]
+    (poll-servers! this timeout wait-for-cookie!)))
