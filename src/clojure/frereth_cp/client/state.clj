@@ -455,7 +455,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef put-packet
         :args (s/cat :chan->server ::chan->server
-                     :srvr-ip ::specs/srvr-ip
+                     :srvr-ip ::server-ips
                      ;; This is copy/pasted from the do-send-packet
                      ;; spec.
                      ;; FIXME: Eliminate the duplication

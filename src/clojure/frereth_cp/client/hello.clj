@@ -29,6 +29,9 @@
                                        ::state/shared-secrets
                                        ::shared/network-packet]))
 
+(s/def ::servers-polled (s/or :possibly-succeeded dfrd/deferrable?
+                              :failed ::state/state))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Globals
 
@@ -466,20 +469,32 @@
         (deref timeout ::polling-timed-out))))
 
 (s/fdef cookie-retrieved
-        :args (s/cat :actual-success ::state/state)
+        :args (s/cat :this ::state/state
+                     :raw-packet ::specs/network-packet
+                     :cookie-sent-callback (s/fspec :args (s/cat :notifier ::specs/deferrable
+                                                                 :timeout (s/and number?
+                                                                                 (complement neg?))
+                                                                 :this ::state/state
+                                                                 :sent ::specs/network-packet))
+                     :start-time  (s/and number?
+                                         (complement neg?))
+                     ;; FIXME: If this isn't somewhere shared already,
+                     ;; move it there
+                     :timeout  (s/and number?
+                                      (complement neg?))
+                     :ips ::specs/srvr-ips)
         :ret ::state/state)
 (defn cookie-retrieved
-  ;; FIXME: Make sure the parameter order is consistent with do-polling-loop
   [{log-state ::log/state
     :keys [::log/logger
            ::shared/network-packet
            ::state/server-security
            ::state/shared-secrets]
     :as this}
+   raw-packet
    cookie-sent-callback
    start-time
    timeout
-   raw-packet
    ips]
   (let [now (System/nanoTime)
         {:keys [::specs/srvr-ip]} server-security]
@@ -553,7 +568,6 @@
                             ips))))))
 
 (defn do-polling-loop
-  ;; FIXME: This is ridiculously long
   [{:keys [::log/logger
            ::specs/executor
            ::state/chan->server
@@ -580,7 +594,7 @@
          #(cookie-sent-callback this
                                 timeout
                                 %)
-         #(cookie-retrieved % cookie-sent-callback start-time timeout raw-packet ips))
+         #(cookie-retrieved % raw-packet cookie-sent-callback start-time timeout ips))
         (dfrd/catch (fn [ex]
                       (assoc this
                              ;; FIXME: This is where the log-state-atom would come in handy
@@ -598,7 +612,7 @@
                                                                           (complement neg?))
                                                           :this ::state/state
                                                           :sent ::specs/network-packet)))
-        :ret ::state/state)
+        :ret ::servers-polled)
 (defn poll-servers!
   "Send hello packet to a seq of server IPs associated with a single server name."
   ;; Ping a bunch of potential servers (listening on an appropriate port with the
@@ -620,28 +634,24 @@
                              "Putting hello(s) onto ->server channel"
                              {::raw-packet raw-packet})]
     (println "Hello: Entering the server polling loop")
-    (let [this
-          (try
-            (do-polling-loop (assoc this ::log/state log-state)
-                             raw-packet
-                             cookie-waiter
-                             (System/nanoTime)
-                             ;; FIXME: The initial timeout needs to be customizable
-                             ;; Q: Why aren't I using timeout?!
-                             (util/seconds->nanos 1)
-                             ;; Q: Do we really want to max out at 8?
-                             ;; 8 means over 46 seconds waiting for a response,
-                             ;; but what if you want the ability to try 20?
-                             ;; Or don't particularly care how long it takes to get a response?
-                             ;; Stick with the reference implementation version for now.
-                             (take max-server-attempts (cycle server-ips)))
-            (catch Exception ex
-              (assoc this ::log/state (log/exception log-state
-                                                     ex
-                                                     ::poll-servers!))))]
-      (assert (::log/state this) "do-polling-loop returned without state")
-      (update this ::log/state
-              #(log/flush-logs! logger %)))))
+    (try
+      (do-polling-loop (assoc this ::log/state log-state)
+                       raw-packet
+                       cookie-waiter
+                       (System/nanoTime)
+                       ;; FIXME: The initial timeout needs to be customizable
+                       ;; Q: Why aren't I using timeout?!
+                       (util/seconds->nanos 1)
+                       ;; Q: Do we really want to max out at 8?
+                       ;; 8 means over 46 seconds waiting for a response,
+                       ;; but what if you want the ability to try 20?
+                       ;; Or don't particularly care how long it takes to get a response?
+                       ;; Stick with the reference implementation version for now.
+                       (take max-server-attempts (cycle server-ips)))
+      (catch Exception ex
+        (assoc this ::log/state (log/exception log-state
+                                               ex
+                                               ::poll-servers!))))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -718,7 +728,7 @@
                      ;; TODO: Spec this out
                      :build-inner-vouch any?
                      :servers-polled any?)
-        :ret ::specs/deferrable)
+        :ret ::servers-polled)
 (defn set-up-server-polling!
   "Start polling the server(s) with HELLO Packets"
   [{:keys [::log/logger]

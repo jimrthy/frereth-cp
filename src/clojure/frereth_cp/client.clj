@@ -153,10 +153,12 @@
                                                             ex
                                                             ::start!))))))
       (catch Throwable ex
+        (swap! log-state-atom
+               #(log/exception %
+                               ex
+                               ::start!))
         (update this
-               ::log/state #(log/exception %
-                                           ex
-                                           ::start!)))
+                ::log/state #(log/flush-logs! logger %)))
       (finally
         (log/flush-logs! logger (log/debug @log-state-atom
                                            ::start!
