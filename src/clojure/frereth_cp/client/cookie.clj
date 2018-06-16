@@ -172,126 +172,8 @@
 
 (s/fdef received-response!
         :args (s/cat :this ::state/state
-                     :callback ::success-callback
                      :cookie ::specs/network-packet)
-        ;; The main point is the side-effect of the callback.
-        :ret any?)
-(defn received-response!-original
-  "wait-for-cookie! triggered this when we hear back from the Server"
-  [{log-state ::log/state
-    :keys [::log/logger]
-    :as this}
-   callback
-   {:keys [:host :message :port]
-        :or {message (byte-array 0)}
-        :as cookie}]
-  ;; FIXME: Have to compare :host (and, realistically, :port)
-  ;; against the server associated with the most recently
-  ;; sent HELLO.
-  ;; If they don't match, we need to discard this cookie
-  ;; and go back to waiting (don't forget to reduce the
-  ;; timeout based on elapsed time)
-  ;; Realistically, it probably would have been better to do
-  ;; this as soon as we received the packet.
-  ;; It seems like that might introduce the possibility of timing
-  ;; attacks, though I don't see how.
-  ;; TODO: Check with a cryptographer.
-  (let [log-label ::received-response!
-        log-state (log/info log-state
-                            log-label
-                            "Possibly got a response from server"
-                            cookie)]
-    (try
-      (if-not (or (= cookie ::drained)
-                  (= cookie ::hello-response-timed-out))
-        (if (= K/cookie-packet-length (count message))
-          ;; Next step for reference implementation is to compare the
-          ;; expected server IP and port vs. what we received.
-          ;; That info's pretty unreliable/meaningless, but the server
-          ;; address probably won't change very often.
-          ;; Unless we're communicating with a server on someone's cell
-          ;; phone.
-          ;; Which, if this is successful, will totally happen.
-          ;; TODO: Verify those before trying to proceed
-          (try
-            (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
-                                                                          [::shared/extension
-                                                                           ::shared/work-area
-                                                                           ::state/server-extension
-                                                                           ::state/server-security
-                                                                           ::state/shared-secrets])
-                                                             ::log/state log-state
-                                                             ::shared/packet message))]
-              ;; Q: Would merge-with be more appropriate?
-              (let [this (merge this decrypted)
-                    {:keys [::shared/my-keys]} this
-                    server-short (get-in this
-                                         [::state/server-security
-                                          ::specs/public-short])
-                    log-state (log/debug log-state
-                                         log-label
-                                         "Managed to decrypt the cookie")]
-                (if server-short
-                  (let [^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
-                        ;; line 327
-                        shared-secrets (assoc (::state/shared-secrets this)
-                                              ::state/client-short<->server-short
-                                              (crypto/box-prepare
-                                               server-short
-                                               (.getSecretKey my-short-pair)))]
-                    (callback {::log/state (log/debug log-state
-                                                      log-label
-                                                      (str "Prepared shared short-term secret\n"
-                                                           "Should resolve the cookie-response in client/poll-servers-with-hello!"))
-                               ::state/server-security (::state/server-security decrypted)
-                               ::state/shared-secrets shared-secrets
-                               ::shared/network-packet cookie}))
-                  (callback {::log/state (log/error log-state
-                                                    log-label
-                                                    (str "Missing ::specs/public-short among\n"
-                                                         (keys (::state/server-security this))
-                                                         "\namong bigger-picture\n"
-                                                         (keys this)))})))
-              ;; This is a failure, really.
-              ;; Discards the packet, update recent (and thus the polling timeout)
-              ;; and go back to polling.
-              (callback {::log/state (log/warn log-state
-                                               log-label
-                                               "Unable to decrypt server cookie"
-                                               {::problem cookie})}))
-            ;; TODO: Look into recovering from these
-            (catch ExceptionInfo ex
-              (callback (assoc this ::log/state (log/exception log-state
-                                                               ex
-                                                               log-label
-                                                               "High-level failure"))))
-            (catch RuntimeException ex
-              (callback {::log/state (log/exception log-state
-                                                    ex
-                                                    log-label
-                                                    "Unexpected failure")}))
-            (catch Exception ex
-              (callback {::log/state (log/exception log-state
-                                                    ex
-                                                    log-label
-                                                    "Low-level failure")}))
-            (catch Throwable ex
-              (callback {::log/state (log/exception log-state
-                                                    ex
-                                                    log-label
-                                                    "Serious Problem")})))
-          (callback {::log/state (log/warn log-state
-                                           log-label
-                                           "Invalid response. Just discard and retry"
-                                           {::problem cookie})}))
-        (let [log-state (log/warn log-state
-                                  log-label
-                                  "Server didn't respond to HELLO. Move on to next.")]
-          (callback {::log/state log-state})))
-      (catch Exception ex
-        (callback {::log/state (log/exception log-state
-                                              ex
-                                              log-label)})))))
+        :ret ::state/state)
 (defn received-response!
   "Hello triggers this when we hear back from the Server"
   [{log-state ::log/state
@@ -354,6 +236,7 @@
                                               (crypto/box-prepare
                                                server-short
                                                (.getSecretKey my-short-pair)))]
+                    ;; Yay! Reached the Happy Path
                     (assoc this
                            ::log/state (log/debug log-state
                                                   log-label
@@ -478,30 +361,10 @@
 
 (s/fdef wait-for-cookie!
         :args (s/cat :this ::state/state
-                     :callback ::success-callback
                      :timeout (s/and number?
                                      (complement neg?))
                      :sent ::specs/network-packet)
         :ret ::specs/deferrable)
-(defn wait-for-cookie!-original
-  [this callback timeout sent]
-  (if (not= sent ::state/sending-hello-timed-out)
-    (let [this (update this
-                       ::log/state
-                       #(log/info %
-                                  ::wait-for-cookie!
-                                  "Sent to server"
-                                  sent))]
-      (let [chan<-server (::state/chan<-server this)
-            d (strm/try-take! chan<-server
-                                ::drained
-                                timeout
-                                ::state/response-timed-out)]
-        (dfrd/on-realized d
-                          (partial received-response! this callback)
-                          (partial hello-response-failed! this))))
-    (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
-
 (defn wait-for-cookie!
   [{:keys [::state/chan<-server]
     :as this}

@@ -468,6 +468,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                      :timeout-key any?)
         :ret dfrd/deferrable?)
 (defn put-packet
+  "Build and put a packet onto channel toward server
+
+  No bells, whistles, or anything else to make it fancier than needed"
   [chan->server srvr-ip packet srvr-port timeout timeout-key]
   (strm/try-put! chan->server
                  {:host srvr-ip
@@ -491,7 +494,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                      :timeout-key any?)
         :ret (s/keys :req [::log/state ::specs/deferrable]))
 (defn do-send-packet
-  "Send a ByteBuf (et al) as UDP to the server"
+  "Send a ByteBuf (et al) as UDP to the server
+
+  With lots of bells, whistles, and callbacks"
   ;; Q: How tough to make this generic enough to use
   ;; on both sides?
   ;; Actually, all we really need to do is make the key
