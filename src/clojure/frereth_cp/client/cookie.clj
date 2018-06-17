@@ -90,9 +90,8 @@
                                     {::shared/text  (b-t/->string text)
                                      ::shared/working-nonce (b-t/->string working-nonce)
                                      ::client-short<->server-long (b-t/->string shared)})]
-            ;; TODO: If/when an exception is thrown here, it would be nice
-            ;; to notify callers immediately
             (try
+              ;; TODO: switch to open-crypto-box
               (let [{log-state ::log/state
                      decrypted ::crypto/unboxed} (crypto/open-after log-state
                                                                     text
@@ -175,7 +174,7 @@
                      :cookie ::specs/network-packet)
         :ret ::state/state)
 (defn received-response!
-  "Hello triggers this when we hear back from the Server"
+  "Hello triggers this when it hears back from a Server"
   [{log-state ::log/state
     :keys [::log/logger]
     :as this}
@@ -236,12 +235,22 @@
                                               (crypto/box-prepare
                                                server-short
                                                (.getSecretKey my-short-pair)))]
+                    ;; Throwing this should cause us to forget the incoming Cookie. And
+                    ;; either move on to the next server or wait for another Cookie from
+                    ;; this one (which, realistically, won't happen).
+                    ;; TODO: Get back to this and verify that we don't wind up sending
+                    ;; an empty Initiate packet (which is what happened the last time
+                    ;; I enabled this exception)
+                    (comment (throw (ex-info "This should discard the cookie"
+                                             {::problem "Not sure. How is this proceeding?"})))
                     ;; Yay! Reached the Happy Path
                     (assoc this
                            ::log/state (log/debug log-state
                                                   log-label
                                                   (str "Prepared shared short-term secret\n"
-                                                       "Should resolve the cookie-response in client/poll-servers-with-hello!"))
+                                                       "Cookie:\n"
+                                                       (b-t/->string (get-in decrypted [::state/server-security
+                                                                                        ::state/server-cookie]))))
                            ::state/server-security (::state/server-security decrypted)
                            ::state/shared-secrets shared-secrets
                            ::shared/network-packet cookie))

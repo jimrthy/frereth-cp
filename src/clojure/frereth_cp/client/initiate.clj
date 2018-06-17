@@ -557,9 +557,11 @@
                      :this ::state/state)
         :ret ::state/state)
 (defn initial-packet-sent
-  ""
+  "Initiate packet was put onto wire"
   [{log-state ::log/state
+    :keys [::log/logger]
     :as this}]
+  {:pre [log-state]}
   (if (not (or (= this ::state/sending-vouch-timed-out)
                (= this ::state/drained)))
     (let [log-state (log/flush-logs! logger
@@ -575,8 +577,7 @@
                                      this))
     (let [failure (ex-info "Something about polling/sending Initiate failed"
                            {::problem this})]
-      (swap! log-state-atom #(log/flush-logs! logger
-                                              (log/exception %
-                                                             failure
-                                                             ::set-up-server-polling!)))
-      (assoc this ::log/state @log-state-atom))))
+      (update this ::log/state #(log/flush-logs! logger
+                                                 (log/exception %
+                                                                failure
+                                                                ::set-up-server-polling!))))))

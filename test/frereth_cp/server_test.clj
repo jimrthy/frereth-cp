@@ -1,5 +1,6 @@
 (ns frereth-cp.server-test
-  (:require [clojure.java.io :as jio]
+  (:require [byte-streams :as b-s]
+            [clojure.java.io :as jio]
             [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
@@ -365,13 +366,21 @@
                                                               ;; FIXME: Verify that this is a valid Initiate packet
                                                               (if-not (or (= initiate ::drained)
                                                                           (= initiate ::timeout))
-                                                                (do
+                                                                (let [initiate (update initiate :message
+                                                                                       (fn [bs]
+                                                                                         (comment
+                                                                                           (if (bytes? bs)
+                                                                                             bs
+                                                                                             (if (instance? ByteBuf bs)
+                                                                                               (throw (RuntimeException. "Convert that"))
+                                                                                               (throw (RuntimeException. (str "Don't know" bs))))))
+                                                                                         (b-s/convert bs (Class/forName "[B"))))]
                                                                   (is (= server-ip (-> initiate
                                                                                        :host
                                                                                        .getAddress
                                                                                        vec)))
                                                                   (is (bytes? (:message initiate))
-                                                                      (str "Invalid byte array in :message inside Initiate packet: " initiate))
+                                                                      (str "Invalid binary in :message inside Initiate packet: " initiate))
                                                                   (if-let [port (:port initiate)]
                                                                     (is (= server-port port))
                                                                     ;; Q: Is this line causing my stack overflow?

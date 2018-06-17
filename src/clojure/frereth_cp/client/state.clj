@@ -52,12 +52,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::client-extension-load-time nat-int?)
 
 (s/def ::server-extension ::shared/extension)
-;; TODO: Needs a real spec
-;; Q: Is this the box that we decrypted with the server's
-;; short-term public key?
-;; Or is it the 96-byte black box that we send back as part of
-;; the Vouch?
-(s/def ::server-cookie any?)
+;; 96-byte black box that we send back as part of
+;; the Vouch
+(s/def ::server-cookie (s/and bytes?
+                              #(= (count %) K/server-cookie-length)))
 (s/def ::server-ips (s/coll-of ::specs/srvr-ip))
 (s/def ::server-security (s/merge ::specs/peer-keys
                                   (s/keys :req [::specs/srvr-name

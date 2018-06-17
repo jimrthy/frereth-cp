@@ -137,15 +137,6 @@
                (into this
                      (initiate/build-inner-vouch this)))
              cookie/servers-polled
-             ;; Cope with the fact that that send returns more than just the
-             ;; next deferred in the chain
-             (fn [{:keys [::specs/deferrable
-                          ::log/state]
-                   :as this}]
-               (println "client/start!: cookie/servers-polled succeeded:" (dissoc this ::log/state))
-               (log/flush-logs! logger state)
-               (swap! log-state-atom #(log/flush-logs! logger %))
-               deferrable)
              initiate/initial-packet-sent)
             (dfrd/catch (fn [ex]
                           (assoc this

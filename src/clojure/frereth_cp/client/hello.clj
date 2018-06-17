@@ -336,8 +336,10 @@
    start-time
    timeout
    ips]
+  ;; Q: Refactor the filtering/error checking pieces into their own function?
   (let [now (System/nanoTime)
-        {:keys [::specs/srvr-ip]} server-security]
+        {:keys [::specs/srvr-ip
+                ::state/server-cookie]} server-security]
     ;; This really should be a log message. Time after time, it's shown up in STDOUT
     ;; as a marker when my logs disappear.
     ;; That isn't an endorsement of using the print.
@@ -350,21 +352,22 @@
              "\nTop-level keys:\n"
              (keys this)
              "\nServer:"
-             srvr-ip)
+             srvr-ip
+             "\nCookie:\n"
+             (if server-cookie
+               (b-t/->string server-cookie)
+               "missing"))
+    ;; We're failing to build the Initiate packet because this is empty.
+    ;; This seems like the most likely spot where it didn't get added
+    (when-not server-cookie
+      ;; This is DOA
+      (binding [*out* *err*]
+        (println "hello/cookie-retrieved: Missing the server-cookie!!"))
+      (throw (ex-info "No server-cookie"
+                      {::state/server-security server-security})))
     (if network-packet
       (do
         (if (and server-security shared-secrets)
-
-          ;; Sometime between now and state/child-> the ::state/state should get
-          ;; a ::state/server-cookie key added to its ::state/server-security
-          ;; structure.
-          ;; Spoiler: it's supposed to happen after the cookie gets decrypted,
-          ;; just before state/fork!
-          ;; That's stopped happening again.
-          ;; It was probably a prime motivation behind the contortions I just
-          ;; ironed out.
-          ;; Need to move on to Vouch. But there's already far
-          ;; too much happening here.
           (assoc this ::log/state (log/debug log-state
                                              ::cookie-retrieved
                                              "Got back a usable cookie"
@@ -447,15 +450,31 @@
          #(cookie-sent-callback this
                                 timeout
                                 %)
+         ;; It's very tempting to inject a filter like this, instead
+         ;; of doing it inside cookie-retrieved, which is what happens
+         ;; now.
+         ;; TODO: Reduce the amount of responsibility in cookie-retrieved
+         ;; and check these details here.
+         #_(fn [{log-state ::log/state
+               :keys [::state/server-security]
+               :as this}]
+           (if server-security
+             (let [{:keys [::specs/public-short ::state/server-cookie]} server-security]
+               (if (and public-short server-cookie)
+                 this
+                 (throw (ex-info "Missing something that should have been added to server-security"
+                                 {::state/server-security server-security}))))
+             (throw (ex-info "Missing server-security"
+                             {::available this}))))
          #(cookie-retrieved % raw-packet cookie-sent-callback start-time timeout ips))
         (dfrd/catch (fn [ex]
                       (assoc this
                              ;; FIXME: This is where the log-state-atom would come in handy
-                             ::log/state (swap! #_log-state-atom log-state
-                                                #(log/flush-logs! logger
-                                                                  (log/exception %
-                                                                                 ex
-                                                                                 ::do-polling-loop)))))))))
+                             ::log/state #_(swap! log-state-atom #(log/flush-logs! logger %))
+                             #(log/flush-logs! logger
+                                               (log/exception %
+                                                              ex
+                                                              ::do-polling-loop))))))))
 
 (s/fdef poll-servers!
         :args (s/cat :this ::state/state
