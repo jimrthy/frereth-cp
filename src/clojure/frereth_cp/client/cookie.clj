@@ -241,6 +241,8 @@
                     ;; TODO: Get back to this and verify that we don't wind up sending
                     ;; an empty Initiate packet (which is what happened the last time
                     ;; I enabled this exception)
+                    ;; TODO: Write a test that checks this without the faked-up exception
+                    ;; here
                     (comment) (throw (ex-info "This should discard the cookie"
                                               {::problem "Not sure. How is this proceeding?"}))
                     ;; Yay! Reached the Happy Path

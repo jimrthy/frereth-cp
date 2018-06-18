@@ -360,8 +360,6 @@
              (if server-cookie
                (b-t/->string server-cookie)
                "missing"))
-    ;; We're failing to build the Initiate packet because this is empty.
-    ;; This seems like the most likely spot where it didn't get added
     (when-not server-cookie
       ;; Try the next server in the list
       (binding [*out* *err*]
@@ -370,6 +368,8 @@
       ;; client/start!
       ;; It isn't.
       (throw (RuntimeException. "FIXME: Figure out why not"))
+      ;; FIXME: Unless this has timed out, take a step back and try sending
+      ;; the hello again.
       (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
                                                                                   ::cookie-retrieved
                                                                                   "Moving on to next ip"

@@ -28,6 +28,8 @@ Calls do-polling-loop, passing along the cookie-waiter callback.
 
 ## hello/do-polling-loop
 
+FIXME: The steps that follow are at least moderately out of date
+
 This renames the cookie-waiter callback to cookie-sent-callback.
 
 Then it creates a new binding, confusingly named cookie-waiter,
