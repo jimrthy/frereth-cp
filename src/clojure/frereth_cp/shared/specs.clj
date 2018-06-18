@@ -42,6 +42,9 @@ This really seems like a bad road to go down."
 
 (s/def ::atom (class-predicate (class (atom nil))))
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
+;; Q: Is this worth hiding?
+;; Especially since I've probably used dfrd/deferrable more
+;; often?
 (s/def ::deferrable dfrd/deferrable?)
 (s/def ::exception-instance (class-predicate Exception))
 (s/def ::executor (class-predicate Executor))

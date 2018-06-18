@@ -29,6 +29,15 @@
                                        ::state/shared-secrets
                                        ::shared/network-packet]))
 
+;; Keep in mind that this is totally distinct from
+;; cookie/wait-for-cookie!
+;; It's annoying that the signatures are so similar
+(s/def ::cookie-sent-callback (s/fspec :args (s/cat :notifier ::specs/deferrable
+                                                    :timeout (s/and number?
+                                                                    (complement neg?))
+                                                    :this ::state/state
+                                                    :sent ::specs/network-packet)))
+
 (s/def ::servers-polled (s/or :possibly-succeeded dfrd/deferrable?
                               :failed ::state/state))
 
@@ -166,7 +175,7 @@
     ;; This is what's going on in
     ;; FIXME: Needs unit test
     [n-remaining]
-    (let [n (- (count hello-wait-time))
+    (let [n (- (count hello-wait-time) n-remaining)
           timeout (nth hello-wait-time n)]
       ;; This matches up with line 289
       (+ timeout (crypto/random-mod timeout)))))
@@ -227,8 +236,9 @@
                                                              ::outcome actual-success})}))))
 
 (s/fdef possibly-recurse
-        :args (s/cat :completion ::specs/deferrable
-                     :this ::state/state)
+        :args (s/cat :this ::state/state
+                     :cookie-sent-callback ::cookie-sent-callback
+                     :raw-packet ::specs/network-packet)
         :fn (s/or :recursion (s/fspec :args nil?
                                       :ret ::log/state)
                   :giving-up ::log/state))
@@ -263,14 +273,12 @@
                      :raw-packet ::specs/network-packet
                      :log-state-atom ::log/state-atom
                      :cookie-response dfrd/deferrable?
-                     :cookie-sent-callback (s/fspec :args (s/cat :this ::state/state
-                                                                 :result dfrd/deferrable?
-                                                                 :timeout nat-int?
-                                                                 :sent ::specs/network-packet)
-                                                    :ret any?)
+                     :cookie-sent-callback ::cookie-sent-callback
                      :send-packet-success boolean?)
-        ;; Actually, it should return a deferrable
-        ;; that resolves to a ::cookie-response
+        ;; Success returns a deferrable
+        ;; that resolves to a ::cookie-response.
+        ;; This is a nice feature of deferred/chain:
+        ;; the outcome is the same either way.
         :ret (s/or :response dfrd/deferrable?
                    :recursed ::cookie-response))
 (defn cookie-sent
@@ -311,15 +319,10 @@
 (s/fdef cookie-retrieved
         :args (s/cat :this ::state/state
                      :raw-packet ::specs/network-packet
-                     :cookie-sent-callback (s/fspec :args (s/cat :notifier ::specs/deferrable
-                                                                 :timeout (s/and number?
-                                                                                 (complement neg?))
-                                                                 :this ::state/state
-                                                                 :sent ::specs/network-packet))
+                     :cookie-sent-callback ::cookie-sent-callback
+                     ;; TODO: This spec needs to be somewhere shared
                      :start-time  (s/and number?
                                          (complement neg?))
-                     ;; FIXME: If this isn't somewhere shared already,
-                     ;; move it there
                      :timeout  (s/and number?
                                       (complement neg?))
                      :ips ::specs/srvr-ips)
@@ -351,7 +354,7 @@
              (dissoc this ::log/state)
              "\nTop-level keys:\n"
              (keys this)
-             "\nServer:"
+             "\nServer"
              srvr-ip
              "\nCookie:\n"
              (if server-cookie
@@ -360,11 +363,19 @@
     ;; We're failing to build the Initiate packet because this is empty.
     ;; This seems like the most likely spot where it didn't get added
     (when-not server-cookie
-      ;; This is DOA
+      ;; Try the next server in the list
       (binding [*out* *err*]
         (println "hello/cookie-retrieved: Missing the server-cookie!!"))
-      (throw (ex-info "No server-cookie"
-                      {::state/server-security server-security})))
+      ;; This should continue to block the deferred chain set up in
+      ;; client/start!
+      ;; It isn't.
+      (throw (RuntimeException. "FIXME: Figure out why not"))
+      (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
+                                                                                  ::cookie-retrieved
+                                                                                  "Moving on to next ip"
+                                                                                  {::timeout timeout})))
+                        cookie-sent-callback
+                        raw-packet))
     (if network-packet
       (do
         (if (and server-security shared-secrets)
@@ -404,20 +415,13 @@
           (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
                                                                                       ::cookie-retrieved
                                                                                       "Moving on to next ip")))
-                            raw-packet
                             cookie-sent-callback
-                            now
-                            (pick-next-timeout timeout)
-                            ips))))))
+                            raw-packet))))))
 
 (s/fdef do-polling-loop
         :args (s/cat :this ::state/state
                      :raw-packet ::specs/network-packet
-                     :cookie-sent-callback (s/fspec :args (s/cat :this ::state/state
-                                                                 :result dfrd/deferrable?
-                                                                 :timeout nat-int?
-                                                                 :sent ::specs/network-packet)
-                                                    :ret any?)
+                     :cookie-sent-callback ::cookie-sent-callback
                      :start-time nat-int?
                      :timeout (s/and number?
                                      (complement neg?))
@@ -470,11 +474,12 @@
         (dfrd/catch (fn [ex]
                       (assoc this
                              ;; FIXME: This is where the log-state-atom would come in handy
+                             ;; (so I wouldn't lose anything that led up to this point)
                              ::log/state #_(swap! log-state-atom #(log/flush-logs! logger %))
-                             #(log/flush-logs! logger
-                                               (log/exception %
-                                                              ex
-                                                              ::do-polling-loop))))))))
+                             (log/flush-logs! logger
+                                              (log/exception log-state
+                                                             ex
+                                                             ::do-polling-loop))))))))
 
 (s/fdef poll-servers!
         :args (s/cat :this ::state/state
@@ -506,27 +511,22 @@
                              "Putting hello(s) onto ->server channel"
                              {::raw-packet raw-packet})]
     (println "Hello: Entering the server polling loop")
-    (try
-      (do-polling-loop (assoc this ::log/state log-state)
-                       raw-packet
-                       cookie-waiter
-                       (System/nanoTime)
-                       ;; FIXME: The initial timeout needs to be customizable
-                       ;; Q: Why aren't I using timeout?
-                       ;; A: Because it can grow to be arbitrarily long.
-                       ;; This is really about the timeout for the packet
-                       ;; send. Honestly, this is far too long.
-                       (util/seconds->nanos 1)
-                       ;; Q: Do we really want to max out at 8?
-                       ;; 8 means over 46 seconds waiting for a response,
-                       ;; but what if you want the ability to try 20?
-                       ;; Or don't particularly care how long it takes to get a response?
-                       ;; Stick with the reference implementation version for now.
-                       (take max-server-attempts (cycle server-ips)))
-      (catch Exception ex
-        (assoc this ::log/state (log/exception log-state
-                                               ex
-                                               ::poll-servers!))))))
+    (do-polling-loop (assoc this ::log/state log-state)
+                     raw-packet
+                     cookie-waiter
+                     (System/nanoTime)
+                     ;; FIXME: The initial timeout needs to be customizable
+                     ;; Q: Why aren't I using timeout?
+                     ;; A: Because it can grow to be arbitrarily long.
+                     ;; This is really about the timeout for the packet
+                     ;; send. Honestly, this is far too long.
+                     (util/seconds->nanos 1)
+                     ;; Q: Do we really want to max out at 8?
+                     ;; 8 means over 46 seconds waiting for a response,
+                     ;; but what if you want the ability to try 20?
+                     ;; Or don't particularly care how long it takes to get a response?
+                     ;; Stick with the reference implementation version for now.
+                     (take max-server-attempts (cycle server-ips)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public

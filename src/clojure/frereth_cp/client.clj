@@ -8,6 +8,7 @@
   (:require [byte-streams :as b-s]
             [clojure.data :as data]
             [clojure.spec.alpha :as s]
+            [clojure.pprint :refer [pprint]]
             [frereth-cp.client
              [cookie :as cookie]
              [hello :as hello]
@@ -131,9 +132,18 @@
                                              log-state-atom
                                              timeout
                                              cookie/wait-for-cookie!))
-             (fn [this]
+             (fn [{log-state ::log/state
+                   :as this}]
+               ;; We're getting here
+               (println "Outcome from hello/set-up-server-polling!")
+               (pprint this)
                ;; This construct's an argument in favor of just passing the
                ;; ::state/state through everything.
+               ;; That approach is certainly easier. Though, ultimately,
+               ;; not exactly simpler. It also takes us in the direction
+               ;; of java, checked exceptions, and needing to change all
+               ;; the callers when something at the bottom of the call
+               ;; stack changes.
                (into this
                      (initiate/build-inner-vouch this)))
              cookie/servers-polled

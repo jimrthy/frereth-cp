@@ -199,7 +199,7 @@
                             cookie)]
     (try
       (if-not (or (= cookie ::drained)
-                  (= cookie ::hello-response-timed-out))
+                  (= cookie ::state/response-timed-out))
         (if (= K/cookie-packet-length (count message))
           ;; Next step for reference implementation is to compare the
           ;; expected server IP and port vs. what we received.
@@ -241,8 +241,8 @@
                     ;; TODO: Get back to this and verify that we don't wind up sending
                     ;; an empty Initiate packet (which is what happened the last time
                     ;; I enabled this exception)
-                    (comment (throw (ex-info "This should discard the cookie"
-                                             {::problem "Not sure. How is this proceeding?"})))
+                    (comment) (throw (ex-info "This should discard the cookie"
+                                              {::problem "Not sure. How is this proceeding?"}))
                     ;; Yay! Reached the Happy Path
                     (assoc this
                            ::log/state (log/debug log-state
@@ -287,7 +287,8 @@
       (catch Exception ex
         {::log/state (log/exception log-state
                                     ex
-                                    log-label)}))))
+                                    log-label)}
+        (throw ex)))))
 
 ;; The name makes this seem like it doesn't belong in here.
 ;; It totally does.
@@ -375,19 +376,28 @@
                      :sent ::specs/network-packet)
         :ret ::specs/deferrable)
 (defn wait-for-cookie!
-  [{:keys [::state/chan<-server]
+  "Pulls Cookie Packet from the wire, then triggers the response"
+  [{:keys [::log/logger
+           ::state/chan<-server]
+    log-state ::log/state
     :as this}
    timeout send-success]
   (if (not= send-success ::state/sending-hello-timed-out)
-    (let [this (update this
-                       ::log/state
-                       #(log/info %
-                                  ::wait-for-cookie!
-                                  "Sent to server"
-                                  send-success))]
-      (dfrd/chain (strm/try-take! chan<-server
+    (let [this (assoc this
+                      ::log/state (log/flush-logs! logger
+                                                   (log/info (::log/state this)
+                                                             ::wait-for-cookie!
+                                                             "Sent to server"
+                                                             send-success)))]
+      (-> (strm/try-take! chan<-server
                                   ::drained
                                   timeout
                                   ::state/response-timed-out)
-                  #(received-response! this %)))
+          (dfrd/chain
+           #(received-response! this %))
+          (dfrd/catch (fn [ex]
+                        (println "cookie/received-response! failed:" ex)
+                        (throw (ex-info "received-response! failed"
+                                        {::last-known this}
+                                        ex))))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
