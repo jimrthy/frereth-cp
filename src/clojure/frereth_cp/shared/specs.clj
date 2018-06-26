@@ -41,10 +41,12 @@ This really seems like a bad road to go down."
   #(instance? klass %))
 
 (s/def ::atom (class-predicate (class (atom nil))))
+(def byte-array-type (Class/forName "[B"))
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
-;; Q: Is this worth hiding?
+;; Q: Is this worth abstracting?
 ;; Especially since I've probably used dfrd/deferrable more
 ;; often?
+;; A: Yes. For using in keys.
 (s/def ::deferrable dfrd/deferrable?)
 (s/def ::exception-instance (class-predicate Exception))
 (s/def ::executor (class-predicate Executor))

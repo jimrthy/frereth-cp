@@ -150,9 +150,10 @@
              initiate/initial-packet-sent)
             (dfrd/catch (fn [ex]
                           (assoc this
-                                 ::log/state (log/exception @log-state-atom
-                                                            ex
-                                                            ::start!))))))
+                                 ::log/state (log/flush-logs! logger
+                                                              (log/exception @log-state-atom
+                                                                             ex
+                                                                             ::start!)))))))
       (catch Throwable ex
         (swap! log-state-atom
                #(log/exception %

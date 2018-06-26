@@ -243,14 +243,13 @@
                                       :ret ::log/state)
                   :giving-up ::log/state))
 (defn possibly-recurse
+  "Try the next server (if any)"
   [{:keys [::log/logger
            ::state/server-ips]
     log-state ::log/state
     :as this}
    cookie-sent-callback
    raw-packet]
-  ;; Sending the packet probably isn't going to fail. But it's good
-  ;; to handle the possibility
   (let [remaining-ips (next server-ips)
         log-state (log/flush-logs! logger (log/warn log-state
                                                     ::possibly-recurse
@@ -266,7 +265,7 @@
                (System/nanoTime)
                (pick-next-timeout (count remaining-ips))
                remaining-ips)
-      (throw (ex-info "Giving up" this)))))
+      (throw (ex-info "No IPs left. Giving up" this)))))
 
 (s/fdef cookie-sent
         :args (s/cat :this ::state/state
@@ -337,8 +336,7 @@
    raw-packet
    cookie-sent-callback
    start-time
-   timeout
-   ips]
+   timeout]
   ;; Q: Refactor the filtering/error checking pieces into their own function?
   (let [now (System/nanoTime)
         {:keys [::specs/srvr-ip
@@ -367,9 +365,7 @@
       ;; This should continue to block the deferred chain set up in
       ;; client/start!
       ;; It isn't.
-      (throw (RuntimeException. "FIXME: Figure out why not"))
-      ;; FIXME: Unless this has timed out, take a step back and try sending
-      ;; the hello again.
+      (comment (throw (RuntimeException. "FIXME: Figure out why not")))
       (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
                                                                                   ::cookie-retrieved
                                                                                   "Moving on to next ip"
@@ -410,8 +406,7 @@
            raw-packet
            cookie-sent-callback
            start-time
-           remaining
-           ips)
+           remaining)
           (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
                                                                                       ::cookie-retrieved
                                                                                       "Moving on to next ip")))
@@ -432,8 +427,9 @@
            ::specs/executor
            ::state/chan->server
            ::state/server-security]
+    ips ::state/server-ips
     :as this}
-   raw-packet cookie-sent-callback start-time timeout ips]
+   raw-packet cookie-sent-callback start-time timeout]
   (let [srvr-ip (first ips)
         log-state (log/info (::log/state this)
                             ::do-polling-loop
@@ -470,7 +466,7 @@
                                  {::state/server-security server-security}))))
              (throw (ex-info "Missing server-security"
                              {::available this}))))
-         #(cookie-retrieved % raw-packet cookie-sent-callback start-time timeout ips))
+         #(cookie-retrieved % raw-packet cookie-sent-callback start-time timeout))
         (dfrd/catch (fn [ex]
                       (assoc this
                              ;; FIXME: This is where the log-state-atom would come in handy
@@ -509,9 +505,17 @@
   (let [log-state (log/debug log-state
                              ::poll-servers!
                              "Putting hello(s) onto ->server channel"
-                             {::raw-packet raw-packet})]
+                             {::raw-packet raw-packet
+                              ::state/server-ips server-ips})]
     (println "Hello: Entering the server polling loop")
-    (do-polling-loop (assoc this ::log/state log-state)
+    (do-polling-loop (assoc this
+                            ::log/state log-state
+                            ;; Q: Do we really want to max out at 8?
+                            ;; 8 means over 46 seconds waiting for a response,
+                            ;; but what if you want the ability to try 20?
+                            ;; Or don't particularly care how long it takes to get a response?
+                            ;; Stick with the reference implementation version for now.
+                            ::state/server-ips (take max-server-attempts (cycle server-ips)))
                      raw-packet
                      cookie-waiter
                      (System/nanoTime)
@@ -520,13 +524,7 @@
                      ;; A: Because it can grow to be arbitrarily long.
                      ;; This is really about the timeout for the packet
                      ;; send. Honestly, this is far too long.
-                     (util/seconds->nanos 1)
-                     ;; Q: Do we really want to max out at 8?
-                     ;; 8 means over 46 seconds waiting for a response,
-                     ;; but what if you want the ability to try 20?
-                     ;; Or don't particularly care how long it takes to get a response?
-                     ;; Stick with the reference implementation version for now.
-                     (take max-server-attempts (cycle server-ips)))))
+                     (util/seconds->nanos 1))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -591,7 +589,7 @@
                   (fn [current]
                     (assoc current
                            ::shared/packet-nonce short-term-nonce
-                           ::shared/packet (b-s/convert packet io.netty.buffer.ByteBuf))))
+                           ::shared/packet (b-s/convert packet specs/byte-array-type))))
           (assoc ::log/state (log/flush-logs! logger log-state))))))
 
 (s/fdef set-up-server-polling!
@@ -608,6 +606,7 @@
   "Start polling the server(s) with HELLO Packets"
   [{:keys [::log/logger]
     :as this}
+   ;; TODO: Either use this or eliminate it.
    log-state-atom
    timeout
    wait-for-cookie!]

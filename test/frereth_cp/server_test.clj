@@ -286,10 +286,7 @@
                             ;; Anything that can be converted to a direct ByteBuf is legal.
                             ;; So this part is painfully implementation-dependent.
                             ;; Q: Is it worth generalizing?
-                            ^ByteBuf hello-buffer (:message hello)
-                            hello-length (.readableBytes hello-buffer)
-                            hello-packet (byte-array hello-length)]
-                        (.readBytes hello-buffer hello-packet)
+                            ^bytes hello-packet (:message hello)]
                         (println (str "shake-hands: Trying to put hello packet\n"
                                       (b-t/->string hello-packet)
                                       "\nonto server channel "
@@ -383,8 +380,6 @@
                                                                       (str "Invalid binary in :message inside Initiate packet: " initiate))
                                                                   (if-let [port (:port initiate)]
                                                                     (is (= server-port port))
-                                                                    ;; Q: Is this line causing my stack overflow?
-                                                                    ;; A: No. I'm getting past this.
                                                                     (is false (str "UDP packet missing port in initiate\n" initiate)))
                                                                   (println "Trying to send that initiate packet to the server")
                                                                   (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
@@ -395,7 +390,9 @@
                                                                         (if-not (or (= first-srvr-message ::drained)
                                                                                     (= first-srvr-message ::timeout))
                                                                           (let [put @(strm/try-put! client<-server
-                                                                                                    first-srvr-message
+                                                                                                    (update first-srvr-message
+                                                                                                            :message
+                                                                                                            #(b-s/convert % specs/byte-array-type))
                                                                                                     1000
                                                                                                     ::timeout)]
                                                                             (if (not= ::timeout put)
@@ -405,18 +402,18 @@
                                                                                 (if (= ::timeout first-full-clnt-message)
                                                                                   (do
                                                                                     (dfrd/error! initiate-outcome
-                                                                                                 (ex-info "Timed out waiting for client response")))
+                                                                                                 (RuntimeException. "Timed out waiting for initial client message")))
                                                                                   (dfrd/success! initiate-outcome first-full-clnt-message)))
                                                                               (do
                                                                                 (dfrd/error! initiate-outcome
-                                                                                             (ex-info "Timed out writing first server Message packet to client")))))
+                                                                                             (RuntimeException. "Timed out writing first server Message packet to client")))))
                                                                           (do
                                                                             (dfrd/error! initiate-outcome
                                                                                          (ex-info "Failed pulling first real Message packet from Server"
                                                                                                   {::problem first-srvr-message})))))
                                                                       (do
                                                                         (dfrd/error! initiate-outcome
-                                                                                     (ex-info "Timed out writing Initiate to Server"))))))
+                                                                                     (RuntimeException. "Timed out writing Initiate to Server"))))))
                                                                 (do
                                                                   (dfrd/error! initiate-outcome (ex-info "Failed to take Initiate/Vouch from Client"
                                                                                                          {::problem initiate})))))
