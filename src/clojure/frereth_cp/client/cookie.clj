@@ -316,6 +316,29 @@
                                          ::hello-response-failed!))
   (dfrd/error! terminated failure))
 
+(s/fdef wrap-received
+        :args (s/cat :this ::state/state
+                     :incoming ::specs/network-packet)
+        :ret ::state/state)
+(defn wrap-received
+  [{log-state ::log/state
+    :keys [::log/logger]
+    :as this}
+   incoming]
+  ;; It seems a bit silly to have a lambda here.
+  ;; The println debugging adds insult to injury.
+  ;; TODO: Refactor this into its own top-level named
+  ;; function
+  (println "The wait for the cookie has ended")
+  (pprint incoming)
+  (let [this
+        (assoc this
+               ::log/state (log/flush-logs! logger (log/trace log-state
+                                                              ::wait-for-cookie!
+                                                              "Pulled from server"
+                                                              {::specs/network-packet incoming})))]
+    (received-response! this incoming)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
@@ -396,17 +419,7 @@
                                   timeout
                                   ::state/response-timed-out)
           (dfrd/chain
-           #_(received-response! this %)
-           (fn [incoming]
-             (println "The wait for the cookie has ended")
-             (pprint incoming)
-             (let [this
-                   (assoc this
-                          ::log/state (log/flush-logs! logger (log/trace log-state
-                                                                         ::wait-for-cookie!
-                                                                         "Pulled from server"
-                                                                         {::specs/network-packet incoming})))]
-               (received-response! this incoming))))
+           (partial wrap-received this))
           (dfrd/catch (fn [ex]
                         (println "cookie/received-response! failed:" ex)
                         (throw (ex-info "received-response! failed"
