@@ -599,7 +599,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
    timeout
    ^bytes message-block]
   {:pre [packet-builder]}
-  (let [log-state (log/do-sync-clock log-state)
+  (let [log-state (log/flush-logs! logger (log/trace log-state
+                                                     ::child->
+                                                     "Top"))
         {:keys [::server-cookie
                 ::specs/srvr-name
                 ::specs/srvr-port]} server-security]
@@ -643,13 +645,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; some equivalent function that I haven't written yet. That function should
     ;; live in client.message.
     (let [^ByteBuf message-packet (packet-builder (assoc state ::log/state log-state) message-block)
+          raw-message-packet (if message-packet
+                               (b-s/convert message-packet specs/byte-array-type)
+                               (byte-array 0))
           log-state (log/debug log-state
                                ::child->
                                "Client sending a message packet from child->serve"
                                {::shared/message (if message-packet
-                                                   (let [barray (byte-array (.readableBytes message-packet))]
-                                                     (.readBytes message-packet barray)
-                                                     (b-t/->string barray))
+                                                   (b-t/->string raw-message-packet)
                                                    "No message packet built")
                                 ::server-security server-security})]
       (when-not (and srvr-name srvr-port message-packet)
@@ -663,7 +666,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               (let [log-state (log/debug log-state
                                                          ::child->
                                                          "Packet sent"
-                                                         {::shared/message message-packet
+                                                         {::shared/message raw-message-packet
                                                           ::server-security server-security})]
                                 (log/flush-logs! logger log-state)))
                             (fn [ex]
@@ -671,11 +674,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              ex
                                                              ::child->
                                                              "Sending packet failed"
-                                                             {::shared/message message-packet
+                                                             {::shared/message raw-message-packet
                                                               ::server-security server-security})]))
                             timeout
                             ::child->timed-out
-                            message-packet)
+                            raw-message-packet)
             {log-state ::log/state
              result ::specs/deferrable} composite-result-placeholder]
         result))))

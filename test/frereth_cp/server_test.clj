@@ -365,23 +365,18 @@
                                                                           (= initiate ::timeout))
                                                                 (let [initiate (update initiate :message
                                                                                        (fn [bs]
-                                                                                         (comment
-                                                                                           (if (bytes? bs)
-                                                                                             bs
-                                                                                             (if (instance? ByteBuf bs)
-                                                                                               (throw (RuntimeException. "Convert that"))
-                                                                                               (throw (RuntimeException. (str "Don't know" bs))))))
                                                                                          (b-s/convert bs (Class/forName "[B"))))]
-                                                                  (is (= server-ip (-> initiate
-                                                                                       :host
-                                                                                       .getAddress
-                                                                                       vec)))
+                                                                  (is (= server-ip
+                                                                         (-> initiate
+                                                                             :host
+                                                                             .getAddress
+                                                                             vec)))
                                                                   (is (bytes? (:message initiate))
                                                                       (str "Invalid binary in :message inside Initiate packet: " initiate))
                                                                   (if-let [port (:port initiate)]
                                                                     (is (= server-port port))
                                                                     (is false (str "UDP packet missing port in initiate\n" initiate)))
-                                                                  (println "Trying to send that initiate packet to the server")
+                                                                  (println "Trying to send that initiate (?) packet to the server")
                                                                   (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
                                                                     (println "Initiate packet sent to the server:" put)
                                                                     (if (not= ::timeout @put)
@@ -422,7 +417,7 @@
                                             (let [actual-initiate-outcome (deref initiate-outcome 2000 ::initiate-timeout)]
                                               (is (not= ::initiate-timeout actual-initiate-outcome))
                                               ;; Q: What are we dealing with here?
-                                              (is (not actual-initiate-outcome)))
+                                              (is (not actual-initiate-outcome) (str "Message is a " (-> actual-initiate-outcome :message class))))
                                             (catch Exception ex
                                               ;; We get here on any of those dfrd/error! triggers above
                                               (is (not ex)))))

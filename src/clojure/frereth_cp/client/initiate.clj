@@ -218,7 +218,10 @@
                    result ::message/possible-response
                    :as filtered} (message/filter-initial-message-bytes log-state
                                                                        result-bytes)]
-              (log/flush-logs! logger log-state)
+              (log/flush-logs! logger (log/debug log-state
+                                                 ::build-initiate-packet!
+                                                 ""
+                                                 {::filtered filtered}))
               result)
             (do
               (log/flush-logs! logger log-state)
@@ -229,7 +232,8 @@
           (log/flush-logs! logger (log/warn log-state
                                             ::build-initiate-packet!
                                             "Invalid message length from child"
-                                            {::message-length (count msg)}))))
+                                            {::message-length (count msg)}))
+          nil))
       (do
         (log/flush-logs! logger log-state)
         (throw (ex-info "Missing outgoing message"
@@ -370,6 +374,9 @@
     {::log/state log-state
      ::specs/vouch vouch}))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
+
 (s/fdef build-inner-vouch
   :args (s/cat :this ::vouch-building-params)
   :ret ::vouch-built)
@@ -426,130 +433,6 @@
                           {::problem shared-secrets}))))
       (assert false (str "Missing nonce in packet-management:\n"
                          (keys packet-management))))))
-
-(s/fdef cookie->initiate
-        :args (s/cat :this ::state/state
-                     :cookie-packet ::shared/network-packet)
-        :ret (s/keys :req [::log/state]
-                     :opt [::specs/byte-buf]))
-(defn cookie->initiate
-  "Got a cookie from the server.
-
-  Replace those bytes
-  in our packet buffer with the vouch bytes we'll use
-  as the response.
-
-  Q: How much of a performance hit (if any) am I looking at if I
-  make this purely functional instead?"
-  [{log-state ::log/state
-    :as this}
-   {:keys [:host :port]
-   ^bytes cookie :message
-   :as cookie-packet}]
-  {:pre [cookie-packet]}
-  (throw (RuntimeException. "obsolete"))
-  (let [log-state (log/info log-state
-                            ::cookie->vouch
-                            "Getting ready to convert cookie into a Vouch"
-                            {::human-readable-cookie (b-t/->string cookie)
-                             ::shared/network-packet cookie-packet})
-        ;; Note that this supplies new state
-        ;; Though whether it should is debatable.
-        ;; Q: why would I put this into ::vouch?
-        ;; A: In case we need to resend it.
-        ;; It's perfectly legal to send as many Initiate
-        ;; packets as the client chooses.
-        ;; This is especially important before the Server
-        ;; has responded with its first Message so the client
-        ;; can switch to sending those.
-        {log-state ::log/state
-         :keys [::specs/vouch]
-         :as built-vouch} (build-inner-vouch (assoc this
-                                                    ::log/state log-state))]
-    (assert log-state)
-    (assert vouch (str "Missing vouch among\n"
-                       (keys built-vouch)
-                       "\nin\n"
-                       built-vouch))
-    (when-not (s/valid? ::specs/vouch vouch)
-      (throw (ex-info "Invalid vouch built"
-                      {::state/state this
-                       ::problem (s/explain-data ::specs/vouch vouch)})))
-    (let [overrides-from-vouch-building (select-keys built-vouch
-                                                    [::log/state
-                                                     ::shared/my-keys
-                                                     ::shared/work-area
-                                                     ::specs/inner-i-nonce
-                                                     ::specs/vouch
-                                                     ::state/server-security
-                                                     ::state/shared-secrets])]
-      ;; FIXME: Convert this to a log message
-      (println "Overrides retrieved for vouch building:\n"
-               overrides-from-vouch-building
-               "\nbased upon\n"
-               (keys built-vouch)
-               "\nfrom\n"
-               built-vouch
-               "\noverriding\n"
-               (keys this)
-               "\nin\n"
-               this)
-      (build-initiate-packet! (into this overrides-from-vouch-building)
-                              cookie
-                              ;; Q: where should this message come from then?
-                              ))))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Public
-
-;; FIXME: Refactor/rename to do-build-and-send-vouch
-;; Because the return value does matter
-(s/fdef build-and-send-vouch!
-        :args (s/cat :this ::state/state
-                     :cookie ::specs/network-packet)
-        :ret (s/keys :req [::specs/deferrable
-                           ::log/state]))
-(defn build-and-send-vouch!
-  "@param this: client-state
-  @param cookie-packet: first response from the server"
-  [this cookie-packet]
-  ;; Note that packet-builder is a member of (::state/server-security this)
-  (throw (RuntimeException. "obsolete"))
-  (if cookie-packet
-    (let [{log-state ::log/state
-           logger ::log/logger} this
-          log-state (log/info log-state
-                              ::build-and-send-vouch!
-                              "Converting cookie->vouch"
-                              {::cause "Received cookie"
-                               ::effect "Forking child"
-                               ::state/state (dissoc this ::log/state)})
-          ;; Once we've signaled the child to start doing its own thing,
-          ;; cope with the cookie we just received.
-          ;; Honestly, we shouldn't send it any more of `this` than
-          ;; it absolutely needs
-          ;; Those changes don't matter, since this entire function
-          ;; is going away.
-          {byte-buf ::specs/byte-buf
-           log-state ::log/state} (cookie->initiate (assoc this ::log/state log-state)
-                                                    cookie-packet)]
-      (try
-        ;; FIXME: Debug only
-        (println "Client built Initiate/Vouch. Sending" byte-buf)
-        (let [base-result (do-send-vouch (assoc this
-                                                ::log/state
-                                                log-state)
-                                         byte-buf)]
-          (update-in base-result
-                     [::state/state ::log/state]
-                     #(log/flush-logs! logger %)))
-        (catch Exception ex
-          (update this
-                  ::log/state #(log/flush-logs! logger (log/exception %
-                                                                      ex
-                                                                      ::build-and-send-vouch!))))))
-    (throw (ex-info "Should have a valid cookie response packet, but do not"
-                            {::state/state this}))))
 
 (s/fdef initial-packet-sent
         :args (s/cat :logger ::log/logger

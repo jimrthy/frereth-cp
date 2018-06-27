@@ -239,7 +239,9 @@
   (let [result
         (-> opts
             (state/initialize-immutable-values logger-initializer)
-            ;; This really belongs in state/initialize-immutable-values
+            ;; Assigning this really belongs in
+            ;; state/initialize-immutable-values
+            ;; (or maybe its mutable counterpart)
             ;; But that would create circular imports.
             ;; This is a red flag.
             ;; FIXME: Come up with a better place for it to live.

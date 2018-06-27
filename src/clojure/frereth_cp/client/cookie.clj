@@ -174,7 +174,7 @@
                      :cookie ::specs/network-packet)
         :ret ::state/state)
 (defn received-response!
-  "Hello triggers this when it hears back from a Server"
+  "Hello triggers this (via wait-for-cookie) when it hears back from a Server"
   [{log-state ::log/state
     :keys [::log/logger]
     :as this}
@@ -243,8 +243,8 @@
                     ;; I enabled this exception)
                     ;; TODO: Write a test that checks this without the faked-up exception
                     ;; here
-                    (comment) (throw (ex-info "This should discard the cookie"
-                                              {::problem "Not sure. How is this proceeding?"}))
+                    (comment (throw (ex-info "This should discard the cookie"
+                                             {::problem "Not sure. How is this proceeding?"})))
                     ;; Yay! Reached the Happy Path
                     (assoc this
                            ::log/state (log/debug log-state
@@ -335,7 +335,7 @@
     ;; Whether that's a "good way" or not is debatable.
     cookie ::specs/network-packet
     :as this}]
-  (println "client: Top of servers-polled")
+  (println "cookie: Top of servers-polled")
   (when-not log-state
     ;; This is an ugly situation.
     ;; Something has gone badly wrong
@@ -396,7 +396,17 @@
                                   timeout
                                   ::state/response-timed-out)
           (dfrd/chain
-           #(received-response! this %))
+           #_(received-response! this %)
+           (fn [incoming]
+             (println "The wait for the cookie has ended")
+             (pprint incoming)
+             (let [this
+                   (assoc this
+                          ::log/state (log/flush-logs! logger (log/trace log-state
+                                                                         ::wait-for-cookie!
+                                                                         "Pulled from server"
+                                                                         {::specs/network-packet incoming})))]
+               (received-response! this incoming))))
           (dfrd/catch (fn [ex]
                         (println "cookie/received-response! failed:" ex)
                         (throw (ex-info "received-response! failed"
