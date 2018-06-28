@@ -49,6 +49,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; added to implement that sort of thing.
 ;; Actually doing anything useful with this seems like it's probably
 ;; an exercise that's been left for later
+;; This seems to have been an aspiration, when DJB hoped the entire idea
+;; would get pulled into the Linux kernel.
+;; It's just that the idea didn't seem to gain any traction.
 (s/def ::client-extension-load-time nat-int?)
 
 (s/def ::server-extension ::shared/extension)
@@ -58,7 +61,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               #(= (count %) K/server-cookie-length)))
 (s/def ::server-ips (s/coll-of ::specs/srvr-ip))
 (s/def ::server-security (s/merge ::specs/peer-keys
-                                  (s/keys :req [::specs/srvr-name
+                                  (s/keys :req [::specs/srvr-name  ;; DNS
                                                 ::specs/srvr-port]
                                           ;; Q: Is there a valid reason for the server-cookie to live here?
                                           ;; Q: I can discard it after sending the vouch, can't I?
@@ -69,6 +72,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                           ;; (i.e. once a server's sent a response to an Initiate
                                           ;; packet).
                                           :opt [::server-cookie
+                                                ;; Where we actually communicate
                                                 ::specs/srvr-ip])))
 
 (s/def ::client-long<->server-long ::shared/shared-secret)

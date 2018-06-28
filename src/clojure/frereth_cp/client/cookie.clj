@@ -139,6 +139,18 @@
                                     ::log/state log-state)
                              rcvd))))
 
+(comment
+  ;; These are different
+  (let [ca (java.net.InetAddress/getByName "www.google.ca")
+        com (java.net.InetAddress/getByName "www.google.com")]
+    (print "CA:" ca "\n.com:" com)
+    (= ca com))
+  ;; These are currently the same
+  (let [www (java.net.InetAddress/getByName "www.frereth.com")
+        beta (java.net.InetAddress/getByName "beta.frereth.com")]
+    (print "beta:" beta "\nwww:" www)
+    (= beta www)))
+
 (s/fdef received-response!
         :args (s/cat :this ::state/state
                      :cookie ::specs/network-packet)
@@ -146,22 +158,12 @@
 (defn received-response!
   "Hello triggers this (via wait-for-cookie) when it hears back from a Server"
   [{log-state ::log/state
-    :keys [::log/logger]
+    :keys [::log/logger
+           ::state/server-security]
     :as this}
    {:keys [:host :message :port]
         :or {message (byte-array 0)}
         :as cookie}]
-  ;; FIXME: Have to compare :host (and, realistically, :port)
-  ;; against the server associated with the most recently
-  ;; sent HELLO.
-  ;; If they don't match, we need to discard this cookie
-  ;; and go back to waiting (don't forget to reduce the
-  ;; timeout based on elapsed time)
-  ;; Realistically, it probably would have been better to do
-  ;; this as soon as we received the packet.
-  ;; It seems like that might introduce the possibility of timing
-  ;; attacks, though I don't see how.
-  ;; TODO: Check with a cryptographer.
   (let [log-label ::received-response!
         log-state (log/info log-state
                             log-label
@@ -171,17 +173,44 @@
       (if-not (or (= cookie ::drained)
                   (= cookie ::state/response-timed-out))
         (if (= K/cookie-packet-length (count message))
-          ;; Next step for reference implementation is to compare the
-          ;; expected server IP and port vs. what we received.
-          ;; That info's pretty unreliable/meaningless, but the server
-          ;; address probably won't change very often.
-          ;; Unless we're communicating with a server on someone's cell
-          ;; phone.
-          ;; Which, if this is successful, will totally happen.
-          ;; TODO: Verify those before trying to proceed
           (try
+            ;; Next step for reference implementation is to compare the
+            ;; expected server IP and port vs. what we received.
+
+            ;; The main point to this is that it identifies the server we meant
+            ;; to address in this iteration of the Hello loop.
+            ;; There are a lot of "does this really make sense?" questions
+            ;; to be asked here.
+
+            ;; That info's pretty unreliable/meaningless, but the server
+            ;; address probably won't change very often.
+            ;; Unless we're communicating with a server on someone's cell
+            ;; phone.
+            ;; Which, if this is successful, will totally happen.
+            ;; Actually, the odds of clojure on a phone seem pretty slim.
+            ;; TODO: Verify host/port before trying to proceed
+            ;; FIXME: Have to compare :host (and, realistically, :port)
+            ;; against the server associated with the most recently
+            ;; sent HELLO.
+            ;; If they don't match, we need to discard this cookie
+            ;; and go back to waiting (don't forget to reduce the
+            ;; timeout based on elapsed time)
+            ;; Realistically, it probably would have been better to do
+            ;; this as soon as we received the packet.
+            ;; It seems like that might introduce the possibility of timing
+            ;; attacks, though I don't see how.
+            ;; TODO: Check with a cryptographer.
+            (let [{:keys [::specs/srvr-port
+                          ::specs/srvr-ip]} server-security]
+              (when-not (and (= srvr-port port)
+                             ;; This check can't possibly be right...can it?!
+                             (= srvr-ip host))
+                (throw (ex-info "Response from wrong server (probably one we've already discarded)"
+                                {::expected server-security
+                                 ::actual cookie}))))
             (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
                                                                           [::shared/extension
+                                                                           ;; FIXME: This needs to go away
                                                                            ::shared/work-area
                                                                            ::state/server-extension
                                                                            ::state/server-security
