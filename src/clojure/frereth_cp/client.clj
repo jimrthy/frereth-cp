@@ -92,6 +92,43 @@
                    (log/warn (log/fork state)
                              ::chan->server-closed)))
 
+(defn unexpectedly-terminated-successfully
+  [result unexpected]
+  ;; terminated is for something really extreme,
+  ;; when you really want to kill the client,
+  ;; can't, and are not quite in a position
+  ;; to do anything short of terminating
+  ;; the JVM.
+  ;; There should never be a "success"
+  ;; condition that leads to termination.
+  (let [logger (log/std-err-log-factory)
+        log-state (log/init ::ctor)]
+    ;; It's very tempting to completely kill the JVM
+    ;; as a way to discourage this sort of behavior.
+    (log/flush-logs! logger
+                     (log/error log-state
+                                ::successful-termination
+                                "Don't ever do this"
+                                {::details unexpected})))
+  (stop! result))
+
+(defn unexpectedly-terminated-unsuccessfully
+  [result outcome]
+  (stop! result)
+  (let [logger (log/std-err-log-factory)
+        log-state (log/init ::ctor)]
+    ;; It's very tempting to completely kill the JVM
+    ;; as a way to discourage this sort of behavior.
+    (log/flush-logs! logger
+                     (if (instance? Throwable outcome)
+                       (log/exception log-state
+                                      outcome
+                                      ::botched-termination)
+                       (log/error log-state
+                                  ::expected-termination
+                                  "If you have to do this, provide copious details"
+                                  {::details outcome})))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
@@ -253,41 +290,11 @@
              ;; Assuming the agent just doesn't go completely away.
              ;; We definitely don't want multiple threads
              ;; messing with them.
+             ;; TODO: Now that the agent has gone away, eliminate
+             ;; these also.
              ::shared/packet-management (shared/default-packet-manager)
              ::shared/work-area (shared/default-work-area)))]
     (dfrd/on-realized (::state/terminated result)
-                      ;; Q: Worth refactoring into top-level functions?
-                      (fn [unexpected]
-                        ;; terminated is for something really extreme,
-                        ;; when you really want to kill the client,
-                        ;; can't, and are not quite in a position
-                        ;; to do anything short of terminating
-                        ;; the JVM.
-                        ;; There should never be a "success"
-                        ;; condition that leads to termination.
-                        (let [logger (log/std-err-log-factory)
-                              log-state (log/init ::ctor)]
-                          ;; It's very tempting to completely kill the JVM
-                          ;; as a way to discourage this sort of behavior.
-                          (log/flush-logs! logger
-                                           (log/error log-state
-                                                      ::successful-termination
-                                                      "Don't ever do this"
-                                                      {::details unexpected})))
-                        (stop! result))
-                      (fn [outcome]
-                        (stop! result)
-                        (let [logger (log/std-err-log-factory)
-                              log-state (log/init ::ctor)]
-                          ;; It's very tempting to completely kill the JVM
-                          ;; as a way to discourage this sort of behavior.
-                          (log/flush-logs! logger
-                                           (if (instance? Throwable outcome)
-                                             (log/exception log-state
-                                                            outcome
-                                                            ::botched-termination)
-                                             (log/error log-state
-                                                        ::expected-termination
-                                                        "If you have to do this, provide copious details"
-                                                        {::details outcome}))))))
+                      (partial unexpectedly-terminated-successfully result)
+                      (partial unexpectedly-terminated-unsuccessfully result))
     result))

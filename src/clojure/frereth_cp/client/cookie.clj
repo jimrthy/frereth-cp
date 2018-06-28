@@ -205,12 +205,9 @@
                                               (crypto/box-prepare
                                                server-short
                                                (.getSecretKey my-short-pair)))]
-                    ;; Throwing this should cause us to forget the incoming Cookie. And
+                    ;; Throwing this causes us to forget the incoming Cookie. And
                     ;; either move on to the next server or wait for another Cookie from
                     ;; this one (which, realistically, won't happen).
-                    ;; TODO: Get back to this and verify that we don't wind up sending
-                    ;; an empty Initiate packet (which is what happened the last time
-                    ;; I enabled this exception)
                     ;; TODO: Write a test that checks this without the faked-up exception
                     ;; here
                     (comment (throw (ex-info "This should discard the cookie"
