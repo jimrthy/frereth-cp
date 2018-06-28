@@ -43,6 +43,8 @@
       (.getBytes decrypted 0 dst)
       (is (b-t/bytes= dst plain-text)))))
 
+;;; FIXME: Also need a test that checks crypto/open-box
+
 (deftest check-persistent-safe-nonce
   (let [key-dir "curve-test"]
     (testing "Same size"

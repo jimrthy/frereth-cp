@@ -64,11 +64,11 @@
                                    ::suffix-bytes (b-t/->string client-nonce-suffix)
                                    ::client-short<->server-long (b-t/->string shared)})
               {log-state ::log/state
-               decrypted ::crypto/unboxed} (crypto/open-crypto-box log-state
-                                                                   K/cookie-nonce-prefix
-                                                                   client-nonce-suffix
-                                                                   cookie
-                                                                   shared)
+               decrypted ::crypto/unboxed} (crypto/open-box log-state
+                                                            K/cookie-nonce-prefix
+                                                            client-nonce-suffix
+                                                            cookie
+                                                            shared)
               {server-short-pk ::K/s'
                server-cookie ::K/black-box
                :as extracted} (serial/decompose K/cookie decrypted)

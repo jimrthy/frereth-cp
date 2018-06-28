@@ -272,11 +272,11 @@ To be fair, this layer *is* pretty special."
   (log/info "Opening the Crypto box we just received from the client")
   (log/debug "The box we're opening is" (count vouch-wrapper) "bytes long")
   (let [message-length (- (count vouch-wrapper) K/minimum-vouch-length)]
-    (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix
-                                                outer-i-nonce
-                                                vouch-wrapper
-                                                (get-in current-client [::state/shared-secrets
-                                                                        ::state/client-short<->server-short]))]
+    (if-let [clear-text (crypto/open-box K/initiate-nonce-prefix
+                                         outer-i-nonce
+                                         vouch-wrapper
+                                         (get-in current-client [::state/shared-secrets
+                                                                 ::state/client-short<->server-short]))]
       (do
         (log/info "Decomposing...")
         (serial/decompose (assoc-in K/initiate-client-vouch-wrapper

@@ -74,7 +74,7 @@
                               {::box-length K/hello-crypto-box-length
                                ::crypto-box (with-out-str (b-s/print-bytes crypto-box))
                                ::shared/nonce-suffix (with-out-str (b-s/print-bytes nonce-suffix))})
-        {:keys [::log2/state ::crypto/unboxed]} (crypto/open-crypto-box
+        {:keys [::log2/state ::crypto/unboxed]} (crypto/open-box
                                                  log-state
                                                  K/hello-nonce-prefix
                                                  nonce-suffix

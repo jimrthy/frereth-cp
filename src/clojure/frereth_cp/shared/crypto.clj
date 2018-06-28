@@ -529,6 +529,14 @@
                        vec
                        (subvec K/decrypt-box-zero-bytes)))
           {::log2/state log-state
+           ;; Q: Why am I wrapping this in a ByteBuf?
+           ;; That seems like I'm probably jumping through extra hoops
+           ;; for the sake of hoop-jumping.
+           ;; Odds are, the next step, in general, is to decompose
+           ;; what just got unwrapped. So this seems like a premature
+           ;; convenience that would make more sense as an extra
+           ;; wrapper elsewhere.
+           ;; TODO: Look into that, too.
            ::unboxed (Unpooled/wrappedBuffer plain-text
                                              K/decrypt-box-zero-bytes
                                              ^Long (- box-length K/box-zero-bytes))})))
@@ -538,7 +546,7 @@
                                      ::nonce nonce
                                      ::shared-key shared-key}))))
 
-(s/fdef open-crypto-box
+(s/fdef open-box
         :args (s/cat :log-state ::log2/state
                      :prefix-bytes (s/and bytes?
                                           #(let [n (count %)]
@@ -559,7 +567,7 @@
         ;; starting to look like the best option.
         :ret (s/keys :req [::log2/state]
                      :opt [::unboxed]))
-(defn open-crypto-box
+(defn open-box
   ;; TODO: Refactor/rename this to open-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
   [log-state prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
@@ -575,7 +583,7 @@
       (open-after log-state crypto-box 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
         {::log2/state (log2/exception ex
-                                      ::open-crypto-box
+                                      ::open-box
                                       (str "Failed to open box\n")
                                       (.getData ex))}))))
 
