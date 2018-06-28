@@ -29,9 +29,9 @@
 (defn filter-initial-message-bytes
   "Make sure bytes are legal for a Vouch"
   [log-state
-   ^ByteBuf initiate-packet]
+   ^bytes initiate-packet]
   (when initiate-packet
-    (let [packet-size (.readableBytes initiate-packet)
+    (let [packet-size (count initiate-packet)
           log-state (log/info log-state
                               ::filter-initial-message-bytes
                               ""

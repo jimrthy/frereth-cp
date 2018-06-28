@@ -467,24 +467,26 @@
   @parameter nonce: Number used Once for this specific box
   @parameter shared-key: combination of their-public and my-private
 
-Note that this does cope with the extra required 16 bytes of prefix padding
+  Note that this does cope with the extra required 16 bytes of prefix padding
 
-The parameter order is screwy to match the java API.
+  The parameter order is screwy to match the java API.
 
-Which was probably modeled to match the C API.
+  Which was probably modeled to match the C API.
 
-It's annoying and subject to change at a a whim. The only
-reason it hasn't yet is that I'm giving this entire translation
-the white-glove treatment.
+  It's annoying and subject to change at a a whim. The only
+  reason it hasn't yet is that I'm giving this entire translation
+  the white-glove treatment.
 
-If nothing else, the shared-key should come first to match the
-instance-level API and allow me to set it up as a partial.
+  If nothing else, the shared-key should come first to match the
+  instance-level API and allow me to set it up as a partial.
 
-It would also be nice to be able to provide a reusable buffer byte
-array destination that could just be reused without GC.
+  It would also be nice to be able to provide a reusable buffer byte
+  array destination that could just be reused without GC.
 
-That looks like it would get into the gory implementation details
-which I'm really not qualified to touch."
+  That looks like it would get into the gory implementation details
+  which I'm really not qualified to touch.
+
+  And it would be premature optimization"
   [log-state
    ;; TODO: Check the clojure docs re: optimizing primitives.
    ;; This seems like it's totally wrong.
@@ -558,6 +560,7 @@ which I'm really not qualified to touch."
         :ret (s/keys :req [::log2/state]
                      :opt [::unboxed]))
 (defn open-crypto-box
+  ;; TODO: Refactor/rename this to open-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
   [log-state prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
   (let [nonce (byte-array K/nonce-length)

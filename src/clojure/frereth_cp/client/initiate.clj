@@ -1,5 +1,6 @@
 (ns frereth-cp.client.initiate
-  (:require [clojure.spec.alpha :as s]
+  (:require [byte-streams :as b-s]
+            [clojure.spec.alpha :as s]
             [frereth-cp.client.message :as message]
             [frereth-cp.client.state :as state]
             [frereth-cp.message.specs :as msg-specs]
@@ -212,8 +213,9 @@
                                                                         ::state/server-cookie])
                                                        :outer-i-nonce nonce-suffix
                                                        :vouch-wrapper crypto-box}
-                  result-bytes (serial/compose dscr
-                                               fields)
+                  raw-result-bytes (serial/compose dscr
+                                                   fields)
+                  result-bytes (b-s/convert raw-result-bytes specs/byte-array-type)
                   {log-state ::log/state
                    result ::message/possible-response
                    :as filtered} (message/filter-initial-message-bytes log-state

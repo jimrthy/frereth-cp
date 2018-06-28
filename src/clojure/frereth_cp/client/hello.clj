@@ -19,16 +19,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-;; TODO: Fix this spec. s/keys just doesn't cut it.
-;; If we have any of the "optional" keys, we must have all 3.
-;; And, realistically, I don't want anything more. There's
-;; to much potential to smuggle in extra crap that shouldn't
-;; be involved here.
-(s/def ::cookie-response (s/keys :req [::log/state]
-                                 :opt [::state/security
-                                       ::state/shared-secrets
-                                       ::shared/network-packet]))
-
 ;; Keep in mind that this is totally distinct from
 ;; cookie/wait-for-cookie!
 ;; It's annoying that the signatures are so similar
@@ -211,7 +201,7 @@
                      ::awaiting-cookie-timed-out
                      ::send-response-timed-out} actual-success)))
       (do
-        (when-let [problem (s/explain-data ::cookie-response actual-success)]
+        (when-let [problem (s/explain-data ::state/cookie-response actual-success)]
           (println "hello/cookie-result-callback Bad cookie response:" problem)
           (dfrd/error! cookie-response
                        (ex-info "Bad cookie response"
@@ -271,15 +261,17 @@
         :args (s/cat :this ::state/state
                      :raw-packet ::specs/network-packet
                      :log-state-atom ::log/state-atom
+                     ;; TODO: Need a better name that isn't as
+                     ;; easily confused with ::state/cookie-response
                      :cookie-response dfrd/deferrable?
                      :cookie-sent-callback ::cookie-sent-callback
                      :send-packet-success boolean?)
         ;; Success returns a deferrable
-        ;; that resolves to a ::cookie-response.
+        ;; that resolves to a ::state/cookie-response.
         ;; This is a nice feature of deferred/chain:
         ;; the outcome is the same either way.
         :ret (s/or :response dfrd/deferrable?
-                   :recursed ::cookie-response))
+                   :recursed ::state/cookie-response))
 (defn cookie-sent
   ;; TODO: Come up with a better name. do-polling-loop
   ;; needs both this and a callback from the cookie
@@ -383,7 +375,7 @@
             (log/flush-logs! logger (log/error log-state
                                                ::cookie-retrieved
                                                "Got back a network-packet but missing something else"
-                                               {::cookie-response this}))
+                                               {::state/cookie-response this}))
             (throw (ex-info "Network-packet missing either security or shared-secrets"
                             {::problem this})))))
       (let [elapsed (- now start-time)

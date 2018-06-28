@@ -19,10 +19,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-;; FIXME: The args are really ::hello/cookie-response
-;; Which means that it needs to move somewhere
-;; shared
-(s/def ::succss-callback (s/fspec :args any?
+(s/def ::succss-callback (s/fspec :args ::state/cookie-response
                                   :ret any?))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -34,14 +31,6 @@
         :ret ::state/state)
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet
-           ;; Having a shared work-area is probably
-           ;; important for avoiding GC.
-           ;; At the same time, the mutable state
-           ;; causes a lot of trouble.
-           ;; Q: Is it worth it?
-           ;; A: Need benchmarks!
-           ;; (but almost definitely not)
-           ::shared/work-area
            ::state/server-security
            ::state/shared-secrets]
     log-state ::log/state
@@ -56,66 +45,47 @@
                             ::decrypt-actual-cookie
                             "Getting ready to try to extract cookie"
                             {::raw-cookie cookie
-                             ::human-readable (shared/bytes->string cookie)})
-        {^bytes text ::shared/text
-         ^bytes working-nonce ::shared/working-nonce} work-area]
-    (assert working-nonce (str "Missing nonce buffer amongst\n"
-                               (keys work-area)
-                               "\nin\n"
-                               (keys this)))
-    (let [log-state (log/info log-state
-                              ::decrypt-actual-cookie
-                              "Copying nonce prefix"
-                              {::src K/cookie-nonce-prefix
-                               ::dst working-nonce})]
-      (b-t/byte-copy! working-nonce K/cookie-nonce-prefix)
-      (b-t/byte-copy! working-nonce
-                      K/server-nonce-prefix-length
-                      K/server-nonce-suffix-length
-                      client-nonce-suffix)
-      (let [log-state (log/info log-state
-                                ::decrypt-actual-cookie
-                                "Copying encrypted cookie"
-                                {::target text
-                                 ::this this
-                                 ::my-keys (keys this)})]
-        (b-t/byte-copy! text 0 K/cookie-frame-length cookie)
-        (let [shared (::state/client-short<->server-long shared-secrets)]
-          (when-not shared
-            (throw (ex-info "Missing client-short<->server-long secret"
-                            {::state/shared-secrets shared-secrets})))
-          (let [log-state (log/info log-state
-                                    ::decrypt-actual-cookie
-                                    "Trying to decrypt"
-                                    {::shared/text  (b-t/->string text)
-                                     ::shared/working-nonce (b-t/->string working-nonce)
-                                     ::client-short<->server-long (b-t/->string shared)})]
-            (try
-              ;; TODO: switch to open-crypto-box
-              (let [{log-state ::log/state
-                     decrypted ::crypto/unboxed} (crypto/open-after log-state
-                                                                    text
-                                                                    0
-                                                                    K/cookie-frame-length
-                                                                    working-nonce
-                                                                    shared)
-                    {server-short-pk ::K/s'
-                     server-cookie ::K/black-box
-                     :as extracted} (serial/decompose K/cookie decrypted)
-                    server-security (assoc (::state/server-security this)
-                                           ::specs/public-short server-short-pk,
-                                           ::state/server-cookie server-cookie)]
-                (assert server-cookie)
-                (assoc this
-                       ::state/server-security server-security
-                       ::log/state log-state))
-              (catch ExceptionInfo ex
-                (assoc this
-                       ::log/state (log/exception log-state
-                                                  ex
-                                                  ::decrypt-actual-cookie
-                                                  "Decryption failed"
-                                                  (.getData ex)))))))))))
+                             ::human-readable (shared/bytes->string cookie)})]
+    (let [log-state (log/debug log-state
+                               ::decrypt-actual-cookie
+                               "Setting up cookie decryption"
+                               {::this this
+                                ::my-keys (keys this)})
+          shared (::state/client-short<->server-long shared-secrets)]
+      (when-not shared
+        (throw (ex-info "Missing client-short<->server-long secret"
+                        {::state/shared-secrets shared-secrets})))
+      (try
+        (let [log-state (log/info log-state
+                                  ::decrypt-actual-cookie
+                                  "Trying to decrypt"
+                                  {::shared/text  (b-t/->string cookie)
+                                   ::prefix-bytes (b-t/->string K/cookie-nonce-prefix)
+                                   ::suffix-bytes (b-t/->string client-nonce-suffix)
+                                   ::client-short<->server-long (b-t/->string shared)})
+              {log-state ::log/state
+               decrypted ::crypto/unboxed} (crypto/open-crypto-box log-state
+                                                                   K/cookie-nonce-prefix
+                                                                   client-nonce-suffix
+                                                                   cookie
+                                                                   shared)
+              {server-short-pk ::K/s'
+               server-cookie ::K/black-box
+               :as extracted} (serial/decompose K/cookie decrypted)
+              server-security (assoc (::state/server-security this)
+                                     ::specs/public-short server-short-pk,
+                                     ::state/server-cookie server-cookie)]
+          (assert server-cookie)
+          (assoc this
+                 ::state/server-security server-security
+                 ::log/state log-state))
+        (catch ExceptionInfo ex
+          (assoc this
+                 ::log/state (log/exception log-state
+                                            ex
+                                            ::decrypt-actual-cookie
+                                            "Decryption failed"
+                                            (.getData ex))))))))
 
 ;; TODO: Split out the parameters we actually need instead of
 ;; just bundling the entire state all the way up and down the

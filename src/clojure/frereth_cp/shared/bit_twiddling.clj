@@ -27,7 +27,6 @@
 (b-s/def-conversion [UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf bytes]
   [^ByteBuf buf _]
   (println "Converting" buf "into a single byte-array")
-  #_(throw (RuntimeException. "Got here"))
   (let [dst (byte-array (.readableBytes buf))]
     (.readBytes buf dst)
     dst))

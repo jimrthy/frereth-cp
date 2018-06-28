@@ -189,6 +189,17 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::child-send-state (s/merge ::initiate-building-params
                                    (s/keys :req [::chan->server])))
 
+;; Refactored from hello so it can be used by ::cookie/success-callback
+;; TODO: Fix this spec. s/keys just doesn't cut it.
+;; If we have any of the "optional" keys, we must have all 3.
+;; And, realistically, I don't want anything more. There's
+;; to much potential to smuggle in extra crap that shouldn't
+;; be involved here.
+(s/def ::cookie-response (s/keys :req [::log/state]
+                                 :opt [::security
+                                       ::shared-secrets
+                                       ::shared/network-packet]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Globals
 
@@ -644,7 +655,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; initiate/build-initiate-packet! to
     ;; some equivalent function that I haven't written yet. That function should
     ;; live in client.message.
-    (let [^ByteBuf message-packet (packet-builder (assoc state ::log/state log-state) message-block)
+    (let [^bytes message-packet (packet-builder (assoc state ::log/state log-state) message-block)
           raw-message-packet (if message-packet
                                (b-s/convert message-packet specs/byte-array-type)
                                (byte-array 0))
