@@ -358,7 +358,7 @@ Note that that includes TODOs re:
       ;; And write a unit test to verify this.
       ;; Even though it's an implementation detail deep in the guts, this
       ;; seems worth covering.
-      (when-let [^ByteBuf inner-pk-buf (crypto/open-crypto-box
+      (when-let [^ByteBuf inner-pk-buf (crypto/open-box
                                         K/vouch-nonce-prefix
                                         (::K/inner-i-nonce client-message-box)
                                         (::K/hidden-client-short-pk client-message-box)

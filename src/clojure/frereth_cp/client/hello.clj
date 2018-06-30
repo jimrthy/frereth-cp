@@ -22,6 +22,8 @@
 ;; Keep in mind that this is totally distinct from
 ;; cookie/wait-for-cookie!
 ;; It's annoying that the signatures are so similar
+;; That distinction no longer seems to be true.
+;; FIXME: Verify and convert this to match reality
 (s/def ::cookie-sent-callback (s/fspec :args (s/cat :notifier ::specs/deferrable
                                                     :timeout (s/and number?
                                                                     (complement neg?))
@@ -407,7 +409,7 @@
 
 (s/fdef do-polling-loop
         :args (s/cat :this ::state/state
-                     :raw-packet ::specs/network-packet
+                     :hello-packet ::shared/message
                      :cookie-sent-callback ::cookie-sent-callback
                      :start-time nat-int?
                      :timeout (s/and number?
@@ -421,7 +423,7 @@
            ::state/server-security]
     ips ::state/server-ips
     :as this}
-   raw-packet cookie-sent-callback start-time timeout]
+   hello-packet cookie-sent-callback start-time timeout]
   (let [srvr-ip (first ips)
         log-state (log/info (::log/state this)
                             ::do-polling-loop
@@ -433,7 +435,7 @@
                  (assoc-in [::state/server-security ::specs/srvr-ip] srvr-ip))]
     (-> chan->server
         (strm/try-put! {:host srvr-ip
-                        :message raw-packet
+                        :message hello-packet
                         :port srvr-port}
                        timeout
                        ::state/sending-hello-timed-out)
@@ -458,8 +460,14 @@
                                  {::state/server-security server-security}))))
              (throw (ex-info "Missing server-security"
                              {::available this}))))
-         #(cookie-retrieved % raw-packet cookie-sent-callback start-time timeout))
+         ;; Need details like the hello-packet and cookie-sent-callback for recursing
+         #(cookie-retrieved % hello-packet cookie-sent-callback start-time timeout))
         (dfrd/catch (fn [ex]
+                      ;; This seems to wind up acting as a success.
+                      ;; The brittleness around this part of the entire chain has
+                      ;; lost its charm.
+                      ;; FIXME: Start back here. Make this part robust.
+                      (println "hello/do-polling-loop: wait-for-cookie! failed:" ex)
                       (assoc this
                              ;; FIXME: This is where the log-state-atom would come in handy
                              ;; (so I wouldn't lose anything that led up to this point)
@@ -472,11 +480,8 @@
 (s/fdef poll-servers!
         :args (s/cat :this ::state/state
                      :timeout nat-int?
-                     :cookie-waiter (s/fspec :args (s/cat :notifier ::specs/deferrable
-                                                          :timeout (s/and number?
-                                                                          (complement neg?))
-                                                          :this ::state/state
-                                                          :sent ::specs/network-packet)))
+                     ;; FIXME: This mesh with reality
+                     :cookie-waiter ::cookie-sent-callback)
         :ret ::servers-polled)
 (defn poll-servers!
   "Send hello packet to a seq of server IPs associated with a single server name."
@@ -490,14 +495,14 @@
   [{:keys [::log/logger
            ::state/server-ips]
     log-state ::log/state
-    {raw-packet ::shared/packet
+    {hello-packet ::shared/packet
      :as packet-management} ::shared/packet-management
     :as this}
    timeout cookie-waiter]
   (let [log-state (log/debug log-state
                              ::poll-servers!
                              "Putting hello(s) onto ->server channel"
-                             {::raw-packet raw-packet
+                             {::hello-packet hello-packet
                               ::state/server-ips server-ips})]
     (println "Hello: Entering the server polling loop")
     (do-polling-loop (assoc this
@@ -508,7 +513,7 @@
                             ;; Or don't particularly care how long it takes to get a response?
                             ;; Stick with the reference implementation version for now.
                             ::state/server-ips (take max-server-attempts (cycle server-ips)))
-                     raw-packet
+                     hello-packet
                      cookie-waiter
                      (System/nanoTime)
                      ;; FIXME: The initial timeout needs to be customizable
@@ -588,8 +593,11 @@
         :args (s/cat :this ::state/state
                      :timeout (s/and #((complement neg?) %)
                                      int?)
-                     ;; TODO: Spec this out
-                     :wait-for-cookie! any?
+                     :wait-for-cookie! (s/fspec :args (s/cat :this ::state/state
+                                                             :timeout (s/and number?
+                                                                             (complement neg?))
+                                                             :sent ::specs/network-packet)
+                                                :ret ::specs/deferrable)
                      ;; TODO: Spec this out
                      :build-inner-vouch any?
                      :servers-polled any?)

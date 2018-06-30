@@ -92,6 +92,7 @@
                    (log/warn (log/fork state)
                              ::chan->server-closed)))
 
+(declare stop!)
 (defn unexpectedly-terminated-successfully
   [result unexpected]
   ;; terminated is for something really extreme,
