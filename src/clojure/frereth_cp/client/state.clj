@@ -444,8 +444,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef update-callback!
         :args (s/cat :io-handle ::msg-specs/io-handle
-                     :time-out (s/and integer?
-                                      (complement neg?))
+                     :time-out ::specs/time
                      :new-callback ::msg-specs/->parent))
 (defn update-callback!
   [io-handle time-out new-callback]

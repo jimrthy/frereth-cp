@@ -1,3 +1,12 @@
+# TODO: hello/do-build-packet
+
+The current approach is broken
+
+# TODO: Fix the documentation here
+
+It's pretty significantly obsolete. I've just gotten way beyond the
+boundaries of what should have really been a fairly minor cleanup branch.
+
 # Handshake
 
 This gets pretty convoluted, with lots of manifold streams and deferreds.

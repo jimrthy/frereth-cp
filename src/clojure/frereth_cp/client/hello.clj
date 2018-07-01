@@ -22,10 +22,7 @@
 ;; TODO: Move this somewhere shared so I can eliminate the duplication
 ;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
 (s/def ::cookie-waiter (s/fspec :args (s/cat :this ::state/state
-                                             :timeout (s/and number?
-                                                             ;; Tempting to use nat-int here
-                                                             ;; But...wait. What time unit is involved here?
-                                                             (complement neg?))
+                                             :timeout ::specs/time
                                              :sent ::specs/network-packet)
                                 :ret ::specs/deferrable))
 
@@ -209,11 +206,8 @@
         :args (s/cat :this ::state/state
                      :raw-packet ::specs/network-packet
                      :cookie-waiter ::cookie-waiter
-                     ;; TODO: This spec needs to be somewhere shared
-                     :start-time  (s/and number?
-                                         (complement neg?))
-                     :timeout  (s/and number?
-                                      (complement neg?))
+                     :start-time ::specs/time
+                     :timeout ::specs/time
                      :ips ::specs/srvr-ips)
         :ret ::state/state)
 (defn cookie-retrieved
@@ -312,8 +306,7 @@
                      :hello-packet ::shared/message
                      :cookie-waiter ::cookie-waiter
                      :start-time nat-int?
-                     :timeout (s/and number?
-                                     (complement neg?))
+                     :timeout ::specs/time
                      :ips ::state/server-ips)
         :ret ::state/state)
 (defn do-polling-loop
@@ -458,6 +451,14 @@
            ::shared/packet-management
            ::shared/work-area]
     :as this}]
+  ;; FIXME: Eliminate things like packet-management and work-area.
+  ;; Be explicit about the actual parameters.
+  ;; Return the new packet.
+  ;; Honestly, split up the calls that configure all the things
+  ;; like setting up the nonce that make this problematic
+  (comment
+    ;; Unfortunately, this is outside the scope of this branch.
+    (throw (RuntimeException. "Start back here")))
   (let [;; There's a good chance this updates my extension.
         ;; That doesn't get set into stone until/unless I
         ;; manage to handshake with a server
@@ -491,8 +492,7 @@
 
 (s/fdef set-up-server-polling!
         :args (s/cat :this ::state/state
-                     :timeout (s/and #((complement neg?) %)
-                                     int?)
+                     :timeout ::specs/time
                      :wait-for-cookie! ::cookie-waiter
                      ;; TODO: Spec this out
                      :build-inner-vouch any?

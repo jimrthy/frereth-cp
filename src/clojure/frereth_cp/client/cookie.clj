@@ -379,10 +379,7 @@
 ;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
 (s/fdef wait-for-cookie!
         :args (s/cat :this ::state/state
-                     :timeout (s/and number?
-                                     ;; Tempting to use nat-int here
-                                     ;; But...wait. What time unit is involved here?
-                                     (complement neg?))
+                     :timeout ::specs/time
                      :sent ::specs/network-packet)
         :ret ::specs/deferrable)
 (defn wait-for-cookie!

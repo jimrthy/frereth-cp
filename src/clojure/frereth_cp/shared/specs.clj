@@ -53,6 +53,15 @@ This really seems like a bad road to go down."
 (s/def ::internet-address (class-predicate java.net.InetAddress))
 (s/def ::throwable (class-predicate Throwable))
 
+(s/def ::time
+  ;; integer? doesn't really work, especially when
+  ;; we're talking about nanoTime.
+  ;; In several situations, this will be a BigInt.
+  ;; But I don't really want to accept floats.
+  ;; Q: Why not?
+  (s/and number?
+         (complement neg?)))
+
 ;; I really don't want to reference generators in here.
 ;; Much less something like rose-tree.
 ;; Those sorts of details really belong in a test ns.
