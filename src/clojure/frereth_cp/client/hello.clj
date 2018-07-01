@@ -19,17 +19,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-;; Keep in mind that this is totally distinct from
-;; cookie/wait-for-cookie!
-;; It's annoying that the signatures are so similar
-;; That distinction no longer seems to be true.
-;; Q: Is this actually used anywhere?
-(s/def ::cookie-sent-callback-obsolete (s/fspec :args (s/cat :notifier ::specs/deferrable
-                                                    :timeout (s/and number?
-                                                                    (complement neg?))
-                                                    :this ::state/state
-                                                    :sent ::specs/network-packet)))
-
 ;; TODO: Move this somewhere shared so I can eliminate the duplication
 ;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
 (s/def ::cookie-waiter (s/fspec :args (s/cat :this ::state/state
@@ -183,60 +172,6 @@
       (+ timeout (crypto/random-mod timeout)))))
 
 (declare do-polling-loop)
-(s/fdef cookie-result-callback
-        :args (s/cat :this ::state/state
-                     :cokie-response dfrd/deferrable?
-                     ;; Q: What is this?
-                     ;; A: It looks like it should be a ::cookie/success-callback
-                     ;; Since I'm trying to called dfrd/success! on it below,
-                     ;; that better not be the case
-                     ;; TODO: Either way, move that spec somewhere shared
-
-                     ;; Q: What is this?
-                     :actual-success any?)
-        :ret any?)
-(defn cookie-result-callback-obsolete
-  [{:keys [::log/logger]
-    log-state ::log/state
-    :as this}
-   ;; Q: Can this go away?
-   cookie-response
-   actual-success]
-  {:pre [actual-success]}
-  (throw (RuntimeException. "Never called anywhere"))
-  (let [now (System/nanoTime)]
-    ;; TODO: convert this to a log message
-    ;; (although, admittedly, it's really helpful for debugging)
-    (println "hello/cookie-result-callback: Received network packet:\n"
-             (::shared/network-packet actual-success))
-    (if (and (not (instance? Throwable actual-success))
-             (not (#{::sending-hello-timed-out
-                     ::awaiting-cookie-timed-out
-                     ::send-response-timed-out} actual-success)))
-      (do
-        (when-let [problem (s/explain-data ::state/cookie-response actual-success)]
-          (println "hello/cookie-result-callback Bad cookie response:" problem)
-          (dfrd/error! cookie-response
-                       (ex-info "Bad cookie response"
-                                {::error problem})))
-        ;; FIXME: Debug only
-        (println "hello/cookie-result-callback Cookie response was OK")
-        (let [log-state (try
-                          (log/info (::log/state actual-success)
-                                    ::do-polling-loop
-                                    "Might have found a responsive server")
-                          (catch Exception ex
-                            (println "client: Failed trying to log about potentially responsive server\n"
-                                     (log/exception-details ex))
-                            (dfrd/error! (ex-info "Logging failure re: server response" {::actual-success actual-success} ex))))]
-          (dfrd/success! cookie-response actual-success)))
-      (dfrd/success! cookie-response {::log/state (log/warn log-state
-                                                            ::do-polling-loop
-                                                            "Problem retrieving cookie"
-                                                            {;; Actually, if this is a Throwable,
-                                                             ;; we probably don't have a way
-                                                             ;; to recover
-                                                             ::outcome actual-success})}))))
 
 (s/fdef possibly-recurse
         :args (s/cat :this ::state/state
@@ -269,53 +204,6 @@
                (pick-next-timeout (count remaining-ips))
                remaining-ips)
       (throw (ex-info "No IPs left. Giving up" this)))))
-
-(s/fdef cookie-sent-obsolete
-        :args (s/cat :this ::state/state
-                     :raw-packet ::specs/network-packet
-                     :log-state-atom ::log/state-atom
-                     ;; TODO: Need a better name that isn't as
-                     ;; easily confused with ::state/cookie-response
-                     :cookie-response dfrd/deferrable?
-                     :cookie-waiter ::cookie-waiter
-                     :send-packet-success boolean?)
-        ;; Success returns a deferrable
-        ;; that resolves to a ::state/cookie-response.
-        ;; This is a nice feature of deferred/chain:
-        ;; the outcome is the same either way.
-        :ret (s/or :response dfrd/deferrable?
-                   :recursed ::state/cookie-response))
-(defn cookie-sent-obsolete
-  ;; TODO: Come up with a better name. do-polling-loop
-  ;; needs both this and a callback from the cookie
-  ;; ns that it's named cookie-sent-callback.
-  ;; Need to make them different enough that I won't
-  ;; get them snarled up.
-  [{:keys [::state/timeout
-           :state/server-ips]
-    :as this}
-   raw-packet
-   log-state-atom
-   cookie-response
-   cookie-waiter
-   send-packet-success]
-  (throw (RuntimeException. "never called"))
-  (if send-packet-success
-    ;; Note that this timeout actually can grow to be quite long.
-    ;; In the original, they probably add up to a ballpark of a minute.
-    ;; It's probably acceptable for a single polling thread to block for that
-    ;; long.
-    ;; Or, at least, it probably was back in 2011 when the spec was written,
-    ;; or in 2013 when my copy of the reference implementation was published.
-    ;; Q: Is that still reasonable today?
-    ;; Better Q: Is there a better alternative?
-    (dfrd/timeout! cookie-response timeout ::awaiting-cookie-timed-out)
-    ;; I'd really like to trampoline this. Realistically, we can't, because
-    ;; we're inside a deferred chain.
-    ;; TODO: Prove that, one way or another
-    (trampoline possibly-recurse
-                (assoc this ::log/state @log-state-atom)
-                server-ips cookie-waiter raw-packet)))
 
 (s/fdef cookie-retrieved
         :args (s/cat :this ::state/state
