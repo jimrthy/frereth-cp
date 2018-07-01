@@ -23,12 +23,22 @@
 ;; cookie/wait-for-cookie!
 ;; It's annoying that the signatures are so similar
 ;; That distinction no longer seems to be true.
-;; FIXME: Verify and convert this to match reality
-(s/def ::cookie-sent-callback (s/fspec :args (s/cat :notifier ::specs/deferrable
+;; Q: Is this actually used anywhere?
+(s/def ::cookie-sent-callback-obsolete (s/fspec :args (s/cat :notifier ::specs/deferrable
                                                     :timeout (s/and number?
                                                                     (complement neg?))
                                                     :this ::state/state
                                                     :sent ::specs/network-packet)))
+
+;; TODO: Move this somewhere shared so I can eliminate the duplication
+;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
+(s/def ::cookie-waiter (s/fspec :args (s/cat :this ::state/state
+                                             :timeout (s/and number?
+                                                             ;; Tempting to use nat-int here
+                                                             ;; But...wait. What time unit is involved here?
+                                                             (complement neg?))
+                                             :sent ::specs/network-packet)
+                                :ret ::specs/deferrable))
 
 (s/def ::servers-polled (s/or :possibly-succeeded dfrd/deferrable?
                               :failed ::state/state))
@@ -185,7 +195,7 @@
                      ;; Q: What is this?
                      :actual-success any?)
         :ret any?)
-(defn cookie-result-callback
+(defn cookie-result-callback-obsolete
   [{:keys [::log/logger]
     log-state ::log/state
     :as this}
@@ -193,6 +203,7 @@
    cookie-response
    actual-success]
   {:pre [actual-success]}
+  (throw (RuntimeException. "Never called anywhere"))
   (let [now (System/nanoTime)]
     ;; TODO: convert this to a log message
     ;; (although, admittedly, it's really helpful for debugging)
@@ -229,7 +240,7 @@
 
 (s/fdef possibly-recurse
         :args (s/cat :this ::state/state
-                     :cookie-sent-callback ::cookie-sent-callback
+                     :cookie-waiter ::cookie-waiter
                      :raw-packet ::specs/network-packet)
         :fn (s/or :recursion (s/fspec :args nil?
                                       :ret ::log/state)
@@ -240,7 +251,7 @@
            ::state/server-ips]
     log-state ::log/state
     :as this}
-   cookie-sent-callback
+   cookie-waiter
    raw-packet]
   (let [remaining-ips (next server-ips)
         log-state (log/flush-logs! logger (log/warn log-state
@@ -253,20 +264,20 @@
                (assoc this
                       ::log-state log-state)
                raw-packet
-               cookie-sent-callback
+               cookie-waiter
                (System/nanoTime)
                (pick-next-timeout (count remaining-ips))
                remaining-ips)
       (throw (ex-info "No IPs left. Giving up" this)))))
 
-(s/fdef cookie-sent
+(s/fdef cookie-sent-obsolete
         :args (s/cat :this ::state/state
                      :raw-packet ::specs/network-packet
                      :log-state-atom ::log/state-atom
                      ;; TODO: Need a better name that isn't as
                      ;; easily confused with ::state/cookie-response
                      :cookie-response dfrd/deferrable?
-                     :cookie-sent-callback ::cookie-sent-callback
+                     :cookie-waiter ::cookie-waiter
                      :send-packet-success boolean?)
         ;; Success returns a deferrable
         ;; that resolves to a ::state/cookie-response.
@@ -274,24 +285,21 @@
         ;; the outcome is the same either way.
         :ret (s/or :response dfrd/deferrable?
                    :recursed ::state/cookie-response))
-(defn cookie-sent
+(defn cookie-sent-obsolete
   ;; TODO: Come up with a better name. do-polling-loop
   ;; needs both this and a callback from the cookie
   ;; ns that it's named cookie-sent-callback.
   ;; Need to make them different enough that I won't
   ;; get them snarled up.
-
-  ;; Q: Is there enough going on in here to justify
-  ;; having a stand-alone top-level function?
   [{:keys [::state/timeout
            :state/server-ips]
     :as this}
    raw-packet
    log-state-atom
    cookie-response
-   ;; Yeah. This is where the names go haywire
-   cookie-sent-callback
+   cookie-waiter
    send-packet-success]
+  (throw (RuntimeException. "never called"))
   (if send-packet-success
     ;; Note that this timeout actually can grow to be quite long.
     ;; In the original, they probably add up to a ballpark of a minute.
@@ -307,12 +315,12 @@
     ;; TODO: Prove that, one way or another
     (trampoline possibly-recurse
                 (assoc this ::log/state @log-state-atom)
-                server-ips cookie-sent-callback raw-packet)))
+                server-ips cookie-waiter raw-packet)))
 
 (s/fdef cookie-retrieved
         :args (s/cat :this ::state/state
                      :raw-packet ::specs/network-packet
-                     :cookie-sent-callback ::cookie-sent-callback
+                     :cookie-waiter ::cookie-waiter
                      ;; TODO: This spec needs to be somewhere shared
                      :start-time  (s/and number?
                                          (complement neg?))
@@ -328,7 +336,7 @@
            ::state/shared-secrets]
     :as this}
    raw-packet
-   cookie-sent-callback
+   cookie-waiter
    start-time
    timeout]
   ;; Q: Refactor the filtering/error checking pieces into their own function?
@@ -339,9 +347,11 @@
     ;; as a marker when my logs disappear.
     ;; That isn't an endorsement of using the print.
     ;; It's probably more of a sign that maybe logs simply are not meant to be
-    ;; accrued this way.
+    ;; accrued the way I'm trying.
     ;; Then again, logs are really for diagnosing production issues, not debugging
-    ;; problems at dev time
+    ;; problems at dev time.
+    ;; (By that same token: unexpected errors that show up in prod are more
+    ;; likely to cause logs like this to just disappear)
     (println "hello/cookie-retrieved:\n"
              (dissoc this ::log/state)
              "\nTop-level keys:\n"
@@ -352,65 +362,67 @@
              (if server-cookie
                (b-t/->string server-cookie)
                "missing"))
-    (when-not server-cookie
-      ;; Try the next server in the list
-      (binding [*out* *err*]
-        (println "hello/cookie-retrieved: Missing the server-cookie!!"))
-      ;; This should continue to block the deferred chain set up in
-      ;; client/start!
-      ;; It isn't.
-      (comment (throw (RuntimeException. "FIXME: Figure out why not")))
-      (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
-                                                                                  ::cookie-retrieved
-                                                                                  "Moving on to next ip"
-                                                                                  {::timeout timeout})))
-                        cookie-sent-callback
-                        raw-packet))
-    (if network-packet
+    (if-not server-cookie
+      ;; This sort of decision-based orchestration seems difficult
+      ;; to model under manifold.
+      ;; I'd like to filter the logic out to something like a dfrd/chain,
+      ;; but I'm not sure how to represent branches and failures.
+      ;; The obvious approaches seem messy.
       (do
-        (if (and server-security shared-secrets)
-          (assoc this ::log/state (log/debug log-state
-                                             ::cookie-retrieved
-                                             "Got back a usable cookie"
-                                             (dissoc this ::log/state)))
-          (do
-            (log/flush-logs! logger (log/error log-state
+        ;; Move on the next server in the list
+        (binding [*out* *err*]
+          (println "hello/cookie-retrieved: Missing the server-cookie!!"))
+        (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
+                                                                                    ::cookie-retrieved
+                                                                                    "Moving on to next ip"
+                                                                                    {::timeout timeout})))
+                          cookie-waiter
+                          raw-packet))
+      (if network-packet
+        (do
+          (if (and server-security shared-secrets)
+            (assoc this ::log/state (log/debug log-state
                                                ::cookie-retrieved
-                                               "Got back a network-packet but missing something else"
-                                               {::state/cookie-response this}))
-            (throw (ex-info "Network-packet missing either security or shared-secrets"
-                            {::problem this})))))
-      (let [elapsed (- now start-time)
-            remaining (- timeout elapsed)
-            log-state (log/info log-state
-                                ::cookie-retrieved
-                                "Discarding garbage cookie")]
-        (if (< 0 remaining)
-          ;; Q: Use trampoline instead?
-          ;; A: That would get into all sorts of weirdness, because this
-          ;; is nested inside a deferred handler.
-          ;; Famous Last Words:
-          ;; The call stack on this should never get all that deep.
-          (do-polling-loop
-           (assoc this ::log/state (log/flush-logs! logger (log/info log-state
-                                                                     ::cookie-retrieved
-                                                                     "Still waiting on server"
-                                                                     {::shared/host srvr-ip
-                                                                      ::millis-remaining remaining})))
-           raw-packet
-           cookie-sent-callback
-           start-time
-           remaining)
-          (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
-                                                                                      ::cookie-retrieved
-                                                                                      "Moving on to next ip")))
-                            cookie-sent-callback
-                            raw-packet))))))
+                                               "Got back a usable cookie"
+                                               (dissoc this ::log/state)))
+            (do
+              (log/flush-logs! logger (log/error log-state
+                                                 ::cookie-retrieved
+                                                 "Got back a network-packet but missing something else"
+                                                 {::state/cookie-response this}))
+              (throw (ex-info "Network-packet missing either security or shared-secrets"
+                              {::problem this})))))
+        (let [elapsed (- now start-time)
+              remaining (- timeout elapsed)
+              log-state (log/info log-state
+                                  ::cookie-retrieved
+                                  "Discarding garbage cookie")]
+          (if (< 0 remaining)
+            ;; Q: Use trampoline instead?
+            ;; A: That would get into all sorts of weirdness, because this
+            ;; is nested inside a deferred handler.
+            ;; Famous Last Words:
+            ;; The call stack on this should never get all that deep.
+            (do-polling-loop
+             (assoc this ::log/state (log/flush-logs! logger (log/info log-state
+                                                                       ::cookie-retrieved
+                                                                       "Still waiting on server"
+                                                                       {::shared/host srvr-ip
+                                                                        ::millis-remaining remaining})))
+             raw-packet
+             cookie-waiter
+             start-time
+             remaining)
+            (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
+                                                                                        ::cookie-retrieved
+                                                                                        "Moving on to next ip")))
+                              cookie-waiter
+                              raw-packet)))))))
 
 (s/fdef do-polling-loop
         :args (s/cat :this ::state/state
                      :hello-packet ::shared/message
-                     :cookie-sent-callback ::cookie-sent-callback
+                     :cookie-waiter ::cookie-waiter
                      :start-time nat-int?
                      :timeout (s/and number?
                                      (complement neg?))
@@ -423,7 +435,7 @@
            ::state/server-security]
     ips ::state/server-ips
     :as this}
-   hello-packet cookie-sent-callback start-time timeout]
+   hello-packet cookie-waiter start-time timeout]
   (let [srvr-ip (first ips)
         log-state (log/info (::log/state this)
                             ::do-polling-loop
@@ -441,14 +453,15 @@
                        ::state/sending-hello-timed-out)
         (dfrd/chain
          ;; Note that this is actually cookie/wait-for-cookie!
-         #(cookie-sent-callback this
-                                timeout
-                                %)
+         #(cookie-waiter this
+                         timeout
+                         %)
          ;; It's very tempting to inject a filter like this, instead
          ;; of doing it inside cookie-retrieved, which is what happens
          ;; now.
-         ;; TODO: Reduce the amount of responsibility in cookie-retrieved
-         ;; and check these details here.
+         ;; TODO: Figure out a way to do so while retaining the granularity
+         ;; of things like tracing and error handling that I currently have
+         ;; in cookie-retrieved.
          #_(fn [{log-state ::log/state
                :keys [::state/server-security]
                :as this}]
@@ -460,8 +473,8 @@
                                  {::state/server-security server-security}))))
              (throw (ex-info "Missing server-security"
                              {::available this}))))
-         ;; Need details like the hello-packet and cookie-sent-callback for recursing
-         #(cookie-retrieved % hello-packet cookie-sent-callback start-time timeout))
+         ;; Need details like the hello-packet and cookie-waiter for recursing
+         #(cookie-retrieved % hello-packet cookie-waiter start-time timeout))
         (dfrd/catch (fn [ex]
                       ;; This seems to wind up acting as a success.
                       ;; The brittleness around this part of the entire chain has
@@ -469,7 +482,8 @@
                       ;; FIXME: Start back here. Make this part robust.
                       (println "hello/do-polling-loop: wait-for-cookie! failed:" ex)
                       (assoc this
-                             ;; FIXME: This is where the log-state-atom would come in handy
+                             ;; FIXME: This is where actually using the log-state-atom would
+                             ;; have been handy
                              ;; (so I wouldn't lose anything that led up to this point)
                              ::log/state #_(swap! log-state-atom #(log/flush-logs! logger %))
                              (log/flush-logs! logger
@@ -480,8 +494,7 @@
 (s/fdef poll-servers!
         :args (s/cat :this ::state/state
                      :timeout nat-int?
-                     ;; FIXME: This mesh with reality
-                     :cookie-waiter ::cookie-sent-callback)
+                     :cookie-waiter ::cookie-waiter)
         :ret ::servers-polled)
 (defn poll-servers!
   "Send hello packet to a seq of server IPs associated with a single server name."
@@ -504,7 +517,6 @@
                              "Putting hello(s) onto ->server channel"
                              {::hello-packet hello-packet
                               ::state/server-ips server-ips})]
-    (println "Hello: Entering the server polling loop")
     (do-polling-loop (assoc this
                             ::log/state log-state
                             ;; Q: Do we really want to max out at 8?
@@ -520,7 +532,7 @@
                      ;; Q: Why aren't I using timeout?
                      ;; A: Because it can grow to be arbitrarily long.
                      ;; This is really about the timeout for the packet
-                     ;; send. Honestly, this is far too long.
+                     ;; send. Honestly, a full second is far too long.
                      (util/seconds->nanos 1))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -593,11 +605,7 @@
         :args (s/cat :this ::state/state
                      :timeout (s/and #((complement neg?) %)
                                      int?)
-                     :wait-for-cookie! (s/fspec :args (s/cat :this ::state/state
-                                                             :timeout (s/and number?
-                                                                             (complement neg?))
-                                                             :sent ::specs/network-packet)
-                                                :ret ::specs/deferrable)
+                     :wait-for-cookie! ::cookie-waiter
                      ;; TODO: Spec this out
                      :build-inner-vouch any?
                      :servers-polled any?)

@@ -299,30 +299,6 @@
                                     log-label)}
         (throw ex)))))
 
-;; The name makes this seem like it doesn't belong in here.
-;; It totally does.
-;; A better name would be nice.
-(s/fdef hello-response-failed!
-        :args (s/cat :wrapper ::state/state
-                     :failure ::specs/throwable)
-        :ret any?)
-(defn hello-response-failed!
-  "Waiting for the cookie failed"
-  [{:keys [::log/logger
-           ::log/state
-           ::state/terminated]
-    :as this}
-   failure]
-  ;; FIXME: Really need to signal the outer client that
-  ;; things broke pretty badly.
-  ;; Note that this isn't an ordinary timeout: this was a true
-  ;; failure in taking from the stream. And, realistically,
-  ;; should never happen.
-  (log/flush-logs! logger (log/exception state
-                                         failure
-                                         ::hello-response-failed!))
-  (dfrd/error! terminated failure))
-
 (s/fdef wrap-received
         :args (s/cat :this ::state/state
                      :incoming ::specs/network-packet)
@@ -397,9 +373,15 @@
                ::log/state log-state
                ::specs/deferrable failure)))))
 
+;; TODO: Move this somewhere shared so I can eliminate the duplication
+;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
+;; TODO: Move this somewhere shared so I can eliminate the duplication
+;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
 (s/fdef wait-for-cookie!
         :args (s/cat :this ::state/state
                      :timeout (s/and number?
+                                     ;; Tempting to use nat-int here
+                                     ;; But...wait. What time unit is involved here?
                                      (complement neg?))
                      :sent ::specs/network-packet)
         :ret ::specs/deferrable)
