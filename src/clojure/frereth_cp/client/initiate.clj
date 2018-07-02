@@ -1,17 +1,20 @@
 (ns frereth-cp.client.initiate
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [frereth-cp.client.message :as message]
-            [frereth-cp.client.state :as state]
+            [frereth-cp
+             [shared :as shared]
+             [util :as utils]]
+            [frereth-cp.client
+             [message :as message]
+             [state :as state]]
             [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
-            [frereth-cp.util :as utils]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [serialization :as serial]
+             [specs :as specs]]
             [manifold.deferred :as dfrd])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
@@ -281,7 +284,7 @@
            deferred ::specs/deferred}
           ;; FIXME: Instead of this, have HELLO set up a partial or lexical closure
           ;; that we can use to send packets.
-          ;; (that's pretty close)
+          ;; (that's pretty close to being ready)
           ;; Honestly, most of what I'm passing along in here is overkill that
           ;; I set up for debugging.
           (state/do-send-packet this

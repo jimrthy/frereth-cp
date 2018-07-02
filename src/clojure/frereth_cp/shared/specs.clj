@@ -61,6 +61,15 @@ This really seems like a bad road to go down."
   ;; Q: Why not?
   (s/and number?
          (complement neg?)))
+;; FIXME: Use this more generally.
+;; There is some confusion in places where I'm
+;; specifying :timeout as nat-int?
+;; Q: How many of those need to be that instead of this?
+;; A: Pretty much all of them. Because nat-int? can't
+;; cope with BigInt instances.
+;; And sometimes floats are OK.
+;; Honestly, this should just go away.
+(s/def ::timeout ::time)
 
 ;; I really don't want to reference generators in here.
 ;; Much less something like rose-tree.
@@ -118,13 +127,6 @@ This really seems like a bad road to go down."
                      pos?
                      #(< % 65536)))
 (s/def ::srvr-port ::port)
-
-;; FIXME: Use this more generally
-;; There is some confusion in places where I'm
-;; specifying :timeout as nat-int?
-;; Q: How many of those need to be that instead of this?
-;; A: Pretty much all of them.
-(s/def ::timeout nat-int?)
 
 ;; Specify it this way because I waffle between
 ;; a byte-array vs. ByteBuf.

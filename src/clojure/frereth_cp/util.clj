@@ -44,6 +44,9 @@
 (defn nanos->millis
   [ns]
   (/ ns 1000000))
+(defn millis->nanos
+  [ms]
+  (* ms 1000000))
 (defn seconds->nanos
   [ss]
   (* ss 1000000000))

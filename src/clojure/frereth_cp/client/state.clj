@@ -173,6 +173,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::state (s/merge ::mutable-state
                         ::immutable-value))
 
+;; Returns a deferrable that's waiting on the cookie in
+;; response to a hello
+(s/def ::cookie-waiter (s/fspec :args (s/cat :this ::state
+                                             :timeout ::specs/time
+                                             :sent ::specs/network-packet)
+                                :ret ::specs/deferrable))
+
 ;; FIXME: This really should be ::message-building-params.
 ;; Except that those are different.
 (s/def ::initiate-building-params (s/keys :req [::log/logger
@@ -458,12 +465,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef current-timeout
         :args (s/cat :state ::state)
-        :ret nat-int?)
+        :ret ::specs/time)
 (defn current-timeout
   "How long should next step wait before giving up?"
   [this]
-  (-> this ::timeout
-      (or default-timeout)))
+  (or (::timeout this)
+      default-timeout))
 
 (s/fdef put-packet
         :args (s/cat :chan->server ::chan->server

@@ -155,12 +155,15 @@
          logger]}
   (let [log-state-atom (atom (log/clean-fork log-state ::for-exception-handling))
         major-problem (fn [ex]
-                        (log/flush-logs! logger ))]
+                        (log/flush-logs! logger
+                                         (log/exception @log-state-atom
+                                                        ex
+                                                        ::start!
+                                                        "Failure escaped")))]
     (try
       (strm/on-drained chan->server
                        (partial chan->server-closed this))
-      (let [timeout (state/current-timeout this)
-            log-state (log/info log-state
+      (let [log-state (log/info log-state
                                 ::start!
                                 "client/start! Wiring side-effects through chan->server")]
         (-> (assoc this ::log/state log-state)
@@ -168,7 +171,6 @@
              (fn [this]
                (hello/set-up-server-polling! this
                                              log-state-atom
-                                             timeout
                                              cookie/wait-for-cookie!))
              (fn [{log-state ::log/state
                    :as this}]

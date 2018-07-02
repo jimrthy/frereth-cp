@@ -1,18 +1,23 @@
 (ns frereth-cp.client.cookie
   (:require [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
-            [frereth-cp.client.initiate :as initiate]
-            [frereth-cp.client.state :as state]
+            ;; Q: Do I *really* need to import
+            ;; initiate here?
+            [frereth-cp.client
+             [initiate :as initiate]
+             [state :as state]]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.specs :as specs]
-            [frereth-cp.shared.serialization :as serial]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [specs :as specs]
+             [serialization :as serial]]
             [frereth-cp.util :as utils]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair))
 
@@ -373,15 +378,8 @@
                ::log/state log-state
                ::specs/deferrable failure)))))
 
-;; TODO: Move this somewhere shared so I can eliminate the duplication
-;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
-;; TODO: Move this somewhere shared so I can eliminate the duplication
-;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
-(s/fdef wait-for-cookie!
-        :args (s/cat :this ::state/state
-                     :timeout ::specs/time
-                     :sent ::specs/network-packet)
-        :ret ::specs/deferrable)
+;; Q: Does this really work?
+(s/def wait-for-cookie! ::state/cookie-waiter)
 (defn wait-for-cookie!
   "Pulls Cookie Packet from the wire, then triggers the response"
   [{:keys [::log/logger

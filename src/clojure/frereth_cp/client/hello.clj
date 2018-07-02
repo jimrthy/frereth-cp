@@ -3,28 +3,23 @@
             [clojure.spec.alpha :as s]
             [frereth-cp.client.state :as state]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [serialization :as serial]
+             [specs :as specs]]
             [frereth-cp.util :as util]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
-
-;; TODO: Move this somewhere shared so I can eliminate the duplication
-;; with cookie/wait-for-cookie! without introducing awkward ns dependencies.
-(s/def ::cookie-waiter (s/fspec :args (s/cat :this ::state/state
-                                             :timeout ::specs/time
-                                             :sent ::specs/network-packet)
-                                :ret ::specs/deferrable))
 
 (s/def ::servers-polled (s/or :possibly-succeeded dfrd/deferrable?
                               :failed ::state/state))
@@ -172,7 +167,7 @@
 
 (s/fdef possibly-recurse
         :args (s/cat :this ::state/state
-                     :cookie-waiter ::cookie-waiter
+                     :cookie-waiter ::state/cookie-waiter
                      :raw-packet ::specs/network-packet)
         :fn (s/or :recursion (s/fspec :args nil?
                                       :ret ::log/state)
@@ -205,7 +200,7 @@
 (s/fdef cookie-retrieved
         :args (s/cat :this ::state/state
                      :raw-packet ::specs/network-packet
-                     :cookie-waiter ::cookie-waiter
+                     :cookie-waiter ::state/cookie-waiter
                      :start-time ::specs/time
                      :timeout ::specs/time
                      :ips ::specs/srvr-ips)
@@ -304,7 +299,7 @@
 (s/fdef do-polling-loop
         :args (s/cat :this ::state/state
                      :hello-packet ::shared/message
-                     :cookie-waiter ::cookie-waiter
+                     :cookie-waiter ::state/cookie-waiter
                      :start-time nat-int?
                      :timeout ::specs/time
                      :ips ::state/server-ips)
@@ -360,7 +355,7 @@
                       ;; This seems to wind up acting as a success.
                       ;; The brittleness around this part of the entire chain has
                       ;; lost its charm.
-                      ;; FIXME: Start back here. Make this part robust.
+                      ;; FIXME: Make this part robust.
                       (println "hello/do-polling-loop: wait-for-cookie! failed:" ex)
                       (assoc this
                              ;; FIXME: This is where actually using the log-state-atom would
@@ -374,17 +369,19 @@
 
 (s/fdef poll-servers!
         :args (s/cat :this ::state/state
-                     :timeout nat-int?
-                     :cookie-waiter ::cookie-waiter)
+                     :send-timeout ::specs/time
+                     :cookie-waiter ::state/cookie-waiter)
         :ret ::servers-polled)
 (defn poll-servers!
-  "Send hello packet to a seq of server IPs associated with a single server name."
+  "Send hello packet to a seq of server IPs associated with a single server name.
+
+  Params:
+      - this: Client state
+      - send-timeout (milliseconds): How long do we wait for the send?
+      - cookie-waiter: sets up a deferrable that does the waiting"
   ;; Ping a bunch of potential servers (listening on an appropriate port with the
   ;; appropriate public key) in a sequence until you get a response or a timeout.
-  ;; In a lot of ways, it was an early attempt at what haproxy does.
-  ;; Then again, haproxy doesn't support UDP, and it's from the client side.
-  ;; So maybe this was/is breathtakingly cutting-edge.
-  ;; The main point is to avoid waiting 20-ish minutes for TCP connections
+  ;; The main point is to avoid waiting 20-ish minutes for initial TCP connections
   ;; to time out.
   [{:keys [::log/logger
            ::state/server-ips]
@@ -392,7 +389,7 @@
     {hello-packet ::shared/packet
      :as packet-management} ::shared/packet-management
     :as this}
-   timeout cookie-waiter]
+   send-timeout cookie-waiter]
   (let [log-state (log/debug log-state
                              ::poll-servers!
                              "Putting hello(s) onto ->server channel"
@@ -409,12 +406,7 @@
                      hello-packet
                      cookie-waiter
                      (System/nanoTime)
-                     ;; FIXME: The initial timeout needs to be customizable
-                     ;; Q: Why aren't I using timeout?
-                     ;; A: Because it can grow to be arbitrarily long.
-                     ;; This is really about the timeout for the packet
-                     ;; send. Honestly, a full second is far too long.
-                     (util/seconds->nanos 1))))
+                     (util/millis->nanos send-timeout))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -432,7 +424,8 @@
         ;; And probably things like the nonce generator
         ;; state.
         ;; Probably the short-term key.
-        ;; But definitely not the full state
+        ;; But definitely not the full state.
+        ;; FIXME: Do that, in a different branch
         :ret ::state/state)
 (defn do-build-packet
   "Puts plain-text hello packet into packet-management
@@ -492,8 +485,7 @@
 
 (s/fdef set-up-server-polling!
         :args (s/cat :this ::state/state
-                     :timeout ::specs/time
-                     :wait-for-cookie! ::cookie-waiter
+                     :wait-for-cookie! ::state/cookie-waiter
                      ;; TODO: Spec this out
                      :build-inner-vouch any?
                      :servers-polled any?)
@@ -504,8 +496,9 @@
     :as this}
    ;; TODO: Either use this or eliminate it.
    log-state-atom
-   timeout
    wait-for-cookie!]
   (println "hello: polling triggered")
   (let [this (do-build-packet this)]
-    (poll-servers! this timeout wait-for-cookie!)))
+    ;; Q: Is a quarter second a reasonable amount of time to
+    ;; wait for the send?
+    (poll-servers! this 250 wait-for-cookie!)))
