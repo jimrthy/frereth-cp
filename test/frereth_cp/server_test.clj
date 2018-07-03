@@ -247,7 +247,7 @@
                   clnt-log-state (log/init ::shake-hands.client)
                   clnt-logger (log/file-writer-factory "/tmp/shake-hands.client.log.edn")
                   internal-client-chan (strm/stream)
-                  client (factory/raw-client (gensym "client-hand-shaker")
+                  client (factory/raw-client (gensym "client-hand-shaker-")
                                              (constantly clnt-logger)
                                              clnt-log-state
                                              server-ip
