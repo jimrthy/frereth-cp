@@ -1856,11 +1856,9 @@
 
 ;; Q: Do I want to set an alternative that blocks?
 (defn swap-parent-callback!
-  ;; I'm fairly certain this is about switching modes from
-  ;; sending Initiate packets to sending Message packets.
-  ;; But only fairly.
-  ;; Q: What is this actually for?
-  ;; TODO: Definitely needs a docstring
+  "Swap out the ->parent callback
+
+  For switching the Client from Initiate to Message packets"
   ([{:keys [::log/logger
              ::specs/message-loop-name
             ::specs/stream]
@@ -1903,27 +1901,27 @@
            ::specs/stream
            ::specs/from-child
            ::specs/child-out]
+    log-state-atom ::log/state-atom
     :as io-handle}]
-  ;; TODO: We need the log-state here, so we can append to it.
-  ;; The obvious choice seems to involve calling get-state.
-  (let [{log-state ::log/state} (get-state io-handle)
-        log-state (log/info log-state
-                            ::halt!
-                            "I/O Loop Halt Requested"
-                            {::specs/message-loop-name message-loop-name})
-        log-state (try
-                    (strm/close! stream)
-                    (doseq [pipe [from-child
-                                  child-out]]
-                      (.close pipe))
-                    (log/info log-state
-                              ::halt!
-                              "Halt initiated"
-                              {::specs/message-loop-name message-loop-name})
-                    (catch RuntimeException ex
-                      (log/exception log-state
-                                     ex
-                                     ::halt!
-                                     "Signalling halt failed"
-                                     {::specs/message-loop-name message-loop-name})))]
-    (log/flush-logs! logger log-state)))
+  (swap! log-state-atom
+         #(log/info %
+                    ::halt!
+                    "I/O Loop Halt Requested"
+                    {::specs/message-loop-name message-loop-name}))
+  (try
+    (strm/close! stream)
+    (doseq [pipe [from-child
+                  child-out]]
+      (.close pipe))
+    (swap! log-state-atom
+           #(log/info %
+                      ::halt!
+                      "Halt initiated"
+                      {::specs/message-loop-name message-loop-name}))
+    (catch RuntimeException ex
+      (swap! log-state-atom #(log/exception %
+                                            ex
+                                            ::halt!
+                                            "Signalling halt failed"
+                                            {::specs/message-loop-name message-loop-name}))))
+  (swap! log-state-atom #(log/flush-logs! logger %)))

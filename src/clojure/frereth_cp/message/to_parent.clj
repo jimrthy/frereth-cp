@@ -181,7 +181,7 @@
       (.resetReaderIndex buf)
       (let [result (byte-array (.readableBytes send-buf))]
         (.readBytes send-buf result)
-        ;; Q: Is this the point to decrement buf's refCnt
+        ;; Q: Should I decrement buf's refCnt
         ;; because I'm done with it?
         {::log/state log-state
          ::specs/bs-or-eof result}))))
@@ -327,7 +327,11 @@
                               (if (= 0 n')
                                 1
                                 n')
-                              ;; FIXME: This can't be right.
+                              ;; 2s complement signed arithmetic.
+                              ;; This is the same logic as bytes that run
+                              ;; from -128 to 127.
+                              ;; It seems like this would make more sense
+                              ;; in the bit-twiddling namespace
                               (dec (- shared-K/max-32-int))))
           ;; It's tempting to pop that message off of whichever queue is its current home.
           ;; That doesn't make sense here/yet.
@@ -348,8 +352,8 @@
           state' (assoc-in state [::specs/outgoing ::specs/next-message-id] next-message-id)
           updated-message (-> current-message
                               (update ::specs/transmissions inc)
-                              (assoc ::specs/time recent)
-                              (assoc ::specs/message-id current-message-id))
+                              (assoc ::specs/time recent
+                                     ::specs/message-id current-message-id))
           log-state (log/debug log-state
                                label
                                "Getting ready to build message block for message"

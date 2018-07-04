@@ -2,6 +2,7 @@
   "Implement the server half of the CurveCP protocol"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
+            ;; FIXME: Finish the switch to log2
             [clojure.tools.logging :as log]
             [frereth-cp.server
              [cookie :as cookie]
@@ -186,9 +187,15 @@
                                  "Failed to send Cookie response")))))))
 
 (s/fdef verify-my-packet
-        ;; FIXME: This spec doesn't match the actual parameters.
-        ;; Q: What are the actual args?
-        :args (s/cat :packet bytes?)
+        :args (s/cat :this ::state
+                     ;; TODO: Be more specific about these
+                     :header bytes?
+                     ;; This has a spec def in both client.state
+                     ;; and shared.constants.
+                     ;; Neither one can possibly be right, can it?
+                     ;; (I kind-of suspect that shared.constants
+                     ;; has to do with a serialization template)
+                     :server-extension bytes?)
         :ret boolean?)
 (defn verify-my-packet
   "Was this packet really intended for this server?"
