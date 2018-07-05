@@ -95,7 +95,7 @@
   []
   {::log2/state (log2/init ::nonce-agent)
    ;; FIXME: Needs a logger for flushing
-   ;; the log-state
+   ;; the log-state (soon)
    ::counter-low 0
    ::counter-high 0
    ::data (byte-array 16)
@@ -182,7 +182,6 @@
     :as this}
    key-dir
    long-term?]
-  (println "Reloading nonce")
   (log/debug "Reloading nonce")
   (let [raw-path (str key-dir "/.expertsonly/")
         path (io/resource raw-path)]
@@ -193,7 +192,6 @@
           (let [channel (.getChannel (RandomAccessFile. f "rw"))]
             (try
               (let [lock (.lock channel 0 Long/MAX_VALUE false)]
-                (println "Lock acquired")
                 (log/info "Lock acquired")
                 (try
                   (let [nonce-counter (io/file path "noncecounter")]
@@ -202,13 +200,11 @@
                       (with-open [counter (io/output-stream nonce-counter)]
                         ;; FIXME: What's a good initial value?
                         (.write counter (byte-array 8))))
-                    (println "Opening" nonce-counter)
                     (log/debug "Opening" nonce-counter)
                     (with-open [counter (io/input-stream nonce-counter)]
-                      (println "Nonce counter file opened for reading")
                       (log/debug "Nonce counter file opened for reading")
                       (let [bytes-read (.read counter data 0 8)]
-                        (println "Read the 8 bytes")
+                        (println "Read" bytes-read "bytes")
                         (when (not= bytes-read 8)
                           (throw (ex-info "Nonce counter file too small"
                                           {::contents (b-t/->string data)
@@ -348,16 +344,11 @@
   [^SecretKey secret-key
    ^bytes clear-text]
   (when-not secret-key
-    ;; After all of Tuesday's debugging/log combingy, I'm still winding up here.
-    ;; Note that there are 2 vital questions.
-    ;; The fact that anything makes it back to the server is honestly more
-    ;; worrisome.
-    (throw (RuntimeException. "FIXME: How is anything escaping the message loop?"))
-    (throw (RuntimeException. "FIXME: What's wrong with this key?")))
+    (throw (RuntimeException. "FIXME: What's wrong with the secret-key ?")))
   ;; Q: Which cipher mode is appropriate here?
   (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
         ;; FIXME: Read https://www.synopsys.com/blogs/software-security/proper-use-of-javas-securerandom/
-        ;; This is almost definitely wrong.
+        ;; This is still almost definitely wrong.
         rng (SecureRandom.)
         ^AlgorithmParameterSpec iv (build-random-iv 16)]
     ;; Q: Does it make sense to create and init a new
@@ -476,25 +467,29 @@
   @parameter nonce: Number used Once for this specific box
   @parameter shared-key: combination of their-public and my-private
 
-Note that this does cope with the extra required 16 bytes of prefix padding
+  Note that this does cope with the extra required 16 bytes of prefix padding
 
-The parameter order is screwy to match the java API.
+  The parameter order is screwy to match the java API.
 
-Which was probably modeled to match the C API.
+  Which was probably modeled to match the C API.
 
-It's annoying and subject to change at a a whim. The only
-reason it hasn't yet is that I'm giving this entire translation
-the white-glove treatment.
+  It's annoying and subject to change at a a whim. The only
+  reason it hasn't yet is that I'm giving this entire translation
+  the white-glove treatment.
 
-If nothing else, the shared-key should come first to match the
-instance-level API and allow me to set it up as a partial.
+  If nothing else, the shared-key should come first to match the
+  instance-level API and allow me to set it up as a partial.
 
-It would also be nice to be able to provide a reusable buffer byte
-array destination that could just be reused without GC.
+  It would also be nice to be able to provide a reusable buffer byte
+  array destination that could just be reused without GC.
 
-That looks like it would get into the gory implementation details
-which I'm really not qualified to touch."
+  That looks like it would get into the gory implementation details
+  which I'm really not qualified to touch.
+
+  And it would be premature optimization"
   [log-state
+   ;; TODO: Check the clojure docs re: optimizing primitives.
+   ;; This seems like it's totally wrong.
    ^bytes box
    box-offset
    box-length
@@ -534,6 +529,14 @@ which I'm really not qualified to touch."
                        vec
                        (subvec K/decrypt-box-zero-bytes)))
           {::log2/state log-state
+           ;; Q: Why am I wrapping this in a ByteBuf?
+           ;; That seems like I'm probably jumping through extra hoops
+           ;; for the sake of hoop-jumping.
+           ;; Odds are, the next step, in general, is to decompose
+           ;; what just got unwrapped. So this seems like a premature
+           ;; convenience that would make more sense as an extra
+           ;; wrapper elsewhere.
+           ;; TODO: Look into that, too.
            ::unboxed (Unpooled/wrappedBuffer plain-text
                                              K/decrypt-box-zero-bytes
                                              ^Long (- box-length K/box-zero-bytes))})))
@@ -543,16 +546,16 @@ which I'm really not qualified to touch."
                                      ::nonce nonce
                                      ::shared-key shared-key}))))
 
-(s/fdef open-crypto-box
+(s/fdef open-box
         :args (s/cat :log-state ::log2/state
                      :prefix-bytes (s/and bytes?
                                           #(let [n (count %)]
-                                             (or (= K/client-nonce-prefix-length n)
-                                                 (= K/server-nonce-prefix-length n))))
+                                             (or (= specs/client-nonce-prefix-length n)
+                                                 (= specs/server-nonce-prefix-length n))))
                      :suffix-buffer (s/and bytes?
                                            #(let [n (count %)]
-                                              (or (= K/client-nonce-suffix-length n)
-                                                  (= K/server-nonce-suffix-length n))))
+                                              (or (= specs/client-nonce-suffix-length n)
+                                                  (= specs/server-nonce-suffix-length n))))
                      :crypto-buffer bytes?
                      :shared-key ::specs/crypto-key)
         ;; This doesn't match the return spec for open-after.
@@ -564,7 +567,7 @@ which I'm really not qualified to touch."
         ;; starting to look like the best option.
         :ret (s/keys :req [::log2/state]
                      :opt [::unboxed]))
-(defn open-crypto-box
+(defn open-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
   [log-state prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
   (let [nonce (byte-array K/nonce-length)
@@ -579,7 +582,7 @@ which I'm really not qualified to touch."
       (open-after log-state crypto-box 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
         {::log2/state (log2/exception ex
-                                      ::open-crypto-box
+                                      ::open-box
                                       (str "Failed to open box\n")
                                       (.getData ex))}))))
 
@@ -697,19 +700,6 @@ Or maybe that's (dec n)"
                (send nonce-writer load-nonce-key key-dir)
                log-state)
              log-state)]
-       ;; Shouldn't need to do this.
-       ;; agent actions are guaranteed to happen sequentially,
-       ;; in the order they were send-ed.
-       ;; Besides, as noted below, we're inside an agent
-       ;; action and thus cannot.
-       ;; Actually, I'm pretty sure that's why I'm getting the NPE
-       ;; from the nonce key in obscure-nonce.
-       ;; This all has to complete before the various agent actions
-       ;; that I'm sending can take effect.
-       ;; Except that doesn't make any sense.
-       ;; Since they have to execute serially, load-nonce-key had
-       ;; to complete before we can get to obscure-nonce.
-       (comment (await nonce-writer))
        (let [{:keys [::counter-low
                      ::counter-high]} @nonce-writer]
          (when (>= counter-low counter-high)
@@ -718,6 +708,9 @@ Or maybe that's (dec n)"
        (send nonce-writer obscure-nonce random-portion)
        ;; Tempting to do an await here, but we're inside an
        ;; agent action, so that isn't legal.
+       ;; Q: Is that still true?
+       ;; Bigger Q: does an agent really make sense for the
+       ;; nonce-writer?
        (if-let [ex (agent-error nonce-writer)]
          (log2/exception log-state
                          ex
@@ -727,15 +720,44 @@ Or maybe that's (dec n)"
     ([log-state dst offset]
      ;; The 16-byte nonce length is very implementation
      ;; dependent and brittle
-     (let [tmp (byte-array K/server-nonce-suffix-length)]
+     (let [tmp (byte-array specs/server-nonce-suffix-length)]
        (random-bytes! tmp)
-       (b-t/byte-copy! dst offset K/server-nonce-suffix-length tmp)
+       (b-t/byte-copy! dst offset specs/server-nonce-suffix-length tmp)
        (log2/debug log-state
                    ::safe-nonce!
                    "Picked a random nonce")))))
 (comment
   (get-nonce-agent-state)
   (reset-safe-nonce-state!))
+
+(s/fdef random-mod
+        :args (s/cat :n nat-int?)
+        :fn (fn [{:keys [:args :ret]}]
+              (let [n (:n args)]
+                (if (not= n 0)
+                  (< ret n)
+                  (= ret n))))
+        :ret (s/and integer?
+                    (complement neg?)))
+(let [;; FIXME: Set the seed securely
+      ;; This really should be used for anything
+      ;; that needs a random number
+      rng (java.security.SecureRandom.)]
+  (defn random-mod
+    "Picks a big random number and securely "
+    [denominator]
+    (if (not= 0 denominator)
+      (let [numerator (BigInteger. 256 (java.util.Random.))]
+        (comment
+          ;; The reference version actually does this:
+          (b-t/secure-mod numerator denominator))
+        ;; Note this this approach is significantly
+        ;; faster.
+        ;; I'm 90% certain that it's just because there's
+        ;; nothing built into C to just handle it this way.
+        ;; TODO: Check with a cryptographer.
+        (mod numerator denominator))
+      0)))
 
 (defn secret-box
   "Symmetric encryption

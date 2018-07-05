@@ -5,18 +5,22 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [frereth-cp.message :as message]
-            [frereth-cp.message.specs :as msg-specs]
+            [frereth-cp.message
+             [registry :as registry]
+             [specs :as msg-specs]]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [serialization :as serial]
+             [specs :as specs]]
             [frereth-cp.util :as util]
-            [manifold.deferred :as dfrd]
-            [manifold.executor :as exec]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [executor :as exec]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
@@ -45,26 +49,30 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; added to implement that sort of thing.
 ;; Actually doing anything useful with this seems like it's probably
 ;; an exercise that's been left for later
+;; This seems to have been an aspiration, when DJB hoped the entire idea
+;; would get pulled into the Linux kernel.
+;; It's just that the idea didn't seem to gain any traction.
 (s/def ::client-extension-load-time nat-int?)
 
 (s/def ::server-extension ::shared/extension)
-;; TODO: Needs a real spec
-;; Q: Is this the box that we decrypted with the server's
-;; short-term public key?
-;; Or is it the 96-byte black box that we send back as part of
-;; the Vouch?
-(s/def ::server-cookie any?)
+;; 96-byte black box that we send back as part of
+;; the Vouch
+(s/def ::server-cookie (s/and bytes?
+                              #(= (count %) K/server-cookie-length)))
 (s/def ::server-ips (s/coll-of ::specs/srvr-ip))
 (s/def ::server-security (s/merge ::specs/peer-keys
-                                  (s/keys :req [::specs/srvr-name
+                                  (s/keys :req [::specs/srvr-name  ;; DNS
                                                 ::specs/srvr-port]
                                           ;; Q: Is there a valid reason for the server-cookie to live here?
                                           ;; Q: I can discard it after sending the vouch, can't I?
                                           ;; A: Yes.
                                           ;; Q: Do I want to?
                                           ;; A: Well...keeping it seems like a potential security hole
-                                          ;; TODO: Make it go away
+                                          ;; TODO: Make it go away once I'm done with it.
+                                          ;; (i.e. once a server's sent a response to an Initiate
+                                          ;; packet).
                                           :opt [::server-cookie
+                                                ;; Where we actually communicate
                                                 ::specs/srvr-ip])))
 
 (s/def ::client-long<->server-long ::shared/shared-secret)
@@ -74,18 +82,20 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                       ::client-short<->server-long
                                       ::client-short<->server-short]))
 
-;; Q: What is this, and how is it used?
-;; A: Well, it has something to do with messages from the Child to the Server.
-;; c.f. client/extract-child-message
-(s/def ::outgoing-message any?)
-
 (s/def ::packet-builder (s/fspec :args (s/cat :state ::child-send-state
                                               :msg-packet bytes?)
                                  :ret ::msg-specs/buf))
 
-;; Because, for now, I need somewhere to hang onto the future.
-;; Q: So...what is this? a Future?
-(s/def ::child any?)
+(s/def ::child ::msg-specs/io-handle)
+
+;; This is for really extreme conditions where sanity has flown
+;; out the window.
+;; In a standard synchronous application, this is where an assert
+;; should fail.
+;; Use this when you can't do that meaningfully because you're
+;; in an async callback and it will just get swallowed.
+;; There's never a valid reason for fulfilling this successfully.
+(s/def ::terminated ::specs/deferrable)
 
 ;; The parts that change really need to be stored in a mutable
 ;; data structure.
@@ -102,11 +112,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; course of the client's lifetime
                                      ::shared/extension
                                      ::log/logger
-                                     ;; If we track ::msg-specs/state here,
-                                     ;; then ::log/state is, honestly, redundant.
-                                     ;; Except that trying to keep them synchronized
-                                     ;; is a path to madness, as is tracking
-                                     ;; a snapshot of ::msg-specs/state.
                                      ::log/state
                                      ;; Q: Does this really make any sense?
                                      ;; A: Not in any sane reality.
@@ -118,20 +123,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ::server-security
                                      ;; The only thing mutable about this is that I don't have it all in beginning
                                      ::shared-secrets
-                                     ;; FIXME: Tracking this here doesn't really make
-                                     ;; any sense at all.
-                                     ;; It's really a member variable of the IOLoop
-                                     ;; class.
-                                     ;; Which seems like an awful way to think about
-                                     ;; it, but it's pretty inherently stateful.
-                                     ;; At least in the sense that it changes after
-                                     ;; pretty much every event through the ioloop.
-                                     ;; So maybe it's more like there's a monad in
-                                     ;; there that tracks this secretly.
-                                     ;; Whatever. It doesn't really make any
-                                     ;; sense here.
-                                     ;; FIXME: Make it go away.
-                                     ::msg-specs/state
+                                     ::terminated
                                      ::shared/work-area]
                                :opt [::child
                                      ::specs/io-handle
@@ -160,6 +152,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::state (s/merge ::mutable-state
                         ::immutable-value))
 
+;; Returns a deferrable that's waiting on the cookie in
+;; response to a hello
+(s/def ::cookie-waiter (s/fspec :args (s/cat :this ::state
+                                             :timeout ::specs/time
+                                             :sent ::specs/network-packet)
+                                :ret ::specs/deferrable))
+
 ;; FIXME: This really should be ::message-building-params.
 ;; Except that those are different.
 (s/def ::initiate-building-params (s/keys :req [::log/logger
@@ -179,6 +178,47 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                 ::specs/inner-i-nonce]))
 (s/def ::child-send-state (s/merge ::initiate-building-params
                                    (s/keys :req [::chan->server])))
+
+;; Refactored from hello so it can be used by ::cookie/success-callback
+(s/def ::cookie-response
+  ;; This started out as
+  #_(s/keys :req [::log/state]
+          :opt [::security
+                ::shared-secrets
+                ::shared/network-packet])
+  ;; But that didn't cut it
+  (fn [{:keys [::log/state
+               ::security
+               ::shared-secrets
+               ::shared/network-packet]
+        :as this}]
+    ;; log-state is required
+    (when
+        (and state
+             ;; We must have all or none of these
+             (or (and security shared-secrets network-packet)
+                 (not security shared-secrets network-packet))
+             (let [n (count (keys this))]
+               ;; No others allowed.
+               ;; This violates some basic principles behind
+               ;; spec, but leaving this open has caused
+               ;; too much pain.
+               (or (= n 1) (= n 4))))
+      this)))
+
+(s/def ::valid-outgoing-binary (s/or :bytes bytes?
+                                     :byte-buf ::specs/byte-buf
+                                     :byte-buffer ::specs/nio-byte-buffer))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Globals
+
+(defonce io-loop-registry (atom (registry/ctor)))
+(comment
+  @io-loop-registry
+  (-> io-loop-registry deref keys)
+  (swap! io-loop-registry registry/de-register "client-hand-shaker")
+  )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Implementation
@@ -261,7 +301,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                {::srvr-long-pk (b-t/->string server-long-term-pk)
                                 ::my-long-pk (b-t/->string (.getPublicKey long-pair))
                                 ;; FIXME: Don't log this
-                                ::shared-key (b-t/->string long-shared)})]
+                                ::shared-key (b-t/->string long-shared)})
+          terminated (dfrd/deferred)]
       (into this
             {::child-packets []
              ::client-extension-load-time 0
@@ -280,7 +321,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              server-long-term-pk
                                                              (.getSecretKey short-pair))}
              ::server-security server-security
-             ::log/state log-state}))))
+             ::log/state log-state
+             ::terminated terminated}))))
 
 (s/fdef ->message-exchange-mode
         :args (s/cat :this ::state
@@ -408,8 +450,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef update-callback!
         :args (s/cat :io-handle ::msg-specs/io-handle
-                     :time-out (s/and integer?
-                                      (complement neg?))
+                     :time-out ::specs/time
                      :new-callback ::msg-specs/->parent))
 (defn update-callback!
   [io-handle time-out new-callback]
@@ -423,35 +464,62 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef current-timeout
         :args (s/cat :state ::state)
-        :ret nat-int?)
+        :ret ::specs/time)
 (defn current-timeout
   "How long should next step wait before giving up?"
   [this]
-  (-> this ::timeout
-      (or default-timeout)))
+  (or (::timeout this)
+      default-timeout))
+
+(s/fdef put-packet
+        :args (s/cat :chan->server ::chan->server
+                     :srvr-ip ::server-ips
+                     :packet ::valid-outgoing-binary
+                     :srvr-port ::specs/srvr-port
+                     :timeout ::specs/timeout
+                     :timeout-key any?)
+        :ret dfrd/deferrable?)
+(defn put-packet
+  "Build and put a packet onto channel toward server
+
+  No bells, whistles, or anything else to make it fancier than needed"
+  [chan->server srvr-ip packet srvr-port timeout timeout-key]
+  (strm/try-put! chan->server
+                 {:host srvr-ip
+                  :message packet
+                  :port srvr-port}
+                 timeout
+                 timeout-key))
 
 (s/fdef do-send-packet
         :args (s/cat :this ::state
-                     :on-success (s/fspec :args (s/cat :result any?)
+                     :on-success (s/fspec :args (s/cat :result boolean?)
                                           :ret any?)
                      :on-failure (s/fspec :args (s/cat :failure ::specs/exception-instance)
                                           :ret any?)
                      :chan->server strm/sinkable?
-                     :packet (s/or :bytes bytes?
-                                   ;; Honestly, an nio.ByteBuffer would probably be
-                                   ;; just fine here also
-                                   :byte-buf ::specs/byte-buf)
+                     :packet ::valid-outgoing-binary
                      :timeout ::specs/timeout
                      :timeout-key any?)
         :ret (s/keys :req [::log/state ::specs/deferrable]))
 (defn do-send-packet
-  "Send a ByteBuf (et al) as UDP to the server"
+  "Send a ByteBuf (et al) as UDP to the server
+
+  With lots of bells, whistles, and callbacks"
+  ;; Q: How tough to make this generic enough to use
+  ;; on both sides?
+  ;; Actually, all we really need to do is make the key
+  ;; names generic, move this into a shared ns, then make
+  ;; the specific versions translate the keys as needed.
+  ;; Q: Is it worth making that happen?
+  ;; I've already backed off here because put-packet seems
+  ;; more usable.
   [{log-state ::log/state
-    {:keys [::log/logger
-            ::specs/srvr-ip
+    {:keys [::specs/srvr-ip
             ::specs/srvr-port]
      :as server-security} ::server-security
-    :keys [::chan->server]
+    :keys [::chan->server
+           ::log/logger]
     :as this}
    on-success
    on-failure
@@ -464,33 +532,20 @@ The fact that this is so big says a lot about needing to re-think my approach"
     (throw (RuntimeException. "Trying to send nil bytes")))
   (let [log-state (log/debug log-state
                              ::do-send-packet
-                             "Incoming message packet. Should be a binary we can put on the wire"
+                             "Outgoing message packet. Should be a binary we can put on the wire"
                              {::shared/packet packet
                               ::payload-class (class packet)})
-        d (strm/try-put! chan->server
-                         {:host srvr-ip
-                          :message packet
-                          :port srvr-port}
-                         timeout
-                         timeout-key)
+        d (put-packet chan->server srvr-ip packet srvr-port timeout timeout-key)
         log-state (log/info log-state
                             ::do-send-packet
                             ""
                             {::server-security server-security
-                             ;; Can't do the straightforward approach from
-                             ;; a ByteBuf without
-                             ;; adding a byte-streams/def-conversion.
-                             ;; TODO: I should probably do that.
-                             ;; However, there's a different problem here:
-                             ;; Sometimes this gets called with packet as a [B.
-                             ;; Others, it's the network-packet spec.
-                             ::human-readable-message (b-t/->string #_packet
-                                                                    (if (bytes? packet)
+                             ::human-readable-message (b-t/->string (if (bytes? packet)
                                                                       packet
-                                                                      (let [^ByteBuf packet packet
-                                                                            bs (byte-array (.readableBytes packet))]
-                                                                        (.getBytes packet 0 bs)
-                                                                        bs)))})]
+                                                                      (throw (ex-info "Expected [B"
+                                                                                      {::actual (class packet)
+                                                                                       ::value packet
+                                                                                       :log/state log-state}))))})]
     {::log/state log-state
      ::specs/deferrable (dfrd/on-realized d
                                           on-success
@@ -512,7 +567,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
         ;; So we really can't count on anything safe happening
         ;; with the return value.
         ;; Although in this case the "child" is the message ioloop,
-        ;; so we can couple it as tightly as we like
+        ;; so we can couple it as tightly as we like.
+        ;; Still, it would be nice to keep it isolated.
         :ret dfrd/deferrable?)
 (defn child->
   "Handle packets streaming out of child"
@@ -549,9 +605,36 @@ The fact that this is so big says a lot about needing to re-think my approach"
    timeout
    ^bytes message-block]
   {:pre [packet-builder]}
-  (let [log-state (log/do-sync-clock log-state)
-        {:keys [::specs/srvr-name ::specs/srvr-port]} server-security]
-    ;; This flag is stored in the child state.
+  (let [{:keys [::server-cookie
+                ::specs/srvr-name
+                ::specs/srvr-port]} server-security
+        log-state (log/flush-logs! logger (log/trace log-state
+                                                     ::child->
+                                                     "Top"
+                                                     {::server-cookie server-cookie}))]
+    (when-not server-cookie
+      ;; This seems like something that should be debug-only.
+      ;; But, honestly, it's a really nice red flag to have around.
+      (binding [*out* *err*]
+        (println "WARNING: Missing the server-cookie in server-security.\n"
+                 "This doesn't matter once we can start sending message\n"
+                 "packets, but it means we cannot possibly build an\n"
+                 "Initiate.")))
+
+    ;; N.B. What gets built very much depends on the current connection
+    ;; state.
+    ;; According to the spec, the child can send as many Initiate packets as
+    ;; it likes, whenever it wants.
+    ;; In general, it should only send them up until the point that we
+    ;; receive the server's first message packet in response.
+    ;; FIXME: When the child receives its first response packet from the
+    ;; server (this will be a Message in response to a Vouch), we need to
+    ;; use message/swap-parent-callback! to swap packet-builder from
+    ;; initiate/build-initiate-packet! to
+    ;; some equivalent function that I haven't written yet. That function should
+    ;; live in client.message.
+
+    ;; The flag that controls this is stored in the child state.
     ;; I can retrieve that from the io-handle, but that's
     ;; terribly inefficient.
     ;; I could update the API here. Just have the child indicate
@@ -569,26 +652,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; It just avoids the possibility of race conditions by running
     ;; in a single thread.
 
-    ;; N.B. What gets built very much depends on the current connection
-    ;; state.
-    ;; According to the spec, the child can send as many Initiate packets as
-    ;; it likes, whenever it wants.
-    ;; In general, it should only send them up until the point that we
-    ;; receive the server's first message packet in response.
-    ;; FIXME: When the child receives its first response packet from the
-    ;; server (this will be a Message in response to a Vouch), we need to
-    ;; use message/swap-parent-callback! to swap packet-builder from
-    ;; initiate/build-initiate-packet! to
-    ;; some equivalent function that I haven't written yet. That function should
-    ;; live in client.message.
-    (let [^ByteBuf message-packet (packet-builder (assoc state ::log/state log-state) message-block)
+    ;; This is the point behind ->message-exchange-mode.
+    (let [message-packet (bytes (packet-builder (assoc state ::log/state log-state) message-block))
+          raw-message-packet (if message-packet
+                               (b-s/convert message-packet specs/byte-array-type)
+                               (byte-array 0))
           log-state (log/debug log-state
                                ::child->
                                "Client sending a message packet from child->serve"
                                {::shared/message (if message-packet
-                                                   (let [barray (byte-array (.readableBytes message-packet))]
-                                                     (.readBytes message-packet barray)
-                                                     (b-t/->string barray))
+                                                   (b-t/->string raw-message-packet)
                                                    "No message packet built")
                                 ::server-security server-security})]
       (when-not (and srvr-name srvr-port message-packet)
@@ -602,7 +675,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               (let [log-state (log/debug log-state
                                                          ::child->
                                                          "Packet sent"
-                                                         {::shared/message message-packet
+                                                         {::shared/message raw-message-packet
                                                           ::server-security server-security})]
                                 (log/flush-logs! logger log-state)))
                             (fn [ex]
@@ -610,11 +683,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              ex
                                                              ::child->
                                                              "Sending packet failed"
-                                                             {::shared/message message-packet
+                                                             {::shared/message raw-message-packet
                                                               ::server-security server-security})]))
                             timeout
                             ::child->timed-out
-                            message-packet)
+                            raw-message-packet)
             {log-state ::log/state
              result ::specs/deferrable} composite-result-placeholder]
         result))))
@@ -688,7 +761,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ::msg-specs/->child
            ::msg-specs/child-spawner!
            ::msg-specs/message-loop-name]
-    initial-msg-state ::msg-specs/state
     log-state ::log/state
     :as this}]
   {:pre [message-loop-name]}
@@ -697,10 +769,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
                          (keys this))
                     this)))
   (let [log-state (log/info log-state ::fork! "Spawning child!!")
+        child-name (str (gensym "child-"))
         startable (message/initial-state message-loop-name
                                          false
-                                         (assoc initial-msg-state
-                                                ::log/state log-state)
+                                         {::log/state (log/clean-fork log-state child-name)}
                                          logger)
         child-send-state (extract-child-send-state this)
         _ (assert (::specs/inner-i-nonce child-send-state) (str "Missing inner-i-nonce in child-send-state\n"
@@ -723,6 +795,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                              "Child message loop initialized"
                              {::this (dissoc this ::log/state)
                               ::child (dissoc io-handle ::log/state)})]
+    (swap! io-loop-registry
+           #(registry/register % io-handle))
     (child-spawner! io-handle)
     (assoc this
            ::child io-handle
@@ -739,8 +813,27 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (if child
     (let [log-state (log/warn log-state
                               ::do-stop
-                              "Halting child's message io-loop")]
+                              "Halting child's message io-loop")
+          message-loop-name (::specs/message-loop-name child)]
       (message/halt! child)
+      ;; In theory, I should be able to just manually call halt!
+      ;; on entries in this registry that don't get stopped when
+      ;; things hit a bug.
+      ;; In practice, the problems probably go deeper:
+      ;; Either from-child or to-parent (more likely) keeps
+      ;; feeding un-ackd messages into the queue.
+      ;; So I need a way to manually halt that also.
+
+      ;; There are some interrupt functions in the top-level
+      ;; frereth-cp.message ns that seem to do the trick.
+      ;; It's tempting to expose them.
+      ;; Then again, they're a sledge hammer that just stops
+      ;; all the message loops.
+      ;; Running multiple clients and server connections
+      ;; requires a scalpel.
+      ;; TODO: Revisit this.
+      (swap! io-loop-registry
+             #(registry/de-register % message-loop-name))
       (log/warn log-state
                 ::do-stop
                 "Child's message io-loop halted"))

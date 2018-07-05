@@ -43,8 +43,8 @@ This is the part that possibly establishes a 'connection'"
   [shared-key nonce-suffix box nonce]
   (b-t/byte-copy! nonce K/initiate-nonce-prefix)
   (b-t/byte-copy! nonce
-                  K/client-nonce-prefix-length
-                  K/client-nonce-suffix-length
+                  shared-specs/client-nonce-prefix-length
+                  shared-specs/client-nonce-suffix-length
                   nonce-suffix)
   (try
     (let [plain-vector (crypto/open-after box 0 (count box) nonce shared-key)]
@@ -156,8 +156,8 @@ To be fair, this layer *is* pretty special."
     (try
       (b-t/byte-copy! nonce K/cookie-nonce-minute-prefix)
       (b-t/byte-copy! nonce
-                      K/server-nonce-prefix-length
-                      K/server-nonce-suffix-length
+                      shared-specs/server-nonce-prefix-length
+                      shared-specs/server-nonce-suffix-length
                       hello-cookie)
       (crypto/secret-unbox dst dst K/server-cookie-length nonce (::state/minute-key cookie-cutter))
       true
@@ -169,7 +169,7 @@ To be fair, this layer *is* pretty special."
                         K/box-zero-bytes
                         K/hello-crypto-box-length
                         hello-cookie
-                        K/server-nonce-suffix-length)
+                        shared-specs/server-nonce-suffix-length)
 
         (try
           (crypto/secret-unbox dst
@@ -272,11 +272,11 @@ To be fair, this layer *is* pretty special."
   (log/info "Opening the Crypto box we just received from the client")
   (log/debug "The box we're opening is" (count vouch-wrapper) "bytes long")
   (let [message-length (- (count vouch-wrapper) K/minimum-vouch-length)]
-    (if-let [clear-text (crypto/open-crypto-box K/initiate-nonce-prefix
-                                                outer-i-nonce
-                                                vouch-wrapper
-                                                (get-in current-client [::state/shared-secrets
-                                                                        ::state/client-short<->server-short]))]
+    (if-let [clear-text (crypto/open-box K/initiate-nonce-prefix
+                                         outer-i-nonce
+                                         vouch-wrapper
+                                         (get-in current-client [::state/shared-secrets
+                                                                 ::state/client-short<->server-short]))]
       (do
         (log/info "Decomposing...")
         (serial/decompose (assoc-in K/initiate-client-vouch-wrapper
@@ -358,7 +358,7 @@ Note that that includes TODOs re:
       ;; And write a unit test to verify this.
       ;; Even though it's an implementation detail deep in the guts, this
       ;; seems worth covering.
-      (when-let [^ByteBuf inner-pk-buf (crypto/open-crypto-box
+      (when-let [^ByteBuf inner-pk-buf (crypto/open-box
                                         K/vouch-nonce-prefix
                                         (::K/inner-i-nonce client-message-box)
                                         (::K/hidden-client-short-pk client-message-box)
@@ -431,7 +431,7 @@ Note that that includes TODOs re:
                              ;; This takes us down to line 381
                              (when (verify-client-public-key-triad state client-short-pk client-message-box)
                                (let [^ByteBuf rcvd-nonce-buffer (::K/outer-i-nonce initiate)
-                                     rcvd-nonce-array (byte-array K/client-nonce-suffix-length)
+                                     rcvd-nonce-array (byte-array shared-specs/client-nonce-suffix-length)
                                      _ (.getBytes rcvd-nonce-buffer 0 rcvd-nonce-array)
                                      _ (.release rcvd-nonce-buffer)
                                      rcvd-nonce (b-t/uint64-unpack rcvd-nonce-array)

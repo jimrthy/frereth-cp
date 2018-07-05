@@ -1,12 +1,34 @@
 (ns frereth-cp.shared.bit-twiddling-test
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
+            [clojure.spec.test.alpha :as test]
             [clojure.test :refer (are deftest is testing)]
             [clojure.test.check.clojure-test :as c-t]
             [clojure.test.check.generators :as lo-gen]
             [clojure.test.check.properties :as props]
             [frereth-cp.shared.bit-twiddling :as b-t])
-  (:import [io.netty.buffer ByteBuf Unpooled]))
+  (:import clojure.lang.BigInt
+           [io.netty.buffer ByteBuf Unpooled]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Helpers
+
+(defn rand64
+  "Pretty much what randint does, but extended for a full 64-bits
+
+This seems like it might be worth making more generally available.
+
+Since it really isn't secure, that might be a terrible idea"
+  []
+  (let [max-signed-long (bit-shift-left 1 62)
+        max+1 (* 4 (bigint max-signed-long))]
+    (-> max+1
+        rand
+        (- (/ max+1 2))
+        long)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Tests
 
 (comment
   ;; This isn't working.
@@ -99,20 +121,6 @@
               (is (= n real-unpacked))
               (is (= real-unpacked unpacked)))))))))
 
-(defn rand64
-  "Pretty much what randint does, but extended for a full 64-bits
-
-This seems like it might be worth making more generally available.
-
-Since it really isn't secure, that might be a terrible idea"
-  []
-  (let [max-signed-long (bit-shift-left 1 62)
-      max+1 (* 4 (bigint max-signed-long))]
-    (-> max+1
-        rand
-        (- (/ max+1 2))
-        long)))
-
 (deftest random-uint64-pack-unpack
   ;; TODO: Generative testing clearly seems appropriate/required here
   (testing "Get random 64-bit int"
@@ -124,3 +132,51 @@ Since it really isn't secure, that might be a terrible idea"
             (testing "\n\t\tunpacking"
               (is (= (b-t/uint64-unpack packed)
                      n)))))))))
+
+(deftest secure-mod-basics
+  (testing "Some basic numbers"
+    (let [n 100 d 256
+          normal (mod n (bigint d))
+          secure (b-t/secure-mod n d)]
+      (is (= normal secure))))
+  (testing "That it runs and spec is OK"
+    (let [raw (test/check `b-t/secure-mod)
+          extracted (first raw)
+          result (get-in extracted [:clojure.spec.test.check/ret :result])]
+      (when-not result
+        (is (not extracted)))
+      (is result))))
+
+(c-t/defspec secure-mod
+  (props/for-all [n (s/gen (s/int-in 0 (Math/pow 2 256)))
+                  d (s/gen (s/int-in 1 (Math/pow 2 256)))]
+                 (let [expected (mod n d)
+                       actual (b-t/secure-mod n d)]
+                   (is (= expected
+                          actual)
+                       (str n " % " d)))))
+
+(deftest compare-mod-time
+  (let [gen #(reduce (fn [acc _]
+                      (conj acc (rand-int Integer/MAX_VALUE)))
+                    []
+                    (range %))
+        numerators (gen 10000)
+        denominators (gen 10000)
+        pairs (mapv vector numerators denominators)
+        start-time (System/nanoTime)
+        standard (reduce (fn [acc [n d]]
+                           (+ acc (mod n d)))
+                         0
+                         pairs)]
+    (let [mid-time (System/nanoTime)
+          secure (reduce (fn [acc [n d]]
+                           (+ acc (b-t/secure-mod n d)))
+                         0
+                         pairs)
+          end-time (System/nanoTime)
+          standard-delta (- mid-time start-time)
+          secure-delta (- end-time mid-time)]
+      (println "Standard modulo took" standard-delta "nanoseconds")
+      (println "DJB's version took" secure-delta)
+      (is (= standard secure)))))

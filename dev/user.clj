@@ -1,10 +1,12 @@
 (ns user
-  (:require [clojure.data :as data]
+  (:require [byte-streams :as b-s]
+            [clojure.data :as data]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.repl :refer (apropos dir doc pst root-cause source)]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
+            [clojure.spec.test.alpha :as test]
             [clojure.test.check :refer (quick-check)]
             [clojure.test.check.clojure-test :refer (defspec)]
             [clojure.test.check.generators :as lo-gen]
@@ -15,6 +17,7 @@
             [frereth-cp.message :as msg]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.logging :as log]
+            [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as utils]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm]))

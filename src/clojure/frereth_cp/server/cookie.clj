@@ -71,7 +71,7 @@ Except that it doesn't seem to do that at all."
       (b-t/byte-copy! working-nonce K/cookie-nonce-minute-prefix)
       (let [log-state (crypto/do-safe-nonce log-state
                                             working-nonce
-                                            K/server-nonce-prefix-length)]
+                                            specs/server-nonce-prefix-length)]
         (log2/flush-logs! logger log-state))
 
       ;; Reference implementation is really doing pointer math with the array
@@ -91,9 +91,9 @@ Except that it doesn't seem to do that at all."
         ;; be discarded anyway
         (b-t/byte-copy! text
                         K/key-length  ; reference uses 64 bytes here. 32 bytes of zeros
-                        K/server-nonce-suffix-length
+                        specs/server-nonce-suffix-length
                         working-nonce
-                        K/server-nonce-prefix-length)  ; line 321
+                        specs/server-nonce-prefix-length)  ; line 321
 
         ;; And now we need to encrypt that.
         ;; This really belongs in its own function
@@ -108,7 +108,7 @@ Except that it doesn't seem to do that at all."
         ;; If nothing else, it's far too tightly coupled.
         (b-t/byte-copy! working-nonce
                         0
-                        K/server-nonce-prefix-length
+                        specs/server-nonce-prefix-length
                         K/cookie-nonce-prefix)
         (let [cookie (crypto/box-after client-short<->server-long
                                        text
@@ -128,8 +128,11 @@ Except that it doesn't seem to do that at all."
     server-extension ::K/srvr-xtn}
    ^bytes working-nonce
    crypto-cookie]
-  (let [nonce-suffix (byte-array K/server-nonce-suffix-length)]
-    (b-t/byte-copy! nonce-suffix 0 K/server-nonce-suffix-length working-nonce K/server-nonce-prefix-length)
+  (let [nonce-suffix (byte-array specs/server-nonce-suffix-length)]
+    (b-t/byte-copy! nonce-suffix 0
+                    specs/server-nonce-suffix-length
+                    working-nonce
+                    specs/server-nonce-prefix-length)
     (let [^ByteBuf composed (serial/compose K/cookie-frame {::K/header K/cookie-header
                                                             ::K/client-extension client-extension
                                                             ::K/server-extension server-extension

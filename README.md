@@ -35,6 +35,14 @@ Although you probably don't want to actually use it.
 
 ## Notes
 
+### Line numbers in comments
+
+A lot of comments reference line numbers. Those really point
+back to the reference implementation, from
+https://github.com/krig/nacl
+
+### tweetnacl
+
 Having the tweetnacl java source just copy/pasted in the middle
 breaks every linter I've tried to use. It seems like that part
 really needs to be published somewhere as its own library.
@@ -44,7 +52,7 @@ behind using tweetnacl.
 
 ## License
 
-Copyright © 2017 James Gatannah
+Copyright © 2017-2018 James Gatannah
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.

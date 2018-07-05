@@ -2,8 +2,7 @@
   "Implement the server half of the CurveCP protocol"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            ;; TODO: Really need millisecond precision (at least)
-            ;; associated with this log formatter
+            ;; FIXME: Finish the switch to log2
             [clojure.tools.logging :as log]
             [frereth-cp.server
              [cookie :as cookie]
@@ -115,6 +114,10 @@
          ;; two are equivalent.
          (= (bit-and r 0xf) 0))))
 
+;;; Q: Why isn't handle-hello! part of the hello ns?
+;;; A: Because it needs access to cookie/do-build-cookie-response
+;;; TODO: Add that as a callback param that I can set up in a
+;;; partial and then move it there
 (s/fdef handle-hello!
         :args (s/cat :state ::state/state
                      :packet ::shared/network-packet)
@@ -184,8 +187,15 @@
                                  "Failed to send Cookie response")))))))
 
 (s/fdef verify-my-packet
-        ;; FIXME: This spec doesn't match the actual parameters.
-        :args (s/cat :packet bytes?)
+        :args (s/cat :this ::state
+                     ;; TODO: Be more specific about these
+                     :header bytes?
+                     ;; This has a spec def in both client.state
+                     ;; and shared.constants.
+                     ;; Neither one can possibly be right, can it?
+                     ;; (I kind-of suspect that shared.constants
+                     ;; has to do with a serialization template)
+                     :server-extension bytes?)
         :ret boolean?)
 (defn verify-my-packet
   "Was this packet really intended for this server?"
@@ -263,7 +273,7 @@
                                      ""
                                      {::packet-type-id packet-type-id})
                 this (assoc this ::log2/state log-state)]
-            (println "My packet" this)
+            (println "Packet for me:" this)
             (try
               (.flush System/out)
               (case packet-type-id
@@ -495,14 +505,14 @@
                                                           "Clearing secrets"))
             outcome (-> (try
                              (state/hide-secrets! this)
-                             (catch RuntimeException ex
-                               (log/error "ERROR: " ex)
-                               this)
                              (catch Exception ex
-                               (log/fatal "FATAL:" ex)
-                               ;; TODO: This really should be fatal.
-                               ;; Make the error-handling go away once hiding secrets actually works
-                               this))
+                               ;; Very tempting to split RuntimeException
+                               ;; away from Exception. And then make Exception
+                               ;; fatal
+                               (update this ::log2/state
+                                       #(log2/exception %
+                                                        ex
+                                                        ::stop!))))
                         (dissoc ::state/event-loop-stopper!
                                 ;; This doesn't make any sense here anyway.
                                 ;; But it's actually breaking my spec

@@ -819,7 +819,8 @@
           state (assoc state ::specs/recent now)
           log-state @log-state-atom
           ;; This is used during exception handling
-          prelog (utils/pre-log message-loop-name)  ; might be on a different thread
+          ;; because that might happengg873 on a different thread
+          prelog (utils/pre-log message-loop-name)
           fmt (str "Awakening event loop that was sleeping for ~g ms "
                    "after ~:d at ~:d\n"
                    "at ~:d because: ~a")
@@ -870,7 +871,7 @@
                                           {::trigger-details prelog
                                            ::specs/message-loop-name message-loop-name})]))
           ;; TODO: Really should add something like an action ID to the state
-          ;; to assist in tracing the action. flow-control seems like a very
+          ;; to assist in tracing how data flows. flow-control seems like a very
           ;; likely place to put it.
           updater (case tag
                     ;; Q: Is this worth switching to something like core.match or a multimethod?
@@ -879,7 +880,9 @@
                     ::drained (fn [{log-state ::log/state
                                     :as state}]
                                 ;; Actually, this seems like a strong argument for
-                                ;; having a pair of streams. Child could still have
+                                ;; having a pair of 1-way streams (as opposed to
+                                ;; a bi-directional one)
+                                ;; Child could still have
                                 ;; bytes to send to the parent after the latter's
                                 ;; stopped sending, or vice versa.
                                 ;; I'm pretty sure the complexity I haven't finished
@@ -1013,8 +1016,11 @@
                        ;; should happen here.
                        ;; (Note that, either way, it really should
                        ;; include a callback to some
-                       ;; currently-undefined status updater
-                       (comment state)
+                       ;; currently-undefined status updater)
+                       ;; That really gets into bigger-picture monitoring
+                       ;; considerations that may not really be appropriate
+                       ;; at this level.
+                       ;; Then again, they totally might be.
                        (update state
                                ::log/state
                                #(log/exception %
@@ -1482,6 +1488,7 @@
         :ret (s/keys :req [::log/state
                            ::specs/io-handle]))
 (defn do-start
+  "Trigger side-effects to start a ::state"
    ;; I'd like to provide the option to build your own
    ;; input loop.
    ;; It seems like this would really need to be a function that
@@ -1648,41 +1655,6 @@
        (assoc result ::log/state @main-log-state-atom))))
   ([stream-holder]
    (get-state stream-holder 500 ::timed-out)))
-
-(s/fdef halt!
-        :args (s/cat :io-handle ::specs/io-handle)
-        :ret any?)
-(defn halt!
-  [{:keys [::log/logger
-           ::specs/message-loop-name
-           ::specs/stream
-           ::specs/from-child
-           ::specs/child-out]
-    :as io-handle}]
-  ;; TODO: We need the log-state here, so we can append to it.
-  ;; The obvious choice seems to involve calling get-state.
-  (let [{log-state ::log/state} (get-state io-handle)
-        my-logs (log/fork log-state)
-        my-logs (log/info my-logs
-                          ::halt!
-                          "I/O Loop Halt Requested"
-                          {::specs/message-loop-name message-loop-name})
-        my-logs (try
-                  (strm/close! stream)
-                  (doseq [pipe [from-child
-                                child-out]]
-                    (.close pipe))
-                  (log/info my-logs
-                            ::halt!
-                            "Halt initiated"
-                            {::specs/message-loop-name message-loop-name})
-                  (catch RuntimeException ex
-                    (log/exception my-logs
-                                   ex
-                                   ::halt!
-                                   "Signalling halt failed"
-                                   {::specs/message-loop-name message-loop-name})))]
-    (log/flush-logs! logger my-logs)))
 
 (s/fdef child->!
         :args (s/cat :io-handle ::specs/io-handle
@@ -1870,10 +1842,6 @@
   ;; The other side, really, controls when it sends EOF.
   ;; Once the final byte has been sent to child, that
   ;; code should control closing that pipe pair.
-
-  ;; The child-monitor loop should handle this
-  ;; detail
-  #_(comment (child-> io-handle ::specs/normal))
   (.close from-child))
 
 (s/fdef swap-parent-callback!
@@ -1885,8 +1853,10 @@
                                          :new-callback ::specs/->parent))
         :ret (s/or :succeeded ::specs/state
                    :timed-out-value any?))
-;; Q: Do I want to set an alternative that blocks?
 (defn swap-parent-callback!
+  "Swap out the ->parent callback
+
+  For switching the Client from Initiate to Message packets"
   ([{:keys [::log/logger
              ::specs/message-loop-name
             ::specs/stream]
@@ -1918,3 +1888,38 @@
          timed-out-value))))
   ([io-handle new-callback]
    (swap-parent-callback! io-handle 5000 ::timed-out new-callback)))
+
+(s/fdef halt!
+        :args (s/cat :io-handle ::specs/io-handle)
+        :ret any?)
+(defn halt!
+  "This is supposed to be a hard-stop that means we're totally done."
+  [{:keys [::log/logger
+           ::specs/message-loop-name
+           ::specs/stream
+           ::specs/from-child
+           ::specs/child-out]
+    log-state-atom ::log/state-atom
+    :as io-handle}]
+  (swap! log-state-atom
+         #(log/info %
+                    ::halt!
+                    "I/O Loop Halt Requested"
+                    {::specs/message-loop-name message-loop-name}))
+  (try
+    (strm/close! stream)
+    (doseq [pipe [from-child
+                  child-out]]
+      (.close pipe))
+    (swap! log-state-atom
+           #(log/info %
+                      ::halt!
+                      "Halt initiated"
+                      {::specs/message-loop-name message-loop-name}))
+    (catch RuntimeException ex
+      (swap! log-state-atom #(log/exception %
+                                            ex
+                                            ::halt!
+                                            "Signalling halt failed"
+                                            {::specs/message-loop-name message-loop-name}))))
+  (swap! log-state-atom #(log/flush-logs! logger %)))

@@ -83,20 +83,17 @@
    ::srvr-state/client-read-chan {::srvr-state/chan nil}
    ::srvr-state/client-write-chan {::srvr-state/chan nil}})
 
-;; FIXME: This spec doesn't match the function signature at all
+;; FIXME: This spec still doesn't match the function signature at all
 (s/fdef raw-client
-        :args (s/or :with-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
+        :args (s/or :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
                                      :logger-init (s/fspec :args nil :ret ::log/logger)
                                      :log-state ::log/state
-                                     ;; Q: is there a built-in predicate for byte?
                                      :server-ip (s/tuple int? int? int? int?)
                                      :srvr-port ::shared-specs/port
                                      :srvr-pk-long ::shared-specs/public-long
-                                     :srvr-xtn-vec (s/and vector?
-                                                          #(= (count %) K/extension-length))
                                      :->child ::msg-specs/->child
                                      :child-spawner! ::msg-specs/child-spawner!)
-                    :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
+                    :with-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
                                      :logger-init (s/fspec :args nil :ret ::log/logger)
                                      :log-state ::log/state
                                      :server-ip (s/tuple int? int? int? int?)

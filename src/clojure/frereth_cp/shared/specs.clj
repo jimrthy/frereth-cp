@@ -15,6 +15,8 @@
 (def ^Integer key-length 32)
 (def client-key-length key-length)
 
+(def ^Integer client-nonce-prefix-length 16)
+(def ^Integer client-nonce-suffix-length 8)
 ;; Really belongs in shared.constants, but we also need it in here.
 ;; And I want to avoid circular dependencies.
 ;; TODO: Move the serialization templates out of there so this isn't
@@ -41,12 +43,36 @@ This really seems like a bad road to go down."
   #(instance? klass %))
 
 (s/def ::atom (class-predicate (class (atom nil))))
+(def byte-array-type (Class/forName "[B"))
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
+(s/def ::nio-byte-buffer (class-predicate java.nio.ByteBuffer))
+;; Q: Is this worth abstracting?
+;; Especially since I've probably used dfrd/deferrable more
+;; often?
+;; A: Yes. For using in keys.
 (s/def ::deferrable dfrd/deferrable?)
 (s/def ::exception-instance (class-predicate Exception))
 (s/def ::executor (class-predicate Executor))
 (s/def ::internet-address (class-predicate java.net.InetAddress))
 (s/def ::throwable (class-predicate Throwable))
+
+(s/def ::time
+  ;; integer? doesn't really work, especially when
+  ;; we're talking about nanoTime.
+  ;; In several situations, this will be a BigInt.
+  ;; But I don't really want to accept floats.
+  ;; Q: Why not?
+  (s/and number?
+         (complement neg?)))
+;; FIXME: Use this more generally.
+;; There is some confusion in places where I'm
+;; specifying :timeout as nat-int?
+;; Q: How many of those need to be that instead of this?
+;; A: Pretty much all of them. Because nat-int? can't
+;; cope with BigInt instances.
+;; And sometimes floats are OK.
+;; Honestly, this should just go away.
+(s/def ::timeout ::time)
 
 ;; I really don't want to reference generators in here.
 ;; Much less something like rose-tree.
@@ -92,7 +118,8 @@ This really seems like a bad road to go down."
 (s/def ::srvr-xtn ::extension)
 (s/def ::clnt-xtn ::extension)
 
-(s/def ::srvr-ip (class-predicate java.net.SocketAddress))
+;; Note that this includes the port
+(s/def ::srvr-ip (class-predicate java.net.InetAddress))
 (def server-name-length 256)
 ;; This is a name suitable for submitting a DNS query.
 ;; 1. Its encoder starts with an array of zeros
@@ -103,13 +130,6 @@ This really seems like a bad road to go down."
                      pos?
                      #(< % 65536)))
 (s/def ::srvr-port ::port)
-
-;; FIXME: Use this more generally
-;; There is some confusion in places where I'm
-;; specifying :timeout as nat-int?
-;; Q: How many of those need to be that instead of this?
-(s/def ::timeout (s/and number?
-                        (complement neg?)))
 
 ;; Specify it this way because I waffle between
 ;; a byte-array vs. ByteBuf.

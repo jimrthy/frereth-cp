@@ -21,8 +21,15 @@
 
 (s/def ::big-int (s/or :int int?
                        :big-int #(instance? BigInt %)))
+
+;; This is really a ::shared.specs/byte-buf.
+;; TODO: Eliminate the duplication.
+;; Have anything/everything that references this switch
+;; to that instead.
+
 ;; N.B. blocklen, in the reference, really corresponds
-;; to .readableBytes here
+;; to the .readableBytes of a ByteBuf
+;; Q: Does ByteBuf make sense?
 (s/def ::buf #(instance? ByteBuf %))
 
 ;;; Just something human-readable to help me track which log
@@ -471,21 +478,6 @@
 
                                  ::executor
                                  ::log/logger
-
-                                 ;; This seems redundant.
-                                 ;; Q: How often will I have an io-handle
-                                 ;; without state?
-                                 ;; The two go together so often/well
-                                 ;; that I'm very tempted to bring back
-                                 ;; a state-wrapper that includes
-                                 ;; them both.
-                                 ;; Then again, most client code doesn't
-                                 ;; have any reason to include the state.
-                                 ;; It would be deceptive to include some
-                                 ;; old, outdated, immutable version of it.
-                                 ;; Maybe do this for something that's
-                                 ;; internal to the message ns (et al)
-                                 ::message-loop-name
                                  ;; This really doesn't belong in here,
                                  ;; but there are at least a couple of places
                                  ;; where I don't have a choice: I need to
@@ -499,7 +491,19 @@
                                  ;; that's exactly what the io-handle is
                                  ;; supposed to be for.
                                  ;; Just use with extreme caution.
-                                 ::log/state-atom]
+                                 ::log/state-atom
+
+                                 ;; This seems redundant.
+                                 ;; Q: How often will I have an io-handle
+                                 ;; without state?
+                                 ;; A: The state's actually quite mutable
+                                 ;; and gets updated pretty much every
+                                 ;; time the message loop gets triggered.
+                                 ;; So anything I stored in here would be
+                                 ;; obsolete almost immediately.
+                                 ;; So it's good to have this sort of
+                                 ;; explicit corollary between the two.
+                                 ::message-loop-name]
                            :opt [::child-input-loop
                                  ::child-output-loop
                                  ::pipe-from-child-size]))

@@ -8,7 +8,9 @@
              [hello :as hello]
              [state :as state]]
             [frereth-cp.message :as message]
-            [frereth-cp.message.specs :as msg-specs]
+            [frereth-cp.message
+             [registry :as registry]
+             [specs :as msg-specs]]
             [frereth-cp.server.cookie :as srvr-cookie]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
@@ -49,8 +51,17 @@
 ;;;; Tests
 
 (deftest step-1
+  ;; This test seems a little bit silly, as written.
+  ;; It was meant to be a jumping-off point to demonstrate basically
+  ;; what the client scaffolding needs to look like.
+  ;; It really can't get very far, since the bogus server can't
+  ;; send back a valid Cookie without getting as complicated as the
+  ;; server-test/handshake.
+
+  ;; However, there is value in an edge case that it revealed.
   (testing "The first basic thing that clnt/start does"
     ;; Q: Should I have run clnt/start! on this?
+    ;; A: Yes. Absolutely.
     ;; Q: What does that actually do?
     ;; A: It starts by sending a HELO
     ;; packet, then setting the client up to wait for a
@@ -91,6 +102,11 @@
                                                     ::chan<-server
                                                     "Channel from server drained"))))
       (let [cookie (byte-array 200)  ;  <---- Note that this is gibberish that should get discarded.
+            ;; The edge case: At the time of this writing, I was failing to decrypt that Cookie,
+            ;; but then proceeding
+            ;; as though it succeeded. And then the Client fails to build the Initiate packet
+            ;; because it doesn't have access to the short-term key that should have arrived with
+            ;; the Cookie.
             cookie-wrapper {:host "10.0.0.12"
                             :port 48637
                             :message cookie}
@@ -102,16 +118,17 @@
                                 ;; Mimic the server sending back its Cookie, which
                                 ;; we filled with garbage above.
                                 (fn [hello]
-                                  (update hello :message
-                                          (fn [current]
-                                            (if (bytes? current)
-                                              current
-                                              (let [^ByteBuf src current
-                                                    n (.readableBytes src)
-                                                    dst (byte-array n)]
-                                                (.readBytes src dst)
-                                                dst))))
-                                  (is (not (s/explain-data ::shared/network-packet hello)))
+                                  (let [hello
+                                        (update hello :message
+                                                (fn [current]
+                                                  (if (bytes? current)
+                                                    current
+                                                    (let [^ByteBuf src current
+                                                          n (.readableBytes src)
+                                                          dst (byte-array n)]
+                                                      (.readBytes src dst)
+                                                      dst))))]
+                                    (is (not (s/explain-data ::shared/network-packet hello))))
                                   (log/flush-logs! logger (log/info log-state
                                                                     "Sending garbage Cookie from mock-server to Client"
                                                                     ::step-1))
@@ -123,20 +140,27 @@
                                 ;; Q: Is that because I just sent garbage in the Cookie?
                                 ;; Or is there a bigger problem?
                                 (fn [cookie]
-                                  (println "Cookie arrived. This should trigger the Initiate")
+                                  (println (str "Bogus cookie sent to Client.\n"
+                                                "In the real world, this would trigger the\n"
+                                                "client's Initiate packet, if the incoming\n"
+                                                "packet weren't deliberately broken"))
                                   (strm/try-take! chan->server ::nada 200 ::timed-out))
                                 (partial check-success client "Taking the vouch")
-                                (fn [buf]
-                                  (is (instance? ByteBuf buf)
-                                      (str "Expected ByteBuf. Got" (class buf)))
+                                (fn [{:keys [:host :message :port]
+                                      :as network-packet}]
+                                  ;; This is actually a PersistentArrayMap
+                                  ;; Probably a ::shared/network-packet
+                                  ;; TODO: Fix this next problem
+                                  (is (instance? ByteBuf message)
+                                      (str "Expected ByteBuf. Got " (class message)))
                                   ;; FIXME: Need to extract the cookie from the vouch that
                                   ;; we just received.
                                   (let [expected-n (count cookie)
-                                        actual-n (.readableBytes buf)]
+                                        actual-n (.readableBytes message)]
                                     (is (= expected-n actual-n)))
-                                  (let [response (byte-array (.readableBytes buf))]
-                                    (.getBytes buf 0 response)
-                                    (is (= (vec response) (vec (.getBytes cookie))))
+                                  (let [response (byte-array (.readableBytes message))]
+                                    (.getBytes message 0 response)
+                                    (is (= (vec response) (vec cookie)))
                                     true)))]
         (is @success)))))
 (comment

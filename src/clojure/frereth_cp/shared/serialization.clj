@@ -302,6 +302,12 @@ Needing to declare these things twice is annoying."
 
 (defn compose
   "serialize a map into a ByteBuf"
+  ;; TODO: This should really just return a [B
+  ;; Or, at least, have an optional arity override that does
+  ;; so. The value in making this change really depends on
+  ;; how many callers need to do that vs. the ones that
+  ;; actually take advantage of the ByteBuf.
+  ;; TODO: Look into this.
   ^ByteBuf [tmplt fields]
   ;; Q: Is it worth precalculating the size?
   (let [size (reduce + (map calculate-length (vals tmplt)))

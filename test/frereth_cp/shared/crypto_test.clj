@@ -1,5 +1,6 @@
 (ns frereth-cp.shared.crypto-test
-  (:require [clojure.test :refer (deftest is testing)]
+  (:require [clojure.spec.test.alpha :as test]
+            [clojure.test :refer (deftest is testing)]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]))
@@ -42,6 +43,8 @@
       (.getBytes decrypted 0 dst)
       (is (b-t/bytes= dst plain-text)))))
 
+;;; FIXME: Also need a test that checks crypto/open-box
+
 (deftest check-persistent-safe-nonce
   (let [key-dir "curve-test"]
     (testing "Same size"
@@ -70,3 +73,9 @@
       (crypto/do-safe-nonce nonce K/key-length)
       (let [head (take K/key-length nonce)]
         (is (every? zero? head))))))
+
+(deftest random-mod
+  (let [raw (test/check `crypto/random-mod)
+        extracted (first raw)
+        result (get-in extracted [:clojure.spec.test.check/ret :result])]
+    (is result)))

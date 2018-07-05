@@ -1,5 +1,6 @@
 (ns frereth-cp.shared.logging-test
-  (:require [clojure.test :refer (deftest is testing)]
+  (:require [clojure.spec.test.alpha :as test]
+            [clojure.test :refer (deftest is testing)]
             [frereth-cp.shared.logging :as log]))
 
 (defn set-up
@@ -16,3 +17,12 @@
            (::log/lamport log-2)))
     (let [forked-entries (::log/entries log-2)]
       (is (= (count forked-entries) 1)))))
+
+(deftest merge-entries
+  ;; This is a slow test, so it's probably worth spinning off into
+  ;; a folder that's really only meant for pre-commit testing.
+  (let [raw (test/check `log/merge-entries)
+        result (get-in (first raw) [:clojure.spec.test.check/ret :result])]
+    (is result)
+    (when (not result)
+      (throw (ex-info "" {::failure raw})))))

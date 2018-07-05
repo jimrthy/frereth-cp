@@ -26,8 +26,8 @@
 ;; b) translate those bits into an unsigned BigInt
 ;; or something along those lines.
 ;; It probably depends on how I'm actually using this.
-;; TODO: Dig into that.
-(def max-unsigned-long -1)
+;; TODO: Dig into that (soon).
+(def max-unsigned-long (long -1))
 (def millis-in-second 1000)
 (def nanos-in-milli (long (Math/pow 10 6)))
 (def nanos-in-second (* nanos-in-milli millis-in-second))
@@ -97,6 +97,7 @@
 ;; But why not a nio.ByteBuffer also?
 ;; Or a string?
 ;; That path leads to madness.
+;; Stick with this until/unless we have evidence that it's too slow.
 (s/def ::message bytes?)
 (s/def ::network-packet (s/keys :req-un [::host ::message ::specs/port]))
 
@@ -129,9 +130,9 @@
                            ::port]))
 
 (s/def ::client-nonce (s/and bytes?
-                             #(= (count %) K/client-nonce-suffix-length)))
+                             #(= (count %) specs/client-nonce-suffix-length)))
 (s/def ::server-nonce (s/and bytes?
-                             #(= (count %) K/server-nonce-suffix-length)))
+                             #(= (count %) specs/server-nonce-suffix-length)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal

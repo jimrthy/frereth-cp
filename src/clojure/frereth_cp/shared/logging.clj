@@ -11,10 +11,11 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(s/def ::ctx-atom (s/or :string string?
+(s/def ::ctx-atom (s/or :int int?
                         :keyword keyword?
-                        :uuid uuid?
-                        :int int?))
+                        :string string?
+                        :symbol symbol?
+                        :uuid uuid?))
 (s/def ::ctx-seq (s/coll-of ::ctx-atom))
 (s/def ::context (s/or :atom ::ctx-atom
                        :seq ::ctx-seq))
@@ -43,15 +44,16 @@
 (s/def ::log-builder (s/fspec :args nil
                               :ret ::logger))
 
-;;; TODO: I need a map of these keys to numeric values to make
-;;; things like removing unwanted messages trivial.
-(def log-levels #{::trace
-                  ::debug
-                  ::info
-                  ::warn
-                  ::error
-                  ::exception
-                  ::fatal})
+(def log-level-values
+  "name -> priority to assist in prioritizing and filtering"
+  {::trace 100
+   ::debug 200
+   ::info 300
+   ::warn 400
+   ::error 500
+   ::exception 600
+   ::fatal 700})
+(def log-levels (set (keys log-level-values)))
 (s/def ::level log-levels)
 
 (s/def ::label keyword?)
@@ -298,6 +300,69 @@
   (flush! [_]
     (send state-agent #(update % ::flush-count inc))))
 
+(defrecord StdErrLogger [state-agent]
+  ;; Really just a StreamLogger
+  ;; where stream is STDOUT.
+  ;; But it's simple/easy enough that it seemed
+  ;; worth writing this way instead
+  Logger
+  (log! [{:keys [:state-agent]
+          :as this} msg]
+    (binding [*out* *err*]
+      (when-let [ex (agent-error state-agent)]
+        (println "Logging Agent Failed:\n"
+                 (exception-details ex))
+        ;; Q: What are the odds this will work?
+        (let [last-state @state-agent]
+          (println "Logging Agent State:\n"
+                   last-state)
+          (restart-agent state-agent last-state)))
+      ;; Creating an exception that we're going to throw away
+      ;; for almost every log message seems really wasteful.
+      (let [get-caller-stack (RuntimeException. "Q: Is there a cheaper way to get the call stack?")]
+        (send state-agent (fn [state entry]
+                            (print (format-log-string get-caller-stack entry))
+                            state)
+              msg))))
+  ;; Q: Is there any point to calling .flush
+  ;; on STDOUT?
+  ;; A: Not according to stackoverflow.
+  ;; It flushes itself after every CR/LF
+  (flush! [_]
+    (send state-agent #(update % ::flush-count inc))))
+
+(s/fdef merge-entries
+        :args (s/cat :xs ::entries
+                     :ys ::entries)
+        :fn (fn [{:keys [:args :ret]}]
+              (let [{:keys [:xs :ys]} args
+                    combined (distinct (concat xs ys))]
+                (= (count combined)
+                   (count ret))))
+        :ret ::entries)
+(defn merge-entries
+  "Note that this is a relatively expensive operation"
+  [xs ys]
+  ;; This is something that's fairly trivial with
+  ;; c++ and iterators.
+  ;; Note that concatenating vectors is probably the
+  ;; expensive part. I'm pretty sure it's O(n).
+  ;; TODO: Try experimenting with
+  ;; a) converting to lists
+  ;; b) running concat
+  ;; c) doing the sort
+  ;; d) converting back to vectors
+  ;; Then again, if you're letting your logs build deeply
+  ;; enough in memories between flushes that this matters,
+  ;; you should probably
+  ;; consider the dangers of losing entries to things like
+  ;; exceptions
+  (let [result (concat xs ys)]
+    (vec (distinct (sort (fn [x y]
+                           (compare [(::lamport x) (::time x) (log-level-values (::level x)) (::message x)]
+                                    [(::lamport y) (::time y) (log-level-values (::level y)) (::message y)]))
+                         result)))))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -340,10 +405,13 @@
   (let [writer (BufferedWriter. (FileWriter. file-name))]
     (->OutputWriterLogger writer)))
 
-(let [std-out-log-agent (agent {::flush-count 0})])
 (defn std-out-log-factory
   []
-  (->StdOutLogger #_std-out-log-agent (agent {::flush-count 0})))
+  (->StdOutLogger (agent {::flush-count 0})))
+
+(defn std-err-log-factory
+  []
+  (->StdErrLogger (agent {::flush-count 0})))
 
 (defn stream-log-factory
   [stream]
@@ -358,6 +426,7 @@
   (defn get-official-clock
     []
     @my-lamport)
+  ;; Just for debugging and REPL development
   (comment (get-official-clock))
 
   (s/fdef do-sync-clock
@@ -415,6 +484,7 @@
                          (ret second ::lamport)
                          (max (::lamport lhs)
                               (::lamport rhs)))))
+        ;; Yes. It really is a pair of them.
         :ret (s/tuple ::state ::state))
 (defn synchronize
   "Fix 2 clocks that have probably drifted apart"
@@ -456,15 +526,13 @@ show up later."
                     :without-child-ctx (s/cat :source ::state))
         ;; Note that the return value really depends
         ;; on the caller arity.
-        ;; TODO: Need to write the :fn arity to reflect this.
+        ;; TODO: Need to write the :fn value to reflect this.
         :ret (s/or :with-nested-context (s/tuple ::state ::state)
                    :keep-parent-context ::state))
 (defn fork
   "Return shape depends on arity"
   ([src child-context]
    (let [parent-ctx (::context src)
-         ;; Q: Am I really not using this at all?
-         ;; Where did src-ctx come from?
          combiner (if (seq? parent-ctx)
                     conj
                     list)
@@ -479,6 +547,14 @@ show up later."
                      :logs2 ::state)
         :ret ::state)
 (defn merge-state
-  "Combine the entries of two log states"
+  "Combine the entries of two log states
+
+  This is mostly meant for logs that have diverged from the same context."
   [x y]
-  (throw (RuntimeException. "Write this")))
+  (let [combined-entries (merge-entries (::entries x) (::entries y))
+        result
+        ;; There really isn't a good way to pick a winner if this conflicts
+        {::context (::context x)
+         ::entries combined-entries
+         ::lamport (max (::lamport x) (::lamport y))}]
+    (debug result ::top "Merged entries")))

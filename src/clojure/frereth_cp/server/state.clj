@@ -61,7 +61,7 @@
 ;;; the server side of this.
 ;;; Right now, I'm still hip-deep in the client side.
 ;;; I'm very hopeful that I'll be able to refactor that
-;;; implementation to shared to avoid duplication.
+;;; implementation to avoid duplication.
 ;; OK, now life starts getting interesting.
 ;; What, exactly, do we need to do here?
 (s/def ::child-id int?)
@@ -171,6 +171,10 @@
   ;; the unsafe function keys (because every namespaced key in
   ;; the map that has a spec will be checked, whether it's listed
   ;; as a key in here or not).
+  ;; Also note: this isn't legit. Macrology bites us here, because
+  ;; fields-safe-to-validate doesn't get spliced into the list, but
+  ;; I can't just use it directly, since a Symbol isn't an ISeq.
+  ;; TODO: ask about this approach on the mailing list.
   (s/def ::checkable-state (s/keys :req [fields-safe-to-validate])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
