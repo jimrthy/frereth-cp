@@ -183,7 +183,7 @@
               ;; safe for follow-up Initiate packets.
               ;; TODO: Verify that it gets reused the way I think.
               nonce-suffix (b-t/sub-byte-array working-nonce
-                                               K/client-nonce-prefix-length)
+                                               specs/client-nonce-prefix-length)
               {:keys [::specs/crypto-box]
                log-state ::log/state
                :as initiate-interior} (build-initiate-interior (select-keys this
@@ -339,8 +339,14 @@
     (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
     (let [log-state
           (if keydir
-            (crypto/do-safe-nonce log-state working-nonce keydir K/server-nonce-prefix-length false)
-            (crypto/do-safe-nonce log-state working-nonce K/server-nonce-prefix-length))]
+            (crypto/do-safe-nonce log-state
+                                  working-nonce
+                                  keydir
+                                  specs/server-nonce-prefix-length
+                                  false)
+            (crypto/do-safe-nonce log-state
+                                  working-nonce
+                                  specs/server-nonce-prefix-length))]
       log-state)
     (catch Exception ex
       (log/flush-logs! logger (log/exception log-state
@@ -389,7 +395,8 @@
   "Build the innermost vouch/nonce pair"
   ;; This was refactored out of cookie->vouch,
   ;; as a first step toward making the bites a little more
-  ;; digestible. TODO: Continue that process.
+  ;; digestible.
+  ;; Q: Can I trim it down any further?
   [{:keys [::log/logger
            ::shared/my-keys
            ::shared/packet-management
@@ -400,32 +407,21 @@
   (let [{:keys [::shared/working-nonce
                 ::shared/text]} work-area
         keydir (::shared/keydir my-keys)
-        nonce-suffix (byte-array K/server-nonce-suffix-length)]
+        nonce-suffix (byte-array specs/server-nonce-suffix-length)]
     (if working-nonce
-      (let [log-state (log/info log-state
-                                ::build-vouch
-                                "Setting up working nonce"
-                                {::shared/working-nonce working-nonce})
-            log-state (build-working-nonce! logger
+      (let [log-state (build-working-nonce! logger
                                             log-state
                                             keydir
                                             working-nonce)
             ;; FIXME: This really belongs inside its own try/catch
             ;; block.
             ;; Unfortunately, that isn't trivial, because the nested
-            ;; pieces below here can/will throw their own exceptions.
+            ;; pieces below here can/will throw their own exceptions
+            ;; that I don't want to handle.
             ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
         (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
         (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
-          (let [log-state (log/debug log-state
-                                     ::build-vouch
-                                     (str "Encrypting the inner-most Initiate Vouch\n"
-                                          "FIXME: Don't log the shared secret")
-                                     {::state/shared-secret (b-t/->string shared-secret)
-                                      ::shared/text text
-                                      ::key-length K/key-length
-                                      ::shared/working-nonce working-nonce})
-                {log-state ::log/state
+          (let [{log-state ::log/state
                  :keys [::specs/vouch]} (encrypt-inner-vouch log-state
                                                              shared-secret
                                                              working-nonce
@@ -457,12 +453,15 @@
                                                ::initial-packet-sent
                                                "Vouch sent (maybe)"
                                                {::sent this}))]
-      ;; These parameters seem wrong
+      ;; These parameters are wrong
       ;; And we can't do this yet: have to wait for a Message
       ;; Packet to come back.
-      (state/->message-exchange-mode (assoc this
-                                            ::log/state log-state)
-                                     this))
+      (state/->message-exchange-mode  (assoc this
+                                             ::log/state log-state)
+                                      ;; Q: When/where does this message actually
+                                      ;; arrive?
+                                      #_(throw (RuntimeException. "This parameter should be the initial response Message"))
+                                      nil))
     (let [failure (ex-info "Something about polling/sending Initiate failed"
                            {::problem this})]
       (update this ::log/state #(log/flush-logs! logger

@@ -346,14 +346,15 @@
   ;; This is something that's fairly trivial with
   ;; c++ and iterators.
   ;; Note that concatenating vectors is probably the
-  ;; expensive part.
+  ;; expensive part. I'm pretty sure it's O(n).
   ;; TODO: Try experimenting with
   ;; a) converting to lists
   ;; b) running concat
   ;; c) doing the sort
   ;; d) converting back to vectors
   ;; Then again, if you're letting your logs build deeply
-  ;; enough in memories between flushes, you should probably
+  ;; enough in memories between flushes that this matters,
+  ;; you should probably
   ;; consider the dangers of losing entries to things like
   ;; exceptions
   (let [result (concat xs ys)]

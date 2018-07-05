@@ -283,7 +283,7 @@
                                            log-label
                                            "Decryption failed so badly we didn't even get back a log message"
                                            {::problem cookie})))
-            ;; TODO: Look into recovering from these
+            ;; TODO: Look into recovering from the variations that are recoverable
             (catch Throwable ex
               (assoc this ::log/state (log/exception log-state
                                                      ex
@@ -378,7 +378,6 @@
                ::log/state log-state
                ::specs/deferrable failure)))))
 
-;; Q: Does this really work?
 (s/def wait-for-cookie! ::state/cookie-waiter)
 (defn wait-for-cookie!
   "Pulls Cookie Packet from the wire, then triggers the response"

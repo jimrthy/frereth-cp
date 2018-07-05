@@ -118,7 +118,7 @@
                  ::K/clnt-xtn extension
                  ::K/clnt-short-pk (.getPublicKey my-short-pair)
                  ::K/zeros nil
-                 ::K/client-nonce-suffix (b-t/sub-byte-array working-nonce K/client-nonce-prefix-length)
+                 ::K/client-nonce-suffix (b-t/sub-byte-array working-nonce specs/client-nonce-prefix-length)
                  ::K/crypto-box boxed}
      ::log/state log-state}))
 
@@ -155,7 +155,8 @@
                               [(util/seconds->nanos 1)]
                               (range max-server-attempts))]
   (defn pick-next-timeout
-    ;; This is what's going on in
+    ;; This is what's going on around line 289 in
+    ;; curvecpclient.c
     ;; FIXME: Needs unit test
     [n-remaining]
     (let [n (- (count hello-wait-time) n-remaining)
@@ -461,7 +462,7 @@
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)]
     (b-t/byte-copy! working-nonce K/hello-nonce-prefix)
-    (b-t/uint64-pack! working-nonce K/client-nonce-prefix-length short-term-nonce)
+    (b-t/uint64-pack! working-nonce specs/client-nonce-prefix-length short-term-nonce)
 
     (let [log-state (log/info log-state
                               ::do-build-packet

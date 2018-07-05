@@ -102,7 +102,8 @@
                                                     ::chan<-server
                                                     "Channel from server drained"))))
       (let [cookie (byte-array 200)  ;  <---- Note that this is gibberish that should get discarded.
-            ;; The edge case: I'm currently failing to decrypt that Cookie, but then proceeding
+            ;; The edge case: At the time of this writing, I was failing to decrypt that Cookie,
+            ;; but then proceeding
             ;; as though it succeeded. And then the Client fails to build the Initiate packet
             ;; because it doesn't have access to the short-term key that should have arrived with
             ;; the Cookie.

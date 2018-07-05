@@ -1853,8 +1853,6 @@
                                          :new-callback ::specs/->parent))
         :ret (s/or :succeeded ::specs/state
                    :timed-out-value any?))
-
-;; Q: Do I want to set an alternative that blocks?
 (defn swap-parent-callback!
   "Swap out the ->parent callback
 

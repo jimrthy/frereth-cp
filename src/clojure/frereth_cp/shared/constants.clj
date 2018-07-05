@@ -19,16 +19,12 @@
 ;; Might as well move these into specs for consistency
 ;; with server-nonce-suffix-length
 ;; FIXME: Make it so (soon)
-(def ^Integer client-nonce-prefix-length 16)
-(def ^Integer client-nonce-suffix-length 8)
 (def extension-length specs/extension-length)
 (def header-length specs/header-length)
 
 (def message-len 1104)
 (def nonce-length 24)
 (def server-key-length key-length)
-(def ^Integer server-nonce-prefix-length specs/server-nonce-prefix-length)
-(def ^Integer server-nonce-suffix-length specs/server-nonce-suffix-length)
 (def shared-key-length key-length)
 
 (def client-header-prefix-string "QvnQ5Xl")
@@ -68,20 +64,13 @@
 ;;; The way these things are split up now is a bit of a mess.
 
 (s/def ::client-nonce-suffix (s/and bytes?
-                                    #(= (count %) client-nonce-suffix-length)))
+                                    #(= (count %) specs/client-nonce-suffix-length)))
 
 ;; The prefixes are all a series of constant bytes.
 ;; Callers shouldn't need to know/worry about them.
 ;; FIXME: Add a ::constant-bytes type that just
 ;; hard-codes the magic.
 (s/def ::prefix ::specs/prefix)
-
-;;;; FIXME: Move these definitions somewhere more suitable.
-;;;; Maybe a packet-definitions ns?
-;;;; Or maybe frereth-cp.shared.packets.individual-packet-type
-;;;; It does need to be a shared location, since they're needed
-;;;; by both client and server.
-;;;; But putting them here just dilutes the point.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Hello packets
@@ -110,7 +99,7 @@
                                   ;; just spec this like that if the jvm had
                                   ;; unsigned ints
                                   ::client-nonce-suffix {::type ::bytes
-                                                         ::length client-nonce-suffix-length}
+                                                         ::length specs/client-nonce-suffix-length}
                                   ::crypto-box {::type ::bytes
                                                 ::length hello-crypto-box-length}))
 ;; Here's a bit of nastiness:
@@ -239,7 +228,7 @@
 ;; => 368
 (def minimum-vouch-length (+ box-zero-bytes  ; 16
                              client-key-length ; 32
-                             server-nonce-suffix-length ; 16
+                             specs/server-nonce-suffix-length ; 16
                              vouch-length ; 48
                              ;; 256
                              specs/server-name-length))
@@ -266,7 +255,7 @@
   "Template for composing the inner part of an Initiate Packet's Vouch that holds everything interesting"
   {::client-long-term-key {::type ::bytes
                            ::length client-key-length}
-   ::inner-i-nonce {::type ::bytes ::length server-nonce-suffix-length}
+   ::inner-i-nonce {::type ::bytes ::length specs/server-nonce-suffix-length}
    ::inner-vouch {::type ::bytes ::length vouch-length}
    ::srvr-name {::type ::bytes ::length specs/server-name-length}
    ;; Q: Do I want to allow compose to accept parameters for things like this?
@@ -288,7 +277,7 @@
              ::cookie {::type ::bytes
                        ::length server-cookie-length}
              ::outer-i-nonce {::type ::bytes
-                              ::length client-nonce-suffix-length}
+                              ::length specs/client-nonce-suffix-length}
              ;; It seems like it would be nice to enable nested
              ;; definitions.
              ;; This isn't "just" vouch-wrapper.
@@ -324,7 +313,7 @@ TODO: Rename this to something like initiate-client-vouch-message"
   (array-map ::long-term-public-key {::type ::bytes
                                      ::length client-key-length}
              ::inner-i-nonce {::type ::bytes
-                            ::length server-nonce-suffix-length}
+                            ::length specs/server-nonce-suffix-length}
              ::hidden-client-short-pk {::type ::bytes
                                        ::length (+ client-key-length box-zero-bytes)}
              ::srvr-name {::type ::bytes

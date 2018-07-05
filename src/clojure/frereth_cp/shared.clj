@@ -27,7 +27,7 @@
 ;; or something along those lines.
 ;; It probably depends on how I'm actually using this.
 ;; TODO: Dig into that (soon).
-(def max-unsigned-long -1)
+(def max-unsigned-long (long -1))
 (def millis-in-second 1000)
 (def nanos-in-milli (long (Math/pow 10 6)))
 (def nanos-in-second (* nanos-in-milli millis-in-second))
@@ -130,9 +130,9 @@
                            ::port]))
 
 (s/def ::client-nonce (s/and bytes?
-                             #(= (count %) K/client-nonce-suffix-length)))
+                             #(= (count %) specs/client-nonce-suffix-length)))
 (s/def ::server-nonce (s/and bytes?
-                             #(= (count %) K/server-nonce-suffix-length)))
+                             #(= (count %) specs/server-nonce-suffix-length)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal

@@ -187,7 +187,6 @@
                                      ::shared/my-keys {::shared/keydir "curve-test"
                                                        ::K/srvr-name factory/server-name})]
         (println "Checking pre-state spec")
-        ;; FIXME: Start back here.
         (is (not (s/explain-data ::server/pre-state-options pre-state-options)))
         (println "pre-state spec passed")
         (testing
@@ -196,7 +195,6 @@
                   state (server/start! pre-state)]
               (try
                 (println "Server started. Looks like:  <------------")
-                ;; Q: Do I want to do this dissoc?
                 (pprint (dissoc state ::log/state))
                 (is (not (s/explain-data ::srvr-state/checkable-state (dissoc state
                                                                               ::srvr-state/child-spawner
@@ -271,7 +269,7 @@
                                       {::received hello
                                        ;; Note that this state is going to
                                        ;; drift further and further from reality, now
-                                       ;; that I'd ditched the agent.
+                                       ;; that I've ditched the agent.
                                        ;; Q: Isn't it?
                                        ::client-state/state client})))
                     (let [host (:host hello)]
@@ -434,9 +432,6 @@
                                   {::client-state client})]
                     (try
                       (println "Stopping client agent" cleaned)
-                      ;; Here's the StackOverflowError I chased around for so long
-                      ;; from nesting the client-agent inside itself.
-                      ;; Should no longer be a concern, since that client-agent is gone.
                       (catch StackOverflowError ex
                         (is (not ex))
                         (println "Failed to print the cleaned-up client agent state:"

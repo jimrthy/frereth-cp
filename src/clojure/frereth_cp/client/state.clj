@@ -207,10 +207,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
       this)))
 
 (s/def ::valid-outgoing-binary (s/or :bytes bytes?
-                                     ;; Honestly, an nio.ByteBuffer would probably be
-                                     ;; just fine here also
-                                     ;; TODO: Go ahead and allow it
-                                     :byte-buf ::specs/byte-buf))
+                                     :byte-buf ::specs/byte-buf
+                                     :byte-buffer ::specs/nio-byte-buffer))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Globals

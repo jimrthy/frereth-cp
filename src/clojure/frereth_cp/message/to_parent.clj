@@ -183,6 +183,7 @@
         (.readBytes send-buf result)
         ;; Q: Should I decrement buf's refCnt
         ;; because I'm done with it?
+        ;; A: Better to just eliminate it
         {::log/state log-state
          ::specs/bs-or-eof result}))))
 

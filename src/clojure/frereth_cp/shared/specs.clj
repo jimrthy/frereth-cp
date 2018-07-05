@@ -15,6 +15,8 @@
 (def ^Integer key-length 32)
 (def client-key-length key-length)
 
+(def ^Integer client-nonce-prefix-length 16)
+(def ^Integer client-nonce-suffix-length 8)
 ;; Really belongs in shared.constants, but we also need it in here.
 ;; And I want to avoid circular dependencies.
 ;; TODO: Move the serialization templates out of there so this isn't
@@ -43,6 +45,7 @@ This really seems like a bad road to go down."
 (s/def ::atom (class-predicate (class (atom nil))))
 (def byte-array-type (Class/forName "[B"))
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
+(s/def ::nio-byte-buffer (class-predicate java.nio.ByteBuffer))
 ;; Q: Is this worth abstracting?
 ;; Especially since I've probably used dfrd/deferrable more
 ;; often?

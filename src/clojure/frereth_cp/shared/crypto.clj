@@ -550,12 +550,12 @@
         :args (s/cat :log-state ::log2/state
                      :prefix-bytes (s/and bytes?
                                           #(let [n (count %)]
-                                             (or (= K/client-nonce-prefix-length n)
-                                                 (= K/server-nonce-prefix-length n))))
+                                             (or (= specs/client-nonce-prefix-length n)
+                                                 (= specs/server-nonce-prefix-length n))))
                      :suffix-buffer (s/and bytes?
                                            #(let [n (count %)]
-                                              (or (= K/client-nonce-suffix-length n)
-                                                  (= K/server-nonce-suffix-length n))))
+                                              (or (= specs/client-nonce-suffix-length n)
+                                                  (= specs/server-nonce-suffix-length n))))
                      :crypto-buffer bytes?
                      :shared-key ::specs/crypto-key)
         ;; This doesn't match the return spec for open-after.
@@ -568,7 +568,6 @@
         :ret (s/keys :req [::log2/state]
                      :opt [::unboxed]))
 (defn open-box
-  ;; TODO: Refactor/rename this to open-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
   [log-state prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
   (let [nonce (byte-array K/nonce-length)
@@ -721,9 +720,9 @@ Or maybe that's (dec n)"
     ([log-state dst offset]
      ;; The 16-byte nonce length is very implementation
      ;; dependent and brittle
-     (let [tmp (byte-array K/server-nonce-suffix-length)]
+     (let [tmp (byte-array specs/server-nonce-suffix-length)]
        (random-bytes! tmp)
-       (b-t/byte-copy! dst offset K/server-nonce-suffix-length tmp)
+       (b-t/byte-copy! dst offset specs/server-nonce-suffix-length tmp)
        (log2/debug log-state
                    ::safe-nonce!
                    "Picked a random nonce")))))

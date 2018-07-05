@@ -21,8 +21,14 @@
 
 (s/def ::big-int (s/or :int int?
                        :big-int #(instance? BigInt %)))
+
+;; This is really a ::shared.specs/byte-buf.
+;; TODO: Eliminate the duplication.
+;; Have anything/everything that references this switch
+;; to that instead.
+
 ;; N.B. blocklen, in the reference, really corresponds
-;; to .readableBytes here
+;; to the .readableBytes of a ByteBuf
 ;; Q: Does ByteBuf make sense?
 (s/def ::buf #(instance? ByteBuf %))
 
@@ -493,6 +499,8 @@
                                  ;; A: The state's actually quite mutable
                                  ;; and gets updated pretty much every
                                  ;; time the message loop gets triggered.
+                                 ;; So anything I stored in here would be
+                                 ;; obsolete almost immediately.
                                  ;; So it's good to have this sort of
                                  ;; explicit corollary between the two.
                                  ::message-loop-name]
