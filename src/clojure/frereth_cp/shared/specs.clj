@@ -44,6 +44,7 @@ This really seems like a bad road to go down."
 
 (s/def ::atom (class-predicate (class (atom nil))))
 (def byte-array-type (Class/forName "[B"))
+(s/def ::byte-array byte-array-type)
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
 (s/def ::nio-byte-buffer (class-predicate java.nio.ByteBuffer))
 ;; Q: Is this worth abstracting?

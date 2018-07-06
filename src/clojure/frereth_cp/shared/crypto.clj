@@ -678,6 +678,8 @@ Or maybe that's (dec n)"
     "Shoves a theoretically safe 16-byte nonce suffix into dst at offset"
     ;; Note that this is extremely brittle.
     ;; It's only called from 2 places, but it's still a bit worrisome.
+    ;; TODO: Take this out of the public interface section.
+    ;; Anything that does call it now should switch to get-safe-nonce
     ([log-state dst key-dir offset long-term?]
      ;; It's tempting to try to set this up to allow multiple
      ;; nonce trackers. It seems like having a single shared
@@ -729,6 +731,18 @@ Or maybe that's (dec n)"
 (comment
   (get-nonce-agent-state)
   (reset-safe-nonce-state!))
+
+(s/fdef get-safe-nonce
+        :args (s/cat :log-state ::log2/state)
+        :ret (s/keys :req [::log2/state
+                           ::specs/byte-array]))
+(defn get-safe-nonce
+  "Get a nonce, safely"
+  [log-state]
+  (let [dst (byte-array K/key-length)
+        log-state (do-safe-nonce log-state dst 0)]
+    {::log2/state log-state
+     ::specs/byte-array dst}))
 
 (s/fdef random-mod
         :args (s/cat :n nat-int?)

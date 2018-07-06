@@ -130,7 +130,7 @@
   (println "Top of handle-hello!")
   (when-let [{log-state ::log2/state
               :as cookie-recipe} (hello/do-handle state message)]
-    (let [^ByteBuf cookie (cookie/do-build-cookie-response state cookie-recipe)
+    (let [^ByteBuf cookie (cookie/do-build-response state cookie-recipe)
           log-state (log2/info log-state
                                ::handle-hello!
                                (str "Cookie packet built. Sending it."))]
