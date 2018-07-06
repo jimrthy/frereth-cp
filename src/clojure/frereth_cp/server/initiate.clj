@@ -11,7 +11,7 @@ This is the part that possibly establishes a 'connection'"
             [frereth-cp.shared.constants :as K]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as shared-specs]
+            [frereth-cp.shared.specs :as specs]
             [frereth-cp.util :as util]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -43,8 +43,8 @@ This is the part that possibly establishes a 'connection'"
   [shared-key nonce-suffix box nonce]
   (b-t/byte-copy! nonce K/initiate-nonce-prefix)
   (b-t/byte-copy! nonce
-                  shared-specs/client-nonce-prefix-length
-                  shared-specs/client-nonce-suffix-length
+                  specs/client-nonce-prefix-length
+                  specs/client-nonce-suffix-length
                   nonce-suffix)
   (try
     (let [plain-vector (crypto/open-after box 0 (count box) nonce shared-key)]
@@ -147,7 +147,7 @@ To be fair, this layer *is* pretty special."
                   K/box-zero-bytes
                   K/hello-crypto-box-length
                   hello-cookie
-                  K/server-nonce-suffix-length)
+                  specs/server-nonce-suffix-length)
   (let [;; Q: How much faster/more efficient is it to have a
         ;; io.netty.buffer.PooledByteBufAllocator around that
         ;; I could use for either .heapBuffer or .directBuffer?
@@ -156,8 +156,8 @@ To be fair, this layer *is* pretty special."
     (try
       (b-t/byte-copy! nonce K/cookie-nonce-minute-prefix)
       (b-t/byte-copy! nonce
-                      shared-specs/server-nonce-prefix-length
-                      shared-specs/server-nonce-suffix-length
+                      specs/server-nonce-prefix-length
+                      specs/server-nonce-suffix-length
                       hello-cookie)
       (crypto/secret-unbox dst dst K/server-cookie-length nonce (::state/minute-key cookie-cutter))
       true
@@ -169,7 +169,7 @@ To be fair, this layer *is* pretty special."
                         K/box-zero-bytes
                         K/hello-crypto-box-length
                         hello-cookie
-                        shared-specs/server-nonce-suffix-length)
+                        specs/server-nonce-suffix-length)
 
         (try
           (crypto/secret-unbox dst
@@ -292,8 +292,9 @@ To be fair, this layer *is* pretty special."
         :ret boolean?)
 (defn validate-server-name
   [state inner-client-box]
-  (let [^bytes rcvd-name (::shared-specs/srvr-name inner-client-box)
-        my-name (get-in state [::shared/my-keys ::shared-specs/srvr-name])
+  (let [rcvd-name (::specs/srvr-name inner-client-box)
+        rcvd-name (bytes rcvd-name)
+        my-name (get-in state [::shared/my-keys ::specs/srvr-name])
         match (b-t/bytes= rcvd-name my-name)]
     (when-not match
       (log/warn (str "Message was intended for another server\n"
@@ -431,7 +432,7 @@ Note that that includes TODOs re:
                              ;; This takes us down to line 381
                              (when (verify-client-public-key-triad state client-short-pk client-message-box)
                                (let [^ByteBuf rcvd-nonce-buffer (::K/outer-i-nonce initiate)
-                                     rcvd-nonce-array (byte-array shared-specs/client-nonce-suffix-length)
+                                     rcvd-nonce-array (byte-array specs/client-nonce-suffix-length)
                                      _ (.getBytes rcvd-nonce-buffer 0 rcvd-nonce-array)
                                      _ (.release rcvd-nonce-buffer)
                                      rcvd-nonce (b-t/uint64-unpack rcvd-nonce-array)
