@@ -70,21 +70,25 @@
   ;; TODO: It might also be worth benchmarking
   ;; and trying out loop unrolling and other approaches
   ;; based on size.
-  ([^bytes dst ^bytes src]
-   (let [m (min (count src)
+  ([dst src]
+   (let [dst (bytes dst)
+         src (bytes src)
+         m (min (count src)
                 (count dst))]
      (run! (fn [n]
              (aset-byte dst n (aget src n)))
            (range m))))
-  ([dst offset n ^bytes src]
-   (run! (fn [m]
-           (aset-byte dst (+ m offset) (aget src m)))
-         (range n)))
-  ([dst offset n ^bytes src src-offset]
-   (run! (fn [m]
-           (aset-byte dst (+ m offset)
-                      (aget src (+ m src-offset))))
-         (range n))))
+  ([dst offset n src]
+   (let [src (bytes src)]
+     (run! (fn [m]
+             (aset-byte dst (+ m offset) (aget src m)))
+           (range n))))
+  ([dst offset n src src-offset]
+   (let [src (bytes src)]
+     (run! (fn [m]
+             (aset-byte dst (+ m offset)
+                        (aget src (+ m src-offset))))
+           (range n)))))
 
 (s/fdef bytes=
         :args (s/cat :x bytes?

@@ -209,15 +209,24 @@
 
 (defn exception-details
   [ex]
-  (let [stack-trace (with-out-str (s-t/print-stack-trace ex))
-        base {::stack stack-trace
-              ::exception ex}
-        with-details (if (instance? ExceptionInfo ex)
-                       (assoc-in base [::data ::problem] (.getData ex))
-                       base)]
-    (if-let [cause (.getCause ex)]
-      (assoc with-details ::cause (exception-details cause))
-      with-details)))
+  (if (instance? Throwable ex)
+    (try
+      (let [stack-trace (with-out-str (s-t/print-stack-trace ex))
+            base {::stack stack-trace
+                  ::exception ex}
+            with-details (if (instance? ExceptionInfo ex)
+                           (assoc-in base [::data ::problem] (.getData ex))
+                           base)]
+        (if-let [cause (.getCause ex)]
+          (assoc with-details ::cause (exception-details cause))
+          with-details))
+      (catch ClassCastException ex1
+        {::exception ex
+         ::exception-class (class ex)
+         ::insult-to-injury {::exception ex1
+                             ::stack (s-t/print-stack-trace ex)}}))
+    {::non-exception ex
+     ::non-exception-class (class ex)}))
 
 (declare init)
 (defn format-log-string

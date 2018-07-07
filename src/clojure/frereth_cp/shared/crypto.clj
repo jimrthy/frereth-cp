@@ -324,12 +324,20 @@
   (let [^ByteBuf buffer (serial/compose tmplt src)]
     (let [n (.readableBytes buffer)
           nonce (byte-array K/nonce-length)
-          dst (byte-array n)]
+          dst (byte-array n)
+          nonce-suffix-length (count nonce-suffix)
+          nonce-prefix-length (count nonce-prefix)]
       (.getBytes buffer 0 dst)
       (b-t/byte-copy! nonce nonce-prefix)
+      (println "Copying"
+               nonce-suffix-length
+               "bytes into a"
+               K/nonce-length
+               "byte array, starting at offset"
+               nonce-prefix-length)
       (b-t/byte-copy! nonce
-                      (count nonce-prefix)
-                      (count nonce-suffix)
+                      nonce-prefix-length
+                      nonce-suffix-length
                       nonce-suffix)
       (box-after key-pair dst n nonce))))
 
@@ -581,7 +589,8 @@
     (try
       (open-after log-state crypto-box 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
-        {::log2/state (log2/exception ex
+        {::log2/state (log2/exception log-state
+                                      ex
                                       ::open-box
                                       (str "Failed to open box\n")
                                       (.getData ex))}))))
@@ -739,7 +748,7 @@ Or maybe that's (dec n)"
 (defn get-safe-nonce
   "Get a nonce, safely"
   [log-state]
-  (let [dst (byte-array K/key-length)
+  (let [dst (byte-array K/nonce-length)
         log-state (do-safe-nonce log-state dst 0)]
     {::log2/state log-state
      ::specs/byte-array dst}))
