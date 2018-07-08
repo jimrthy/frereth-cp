@@ -27,15 +27,65 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Helpers
 
+(defn build-inner-cookie-original
+  "This is the way it used to be done"
+  [log-state
+   client-short-pk
+   ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair
+   minute-key]
+  (let [^ByteBuf buffer (Unpooled/buffer K/server-cookie-length)
+        client-short-pk (bytes client-short-pk)]
+    (try
+      (.writeBytes buffer K/all-zeros 0 K/decrypt-box-zero-bytes) ; line 315
+      (.writeBytes buffer client-short-pk 0 K/key-length)
+      (.writeBytes buffer (.getSecretKey key-pair) 0 K/key-length)
+
+      (.array buffer))))
+
+(s/fdef build-inner-cookie
+        :args (s/cat)
+        :ret (s/keys :req [::specs/byte-array
+                           ::log2/log-state
+                           ::shared/working-nonce]))
+(defn build-inner-cookie
+  "Build the inner black-box Cookie portion of the Cookie Packet"
+  [log-state
+   client-short-pk
+   ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair
+   minute-key]
+  ;; line 315 - tie into the 0 padding that's part of the buffer getting created here
+  (let [{log-state ::log2/state
+         working-nonce ::specs/byte-array} (crypto/get-safe-nonce log-state)
+        nonce-suffix (byte-array specs/server-nonce-suffix-length)]
+    (b-t/byte-copy! nonce-suffix
+                    0
+                    specs/server-nonce-suffix-length
+                    working-nonce
+                    specs/server-nonce-prefix-length)
+    ;; I feel like my problems start later, around line 87 when I start
+    ;; running byte-copy.
+    ;; TODO: Verify that this approach generates the same output as the
+    ;; original.
+    (let [boxed-cookie (crypto/build-crypto-box K/black-box-dscr
+                                                {::K/clnt-short-pk client-short-pk
+                                                 ::K/srvr-short-sk (.getSecretKey key-pair)}
+                                                minute-key
+                                                K/cookie-nonce-minute-prefix
+                                                nonce-suffix)]
+      {::specs/byte-array (bytes boxed-cookie)
+       ::log2/log-state log-state
+       ::shared/working-nonce working-nonce})))
+
 ;; FIXME: Write this spec
 (s/fdef prepare-packet
-        :args (s/cat)
+        :args (s/cat :this ::state/state)
         :ret bytes?)
 (defn prepare-packet!
   [{:keys [::state/client-short<->server-long
+           ::log2/logger
            ::state/minute-key
            ;; Q: What is/was this for?
-           ;; A: This is/was supposed to be the buffer of bytes
+           ;; A: Well, it's supposed to be the buffer of bytes
            ;; that get encrypted
            ::clear-text
            ::shared/working-nonce]
@@ -50,87 +100,65 @@ and puts the crypto-text into the byte-array in text.
 
 Except that it doesn't seem to do that at all."
   (let [client-short-pk (bytes client-short-pk)
-        ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair keys (crypto/random-key-pair)
-        ;; TODO: Integrate functional logging for real
+        ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair (crypto/random-key-pair)
         log-state (log2/init "pointless-cookie-prep")
-        logger (log2/std-out-log-factory)]
+        {actual ::specs/byte-array
+         log-state ::log2/state
+         working-nonce ::shared/working-nonce} (build-inner-cookie log-state
+                                                                   client-short-pk
+                                                                   key-pair
+                                                                   minute-key)
+        actual (bytes actual)]
     (try
-      ;; line 315 - tie into the 0 padding that's part of the buffer getting created here
-      (let [{log-state ::log2/state
-             working-nonce ::specs/byte-array} (crypto/get-safe-nonce log-state)
-            nonce-suffix (byte-array specs/server-nonce-suffix-length)]
-        (b-t/byte-copy! nonce-suffix
-                        0
-                        specs/server-nonce-suffix-length
-                        working-nonce
-                        specs/server-nonce-prefix-length)
-        ;; I feel like my problems start later, around line 87 when I start
-        ;; running byte-copy.
-        ;; But things blow up here first.
-        ;; Q: Are they still?
-        ;; TODO: Verify that this approach generates the same output as the
-        ;; original.
-        (let [boxed-cookie (crypto/build-crypto-box K/black-box-dscr
-                                                  {::K/clnt-short-pk client-short-pk
-                                                   ::K/srvr-short-sk (.getSecretKey keys)}
-                                                  ;; Q: Is this the proper key?
-                                                  minute-key
-                                                  K/cookie-nonce-minute-prefix
-                                                  nonce-suffix)
-              actual (bytes boxed-cookie)]
+      ;; Reference implementation is really doing pointer math with the array
+      ;; to make this work.
+      ;; It's encrypting from (+ clear-text 64) over itself.
+      ;; There just isn't a good way to do the same thing in java.
+      ;; (The problem, really, is that I have to copy the plaintext
+      ;; so it winds up at the start of the array).
+      ;; Note that this is a departure from the reference implementation!
 
-          ;; Reference implementation is really doing pointer math with the array
-          ;; to make this work.
-          ;; It's encrypting from (+ clear-text 64) over itself.
-          ;; There just isn't a good way to do the same thing in java.
-          ;; (The problem, really, is that I have to copy the plaintext
-          ;; so it winds up at the start of the array).
-          ;; Note that this is a departure from the reference implementation!
+      ;; Copy that encrypted cookie into the text working area
+      (b-t/byte-copy! text K/key-length K/server-cookie-length actual)
+      ;; Along with the nonce
+      ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
+      ;; Go with the assumption that those are the initial garbage 0 bytes that should
+      ;; be discarded anyway
+      (b-t/byte-copy! text
+                      ;; reference uses 64 bytes here. 32 bytes of zeros
+                      ;; Don't need that much, since the encryption library
+                      ;; copes with that extra padding
+                      K/key-length
+                      specs/server-nonce-suffix-length
+                      working-nonce
+                      specs/server-nonce-prefix-length)  ; line 321
 
-          ;; Copy that encrypted cookie into the text working area
-          (comment (.getBytes buffer 0 text 32 K/server-cookie-length))
-          (b-t/byte-copy! text K/key-length K/server-cookie-length actual)
-          ;; Along with the nonce
-          ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
-          ;; Go with the assumption that those are the initial garbage 0 bytes that should
-          ;; be discarded anyway
+      ;; And now we need to encrypt that.
+      ;; This really belongs in its own function
+      ;; And it's another place where I should probably call compose
+      (b-t/byte-copy! text 0 K/key-length (.getPublicKey key-pair))
 
-          (b-t/byte-copy! text
-                          ;; reference uses 64 bytes here. 32 bytes of zeros
-                          ;; Don't need that much, since the encryption library
-                          ;; copes with that extra padding
-                          K/key-length
-                          specs/server-nonce-suffix-length
-                          working-nonce
-                          specs/server-nonce-prefix-length)  ; line 321
-
-          ;; And now we need to encrypt that.
-          ;; This really belongs in its own function
-          ;; And it's another place where I should probably call compose
-
-          (b-t/byte-copy! text 0 K/key-length (.getPublicKey keys))
-          ;; Overwrite the prefix.
-          ;; Reuse the 16 byte suffix that came in from the client.
-          ;; Note that, as written, we have to access this suffix
-          ;; later in build-cookie-packet.
-          ;; That may technically be functionally pure, but it seems
-          ;; pretty awful.
-          ;; If nothing else, it's far too tightly coupled.
-
-          (b-t/byte-copy! working-nonce
-                          0
-                          specs/server-nonce-prefix-length
-                          K/cookie-nonce-prefix)
-          (let [cookie (crypto/box-after client-short<->server-long
-                                         text
-                                         ;; TODO: named const for this.
-                                         K/unboxed-crypto-cookie-length ; 128
-                                         working-nonce)]
-            (log/info (str "Full cookie going to client that it should be able to decrypt:\n"
-                           (with-out-str (b-s/print-bytes cookie))
-                           "using shared secret:\n"
-                           (with-out-str (b-s/print-bytes client-short<->server-long))))
-            cookie))))))
+      ;; Overwrite the prefix.
+      ;; Reuse the 16 byte suffix that came in from the client.
+      ;; Note that, as written, we have to access this suffix
+      ;; later in build-cookie-packet.
+      ;; That may technically be functionally pure, but it seems
+      ;; pretty awful.
+      ;; If nothing else, it's far too tightly coupled.
+      (b-t/byte-copy! working-nonce
+                      0
+                      specs/server-nonce-prefix-length
+                      K/cookie-nonce-prefix)
+      (let [cookie (crypto/box-after client-short<->server-long
+                                     text
+                                     ;; TODO: named const for this.
+                                     K/unboxed-crypto-cookie-length ; 128
+                                     working-nonce)]
+        (log/info (str "Full cookie going to client that it should be able to decrypt:\n"
+                       (with-out-str (b-s/print-bytes cookie))
+                       "using shared secret:\n"
+                       (with-out-str (b-s/print-bytes client-short<->server-long))))
+        cookie))))
 
 (defn build-cookie-packet
   [{client-extension ::K/clnt-xtn

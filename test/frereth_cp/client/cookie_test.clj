@@ -2,7 +2,6 @@
   "Test out pieces involved in client cookie handling"
   (:require [clojure.test :refer (deftest is testing)]))
 
-
 (deftest url-comparison
   (testing "Distinct addresses"
     (let [ca (java.net.InetAddress/getByName "www.google.ca")
