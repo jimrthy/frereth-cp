@@ -187,15 +187,17 @@
                                                     "Sending HELLO failed. Will try the next (if any) in the list"
                                                     {::state/server-ips remaining-ips}))]
     (if remaining-ips
-      ;; Return the function for the trampoline to call
-      (partial do-polling-loop
-               (assoc this
-                      ::log-state log-state)
-               raw-packet
-               cookie-waiter
-               (System/nanoTime)
-               (pick-next-timeout (count remaining-ips))
-               remaining-ips)
+      ;; FIXME: Return a partial version of this function for the trampoline to call
+      ;; That's easier said than done, because deferreds do not play nicely
+      ;; with the call stack.
+      (do-polling-loop
+       (assoc this
+              ::log-state log-state
+              ::state/server-ips remaining-ips)
+       raw-packet
+       cookie-waiter
+       (System/nanoTime)
+       (pick-next-timeout (count remaining-ips)))
       (throw (ex-info "No IPs left. Giving up" this)))))
 
 (s/fdef cookie-retrieved
@@ -313,6 +315,8 @@
     ips ::state/server-ips
     :as this}
    hello-packet cookie-waiter start-time timeout]
+  ;; TODO: At least consider ways to rewrite this as
+  ;; a dfrd/loop.
   (let [srvr-ip (first ips)
         log-state (log/info (::log/state this)
                             ::do-polling-loop
@@ -330,15 +334,16 @@
                        ::state/sending-hello-timed-out)
         (dfrd/chain
          ;; Note that this is actually cookie/wait-for-cookie!
-         #(cookie-waiter this
-                         timeout
-                         %)
+         #(cookie-waiter this timeout %)
          ;; It's very tempting to inject a filter like this, instead
          ;; of doing it inside cookie-retrieved, which is what happens
          ;; now.
          ;; TODO: Figure out a way to do so while retaining the granularity
          ;; of things like tracing and error handling that I currently have
          ;; in cookie-retrieved.
+         ;; Note that doing this makes the idea behind dfrd/loop and
+         ;; dfrd/recur at least plausible.
+         ;; TODO: Verify that I can recur in the middle of a dfrd/chain.
          #_(fn [{log-state ::log/state
                :keys [::state/server-security]
                :as this}]

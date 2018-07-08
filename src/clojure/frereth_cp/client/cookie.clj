@@ -66,22 +66,25 @@
                                                           K/cookie-nonce-prefix
                                                           client-nonce-suffix
                                                           cookie
-                                                          shared)
-            {server-short-pk ::K/s'
-             server-cookie ::K/black-box
-             :as extracted} (serial/decompose K/cookie decrypted)
-            server-security (assoc (::state/server-security this)
-                                   ::specs/public-short server-short-pk,
-                                   ::state/server-cookie server-cookie)]
-        (assert server-cookie)
-        {::state/server-security server-security
-         ::log/state log-state})
-      (catch ExceptionInfo ex
+                                                          shared)]
+        (if decrypted
+          (let [{server-short-pk ::K/s'
+                 server-cookie ::K/black-box
+                 :as extracted} (serial/decompose K/cookie decrypted)
+                server-security (assoc (::state/server-security this)
+                                       ::specs/public-short server-short-pk,
+                                       ::state/server-cookie server-cookie)]
+            (assert server-cookie)
+            {::state/server-security server-security
+             ::log/state log-state})
+          {::log/state (log/warn log-state
+                                 ::decrypt-actual-cookie
+                                 "Decryption failed silently")}))
+      (catch RuntimeException ex
         {::log/state (log/exception log-state
                                     ex
                                     ::decrypt-actual-cookie
-                                    "Decryption failed"
-                                    (.getData ex))}))))
+                                    "Decryption failed")}))))
 
 (s/fdef decrypt-cookie-packet
         :args (s/cat :this (s/keys :req [::log/state
