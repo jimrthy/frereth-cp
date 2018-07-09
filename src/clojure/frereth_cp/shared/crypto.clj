@@ -22,10 +22,10 @@
            [javax.crypto Cipher KeyGenerator SecretKey]
            [javax.crypto.spec IvParameterSpec SecretKeySpec]))
 
-(set! *warn-on-reflection* true)
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic constants
+
+(set! *warn-on-reflection* true)
 
 ;;; 192 bits
 ;;; It seems a little silly to encrypt a 128-bit
@@ -43,6 +43,7 @@
 ;; go away.
 (s/def ::data (s/and bytes?
                      #(= (count %) 16)))
+(s/def ::java-key-pair #(instance? com.iwebpp.crypto.TweetNaclFast$Box$KeyPair %))
 (s/def ::legal-key-algorithms #{"AES"})
 (s/def ::long-short #{::long ::short})
 (s/def ::unboxed #(instance? ByteBuf %))
@@ -782,6 +783,13 @@ Or maybe that's (dec n)"
         (mod numerator denominator))
       0)))
 
+(s/fdef secret-box
+        :args (s/cat :dst bytes?
+                     :cleartext bytes?
+                     :length integer?
+                     :nonce ::specs/nonce
+                     :key ::specs/crypto-key)
+        :ret bytes?)
 (defn secret-box
   "Symmetric encryption
 
@@ -790,8 +798,9 @@ Note that this does not do anything about the initial padding.
 It may be an implementation detail, but box-after above is really
 just a wrapper around this"
   [dst cleartext length nonce key]
-  (TweetNaclFast/crypto_secretbox dst cleartext
-                                  length nonce key))
+  (let [key (bytes key)]
+       (TweetNaclFast/crypto_secretbox dst cleartext
+                                       length nonce key)))
 
 (defn secret-unbox
   "Symmetric-key decryption"

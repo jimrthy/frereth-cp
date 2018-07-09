@@ -3,17 +3,20 @@
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
-            [frereth-cp.server.shared-specs :as srvr-specs]
-            [frereth-cp.server.state :as state]
+            [frereth-cp.server
+             [shared-specs :as srvr-specs]
+             [state :as state]]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log2]
+             [serialization :as serial]
+             [specs :as specs]]
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (set! *warn-on-reflection* true)
@@ -32,49 +35,69 @@
   [log-state
    client-short-pk
    ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair
-   minute-key]
+   minute-key
+   working-nonce]
   (let [^ByteBuf buffer (Unpooled/buffer K/server-cookie-length)
-        client-short-pk (bytes client-short-pk)]
+        client-short-pk (bytes client-short-pk)
+        working-nonce (byte-array working-nonce)]
     (try
+      ;; Set up the raw plaintext cookie
       (.writeBytes buffer K/all-zeros 0 K/decrypt-box-zero-bytes) ; line 315
       (.writeBytes buffer client-short-pk 0 K/key-length)
       (.writeBytes buffer (.getSecretKey key-pair) 0 K/key-length)
 
-      (.array buffer))))
+      (let [actual (.array buffer)
+            result (byte-array K/server-cookie-length)]
+        (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
+        ;; Original needs to leave 0 padding up front
+        (comment (.getBytes buffer 0 text 32 K/server-cookie-length))
+        (.getBytes buffer 0 result 0 K/server-cookie-length)
+        result))))
 
 (s/fdef build-inner-cookie
-        :args (s/cat)
+        :args (s/cat :log-state ::log2/state
+                     :client-short-pk any?
+                     :key-pair ::specs/java-key-pair
+                     :minute-key ::specs/java-key-pair)
         :ret (s/keys :req [::specs/byte-array
                            ::log2/log-state
                            ::shared/working-nonce]))
 (defn build-inner-cookie
   "Build the inner black-box Cookie portion of the Cookie Packet"
-  [log-state
-   client-short-pk
-   ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair
-   minute-key]
-  ;; line 315 - tie into the 0 padding that's part of the buffer getting created here
-  (let [{log-state ::log2/state
-         working-nonce ::specs/byte-array} (crypto/get-safe-nonce log-state)
-        nonce-suffix (byte-array specs/server-nonce-suffix-length)]
-    (b-t/byte-copy! nonce-suffix
-                    0
-                    specs/server-nonce-suffix-length
-                    working-nonce
-                    specs/server-nonce-prefix-length)
-    ;; I feel like my problems start later, around line 87 when I start
-    ;; running byte-copy.
-    ;; TODO: Verify that this approach generates the same output as the
-    ;; original.
-    (let [boxed-cookie (crypto/build-crypto-box K/black-box-dscr
-                                                {::K/clnt-short-pk client-short-pk
-                                                 ::K/srvr-short-sk (.getSecretKey key-pair)}
-                                                minute-key
-                                                K/cookie-nonce-minute-prefix
-                                                nonce-suffix)]
-      {::specs/byte-array (bytes boxed-cookie)
-       ::log2/log-state log-state
-       ::shared/working-nonce working-nonce})))
+  ([log-state
+    client-short-pk
+    key-pair
+    minute-key]
+   (let [{log-state ::log2/state
+          working-nonce ::specs/byte-array} (crypto/get-safe-nonce log-state)]
+     (build-inner-cookie log-state client-short-pk key-pair minute-key working-nonce)))
+  ;; This arity really only exists for the sake of testing:
+  ;; Being able to reproduce the nonce makes like much easier in that regard
+  ([log-state
+     client-short-pk
+     ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair
+    minute-key
+    working-nonce]
+   (let [working-nonce (byte-array working-nonce)
+         nonce-suffix (byte-array specs/server-nonce-suffix-length)]
+     (b-t/byte-copy! nonce-suffix
+                     0
+                     specs/server-nonce-suffix-length
+                     working-nonce
+                     specs/server-nonce-prefix-length)
+     ;; I feel like my problems start later, around line 87 when I start
+     ;; running byte-copy.
+     ;; TODO: Verify that this approach generates the same output as the
+     ;; original.
+     (let [boxed-cookie (crypto/build-crypto-box K/black-box-dscr
+                                                 {::K/clnt-short-pk client-short-pk
+                                                  ::K/srvr-short-sk (.getSecretKey key-pair)}
+                                                 minute-key
+                                                 K/cookie-nonce-minute-prefix
+                                                 nonce-suffix)]
+       {::specs/byte-array (bytes boxed-cookie)
+        ::log2/log-state log-state
+        ::shared/working-nonce working-nonce}))))
 
 ;; FIXME: Write this spec
 (s/fdef prepare-packet

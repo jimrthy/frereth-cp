@@ -162,6 +162,7 @@
                                     ::client-nonce-suffix
                                     ::cookie]))
 
+;; line 315 - tie into the 0 padding that's part of the buffer getting created here
 (def black-box-dscr (array-map ::padding {::type ::zeroes ::length decrypt-box-zero-bytes}
                                ::clnt-short-pk {::type ::bytes ::length client-key-length}
                                ::srvr-short-sk {::type ::bytes ::length server-key-length}))
