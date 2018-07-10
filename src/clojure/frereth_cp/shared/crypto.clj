@@ -59,6 +59,10 @@
                                    ::key-loaded?
                                    ::nonce-key]))
 
+;; What's produced by get-safe-nonce
+(s/def ::safe-nonce (s/or :server-suffix ::specs/server-nonce-suffix
+                          :client-prefix ::specs/client-nonce-prefix))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
@@ -664,14 +668,12 @@ Or maybe that's (dec n)"
 
 (s/fdef do-safe-nonce
         :args (s/or :persistent (s/cat :log-state ::log2/state
-                                       :dst (and bytes?
-                                                 #(<= K/key-length (count %)))
+                                       :dst ::safe-nonce
                                        :key-dir (s/nilable string?)
                                        :offset (complement neg-int?)
                                        :long-term? boolean?)
                     :transient (s/cat :log-state ::log2/state
-                                      :dst (and bytes?
-                                                #(<= K/key-length (count %)))
+                                      :dst ::safe-nonce
                                       :offset (complement neg-int?)))
         :ret ::log2/state)
 ;; TODO: Needs a way to flush the log-state
@@ -745,14 +747,14 @@ Or maybe that's (dec n)"
 (s/fdef get-safe-nonce
         :args (s/cat :log-state ::log2/state)
         :ret (s/keys :req [::log2/state
-                           ::specs/byte-array]))
+                           ::safe-nonce]))
 (defn get-safe-nonce
   "Get a nonce, safely"
   [log-state]
-  (let [dst (byte-array K/nonce-length)
+  (let [dst (byte-array specs/server-nonce-suffix-length)
         log-state (do-safe-nonce log-state dst 0)]
     {::log2/state log-state
-     ::specs/byte-array dst}))
+     ::safe-nonce dst}))
 
 (s/fdef random-mod
         :args (s/cat :n nat-int?)

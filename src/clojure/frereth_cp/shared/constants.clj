@@ -23,6 +23,11 @@
 (def header-length specs/header-length)
 
 (def message-len 1104)
+;; FIXME: Move this into specs, where it's defined
+;; based on prefix/suffix lengths
+;; Then again, all the constants in there should
+;; really move back into here. And then that
+;; should require this, instead of vice-versa.
 (def nonce-length 24)
 (def server-key-length key-length)
 (def shared-key-length key-length)

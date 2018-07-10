@@ -148,3 +148,22 @@ Or there's probably something similar in guava"
   (with-open [out (clojure.java.io/output-stream f)]
     (with-open [in (clojure.java.io/input-stream bs)]
       (clojure.java.io/copy in out))))
+
+(defn update-values
+  "Apply f (& args) to each value in a map
+
+  Credit: http://blog.jayfields.com/2011/08/clojure-apply-function-to-each-value-of.html"
+  [m f & args]
+  ;; TODO: Compare speed against the suggested alternatives
+  ;; Assuming we ever have any indication that this is used in
+  ;; a speed-critical inner loop
+  (comment
+    (zipmap (keys m) (map #(apply f % args) (vals m))))
+  (comment
+    (into {}
+          (for [[k v] m]
+            [k (apply f v args)])))
+  (reduce (fn [r [k v]]
+            (assoc r k (apply f v args)))
+          {}
+          m))
