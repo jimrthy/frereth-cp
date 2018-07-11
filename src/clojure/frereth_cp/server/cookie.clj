@@ -55,8 +55,11 @@
         (println )
         (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
         ;; Original needs to leave 0 padding up front
+        ;; Note that the first 16 of those 32 bytes are garbage.
+        ;; They're meant to be overwritten by the nonce-suffix
         (comment (.getBytes buffer 0 text 32 K/server-cookie-length))
-        (.getBytes buffer 0 result 0 K/server-cookie-length)
+        (.getBytes buffer 0 result)
+        (b-t/byte-copy! result nonce-suffix)
         result))))
 
 (s/fdef build-inner-cookie
@@ -92,12 +95,19 @@
    ;; running byte-copy.
    ;; STARTED: Verify that this approach generates the same output as the
    ;; original.
+   ;; Currently, it does not.
+   ;; Q: What are the odds that this has something to do with the 0 padding
+   ;; and the extra 16 bytes the test needs to drop from the return value here?
    (let [boxed-cookie (crypto/build-crypto-box K/black-box-dscr
                                                {::K/clnt-short-pk client-short-pk
                                                 ::K/srvr-short-sk my-short-sk}
                                                minute-key
                                                K/cookie-nonce-minute-prefix
                                                nonce-suffix)]
+     ;; Alternative approach here would be to just prepend the nonce suffix
+     ;; to boxed-cookie. Which is similar to what the reference implementation
+     ;; does when it just overwrites the garbage portion of the zero-padding
+     ;; with it on line 321
      {::specs/byte-array (bytes boxed-cookie)
       ::log2/log-state log-state
       ::specs/server-nonce-suffix nonce-suffix})))

@@ -168,8 +168,8 @@
                                     ::cookie]))
 
 ;; line 315 - tie into the 0 padding that's part of the buffer getting created here
-(def black-box-dscr (array-map ::padding {::type ::zeroes ::length decrypt-box-zero-bytes}
-                               ::clnt-short-pk {::type ::bytes ::length client-key-length}
+;; Note that we don't want/need it: box-after in crypto handles that
+(def black-box-dscr (array-map ::clnt-short-pk {::type ::bytes ::length client-key-length}
                                ::srvr-short-sk {::type ::bytes ::length server-key-length}))
 (def cookie
   (array-map ::s' {::type ::bytes ::length server-key-length}

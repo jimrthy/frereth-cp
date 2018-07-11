@@ -264,7 +264,7 @@
                         (+ (-> % :args :length)
                            (or (-> % :args :offset) 0)))
                    #(= (count (:ret %))
-                       (+ (-> % :args :plain-text))))
+                       (+ (-> % :args :plain-text) specs/box-zero-bytes)))
         :ret bytes?)
 (defn box-after
   "Accept some plain text and turn it into cipher text"
@@ -299,8 +299,8 @@
        (when (= 0 (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce shared-key))
          ;; After it's encrypted, we can discard the first 16 bytes.
          ;; But not the other extra 16.
-         ;; This is an annoying API pitfall that leads to a lot of
-         ;; confusion.
+         ;; This is an annoying API pitfall that has lead to a lot of
+         ;; confusion for me.
          (b-t/sub-byte-array cipher-text K/box-zero-bytes))))))
 
 (s/fdef box-prepare
@@ -316,15 +316,21 @@
     shared))
 
 (s/fdef build-crypto-box
-        ;; FIXME: Specify the any? args
+        ;; FIXME: Figure out a meaningful way to spec out template and source
         :args (s/cat :template any?
                      :source any?
-                     :key-pair any?
-                     :nonce-prefix bytes?
-                     :nonce-suffix bytes?)
+                     :shared-key ::specs/crypto-key
+                     :nonce-prefix (s/or :server ::specs/server-nonce-prefix
+                                         :client ::specs/client-nonce-prefix)
+                     :nonce-suffix (s/or :server ::specs/server-nonce-suffix
+                                         :client ::specs/client-nonce-suffix))
+        ;; The length of :ret can be determined by :template.
+        ;; But that gets into troublesome details about serialization
         :ret bytes?)
 (defn build-crypto-box
-  "Compose a map into bytes and encrypt it"
+  "Compose a map into bytes and encrypt it
+
+  Note that tmplt should *not* include the requisite 32 bytes of 0 padding"
   [tmplt src key-pair nonce-prefix nonce-suffix]
   (let [^ByteBuf buffer (serial/compose tmplt src)]
     (let [n (.readableBytes buffer)

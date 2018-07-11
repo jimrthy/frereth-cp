@@ -10,7 +10,9 @@
 ;;;; Magic Constants - don't belong in here
 ;;;; Warning: Use the versions in shared.constants instead
 
-(def box-zero-bytes 16)
+(def box-zero-bytes
+  "When you encrypt plain text, this many bytes of the the initial padding still matter"
+  16)
 
 (def ^Integer key-length 32)
 (def client-key-length key-length)
@@ -50,7 +52,7 @@ This really seems like a bad road to go down."
 ;; Q: Is this worth abstracting?
 ;; Especially since I've probably used dfrd/deferrable more
 ;; often?
-;; A: Yes. For using in keys.
+;; A: Yes. For using in s/keys.
 (s/def ::deferrable dfrd/deferrable?)
 (s/def ::exception-instance (class-predicate Exception))
 (s/def ::executor (class-predicate Executor))
