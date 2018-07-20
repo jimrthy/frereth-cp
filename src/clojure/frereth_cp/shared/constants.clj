@@ -167,6 +167,7 @@
                                     ::client-nonce-suffix
                                     ::cookie]))
 
+(s/def ::srvr-nonce-suffix ::specs/server-nonce-suffix)
 ;; line 315 - tie into the 0 padding that's part of the buffer getting created here
 ;; Note that we don't want/need it: box-after in crypto handles that
 (def black-box-dscr (array-map ::clnt-short-pk {::type ::bytes ::length client-key-length}

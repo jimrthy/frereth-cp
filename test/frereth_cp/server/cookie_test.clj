@@ -46,11 +46,8 @@
                                                                (byte-array server-short-sk)
                                                                (byte-array minute-key)
                                                                (byte-array working-nonce))
-        easier' (vec easier)
-        combined (concat nonce-suffix easier')]
-    (is (= original' combined))
-    ;; Q: Do they match if we discard the first 16 bytes of original?
-    ;; A: Nope.
-    (when (not= original' combined)
-      (println "Original:\n" original' "\neasier:\n" combined)
-      (is (= (count original') (count combined))))))
+        easier' (vec easier)]
+    (is (= original' easier'))
+    (when (not= original' easier')
+      (println "Original:\n" original' "\neasier:\n" easier')
+      (is (= (count original') (count easier'))))))

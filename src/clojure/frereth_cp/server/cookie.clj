@@ -82,7 +82,7 @@
     my-short-sk
     minute-key]
    (let [{log-state ::log2/state
-          working-nonce ::crypto/safe-nance} (crypto/get-safe-nonce log-state)]
+          working-nonce ::crypto/safe-nonce} (crypto/get-safe-nonce log-state)]
      (build-inner-cookie log-state client-short-pk my-short-sk minute-key working-nonce)))
   ;; This arity really only exists for the sake of testing:
   ;; Being able to reproduce the nonce makes like much easier in that regard
@@ -103,13 +103,20 @@
                                                 ::K/srvr-short-sk my-short-sk}
                                                minute-key
                                                K/cookie-nonce-minute-prefix
-                                               nonce-suffix)]
-     ;; Alternative approach here would be to just prepend the nonce suffix
-     ;; to boxed-cookie. Which is similar to what the reference implementation
-     ;; does when it just overwrites the garbage portion of the zero-padding
-     ;; with it on line 321
-     {::specs/byte-array (bytes boxed-cookie)
+                                               nonce-suffix)
+         ;; This is similar to what the reference implementation
+         ;; does when it just overwrites the garbage portion of the zero-padding
+         ;; with it on line 321.
+         ;; It's tempting to use serialize again, but that would be terribly
+         ;; silly.
+         nonced-cookie (concat nonce-suffix boxed-cookie)]
+     {::specs/byte-array (byte-array nonced-cookie)
       ::log2/log-state log-state
+      ;; It seems silly to return this, since it was a parameter.
+      ;; But this probably won't be called as a pure function.
+      ;; Most callers will use the other arity that calls safe-nonce.
+      ;; OK, there's probably only one caller. It reuses half of
+      ;; this suffix.
       ::specs/server-nonce-suffix nonce-suffix})))
 
 ;; FIXME: Write this spec
@@ -165,7 +172,6 @@ Except that it doesn't seem to do that at all."
                       ;; Then zeros out the first 32 bytes.
                       ;; Don't need that much, since the encryption library
                       ;; copes with that extra padding.
-                      ;; TODO: Verify that.
                       K/key-length
                       specs/server-nonce-suffix-length
                       working-nonce
