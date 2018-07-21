@@ -127,64 +127,68 @@
     :as state}
    {:keys [:message]
     :as packet}]
-  (println "Top of handle-hello!")
-  (when-let [{log-state ::log2/state
-              :as cookie-recipe} (hello/do-handle state message)]
-    (let [^ByteBuf cookie (cookie/do-build-response state cookie-recipe)
-          log-state (log2/info log-state
-                               ::handle-hello!
-                               (str "Cookie packet built. Sending it."))]
-      (try
-        (if-let [dst (get-in state [::state/client-write-chan ::state/chan])]
-          ;; And this is why I need to refactor this. There's so much going
-          ;; on in here that it's tough to remember that this is sending back
-          ;; a map. It has to, since that's the way aleph handles
-          ;; UDP connections, but it really shouldn't need to: that's the sort
-          ;; of tightly coupled implementation detail that I can push further
-          ;; to the boundary.
-          (let [put-future (strm/try-put! dst
-                                          (assoc packet
-                                                 :message cookie)
-                                          ;; TODO: This really needs to be part of
-                                          ;; state so it can be tuned while running
-                                          send-timeout
-                                          ::timed-out)
-                log-state (log2/info log-state
-                                     ::handle-hello!
-                                     "Cookie packet scheduled to send")
-                forked-log-state (log2/clean-fork log-state
-                                                  ::hello-processed)]
-
-            (dfrd/on-realized put-future
-                              (fn [success]
-                                (log2/flush-logs! logger
-                                                   (if success
-                                                     (log2/info forked-log-state
-                                                                ::handle-hello!
-                                                                "Sending Cookie succeeded")
-                                                     (log2/error forked-log-state
-                                                                 ::handle-hello!
-                                                                 "Sending Cookie failed"))))
-                              (fn [err]
-                                (log2/flush-logs! logger
-                                                  (log2/error forked-log-state
-                                                              ::handle-hello!
-                                                              "Sending Cookie failed:" err))))
-            (assoc state
-                   ::log2/state log-state))
-          (throw (ex-info "Missing destination"
-                          (or (::state/client-write-chan state)
-                              {::problem "No client-write-chan"
-                               ::keys (keys state)
-                               ::actual state}))))
-        (catch Exception ex
-
-          (assoc state
-                 ::log2/state
-                 (log2/exception log-state
-                                 ex
+  (println "Top of handle-hello!\nlogger:" logger)
+  (let [{log-state ::log2/state
+         :as cookie-recipe} (hello/do-handle state message)]
+    ;; Q: Is the possibly-nil return value deliberate?
+    ;; It seems like failing to build the cookie should just return
+    ;; state as-is.
+    (when cookie-recipe
+      (let [^ByteBuf cookie (cookie/do-build-response state cookie-recipe)
+            log-state (log2/info log-state
                                  ::handle-hello!
-                                 "Failed to send Cookie response")))))))
+                                 (str "Cookie packet built. Sending it."))]
+        (try
+          (if-let [dst (get-in state [::state/client-write-chan ::state/chan])]
+            ;; And this is why I need to refactor this. There's so much going
+            ;; on in here that it's tough to remember that this is sending back
+            ;; a map. It has to, since that's the way aleph handles
+            ;; UDP connections, but it really shouldn't need to: that's the sort
+            ;; of tightly coupled implementation detail that I can push further
+            ;; to the boundary.
+            (let [put-future (strm/try-put! dst
+                                            (assoc packet
+                                                   :message cookie)
+                                            ;; TODO: This really needs to be part of
+                                            ;; state so it can be tuned while running
+                                            send-timeout
+                                            ::timed-out)
+                  log-state (log2/info log-state
+                                       ::handle-hello!
+                                       "Cookie packet scheduled to send")
+                  forked-log-state (log2/clean-fork log-state
+                                                    ::hello-processed)]
+
+              (dfrd/on-realized put-future
+                                (fn [success]
+                                  (log2/flush-logs! logger
+                                                    (if success
+                                                      (log2/info forked-log-state
+                                                                 ::handle-hello!
+                                                                 "Sending Cookie succeeded")
+                                                      (log2/error forked-log-state
+                                                                  ::handle-hello!
+                                                                  "Sending Cookie failed"))))
+                                (fn [err]
+                                  (log2/flush-logs! logger
+                                                    (log2/error forked-log-state
+                                                                ::handle-hello!
+                                                                "Sending Cookie failed:" err))))
+              (assoc state
+                     ::log2/state log-state))
+            (throw (ex-info "Missing destination"
+                            (or (::state/client-write-chan state)
+                                {::problem "No client-write-chan"
+                                 ::keys (keys state)
+                                 ::actual state}))))
+          (catch Exception ex
+
+            (assoc state
+                   ::log2/state
+                   (log2/exception log-state
+                                   ex
+                                   ::handle-hello!
+                                   "Failed to send Cookie response"))))))))
 
 (s/fdef verify-my-packet
         :args (s/cat :this ::state
@@ -276,6 +280,7 @@
             (println "Packet for me:" this)
             (try
               (.flush System/out)
+              ;; FIXME: This should at least update the log-state
               (case packet-type-id
                 \H (handle-hello! this packet)
                 \I (initiate/handle! this packet)

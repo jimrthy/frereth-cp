@@ -109,9 +109,12 @@
          ;; with it on line 321.
          ;; It's tempting to use serialize again, but that would be terribly
          ;; silly.
-         nonced-cookie (concat nonce-suffix boxed-cookie)]
-     {::specs/byte-array (byte-array nonced-cookie)
-      ::log2/log-state log-state
+         ;; Note that using concat *is* problematic.
+         ;; Especially for something this small.
+         ;; Every alternative I've tried so far is uglier.
+         nonced-cookie (byte-array (concat nonce-suffix boxed-cookie))]
+     {::specs/byte-array nonced-cookie
+      ::log2/state log-state
       ;; It seems silly to return this, since it was a parameter.
       ;; But this probably won't be called as a pure function.
       ;; Most callers will use the other arity that calls safe-nonce.
@@ -120,9 +123,10 @@
       ::specs/server-nonce-suffix nonce-suffix})))
 
 ;; FIXME: Write this spec
-(s/fdef prepare-packet
+(s/fdef prepare-packet!
         :args (s/cat :this ::state/state)
-        :ret bytes?)
+        :ret {::log2/state
+              ::specs/byte-array})
 (defn prepare-packet!
   [{:keys [::state/client-short<->server-long
            ::log2/logger
@@ -133,10 +137,11 @@
            ::clear-text
            ::shared/working-nonce]
     client-short-pk ::state/client-short-pk
+    log-state ::log2/state
     ;; This is really the destination for the crypto-box
     ;; being built from clear-text
     ^bytes text ::shared/text}]
-  "Called purely for side-effects.
+  "Called mostly for side-effects.
 
 The most important is that it encrypts clear-text
 and puts the crypto-text into the byte-array in text.
@@ -144,14 +149,25 @@ and puts the crypto-text into the byte-array in text.
 Except that it doesn't seem to do that at all."
   (let [client-short-pk (bytes client-short-pk)
         ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair (crypto/random-key-pair)
-        log-state (log2/init "pointless-cookie-prep")
         {actual ::specs/byte-array
          log-state ::log2/state
          working-nonce ::specs/server-nonce-suffix} (build-inner-cookie log-state
                                                                    client-short-pk
                                                                    (.getSecretKey key-pair)
                                                                    minute-key)
-        actual (bytes actual)]
+        actual (bytes actual)
+        log-state (log2/debug log-state
+                              ::prepare-packet!
+                              "Copying inner cookie into clear-text wrapper"
+                              {::source (vec actual)
+                               ::source-length (count actual)
+                               ::destination text
+                               ::destination-length (count text)
+                               ::starting-offset K/key-length
+                               ::bytes-to-copy K/server-cookie-length})
+        ;; We're missing the logger here
+        _ (log/warn (str "Flushing logs\n" log-state "\nthrough " logger))
+        log-state (log2/flush-logs! logger log-state)]
     (try
       ;; Reference implementation is really doing pointer math with the array
       ;; to make this work.
@@ -162,24 +178,31 @@ Except that it doesn't seem to do that at all."
       ;; Note that this is a departure from the reference implementation!
 
       ;; Copy that encrypted cookie into the text working area
+
       (b-t/byte-copy! text K/key-length K/server-cookie-length actual)
-      ;; Along with the nonce
-      ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
-      ;; Go with the assumption that those are the initial garbage 0 bytes that should
-      ;; be discarded anyway
-      (b-t/byte-copy! text
-                      ;; reference starts at offset 64 here.
-                      ;; Then zeros out the first 32 bytes.
-                      ;; Don't need that much, since the encryption library
-                      ;; copes with that extra padding.
-                      K/key-length
-                      specs/server-nonce-suffix-length
-                      working-nonce
-                      specs/server-nonce-prefix-length)  ; line 321
+
+      ;; This step should be redundant: it's part of the inner actual cookie,
+      ;; so should have already been handled when we built that
+
+      (comment
+        ;; Along with the nonce
+        ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
+        ;; Go with the assumption that those are the initial garbage 0 bytes that should
+        ;; be discarded anyway
+        (b-t/byte-copy! text
+                        ;; reference starts at offset 64 here.
+                        ;; Then zeros out the first 32 bytes.
+                        ;; Don't need that much, since the encryption library
+                        ;; copes with that extra padding.
+                        K/key-length
+                        specs/server-nonce-suffix-length
+                        working-nonce
+                        specs/server-nonce-prefix-length))  ; line 321
 
       ;; And now we need to encrypt that.
       ;; This really belongs in its own function
       ;; And it's another place where I should probably call compose
+
       (b-t/byte-copy! text 0 K/key-length (.getPublicKey key-pair))
 
       ;; Overwrite the prefix.
@@ -189,20 +212,33 @@ Except that it doesn't seem to do that at all."
       ;; That may technically be functionally pure, but it seems
       ;; pretty awful.
       ;; If nothing else, it's far too tightly coupled.
+
+      (throw (RuntimeException. "Another working-nonce to eliminate"))
       (b-t/byte-copy! working-nonce
                       0
                       specs/server-nonce-prefix-length
                       K/cookie-nonce-prefix)
       (let [cookie (crypto/box-after client-short<->server-long
                                      text
-                                     ;; TODO: named const for this.
                                      K/unboxed-crypto-cookie-length ; 128
-                                     working-nonce)]
-        (log/info (str "Full cookie going to client that it should be able to decrypt:\n"
-                       (with-out-str (b-s/print-bytes cookie))
-                       "using shared secret:\n"
-                       (with-out-str (b-s/print-bytes client-short<->server-long))))
-        cookie))))
+                                     ;; Here's my culprit
+                                     working-nonce)
+            cookie (bytes cookie)
+            log-state (log2/info log-state
+                                 ::prepare-cookie!
+                                 "Full cookie going to client that it should be able to decrypt"
+                                 {::specs/byte-array (try (with-out-str (b-s/print-bytes cookie))
+                                                          (catch Exception ex
+                                                            (log/error ex "Trying to show cookie contents")
+                                                            (vec cookie)))
+                                  ::shared-secret (str "FIXME: Don't log this!\n"
+                                                       (try
+                                                         (with-out-str (b-s/print-bytes client-short<->server-long))
+                                                         (catch Exception ex
+                                                           (log/error ex "Trying to show shared key")
+                                                           (vec client-short<->server-long))))})]
+        {::specs/byte-array cookie
+         ::log2/state log-state}))))
 
 (defn build-cookie-packet
   [{client-extension ::K/clnt-xtn
@@ -232,14 +268,21 @@ Except that it doesn't seem to do that at all."
                      :recipe (s/keys :req [::srvr-specs/cookie-components ::K/hello-spec]))
         :ret ::specs/byte-buf)
 (defn do-build-response
-  [state
+  [{:keys [::log2/logger]
+    log-state ::log2/state
+    :as state}
    {{:keys [::shared/working-nonce]
      :as cookie-components} ::srvr-specs/cookie-components
     hello-spec ::K/hello-spec}]
   (log/info "Preparing cookie")
-  (let [crypto-box (prepare-packet! cookie-components)]
+  (let [{crypto-box ::specs/byte-array
+         log-state ::log2/state} (prepare-packet! (assoc cookie-components
+                                                         ::log2/logger logger
+                                                         ::log2/state log-state))
+        ;; FIXME: Don't just throw this away
+        log-state (log2/flush-logs! logger log-state)]
     ;; Note that the reference implementation overwrites this incoming message in place.
-    ;; That seems dangerous, but it very deliberately is longer than
+    ;; That seems dangerous, but the HELLO is very deliberately longer than
     ;; our response.
     ;; And it does save a malloc/GC.
     ;; I can't do that, because of the way compose works.

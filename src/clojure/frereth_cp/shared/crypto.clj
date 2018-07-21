@@ -289,19 +289,34 @@
            (b-t/sub-byte-array cipher-text K/box-zero-bytes)))))
    (box-after shared-key plain-text 0 length nonce))
   ([shared-key plain-text offset length nonce]
-   (when (and (<= (+ length offset) (count plain-text))
-              nonce
-              (= (count nonce) K/nonce-length))
+   (if (and (<= (+ length offset) (count plain-text))
+            nonce
+            (= (count nonce) K/nonce-length))
      (let [padded-length (+ length K/decrypt-box-zero-bytes)
            cipher-text (byte-array padded-length)
            plain-buffer (byte-array padded-length)]
        (b-t/byte-copy! plain-buffer K/decrypt-box-zero-bytes length plain-text offset)
-       (when (= 0 (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce shared-key))
-         ;; After it's encrypted, we can discard the first 16 bytes.
-         ;; But not the other extra 16.
-         ;; This is an annoying API pitfall that has lead to a lot of
-         ;; confusion for me.
-         (b-t/sub-byte-array cipher-text K/box-zero-bytes))))))
+       (let [success (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce shared-key)]
+         (if (= 0 success)
+           ;; After it's encrypted, we can discard the first 16 bytes.
+           ;; But not the other extra 16.
+           ;; This is an annoying API pitfall that has lead to a lot of
+           ;; confusion for me.
+           (b-t/sub-byte-array cipher-text K/box-zero-bytes)
+           (throw (ex-info "Boxing failed"
+                           {::failure-code success
+                            ::cipher-text (vec cipher-text)
+                            ::cipher-text-length (count cipher-text)
+                            ::clear-text (vec plain-buffer)
+                            ::clear-text-length (count plain-buffer)
+                            ::bytes-to-encrypt padded-length
+                            ::nonce (vec nonce)
+                            ::shared-key (vec shared-key)})))))
+     (throw (ex-info "Bad pre-conditions for boxing"
+                     {::length length
+                      ::offset offset
+                      ::clear-text-length (count plain-text)
+                      ::nonce (vec nonce)})))))
 
 (s/fdef box-prepare
         :args (s/cat :public ::specs/crypto-key
@@ -315,6 +330,7 @@
     (TweetNaclFast/crypto_box_beforenm shared public secret)
     shared))
 
+;; FIXME: Refactor/rename this to build-box
 (s/fdef build-crypto-box
         ;; FIXME: Figure out a meaningful way to spec out template and source
         :args (s/cat :template any?
