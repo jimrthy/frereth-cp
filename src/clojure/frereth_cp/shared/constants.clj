@@ -145,38 +145,7 @@
 (def ^Integer cookie-packet-length 200)
 (def unboxed-crypto-cookie-length 128)
 
-;; FIXME: Add a macro for defining both the template
-;; and the spec at the same time
-(def cookie-frame
-  "The boiler plate around a cookie"
-  ;; Header is only a "string" in the ASCII sense
-  (array-map ::header {::type ::bytes
-                       ::length header-length}
-             ::client-extension {::type ::bytes
-                                 ::length extension-length}
-             ::server-extension {::type ::bytes
-                                 ::length extension-length}
-             ;; Implicitly prefixed with "CurveCPK"
-             ::client-nonce-suffix {::type ::bytes
-                                    ::length specs/server-nonce-suffix-length}
-             ::cookie {::type ::bytes
-                       ::length cookie-frame-length}))
-(s/def ::cookie-frame (s/keys :req [::header
-                                    ::client-extension
-                                    ::server-extension
-                                    ::client-nonce-suffix
-                                    ::cookie]))
-
 (s/def ::srvr-nonce-suffix ::specs/server-nonce-suffix)
-;; line 315 - tie into the 0 padding that's part of the buffer getting created here
-;; Note that we don't want/need it: box-after in crypto handles that
-(def black-box-dscr (array-map ::clnt-short-pk {::type ::bytes ::length client-key-length}
-                               ::srvr-short-sk {::type ::bytes ::length server-key-length}))
-(def cookie
-  (array-map ::s' {::type ::bytes ::length server-key-length}
-             ::black-box {::type ::bytes ::length server-cookie-length}))
-;; TODO: Need matching specs for these keys.
-(s/def ::cookie-spec (s/keys :req [::s' ::black-box]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets

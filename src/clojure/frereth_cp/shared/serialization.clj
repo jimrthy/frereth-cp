@@ -52,7 +52,7 @@ Needing to declare these things twice is annoying."
                                "' under " k " in\n" fields))))
     (try
       (case cnvrtr
-        ::K/bytes (let [^Long n (::K/length dscr)
+        ::K/bytes (let [n (long (::K/length dscr))
                         beg (.readableBytes dst)]
                     (try
                       (log/debug (str "Getting ready to write "
@@ -62,7 +62,9 @@ Needing to declare these things twice is annoying."
                                       " a "
                                       (class dst)
                                       "\nfor field "
-                                      k))
+                                      k
+                                      "\nfrom " (count v)
+                                      " bytes in " v))
                       (.writeBytes dst v 0 n)
                       (let [end (.readableBytes dst)]
                         (assert (= (- end beg) n)))
@@ -124,11 +126,15 @@ Needing to declare these things twice is annoying."
 (defn calculate-length
   [{cnvrtr ::K/type
     :as dscr}]
-  (case cnvrtr
-    ::K/bytes (::K/length dscr)
-    ::K/const (count (::K/contents dscr))
-    ::K/int-64 8
-    ::K/zeroes (::K/length dscr)))
+  (try
+    (case cnvrtr
+      ::K/bytes (::K/length dscr)
+      ::K/const (count (::K/contents dscr))
+      ::K/int-64 8
+      ::K/zeroes (::K/length dscr))
+    (catch IllegalArgumentException ex
+      (log/error ex (str "Trying to calculate length for "
+                         dscr)))))
 
 (s/fdef extract-byte-array-subset
         :args (s/and (s/cat :offset nat-int?

@@ -6,7 +6,10 @@
             [frereth-cp.client.initiate :as clnt-init]
             [frereth-cp.server :as server]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.constants :as K])
+            [frereth-cp.shared
+             [constants :as K]
+             [specs :as specs]
+             [templates :as templates]])
   (:import io.netty.buffer.Unpooled))
 
 (deftest test-cookie-composition
@@ -21,9 +24,9 @@
         dst (Unpooled/buffer (* 2 K/cookie-packet-length))
         ;; Built from the array, offset, and the length
         client-nonce-suffix-buffer (Unpooled/wrappedBuffer working-nonce
-                                                           K/server-nonce-prefix-length
-                                                           K/server-nonce-suffix-length)
-        client-nonce-suffix (byte-array K/server-nonce-suffix-length)
+                                                           specs/server-nonce-prefix-length
+                                                           specs/server-nonce-suffix-length)
+        client-nonce-suffix (byte-array specs/server-nonce-suffix-length)
         cookie-buffer (Unpooled/wrappedBuffer boxed
                                               K/box-zero-bytes
                                               K/cookie-frame-length)
@@ -36,7 +39,7 @@
                      ::K/client-nonce-suffix client-nonce-suffix
                      ::K/cookie cookie}]
       (try
-        (let [composed (shared/compose K/cookie-frame to-encode dst)]
+        (let [composed (shared/compose templates/cookie-frame to-encode dst)]
           ;; It's very tempting to dissect this for a round trip.
           ;; But, honestly, that's what property-based tests are best at
           (is composed))

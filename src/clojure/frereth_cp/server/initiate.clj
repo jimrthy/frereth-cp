@@ -4,17 +4,21 @@
 This is the part that possibly establishes a 'connection'"
   (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
-            [frereth-cp.server.message :as message]
-            [frereth-cp.server.state :as state]
+            [frereth-cp.server
+             [message :as message]
+             [state :as state]]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [serialization :as serial]
+             [specs :as specs]
+             [templates :as templates]]
             [frereth-cp.util :as util]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            [io.netty.buffer ByteBuf Unpooled]))
@@ -257,7 +261,7 @@ To be fair, this layer *is* pretty special."
             ;; for this.
             ;; Q: Don't I?
             (let [vouch-buf (Unpooled/wrappedBuffer inner-vouch-bytes)]
-              (serial/decompose K/black-box-dscr vouch-buf))))))))
+              (serial/decompose templates/black-box-dscr vouch-buf))))))))
 
 (s/fdef open-client-crypto-box
         :args (s/cat :initiate ::K/initiate-packet-spec

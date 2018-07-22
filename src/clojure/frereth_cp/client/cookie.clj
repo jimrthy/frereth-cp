@@ -13,7 +13,8 @@
              [crypto :as crypto]
              [logging :as log]
              [specs :as specs]
-             [serialization :as serial]]
+             [serialization :as serial]
+             [templates :as templates]]
             [frereth-cp.util :as utils]
             [manifold
              [deferred :as dfrd]
@@ -35,7 +36,7 @@
                                          ::shared/packet
                                          ::state/server-security
                                          ::state/shared-secrets])
-                     :received ::K/cookie-frame)
+                     :received ::templates/cookie-frame)
         :ret (s/keys :req [::log/state]
                      :opt [::state/server-security]))
 (defn decrypt-actual-cookie
@@ -68,9 +69,9 @@
                                                           cookie
                                                           shared)]
         (if decrypted
-          (let [{server-short-pk ::K/s'
-                 server-cookie ::K/black-box
-                 :as extracted} (serial/decompose K/cookie decrypted)
+          (let [{server-short-pk ::templates/s'
+                 server-cookie ::templates/black-box
+                 :as extracted} (serial/decompose templates/cookie decrypted)
                 server-security (assoc (::state/server-security this)
                                        ::specs/public-short server-short-pk,
                                        ::state/server-cookie server-cookie)]
@@ -117,7 +118,7 @@
         {:keys [::K/header
                 ::K/client-extension
                 ::K/server-extension]
-         :as rcvd} (serial/decompose-array K/cookie-frame packet)
+         :as rcvd} (serial/decompose-array templates/cookie-frame packet)
         log-state (log/info log-state
                             ::decrypt-cookie-packet
                             "Verifying that decrypted packet looks like a Cookie"

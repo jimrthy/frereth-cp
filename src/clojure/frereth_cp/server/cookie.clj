@@ -13,7 +13,8 @@
              [crypto :as crypto]
              [logging :as log2]
              [serialization :as serial]
-             [specs :as specs]]
+             [specs :as specs]
+             [templates :as templates]]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -98,12 +99,12 @@
    ;; Currently, it does not.
    ;; Q: What are the odds that this has something to do with the 0 padding
    ;; and the extra 16 bytes the test needs to drop from the return value here?
-   (let [boxed-cookie (crypto/build-crypto-box K/black-box-dscr
-                                               {::K/clnt-short-pk client-short-pk
-                                                ::K/srvr-short-sk my-short-sk}
-                                               minute-key
-                                               K/cookie-nonce-minute-prefix
-                                               nonce-suffix)
+   (let [boxed-cookie (crypto/build-box templates/black-box-dscr
+                                        {::templates/clnt-short-pk client-short-pk
+                                         ::templates/srvr-short-sk my-short-sk}
+                                        minute-key
+                                        K/cookie-nonce-minute-prefix
+                                        nonce-suffix)
          ;; This is similar to what the reference implementation
          ;; does when it just overwrites the garbage portion of the zero-padding
          ;; with it on line 321.
@@ -128,135 +129,69 @@
         :ret {::log2/state
               ::specs/byte-array})
 (defn prepare-packet!
+  "Set up the inner cookie"
   [{:keys [::state/client-short<->server-long
            ::log2/logger
            ::state/minute-key
-           ;; Q: What is/was this for?
-           ;; A: Well, it's supposed to be the buffer of bytes
-           ;; that get encrypted
-           ::clear-text
            ::shared/working-nonce]
-    client-short-pk ::state/client-short-pk
-    log-state ::log2/state
-    ;; This is really the destination for the crypto-box
-    ;; being built from clear-text
-    ^bytes text ::shared/text}]
-  "Called mostly for side-effects.
-
-The most important is that it encrypts clear-text
-and puts the crypto-text into the byte-array in text.
-
-Except that it doesn't seem to do that at all."
+     client-short-pk ::state/client-short-pk
+    log-state ::log2/state}]
   (let [client-short-pk (bytes client-short-pk)
         ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair (crypto/random-key-pair)
-        {actual ::specs/byte-array
+        {black-box ::specs/byte-array
          log-state ::log2/state
          working-nonce ::specs/server-nonce-suffix} (build-inner-cookie log-state
                                                                    client-short-pk
                                                                    (.getSecretKey key-pair)
                                                                    minute-key)
-        actual (bytes actual)
-        log-state (log2/debug log-state
-                              ::prepare-packet!
-                              "Copying inner cookie into clear-text wrapper"
-                              {::source (vec actual)
-                               ::source-length (count actual)
-                               ::destination text
-                               ::destination-length (count text)
-                               ::starting-offset K/key-length
-                               ::bytes-to-copy K/server-cookie-length})
-        ;; We're missing the logger here
-        _ (log/warn (str "Flushing logs\n" log-state "\nthrough " logger))
-        log-state (log2/flush-logs! logger log-state)]
-    (try
-      ;; Reference implementation is really doing pointer math with the array
-      ;; to make this work.
-      ;; It's encrypting from (+ clear-text 64) over itself.
-      ;; There just isn't a good way to do the same thing in java.
-      ;; (The problem, really, is that I have to copy the plaintext
-      ;; so it winds up at the start of the array).
-      ;; Note that this is a departure from the reference implementation!
+        black-box (bytes black-box)
+        _ (throw (RuntimeException. "Need to restore code that built the cookie around the black-box"))
+        cookie nil
+        log-state (log2/info log-state
+                             ::prepare-cookie!
+                             "Full cookie going to client that it should be able to decrypt"
+                             {::specs/byte-array (try (with-out-str (b-s/print-bytes cookie))
+                                                      (catch Exception ex
+                                                        (log/error ex "Trying to show cookie contents")
+                                                        (vec cookie)))
+                              ::shared-secret (str "FIXME: Don't log this!\n"
+                                                   (try
+                                                     (with-out-str (b-s/print-bytes client-short<->server-long))
+                                                     (catch Exception ex
+                                                       (log/error ex "Trying to show shared key")
+                                                       (vec client-short<->server-long))))})]
+    {::specs/byte-array cookie
+     ::log2/state log-state}))
 
-      ;; Copy that encrypted cookie into the text working area
-
-      (b-t/byte-copy! text K/key-length K/server-cookie-length actual)
-
-      ;; This step should be redundant: it's part of the inner actual cookie,
-      ;; so should have already been handled when we built that
-
-      (comment
-        ;; Along with the nonce
-        ;; Note that this overwrites the first 16 bytes of the box we just wrapped.
-        ;; Go with the assumption that those are the initial garbage 0 bytes that should
-        ;; be discarded anyway
-        (b-t/byte-copy! text
-                        ;; reference starts at offset 64 here.
-                        ;; Then zeros out the first 32 bytes.
-                        ;; Don't need that much, since the encryption library
-                        ;; copes with that extra padding.
-                        K/key-length
-                        specs/server-nonce-suffix-length
-                        working-nonce
-                        specs/server-nonce-prefix-length))  ; line 321
-
-      ;; And now we need to encrypt that.
-      ;; This really belongs in its own function
-      ;; And it's another place where I should probably call compose
-
-      (b-t/byte-copy! text 0 K/key-length (.getPublicKey key-pair))
-
-      ;; Overwrite the prefix.
-      ;; Reuse the 16 byte suffix that came in from the client.
-      ;; Note that, as written, we have to access this suffix
-      ;; later in build-cookie-packet.
-      ;; That may technically be functionally pure, but it seems
-      ;; pretty awful.
-      ;; If nothing else, it's far too tightly coupled.
-
-      (throw (RuntimeException. "Another working-nonce to eliminate"))
-      (b-t/byte-copy! working-nonce
-                      0
-                      specs/server-nonce-prefix-length
-                      K/cookie-nonce-prefix)
-      (let [cookie (crypto/box-after client-short<->server-long
-                                     text
-                                     K/unboxed-crypto-cookie-length ; 128
-                                     ;; Here's my culprit
-                                     working-nonce)
-            cookie (bytes cookie)
-            log-state (log2/info log-state
-                                 ::prepare-cookie!
-                                 "Full cookie going to client that it should be able to decrypt"
-                                 {::specs/byte-array (try (with-out-str (b-s/print-bytes cookie))
-                                                          (catch Exception ex
-                                                            (log/error ex "Trying to show cookie contents")
-                                                            (vec cookie)))
-                                  ::shared-secret (str "FIXME: Don't log this!\n"
-                                                       (try
-                                                         (with-out-str (b-s/print-bytes client-short<->server-long))
-                                                         (catch Exception ex
-                                                           (log/error ex "Trying to show shared key")
-                                                           (vec client-short<->server-long))))})]
-        {::specs/byte-array cookie
-         ::log2/state log-state}))))
-
+(s/fdef build-cookie-packet
+        :args (s/cat)
+        ;; FIXME: Just return a B]
+        :ret ::specs/byte-buf)
 (defn build-cookie-packet
   [{client-extension ::K/clnt-xtn
     server-extension ::K/srvr-xtn}
-   ^bytes working-nonce
+   working-nonce
    crypto-cookie]
-  (let [nonce-suffix (byte-array specs/server-nonce-suffix-length)]
+  (let [working-nonce (bytes working-nonce)
+        nonce-suffix (byte-array specs/server-nonce-suffix-length)]
     (b-t/byte-copy! nonce-suffix 0
                     specs/server-nonce-suffix-length
                     working-nonce
                     specs/server-nonce-prefix-length)
-    (let [^ByteBuf composed (serial/compose K/cookie-frame {::K/header K/cookie-header
-                                                            ::K/client-extension client-extension
-                                                            ::K/server-extension server-extension
-                                                            ::K/client-nonce-suffix nonce-suffix
-                                                            ::K/cookie crypto-cookie})]
+    ;; Big nope on crypto-cookie.
+    ;; What I have here is the 96 byte inner cookie (what I'm calling
+    ;; the black-box).
+    ;; It's lost the portion that converts it to a boxed "cookie"
+    (throw (RuntimeException. "Start back here"))
+    (let [fillers {::templates/header K/cookie-header
+                   ::templates/client-extension client-extension
+                   ::templates/server-extension server-extension
+                   ::templates/client-nonce-suffix nonce-suffix
+                   ::templates/cookie crypto-cookie}
+          ^ByteBuf composed (serial/compose templates/cookie-frame fillers)]
       ;; I really shouldn't need to do this
       ;; FIXME: Make sure it gets released
+      ;; Better: extract the byte array and return that
       (.retain composed)
       composed)))
 

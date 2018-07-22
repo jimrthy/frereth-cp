@@ -330,8 +330,7 @@
     (TweetNaclFast/crypto_box_beforenm shared public secret)
     shared))
 
-;; FIXME: Refactor/rename this to build-box
-(s/fdef build-crypto-box
+(s/fdef build-box
         ;; FIXME: Figure out a meaningful way to spec out template and source
         :args (s/cat :template any?
                      :source any?
@@ -343,7 +342,7 @@
         ;; The length of :ret can be determined by :template.
         ;; But that gets into troublesome details about serialization
         :ret bytes?)
-(defn build-crypto-box
+(defn build-box
   "Compose a map into bytes and encrypt it
 
   Note that tmplt should *not* include the requisite 32 bytes of 0 padding"
@@ -367,6 +366,26 @@
                       nonce-suffix-length
                       nonce-suffix)
       (box-after key-pair dst n nonce))))
+
+;; FIXME: Make this indirection wrapper go away
+(s/fdef build-crypto-box
+        ;; FIXME: Figure out a meaningful way to spec out template and source
+        :args (s/cat :template any?
+                     :source any?
+                     :shared-key ::specs/crypto-key
+                     :nonce-prefix (s/or :server ::specs/server-nonce-prefix
+                                         :client ::specs/client-nonce-prefix)
+                     :nonce-suffix (s/or :server ::specs/server-nonce-suffix
+                                         :client ::specs/client-nonce-suffix))
+        ;; The length of :ret can be determined by :template.
+        ;; But that gets into troublesome details about serialization
+        :ret bytes?)
+(defn build-crypto-box
+  "Compose a map into bytes and encrypt it
+
+  Note that tmplt should *not* include the requisite 32 bytes of 0 padding"
+  [tmplt src key-pair nonce-prefix nonce-suffix]
+  (build-box tmplt src key-pair nonce-prefix nonce-suffix))
 
 (defn encrypt-block
   "Block-encrypt a byte-array"
