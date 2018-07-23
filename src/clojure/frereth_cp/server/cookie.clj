@@ -56,10 +56,10 @@
         (println )
         (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
         ;; Original needs to leave 0 padding up front
-        ;; Note that the first 16 of those 32 bytes are garbage.
+        ;; Note that the first 16 of these bytes are padding.
         ;; They're meant to be overwritten by the nonce-suffix
-        (comment (.getBytes buffer 0 text 32 K/server-cookie-length))
         (.getBytes buffer 0 result)
+        ;; Do that overwriting
         (b-t/byte-copy! result nonce-suffix)
         result))))
 
@@ -123,11 +123,49 @@
       ;; this suffix.
       ::specs/server-nonce-suffix nonce-suffix})))
 
-;; FIXME: Write this spec
+(s/fdef build-cookie-wrapper
+        :args (s/cat :log-state ::log2/state
+                     :shared-key ::state/client-short<->server-long
+                     :nonce-suffix ::crypto/srvr-nonce-suffix
+                     :pk-session ::specs/public-short
+                     :black-box ::templates/inner-cookie)
+        :ret (s/keys :req [::log2/state]
+                     :opt [::templates/encrypted-cookie]))
+(defn build-cookie-wrapper
+  "Put together the real payload for the cookie packet
+
+  This builds the 144-byte crypto box that wraps the server's
+  public session key and the actual cookie black-box"
+  [log-state
+   shared-key
+   nonce-suffix
+   pk-session
+   black-box]
+  ;; It almost doesn't seem worth having a stand-alone
+  ;; function for this.
+  ;; Then again, a semantically meaningful wrapper definitely
+  ;; isn't a bad thing
+  (log/debug "Trying to encrypt the real cookie")
+  (try
+    (let [result
+          (crypto/build-box templates/cookie
+                            {::templates/s' pk-session
+                             ::templates/inner-cookie black-box}
+                            shared-key
+                            K/cookie-nonce-prefix
+                            nonce-suffix)]
+      (log/debug "Encrypting the real cookie succeeded")
+      {::log2/state log-state
+       ::templates/encrypted-cookie result})
+    (catch Throwable ex
+      (log/error ex "Trying to build the crypto box")
+      {::log2/state (log2/exception log-state ex ::build-cookie-wrapper)})))
+
 (s/fdef prepare-packet!
         :args (s/cat :this ::state/state)
-        :ret {::log2/state
-              ::specs/byte-array})
+        :ret (s/keys :req [::log2/state]
+                     :opt [::templates/encrypted-cookie
+                           ::specs/server-nonce-suffix]))
 (defn prepare-packet!
   "Set up the inner cookie"
   [{:keys [::state/client-short<->server-long
@@ -137,63 +175,53 @@
      client-short-pk ::state/client-short-pk
     log-state ::log2/state}]
   (let [client-short-pk (bytes client-short-pk)
-        ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair key-pair (crypto/random-key-pair)
+        ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair session-keys (crypto/random-key-pair)
         {black-box ::specs/byte-array
          log-state ::log2/state
-         working-nonce ::specs/server-nonce-suffix} (build-inner-cookie log-state
-                                                                   client-short-pk
-                                                                   (.getSecretKey key-pair)
-                                                                   minute-key)
-        black-box (bytes black-box)
-        _ (throw (RuntimeException. "Need to restore code that built the cookie around the black-box"))
-        cookie nil
+         nonce-suffix ::specs/server-nonce-suffix} (build-inner-cookie log-state
+                                                                       client-short-pk
+                                                                       (.getSecretKey session-keys)
+                                                                       minute-key)
+        {cookie ::templates/encrypted-cookie
+         log-state ::log2/state} (build-cookie-wrapper log-state
+                                                       client-short<->server-long
+                                                       nonce-suffix
+                                                       (.getPublicKey session-keys)
+                                                       black-box)
         log-state (log2/info log-state
                              ::prepare-cookie!
                              "Full cookie going to client that it should be able to decrypt"
-                             {::specs/byte-array (try (with-out-str (b-s/print-bytes cookie))
-                                                      (catch Exception ex
-                                                        (log/error ex "Trying to show cookie contents")
-                                                        (vec cookie)))
+                             {::templates/inner-cookie
+                              (try (with-out-str (b-s/print-bytes cookie))
+                                   (catch Exception ex
+                                     (log/error ex "Trying to show cookie contents")
+                                     (vec cookie)))
                               ::shared-secret (str "FIXME: Don't log this!\n"
                                                    (try
                                                      (with-out-str (b-s/print-bytes client-short<->server-long))
                                                      (catch Exception ex
                                                        (log/error ex "Trying to show shared key")
                                                        (vec client-short<->server-long))))})]
-    {::specs/byte-array cookie
+    {::templates/encrypted-cookie cookie
+     ::K/srvr-nonce-suffix nonce-suffix
      ::log2/state log-state}))
 
 (s/fdef build-cookie-packet
         :args (s/cat)
-        ;; FIXME: Just return a B]
-        :ret ::specs/byte-buf)
+        :ret ::K/cookie-packet)
 (defn build-cookie-packet
   [{client-extension ::K/clnt-xtn
     server-extension ::K/srvr-xtn}
-   working-nonce
+   nonce-suffix
    crypto-cookie]
-  (let [working-nonce (bytes working-nonce)
-        nonce-suffix (byte-array specs/server-nonce-suffix-length)]
-    (b-t/byte-copy! nonce-suffix 0
-                    specs/server-nonce-suffix-length
-                    working-nonce
-                    specs/server-nonce-prefix-length)
-    ;; Big nope on crypto-cookie.
-    ;; What I have here is the 96 byte inner cookie (what I'm calling
-    ;; the black-box).
-    ;; It's lost the portion that converts it to a boxed "cookie"
-    (throw (RuntimeException. "Start back here"))
+  (let [nonce-suffix (bytes nonce-suffix)]
     (let [fillers {::templates/header K/cookie-header
                    ::templates/client-extension client-extension
                    ::templates/server-extension server-extension
                    ::templates/client-nonce-suffix nonce-suffix
                    ::templates/cookie crypto-cookie}
           ^ByteBuf composed (serial/compose templates/cookie-frame fillers)]
-      ;; I really shouldn't need to do this
-      ;; FIXME: Make sure it gets released
-      ;; Better: extract the byte array and return that
-      (.retain composed)
-      composed)))
+      (b-s/convert composed specs/byte-array-type))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -201,7 +229,8 @@
 (s/fdef do-build-response
         :args (s/cat :state ::state/state
                      :recipe (s/keys :req [::srvr-specs/cookie-components ::K/hello-spec]))
-        :ret ::specs/byte-buf)
+        :ret (s/keys :req [::log2/state]
+                     :opt [::K/cookie-packet]))
 (defn do-build-response
   [{:keys [::log2/logger]
     log-state ::log2/state
@@ -210,16 +239,16 @@
      :as cookie-components} ::srvr-specs/cookie-components
     hello-spec ::K/hello-spec}]
   (log/info "Preparing cookie")
-  (let [{crypto-box ::specs/byte-array
+  (let [{crypto-box ::templates/encrypted-cookie
+         nonce-suffix ::K/srvr-nonce-suffix
          log-state ::log2/state} (prepare-packet! (assoc cookie-components
                                                          ::log2/logger logger
-                                                         ::log2/state log-state))
-        ;; FIXME: Don't just throw this away
-        log-state (log2/flush-logs! logger log-state)]
+                                                         ::log2/state log-state))]
     ;; Note that the reference implementation overwrites this incoming message in place.
     ;; That seems dangerous, but the HELLO is very deliberately longer than
     ;; our response.
     ;; And it does save a malloc/GC.
     ;; I can't do that, because of the way compose works.
     ;; TODO: Revisit this decision if/when the GC turns into a problem.
-    (build-cookie-packet hello-spec working-nonce crypto-box)))
+    {::K/cookie-packet (build-cookie-packet hello-spec working-nonce crypto-box)
+     ::log2/state log-state}))

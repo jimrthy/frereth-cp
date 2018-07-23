@@ -134,7 +134,8 @@
     ;; It seems like failing to build the cookie should just return
     ;; state as-is.
     (when cookie-recipe
-      (let [^ByteBuf cookie (cookie/do-build-response state cookie-recipe)
+      (let [{cookie ::K/cookie-packet
+             log-state ::log2/state} (cookie/do-build-response state cookie-recipe)
             log-state (log2/info log-state
                                  ::handle-hello!
                                  (str "Cookie packet built. Sending it."))]
@@ -175,14 +176,13 @@
                                                                 ::handle-hello!
                                                                 "Sending Cookie failed:" err))))
               (assoc state
-                     ::log2/state log-state))
+                     ::log2/state (log2/flush-logs! logger log-state)))
             (throw (ex-info "Missing destination"
                             (or (::state/client-write-chan state)
                                 {::problem "No client-write-chan"
                                  ::keys (keys state)
                                  ::actual state}))))
           (catch Exception ex
-
             (assoc state
                    ::log2/state
                    (log2/exception log-state

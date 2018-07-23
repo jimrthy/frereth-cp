@@ -146,6 +146,7 @@
 (def unboxed-crypto-cookie-length 128)
 
 (s/def ::srvr-nonce-suffix ::specs/server-nonce-suffix)
+(s/def ::cookie-packet (partial specs/counted-bytes cookie-packet-length))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets

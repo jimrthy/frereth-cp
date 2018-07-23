@@ -251,7 +251,7 @@
       (do
         ;; Move on the next server in the list
         (binding [*out* *err*]
-          (println "hello/cookie-retrieved: Missing the server-cookie!!"))
+          (println "hello/cookie-retrieved: Missing the server-cookie!!\nAmong:\n" server-security))
         (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
                                                                                     ::cookie-retrieved
                                                                                     "Moving on to next ip"

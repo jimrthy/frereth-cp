@@ -11,6 +11,8 @@
 ;;; FIXME: Refactor all the template definitions from constants
 ;;; into here.
 
+;;; FIXME: Refactor specs back into the specs ns. Or at least constants.
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Cookie packets
 
@@ -18,12 +20,15 @@
 ;; Note that we don't want/need it: box-after in crypto handles that
 (def black-box-dscr (array-map ::clnt-short-pk {::K/type ::K/bytes ::K/length K/client-key-length}
                                ::srvr-short-sk {::K/type ::K/bytes ::K/length K/server-key-length}))
+(s/def ::inner-cookie (partial specs/counted-bytes K/server-cookie-length))
 (def cookie
   (array-map ::s' {::K/type ::K/bytes ::K/length K/server-key-length}
-             ::black-box {::K/type ::K/bytes ::K/length K/server-cookie-length}))
-;; TODO: Need matching specs for these keys.
-(s/def ::cookie-spec (s/keys :req [::s' ::black-box]))
+             ::inner-cookie {::K/type ::K/bytes ::K/length K/server-cookie-length}))
 
+(s/def ::s' ::specs/public-short)
+(s/def ::cookie-spec (s/keys :req [::s' ::inner-cookie]))
+
+(s/def ::encrypted-cookie (partial specs/counted-bytes K/cookie-frame-length))
 
 (def cookie-frame
   "The boiler plate around a cookie"

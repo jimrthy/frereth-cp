@@ -45,9 +45,9 @@
            ::state/shared-secrets]
     log-state ::log/state
     :as this}
-   {:keys [::K/header
-           ::K/client-extension
-           ::K/server-extension]
+   {:keys [::templates/header
+           ::templates/client-extension
+           ::templates/server-extension]
     ^bytes client-nonce-suffix ::K/client-nonce-suffix
     ^bytes cookie ::K/cookie
     :as rcvd}]
@@ -70,7 +70,7 @@
                                                           shared)]
         (if decrypted
           (let [{server-short-pk ::templates/s'
-                 server-cookie ::templates/black-box
+                 server-cookie ::templates/inner-cookie
                  :as extracted} (serial/decompose templates/cookie decrypted)
                 server-security (assoc (::state/server-security this)
                                        ::specs/public-short server-short-pk,
@@ -115,9 +115,9 @@
                              "Incoming packet that looks like it might be a cookie"
                              {::raw-packet packet
                               ::human-readable (shared/bytes->string packet)})
-        {:keys [::K/header
-                ::K/client-extension
-                ::K/server-extension]
+        {:keys [::templates/header
+                ::templates/client-extension
+                ::templates/server-extension]
          :as rcvd} (serial/decompose-array templates/cookie-frame packet)
         log-state (log/info log-state
                             ::decrypt-cookie-packet
@@ -232,9 +232,13 @@
                                                              ::log/state log-state
                                                              ::shared/packet message))]
               ;; Q: Would merge-with be more appropriate?
-              (let [{:keys [::shared/my-keys]
+              (let [{:keys [::state/server-security]
+                     log-state ::log/state} decrypted
+                    {:keys [::shared/my-keys]
                      :as this} (merge this decrypted)]
-                (if (::state/server-security decrypted)
+                ;; This check is failing.
+                ;; FIXME: Start back here
+                (if server-security
                   (let [server-short (get-in this
                                              [::state/server-security
                                               ::specs/public-short])
@@ -280,8 +284,9 @@
                   (assoc this
                          ::log/state (log/warn log-state
                                                log-label
-                                               "Decrypting cookie failed"
-                                               {::problem cookie}))))
+                                               "Missing ::state/server-security"
+                                               {::problem cookie
+                                                ::decrypted (dissoc decrypted ::log/state)}))))
               (assoc this
                      ::log/state (log/warn log-state
                                            log-label

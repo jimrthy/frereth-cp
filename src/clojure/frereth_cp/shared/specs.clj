@@ -45,10 +45,19 @@ This really seems like a bad road to go down."
   #(instance? klass %))
 
 (s/def ::atom (class-predicate (class (atom nil))))
-(def byte-array-type (Class/forName "[B"))
-(s/def ::byte-array byte-array-type)
+(def byte-array-type
+  "This seems redundant. Should generally just use bytes?"
+  (Class/forName "[B"))
+(s/def ::byte-array (class-predicate byte-array-type))
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
 (s/def ::nio-byte-buffer (class-predicate java.nio.ByteBuffer))
+
+(defn counted-bytes
+  "Spec for a byte-array of a specific length"
+  [n x]
+  (s/and (bytes? x)
+         #(= (count x) n)))
+
 ;; Q: Is this worth abstracting?
 ;; Especially since I've probably used dfrd/deferrable more
 ;; often?

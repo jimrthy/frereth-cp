@@ -324,12 +324,7 @@
                                        (not= ::timeout packet)
                                        (not= ::take-timeout packet))
                                 (if-let [client<-server (::client-state/chan<-server client)]
-                                  (let [cookie-buffer (:message packet)
-                                        ;; I'm using this pattern often enough in here alone
-                                        ;; that I should get this working through something
-                                        ;; like byte-streams in bit-twiddling
-                                        cookie (byte-array (.readableBytes cookie-buffer))]
-                                    (.readBytes cookie-buffer cookie)
+                                  (let [cookie (:message packet)]
                                     (is (= server-ip (-> packet
                                                          :host
                                                          .getAddress
