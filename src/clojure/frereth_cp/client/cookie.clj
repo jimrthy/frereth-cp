@@ -45,13 +45,15 @@
            ::state/shared-secrets]
     log-state ::log/state
     :as this}
-   {:keys [::templates/header
-           ::templates/client-extension
+   {:keys [::templates/client-extension
+           ::templates/client-nonce-suffix
+           ::templates/cookie
+           ::templates/header
            ::templates/server-extension]
-    ^bytes client-nonce-suffix ::K/client-nonce-suffix
-    ^bytes cookie ::K/cookie
     :as rcvd}]
-  (let [log-state (log/debug log-state
+  (let [client-nonce-suffix (bytes client-nonce-suffix)
+        cookie (bytes cookie)
+        log-state (log/debug log-state
                              ::decrypt-actual-cookie
                              "Setting up cookie decryption"
                              {::this this
@@ -62,6 +64,10 @@
                       {::state/shared-secrets shared-secrets
                        ::log/state log-state})))
     (try
+      (println "Getting ready to try to unbox cookie from\n"
+               (vec cookie)
+               "\nusing nonce suffix:" (vec client-nonce-suffix)
+               "\nand shared key:" (vec shared))
       (let [{log-state ::log/state
              decrypted ::crypto/unboxed} (crypto/open-box log-state
                                                           K/cookie-nonce-prefix
@@ -95,8 +101,8 @@
                                          ::state/server-extension
                                          ::state/server-security
                                          ::state/shared-secrets]))
-        :ret (s/nilable (s/keys :req [::log/state]
-                                :opt [::state/server-security])))
+        :ret (s/keys :req [::log/state]
+                     :opt [::state/server-security]))
 (defn decrypt-cookie-packet
   [{:keys [::shared/extension
            ::shared/packet
@@ -237,7 +243,6 @@
                     {:keys [::shared/my-keys]
                      :as this} (merge this decrypted)]
                 ;; This check is failing.
-                ;; FIXME: Start back here
                 (if server-security
                   (let [server-short (get-in this
                                              [::state/server-security
@@ -302,11 +307,12 @@
                  ::log/state (log/warn log-state
                                        log-label
                                          "Invalid response. Just discard and retry"
-                                         {::problem cookie})))
+                                         {::problem cookie
+                                          ::cookie-length (count cookie)})))
         (let [log-state (log/warn log-state
                                   log-label
                                   "Server didn't respond to HELLO. Move on to next.")]
-          (assoc this ::log/state) log-state))
+          (assoc this ::log/state log-state)))
       (catch Exception ex
         {::log/state (log/exception log-state
                                     ex

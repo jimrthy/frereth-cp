@@ -99,7 +99,11 @@
    ;; Currently, it does not.
    ;; Q: What are the odds that this has something to do with the 0 padding
    ;; and the extra 16 bytes the test needs to drop from the return value here?
-   (let [boxed-cookie (crypto/build-box templates/black-box-dscr
+   (let [log-state (log2/debug log-state
+                               ::build-inner-cookie
+                               "Encrypting inner cookie"
+                               {::specs/server-nonce-suffix (vec nonce-suffix)})
+         boxed-cookie (crypto/build-box templates/black-box-dscr
                                         {::templates/clnt-short-pk client-short-pk
                                          ::templates/srvr-short-sk my-short-sk}
                                         minute-key
@@ -235,11 +239,12 @@
   [{:keys [::log2/logger]
     log-state ::log2/state
     :as state}
-   {{:keys [::shared/working-nonce]
-     :as cookie-components} ::srvr-specs/cookie-components
-    hello-spec ::K/hello-spec}]
-  (log/info "Preparing cookie")
-  (let [{crypto-box ::templates/encrypted-cookie
+   {:keys [::srvr-specs/cookie-components
+           ::K/hello-spec]}]
+  (let [log-state (log2/info log-state
+                             ::do-build-response
+                             "Preparing cookie")
+        {crypto-box ::templates/encrypted-cookie
          nonce-suffix ::K/srvr-nonce-suffix
          log-state ::log2/state} (prepare-packet! (assoc cookie-components
                                                          ::log2/logger logger
@@ -250,5 +255,5 @@
     ;; And it does save a malloc/GC.
     ;; I can't do that, because of the way compose works.
     ;; TODO: Revisit this decision if/when the GC turns into a problem.
-    {::K/cookie-packet (build-cookie-packet hello-spec working-nonce crypto-box)
+    {::K/cookie-packet (build-cookie-packet hello-spec nonce-suffix crypto-box)
      ::log2/state log-state}))

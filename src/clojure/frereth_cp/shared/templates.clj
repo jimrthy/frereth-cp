@@ -47,5 +47,18 @@
 (s/def ::cookie-frame (s/keys :req [::header
                                     ::client-extension
                                     ::server-extension
+                                    ;; It's tempting to think this is what's
+                                    ;; getting assembled around line 321.
+                                    ;; It isn't.
+                                    ;; This is both part of the cookie black
+                                    ;; box and part of the plaintext outer packet.
+                                    ;; Which seems like it might offer an attack
+                                    ;; vector, similar to something like the
+                                    ;; BREACH attack.
+                                    ;; security.stackexchange.com assures me
+                                    ;; that that only applies to compressed
+                                    ;; data in very special circumstances
+                                    ;; which include mirroring client data.
+                                    ;; So trust the experts on this one.
                                     ::client-nonce-suffix
                                     ::cookie]))

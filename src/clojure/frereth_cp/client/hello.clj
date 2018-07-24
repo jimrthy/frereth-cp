@@ -187,17 +187,19 @@
                                                     "Sending HELLO failed. Will try the next (if any) in the list"
                                                     {::state/server-ips remaining-ips}))]
     (if remaining-ips
-      ;; FIXME: Return a partial version of this function for the trampoline to call
-      ;; That's easier said than done, because deferreds do not play nicely
-      ;; with the call stack.
-      (do-polling-loop
-       (assoc this
-              ::log-state log-state
-              ::state/server-ips remaining-ips)
-       raw-packet
-       cookie-waiter
-       (System/nanoTime)
-       (pick-next-timeout (count remaining-ips)))
+      (let [timeout-ns (pick-next-timeout (count remaining-ips))
+            timeout-ms (util/nanos->millis timeout-ns)]
+        ;; FIXME: Return a partial version of this function for the trampoline to call
+        ;; That's easier said than done, because deferreds do not play nicely
+        ;; with the call stack.
+        (do-polling-loop
+         (assoc this
+                ::log-state log-state
+                ::state/server-ips remaining-ips)
+         raw-packet
+         cookie-waiter
+         (System/nanoTime)
+         timeout-ms))
       (throw (ex-info "No IPs left. Giving up" this)))))
 
 (s/fdef cookie-retrieved
@@ -304,7 +306,7 @@
                      :hello-packet ::shared/message
                      :cookie-waiter ::state/cookie-waiter
                      :start-time nat-int?
-                     :timeout ::specs/time
+                     :timeout ::specs/milli-time
                      :ips ::state/server-ips)
         :ret ::state/state)
 (defn do-polling-loop

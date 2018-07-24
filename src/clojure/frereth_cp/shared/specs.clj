@@ -86,6 +86,11 @@ This really seems like a bad road to go down."
 ;; Honestly, this should just go away.
 (s/def ::timeout ::time)
 
+;; Time in nanoseconds
+(s/def ::nano-time ::time)
+;; Time in milliseconds
+(s/def ::milli-time ::time)
+
 ;; I really don't want to reference generators in here.
 ;; Much less something like rose-tree.
 ;; Those sorts of details really belong in a test ns.
