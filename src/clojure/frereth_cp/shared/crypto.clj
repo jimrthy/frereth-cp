@@ -369,17 +369,21 @@
 
 ;; FIXME: Make this indirection wrapper go away
 (s/fdef build-crypto-box
-        ;; FIXME: Figure out a meaningful way to spec out template and source
-        :args (s/cat :template any?
-                     :source any?
-                     :shared-key ::specs/crypto-key
-                     :nonce-prefix (s/or :server ::specs/server-nonce-prefix
-                                         :client ::specs/client-nonce-prefix)
-                     :nonce-suffix (s/or :server ::specs/server-nonce-suffix
-                                         :client ::specs/client-nonce-suffix))
-        ;; The length of :ret can be determined by :template.
-        ;; But that gets into troublesome details about serialization
-        :ret bytes?)
+  ;; FIXME: Figure out a meaningful way to spec out template and source
+  ;; They're really maps with matching keys.
+  ;; :template describes how :source values get structured into the
+  ;; binary result.
+  :args (s/cat :template any?
+               :source any?
+               :shared-key ::specs/crypto-key
+               :nonce-prefix (s/or :server ::specs/server-nonce-prefix
+                                   :client ::specs/client-nonce-prefix)
+               :nonce-suffix (s/or :server ::specs/server-nonce-suffix
+                                   :client ::specs/client-nonce-suffix))
+  ;; The length of :ret can be determined by :template.
+  ;; But that gets into troublesome details about serialization.
+  ;; So leave it be for now.
+  :ret bytes?)
 (defn build-crypto-box
   "Compose a map into bytes and encrypt it
 

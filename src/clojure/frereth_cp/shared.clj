@@ -86,7 +86,12 @@
 (s/def ::secret-key (s/and bytes? #(= (count %) K/key-length)))
 (s/def ::symmetric-key (s/and bytes? #(= (count %) K/key-length)))
 
+;; STARTED: Replace this:
 (s/def ::working-nonce (s/and bytes? #(= (count %) K/nonce-length)))
+;; with this:
+(s/def ::safe-nonce (s/and sequential?
+                           #(every? bytes? %)))
+
 (s/def ::text bytes?)
 (s/def ::work-area (s/keys :req [::text ::working-nonce]))
 

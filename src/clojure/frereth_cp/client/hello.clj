@@ -75,7 +75,7 @@
 (s/fdef build-raw
         :args (s/cat :this ::state/state
                       :short-term-nonce any?
-                      :working-nonce ::shared/working-nonce)
+                      :safe-nonce ::shared/safe-nonce)
         :ret (s/keys :req [::K/hello-spec ::log/state]))
 (defn build-raw
   [{:keys [::state/server-extension
@@ -85,7 +85,7 @@
     log-state ::log/state
     :as this}
    short-term-nonce
-   working-nonce]
+   safe-nonce]
   (let [log-state
         (if-let [{:keys [::state/server-security]} this]
           (log/debug log-state
@@ -98,9 +98,11 @@
                      ::state/state this}))
         my-short<->their-long (::state/client-short<->server-long shared-secrets)
         _ (assert my-short<->their-long)
+       working-nonce (byte-array safe-nonce)
         ;; Note that this definitely inserts the 16-byte prefix for me
         boxed (crypto/box-after my-short<->their-long
-                                K/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes) working-nonce)
+                                K/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes)
+                                working-nonce)
         ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
         log-state (log/info log-state
                             ::build-raw
@@ -112,29 +114,35 @@
                                                b-t/->string)
                              ::server-long-pk (b-t/->string (get-in this [::state/server-security
                                                                           ::specs/public-long]))
-                             ::state/client-short<->server-long (b-t/->string my-short<->their-long)})]
+                             ::state/client-short<->server-long (b-t/->string my-short<->their-long)})
+        nonce-suffix (byte-array (vec (drop specs/client-nonce-prefix-length
+                                            safe-nonce)))]
     {::template {::K/hello-prefix nil  ; This is a constant, so there's no associated value
                  ::K/srvr-xtn server-extension
                  ::K/clnt-xtn extension
                  ::K/clnt-short-pk (.getPublicKey my-short-pair)
                  ::K/zeros nil
-                 ::K/client-nonce-suffix (b-t/sub-byte-array working-nonce specs/client-nonce-prefix-length)
+                 ::K/client-nonce-suffix nonce-suffix
                  ::K/crypto-box boxed}
      ::log/state log-state}))
 
 (s/fdef build-actual-hello-packet
         :args (s/cat :this ::state/state
-                     ;; TODO: Verify that this is a long
+                     ;; TODO: Verify that this is a valid long
+                     ;; Annoying detail: Negatives are also legal, because this needs to map
+                     ;; into the ulong space.
+                     ;; More important TODO: Make sure I'm working within that range.
+                     ;; And that bigint isn't killing performance.
                      :short-nonce integer?
-                     :working-nonce bytes?)
+                     :safe-nonce ::shared/safe-nonce)
         :ret ::state/state)
 (defn build-actual-packet
   [{log-state ::log/state
     :as this}
    short-term-nonce
-   working-nonce]
+   safe-nonce]
   (let [{raw-hello ::template
-         log-state ::log/state} (build-raw this short-term-nonce working-nonce)
+         log-state ::log/state} (build-raw this short-term-nonce safe-nonce)
         log-state (log/info log-state
                             ::build-actual-packet
                             "Building Hello"
@@ -465,21 +473,22 @@
         ;; manage to handshake with a server
         {log-state ::log/state
          :as this} (state/clientextension-init this)
-        working-nonce (::shared/working-nonce work-area)
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
-        short-term-nonce (state/update-client-short-term-nonce packet-nonce)]
-    (b-t/byte-copy! working-nonce K/hello-nonce-prefix)
-    (b-t/uint64-pack! working-nonce specs/client-nonce-prefix-length short-term-nonce)
-
-    (let [log-state (log/info log-state
+        short-term-nonce (state/update-client-short-term-nonce packet-nonce)
+        safe-nonce-prefix (vec K/hello-nonce-prefix)
+        nonce-suffix (byte-array 8)]
+    ;; Q: Is it worth coming up with a more efficient way to build this?
+    (b-t/uint64-pack! nonce-suffix 0 short-term-nonce)
+    (let [safe-nonce (concat safe-nonce-prefix (vec nonce-suffix))
+          log-state (log/info log-state
                               ::do-build-packet
                               "Packed short-term- into working- -nonces"
                               {::short-term-nonce short-term-nonce
-                               ::shared/working-nonce (b-t/->string working-nonce)})
+                               ::shared/safe-nonce safe-nonce})
           {:keys [::shared/packet]
            log-state ::log/state} (build-actual-packet (assoc this ::log/state log-state)
                                                         short-term-nonce
-                                                        working-nonce)
+                                                        safe-nonce)
           log-state (log/info log-state
                               ::do-build-packet
                               "hello packet built. Returning/updating")]
