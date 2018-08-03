@@ -224,14 +224,21 @@
                                   -1 0)))
         ;; TODO: Revisit the original and decide whether it's worth the trouble.
         ;; ALT: Compare the prefix as a vector. See how much of a performance hit we take
+        ;; It doesn't seem likely that timing attack matter here. These get sent in
+        ;; clear-text.
+        ;; As always: check with a cryptographer.
         verified (and (b-t/bytes= K/client-header-prefix
                                   rcvd-prfx)
                       (b-t/bytes= extension
                                   rcvd-xtn))]
     (when-not verified
-      (log/warn "Dropping packet intended for someone else. Expected" (String. K/client-header-prefix)
-                "and" (vec extension)
-                "\nGot" (String. rcvd-prfx) "and" (vec rcvd-xtn)))
+      (log/warn (str "Dropping packet intended for someone else.\nExpected: "
+                     (String. K/client-header-prefix)
+                     " a " (class K/client-header-prefix)
+                     " and " (vec extension)
+                     "\nActual: " (String. rcvd-prfx)
+                     " a " (class rcvd-prfx)
+                     " and " (vec rcvd-xtn))))
     verified))
 
 (defn handle-message!

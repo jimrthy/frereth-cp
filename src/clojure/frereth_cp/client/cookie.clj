@@ -64,11 +64,12 @@
                       {::state/shared-secrets shared-secrets
                        ::log/state log-state})))
     (try
-      (println "Getting ready to try to unbox cookie from\n"
-               (vec cookie)
-               "\nusing nonce suffix:" (vec client-nonce-suffix)
-               "\nand shared key:" (vec shared))
-      (let [{log-state ::log/state
+      (let [log-state (log/debug log-state ::decrypt-actual-cookie
+                                 "Getting ready to try to unbox cookie\nFIXME: Don't log shared secret"
+                                 (assoc (select-keys rcvd [::templates/cookie
+                                                           ::templates/client-nonce-suffix])
+                                        ::state/client-short<->server-long shared))
+            {log-state ::log/state
              decrypted ::crypto/unboxed} (crypto/open-box log-state
                                                           K/cookie-nonce-prefix
                                                           client-nonce-suffix

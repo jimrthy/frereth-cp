@@ -215,7 +215,7 @@ To be fair, this layer *is* pretty special."
 (s/fdef extract-cookie
         :args (s/cat :cookie-cutter ::state/cookie-cutter
                      :initiate-packet ::K/initiate-packet-spec)
-        :ret ::K/cookie-spec)
+        :ret ::templates/cookie-spec)
 (defn extract-cookie
   [{:keys [::state/minute-key
            ::state/last-minute-key]
