@@ -220,6 +220,7 @@
     (try
       (if-not (or (= cookie ::drained)
                   (= cookie ::state/response-timed-out))
+        ;; Line 301 in reference
         (if (= K/cookie-packet-length (count message))
           (try
             (when-not (expected-sender? server-security
@@ -229,6 +230,7 @@
                               {::expected server-security
                                ::actual cookie})))
 
+            ;; Line 312
             (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
                                                                           [::shared/extension
                                                                            ;; FIXME: This needs to go away
@@ -243,7 +245,6 @@
                      log-state ::log/state} decrypted
                     {:keys [::shared/my-keys]
                      :as this} (merge this decrypted)]
-                ;; This check is failing.
                 (if server-security
                   (let [server-short (get-in this
                                              [::state/server-security
@@ -259,6 +260,8 @@
                                                   (crypto/box-prepare
                                                    server-short
                                                    (.getSecretKey my-short-pair)))]
+                        ;; This is an exception I added temporarily for debugging error
+                        ;; situations.
                         ;; Throwing this causes us to forget the incoming Cookie. And
                         ;; either move on to the next server or wait for another Cookie from
                         ;; this one (which, realistically, won't happen).

@@ -141,7 +141,8 @@
 (defn build-initiate-packet!
   "Combine message buffer and client state into an Initiate packet
 
-  This is destructive in the sense that it overwrites ::shared/work-area
+  This is destructive in the sense that it overwrites the byte-arrays
+  in ::shared/work-area
   FIXME: Eliminate that"
   [{log-state ::log/state
     :keys [::log/logger
@@ -165,23 +166,14 @@
         ;; I really don't like this approach to a shared work-area.
         ;; It kind-of made sense with the original approach, which involved
         ;; locking down access strictly from a single thread, using an agent.
-        ;; Note that this approach is worse than I thought at first glance:
-        ;; I'm really just reusing the last-used nonce (which, in theory,
-        ;; should be the one sent by the server for its cookie).
-        ;; That seems wrong all around. After all, the client can send Initiate
-        ;; packets any time it likes.
+        ;; Now, not so much. Though, realistically, there probably won't be
+        ;; multiple threads touching a single client (Q: will there?)
+        ;; At some point, I became convinced that the reference implementation
+        ;; was just reusing a portion of the incoming nonce. Which would have
+        ;; have this extremely dicey.
+        ;; This is absolutely not the case.
         ;; c.f. lines 329-334 in the reference spec.
         (let [working-nonce (byte-array K/nonce-length)
-              ;; Just reuse a subset of whatever the server sent us.
-              ;; Legal for the original Initiate Packet  because
-              ;; a) it uses a different prefix and
-              ;; b) it's a subset of the bytes the server really used anyway
-              ;; Note that this is actually for the *inner* vouch nonce.
-              ;; Which gets gets re-encrypted inside the Message chunk
-              ;; of the actual Initiate Packet.
-              ;; I'm going to trust the cryptographers that it's still
-              ;; safe for follow-up Initiate packets.
-              ;; TODO: Verify that it gets reused the way I think.
               nonce-suffix (b-t/sub-byte-array working-nonce
                                                specs/client-nonce-prefix-length)
               {:keys [::specs/crypto-box]
@@ -323,59 +315,59 @@
                                  "No message bytes to send")
            ::specs/deferrable (dfrd/success-deferred ::nothing-to-send))))
 
-(s/fdef build-working-nonce!
+(s/fdef build-nonce!
         :args (s/cat :logger ::log/logger
                      :log-state ::log/state
                      :keydir ::shared/keydir
-                     :working-nonce ::shared/working-nonce)
+                     :safe-nonce ::shared/safe-nonce)
         :ret ::log/state)
-(defn build-working-nonce!
+(defn build-nonce!
   "Destructively build up the nonce used to encrypt the innermost Vouch"
   [logger
    log-state
    keydir
-   working-nonce]
+   safe-nonce]
   (try
-    (b-t/byte-copy! working-nonce K/vouch-nonce-prefix)
+    (b-t/byte-copy! safe-nonce K/vouch-nonce-prefix)
     (let [log-state
           (if keydir
             (crypto/do-safe-nonce log-state
-                                  working-nonce
+                                  safe-nonce
                                   keydir
                                   specs/server-nonce-prefix-length
                                   false)
             (crypto/do-safe-nonce log-state
-                                  working-nonce
+                                  safe-nonce
                                   specs/server-nonce-prefix-length))]
       log-state)
     (catch Exception ex
       (log/flush-logs! logger (log/exception log-state
                                              ex
                                              ::build-vouch
-                                             "Setting up working-nonce"))
+                                             "Setting up nonce"))
       (throw ex))))
 
 (s/fdef encrypt-inner-vouch
         :args (s/cat :log-state ::log/state
                      :shared-secret ::shared/shared-secret
-                     :working-nonce ::specs/nonce
+                     :safe-nonce ::specs/nonce
                      :clear-text ::shared/text))
 (defn encrypt-inner-vouch
   "Encrypt the inner-most crypto box"
-  [log-state shared-secret working-nonce clear-text]
+  [log-state shared-secret safe-nonce clear-text]
   ;; This is the inner-most secret that the inner vouch hides.
   ;; The point is to allow the server to verify
   ;; that whoever sent this packet truly has access to the
   ;; secret keys associated with both the long-term and short-
   ;; term key's we're claiming for this session.
   (let [encrypted (crypto/box-after shared-secret
-                                    clear-text K/key-length working-nonce)
+                                    clear-text K/key-length safe-nonce)
         vouch (byte-array K/vouch-length)
         log-state (log/info log-state
                             ::build-vouch
                             (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
                                  "(FIXME: Don't log the shared secret)")
-                            {::shared/working-nonce (b-t/->string working-nonce)
+                            {::shared/safe-nonce (b-t/->string safe-nonce)
                              ::state/shared-secret (b-t/->string shared-secret)
                              ::specs/vouch (b-t/->string vouch)})]
     (b-t/byte-copy! vouch
@@ -404,15 +396,14 @@
            ::shared/work-area]
     log-state ::log/state
     :as this}]
-  (let [{:keys [::shared/working-nonce
-                ::shared/text]} work-area
+  (let [{:keys [::shared/text]} work-area
         keydir (::shared/keydir my-keys)
         nonce-suffix (byte-array specs/server-nonce-suffix-length)]
-    (if working-nonce
-      (let [log-state (build-working-nonce! logger
-                                            log-state
-                                            keydir
-                                            working-nonce)
+    (let [safe-nonce (byte-array K/nonce-length)]
+      (let [log-state (build-nonce! logger
+                                    log-state
+                                    keydir
+                                    safe-nonce)
             ;; FIXME: This really belongs inside its own try/catch
             ;; block.
             ;; Unfortunately, that isn't trivial, because the nested
@@ -424,16 +415,14 @@
           (let [{log-state ::log/state
                  :keys [::specs/vouch]} (encrypt-inner-vouch log-state
                                                              shared-secret
-                                                             working-nonce
+                                                             safe-nonce
                                                              text)]
             (assert log-state)
             {::specs/inner-i-nonce nonce-suffix
              ::log/state log-state
              ::specs/vouch vouch})
           (throw (ex-info "Missing long-term shared keys"
-                          {::problem shared-secrets}))))
-      (assert false (str "Missing nonce in packet-management:\n"
-                         (keys packet-management))))))
+                          {::problem shared-secrets})))))))
 
 (s/fdef initial-packet-sent
         :args (s/cat :logger ::log/logger
