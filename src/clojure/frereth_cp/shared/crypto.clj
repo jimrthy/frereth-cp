@@ -59,9 +59,9 @@
                                    ::key-loaded?
                                    ::nonce-key]))
 
-;; What's produced by get-safe-nonce
-(s/def ::safe-nonce (s/or :server-suffix ::specs/server-nonce-suffix
-                          :client-prefix ::specs/client-nonce-prefix))
+(s/def ::safe-client-nonce ::specs/client-nonce-prefix)
+(s/def ::safe-server-nonce ::specs/server-nonce-suffix)
+(s/def ::safe-nonce (s/or ::safe-client-nonce ::safe-server-nonce))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
@@ -243,6 +243,83 @@
                            ::resource path}
                           ex)))))))
 
+(declare get-random-bytes)
+(s/fdef do-safe-nonce
+        :args (s/or :persistent (s/cat :log-state ::log2/state
+                                       :dst ::safe-nonce
+                                       :key-dir (s/nilable string?)
+                                       :offset (complement neg-int?)
+                                       :long-term? boolean?)
+                    :transient (s/cat :log-state ::log2/state
+                                      :dst ::safe-nonce
+                                      :offset (complement neg-int?)))
+        :ret ::log2/state)
+;; TODO: Needs a way to flush the log-state
+(let [nonce-writer (agent (initial-nonce-agent-state))
+      random-portion (byte-array 8)]
+  (defn get-nonce-agent-state
+    []
+    @nonce-writer)
+  (comment (get-nonce-agent-state))
+  (defn reset-safe-nonce-state!
+    []
+    (restart-agent nonce-writer (initial-nonce-agent-state)))
+  (defn do-safe-nonce
+    "Shoves a theoretically safe 16-byte nonce suffix into dst at offset"
+    ;; Note that this is extremely brittle.
+    ;; It's only called from 2 places, but it's still a bit worrisome.
+    ;; TODO: Take this out of the public interface section.
+    ;; Anything that does call it now should switch to get-safe-nonce
+    ([log-state dst key-dir offset long-term?]
+     ;; It's tempting to try to set this up to allow multiple
+     ;; nonce trackers. It seems like having a single shared
+     ;; one risks leaking information to attackers.
+     ;; This current implementation absolutely cannot
+     ;; handle that sort of thing.
+     ;; Right now, we have one agent with a single nonce key
+     ;; (along with counters).
+     ;; Maybe it doesn't matter.
+
+     (when-let [ex (agent-error nonce-writer)]
+       (throw ex))
+
+     ;; Read the last saved version from keydir
+     (let [log-state
+           (if-not (-> nonce-writer deref ::key-loaded? realized?)
+             (let [log-state (log2/debug log-state
+                                         ::do-safe-nonce
+                                         "Triggering nonce-key initial load")]
+               (send nonce-writer load-nonce-key key-dir)
+               log-state)
+             log-state)]
+       (let [{:keys [::counter-low
+                     ::counter-high]} @nonce-writer]
+         (when (>= counter-low counter-high)
+           (send nonce-writer reload-nonce key-dir long-term?)))
+       (send nonce-writer obscure-nonce random-portion)
+         ;; Tempting to do an await here, but we're inside an
+         ;; agent action, so that isn't legal.
+         ;; Q: Is that still true?
+         ;; Bigger Q: does an agent really make sense for the
+         ;; nonce-writer?
+
+       (if-let [ex (agent-error nonce-writer)]
+         (log2/exception log-state
+                         ex
+                         ::do-safe-nonce
+                         "System is down")
+         log-state)))
+    ([log-state dst offset]
+     (let [length-to-fill (- (count dst) offset)
+           tmp (get-random-bytes length-to-fill)]
+       (b-t/byte-copy! dst offset length-to-fill tmp)
+       (log2/debug log-state
+                   ::safe-nonce!
+                   "Picked a random nonce")))))
+(comment
+  (get-nonce-agent-state)
+  (reset-safe-nonce-state!))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
@@ -413,6 +490,30 @@
     ;; Cipher each time?
     (.init cipher Cipher/ENCRYPT_MODE secret-key iv rng)
     (.doFinal cipher clear-text)))
+
+(s/fdef get-safe-client-nonce-suffix
+        :args (s/cat :log-state ::log2/state)
+        :ret (s/keys :req [::log2/state
+                           ::specs/client-nonce-suffix]))
+(defn get-safe-client-nonce-suffix
+  "Get a new byte array containing the next client nonce suffix"
+  [log-state]
+  (let [dst (byte-array specs/client-nonce-suffix-length)
+        log-state (do-safe-nonce log-state dst 0)]
+    {::log2/state log-state
+     ::specs/client-nonce-suffix dst}))
+
+(s/fdef get-safe-server-nonce-suffix
+        :args (s/cat :log-state ::log2/state)
+        :ret (s/keys :req [::log2/state
+                           ::safe-server-nonce]))
+(defn get-safe-server-nonce-suffix
+  "Get a new byte array containing the next server nonce suffix"
+  [log-state]
+  (let [dst (byte-array specs/server-nonce-suffix-length)
+        log-state (do-safe-nonce log-state dst 0)]
+    {::log2/state log-state
+     ::specs/server-nonce-suffix dst}))
 
 (s/fdef random-key-pair
         :args (s/cat)
@@ -652,9 +753,20 @@
   (TweetNaclFast/randombytes n))
 
 (defn random-bytes!
+  ;; FIXME: Make this private. Anything that currently calls it
+  ;; should really just use get-random-bytes instead.
   "Fills dst with random bytes"
   [#^bytes dst]
   (TweetNaclFast/randombytes dst))
+
+(s/fdef get-random-bytes
+  :args (s/cat :n integer?)
+  :ret bytes?)
+(defn get-random-bytes
+  [n]
+  (let [result (byte-array n)]
+    (random-bytes! result)
+    result))
 
 (defn randomize-buffer!
   "Fills the bytes of dst with crypto-random ints"
@@ -710,96 +822,6 @@ Or maybe that's (dec n)"
   "Generates a number suitable for use as a cryptographically secure random nonce"
   []
   (long (random-mod K/max-random-nonce)))
-
-(s/fdef do-safe-nonce
-        :args (s/or :persistent (s/cat :log-state ::log2/state
-                                       :dst ::safe-nonce
-                                       :key-dir (s/nilable string?)
-                                       :offset (complement neg-int?)
-                                       :long-term? boolean?)
-                    :transient (s/cat :log-state ::log2/state
-                                      :dst ::safe-nonce
-                                      :offset (complement neg-int?)))
-        :ret ::log2/state)
-;; TODO: Needs a way to flush the log-state
-(let [nonce-writer (agent (initial-nonce-agent-state))
-      random-portion (byte-array 8)]
-  (defn get-nonce-agent-state
-    []
-    @nonce-writer)
-  (comment (get-nonce-agent-state))
-  (defn reset-safe-nonce-state!
-    []
-    (restart-agent nonce-writer (initial-nonce-agent-state)))
-  (defn do-safe-nonce
-    "Shoves a theoretically safe 16-byte nonce suffix into dst at offset"
-    ;; Note that this is extremely brittle.
-    ;; It's only called from 2 places, but it's still a bit worrisome.
-    ;; TODO: Take this out of the public interface section.
-    ;; Anything that does call it now should switch to get-safe-nonce
-    ([log-state dst key-dir offset long-term?]
-     ;; It's tempting to try to set this up to allow multiple
-     ;; nonce trackers. It seems like having a single shared
-     ;; one risks leaking information to attackers.
-     ;; This current implementation absolutely cannot
-     ;; handle that sort of thing.
-     ;; Right now, we have one agent with a single nonce key
-     ;; (along with counters).
-     ;; Maybe it doesn't matter.
-
-     (when-let [ex (agent-error nonce-writer)]
-       (throw ex))
-
-     ;; Read the last saved version from keydir
-     (let [log-state
-           (if-not (-> nonce-writer deref ::key-loaded? realized?)
-             (let [log-state (log2/debug log-state
-                                         ::do-safe-nonce
-                                         "Triggering nonce-key initial load")]
-               (send nonce-writer load-nonce-key key-dir)
-               log-state)
-             log-state)]
-       (let [{:keys [::counter-low
-                     ::counter-high]} @nonce-writer]
-         (when (>= counter-low counter-high)
-           (send nonce-writer reload-nonce key-dir long-term?)))
-       (random-bytes! random-portion)
-       (send nonce-writer obscure-nonce random-portion)
-       ;; Tempting to do an await here, but we're inside an
-       ;; agent action, so that isn't legal.
-       ;; Q: Is that still true?
-       ;; Bigger Q: does an agent really make sense for the
-       ;; nonce-writer?
-       (if-let [ex (agent-error nonce-writer)]
-         (log2/exception log-state
-                         ex
-                         ::do-safe-nonce
-                         "System is down")
-         log-state)))
-    ([log-state dst offset]
-     ;; The 16-byte nonce length is very implementation
-     ;; dependent and brittle
-     (let [tmp (byte-array specs/server-nonce-suffix-length)]
-       (random-bytes! tmp)
-       (b-t/byte-copy! dst offset specs/server-nonce-suffix-length tmp)
-       (log2/debug log-state
-                   ::safe-nonce!
-                   "Picked a random nonce")))))
-(comment
-  (get-nonce-agent-state)
-  (reset-safe-nonce-state!))
-
-(s/fdef get-safe-nonce
-        :args (s/cat :log-state ::log2/state)
-        :ret (s/keys :req [::log2/state
-                           ::safe-nonce]))
-(defn get-safe-nonce
-  "Get a nonce, safely"
-  [log-state]
-  (let [dst (byte-array specs/server-nonce-suffix-length)
-        log-state (do-safe-nonce log-state dst 0)]
-    {::log2/state log-state
-     ::safe-nonce dst}))
 
 (s/fdef random-mod
         :args (s/cat :n nat-int?)

@@ -83,10 +83,15 @@
     my-short-sk
     minute-key]
    (let [{log-state ::log2/state
-          working-nonce ::crypto/safe-nonce} (crypto/get-safe-nonce log-state)]
-     (build-inner-cookie log-state client-short-pk my-short-sk minute-key working-nonce)))
+          nonce-suffix ::specs/server-nonce-suffix
+          :as safe-nonce} (crypto/get-safe-server-nonce-suffix log-state)]
+     (log/debug (str "Building inner cookie from "
+                     (count nonce-suffix)
+                     " bytes found in"
+                     (dissoc safe-nonce ::log2/state)))
+     (build-inner-cookie log-state client-short-pk my-short-sk minute-key nonce-suffix)))
   ;; This arity really only exists for the sake of testing:
-  ;; Being able to reproduce the nonce makes like much easier in that regard
+  ;; Being able to reproduce the nonce makes life much easier in that regard
   ([log-state
     client-short-pk
     my-short-sk
@@ -147,23 +152,29 @@
    black-box]
   ;; It almost doesn't seem worth having a stand-alone
   ;; function for this.
-  ;; Then again, a semantically meaningful wrapper definitely
+  ;; Then again, a semantically meaningful wrapper with logging
   ;; isn't a bad thing
-  (log/debug "Trying to encrypt the real cookie")
-  (try
-    (let [result
-          (crypto/build-box templates/cookie
-                            {::templates/s' pk-session
-                             ::templates/inner-cookie black-box}
-                            shared-key
-                            K/cookie-nonce-prefix
-                            nonce-suffix)]
-      (log/debug "Encrypting the real cookie succeeded")
-      {::log2/state log-state
-       ::templates/encrypted-cookie result})
-    (catch Throwable ex
-      (log/error ex "Trying to build the crypto box")
-      {::log2/state (log2/exception log-state ex ::build-cookie-wrapper)})))
+  (let [log-state (log2/debug log-state
+                              ::build-cookie-wrapper
+                              "Trying to encrypt the real cookie"
+                              {::templates/s' pk-session
+                               ::templates/inner-cookie black-box
+                               ::inner-box-size (count black-box)})]
+    (try
+      (let [result
+            (crypto/build-box templates/cookie
+                              {::templates/s' pk-session
+                               ::templates/inner-cookie black-box}
+                              shared-key
+                              K/cookie-nonce-prefix
+                              nonce-suffix)]
+        {::log2/state (log2/debug log-state
+                                  ::build-cookie-wrapper
+                                  "Encrypting the real cookie succeeded")
+         ::templates/encrypted-cookie result})
+      (catch Throwable ex
+        (log/error ex "Trying to build the crypto box")
+        {::log2/state (log2/exception log-state ex ::build-cookie-wrapper)}))))
 
 (s/fdef prepare-packet!
         :args (s/cat :this ::state/state)

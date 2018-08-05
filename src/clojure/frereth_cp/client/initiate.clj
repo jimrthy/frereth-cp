@@ -173,9 +173,7 @@
         ;; have this extremely dicey.
         ;; This is absolutely not the case.
         ;; c.f. lines 329-334 in the reference spec.
-        (let [working-nonce (byte-array K/nonce-length)
-              nonce-suffix (b-t/sub-byte-array working-nonce
-                                               specs/client-nonce-prefix-length)
+        (let [nonce-suffix (crypto/get-safe-client-nonce-suffix)
               {:keys [::specs/crypto-box]
                log-state ::log/state
                :as initiate-interior} (build-initiate-interior (select-keys this
@@ -320,13 +318,15 @@
                      :log-state ::log/state
                      :keydir ::shared/keydir
                      :safe-nonce ::shared/safe-nonce)
-        :ret ::log/state)
+        :ret (s/keys ::log/state
+                     ::specs/client-nonce-suffix))
 (defn build-nonce!
   "Destructively build up the nonce used to encrypt the innermost Vouch"
   [logger
    log-state
    keydir
    safe-nonce]
+  (throw (RuntimeException. "This is pointless"))
   (try
     (b-t/byte-copy! safe-nonce K/vouch-nonce-prefix)
     (let [log-state
@@ -361,7 +361,9 @@
   ;; secret keys associated with both the long-term and short-
   ;; term key's we're claiming for this session.
   (let [encrypted (crypto/box-after shared-secret
-                                    clear-text K/key-length safe-nonce)
+                                    clear-text
+                                    K/key-length
+                                    safe-nonce)
         vouch (byte-array K/vouch-length)
         log-state (log/info log-state
                             ::build-vouch
@@ -385,44 +387,36 @@
   :ret ::vouch-built)
 (defn build-inner-vouch
   "Build the innermost vouch/nonce pair"
-  ;; This was refactored out of cookie->vouch,
-  ;; as a first step toward making the bites a little more
-  ;; digestible.
-  ;; Q: Can I trim it down any further?
-  [{:keys [::log/logger
-           ::shared/my-keys
-           ::shared/packet-management
+  [{:keys [::shared/my-keys
            ::state/shared-secrets
            ::shared/work-area]
     log-state ::log/state
     :as this}]
-  (let [{:keys [::shared/text]} work-area
-        keydir (::shared/keydir my-keys)
-        nonce-suffix (byte-array specs/server-nonce-suffix-length)]
-    (let [safe-nonce (byte-array K/nonce-length)]
-      (let [log-state (build-nonce! logger
-                                    log-state
-                                    keydir
-                                    safe-nonce)
-            ;; FIXME: This really belongs inside its own try/catch
-            ;; block.
-            ;; Unfortunately, that isn't trivial, because the nested
-            ;; pieces below here can/will throw their own exceptions
-            ;; that I don't want to handle.
-            ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)]
-        (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
-        (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
-          (let [{log-state ::log/state
-                 :keys [::specs/vouch]} (encrypt-inner-vouch log-state
-                                                             shared-secret
-                                                             safe-nonce
-                                                             text)]
-            (assert log-state)
-            {::specs/inner-i-nonce nonce-suffix
-             ::log/state log-state
-             ::specs/vouch vouch})
-          (throw (ex-info "Missing long-term shared keys"
-                          {::problem shared-secrets})))))))
+  (let [{log-state ::log/state
+         nonce-suffix ::specs/server-nonce-suffix} (crypto/get-safe-server-nonce-suffix log-state)
+        ;; FIXME: This really belongs inside its own try/catch
+        ;; block.
+        ;; Unfortunately, that isn't trivial, because the nested
+        ;; pieces below here can/will throw their own exceptions
+        ;; that I don't want to handle.
+        ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)
+        ;; FIXME: Make this shared byte array go away
+        {:keys [::shared/text]} work-area]
+    (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
+    (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
+      (let [_ (throw (RuntimeException. "Needs full nonce")) ; Not just the suffix
+            ;; Although, honestly, it would make more sense for it to add the prefix bytes
+            {log-state ::log/state
+             :keys [::specs/vouch]} (encrypt-inner-vouch log-state
+                                                         shared-secret
+                                                         nonce-suffix
+                                                         text)]
+        (assert log-state)
+        {::specs/inner-i-nonce nonce-suffix
+         ::log/state log-state
+         ::specs/vouch vouch})
+      (throw (ex-info "Missing long-term shared keys"
+                      {::problem shared-secrets})))))
 
 (s/fdef initial-packet-sent
         :args (s/cat :logger ::log/logger

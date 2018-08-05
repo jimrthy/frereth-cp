@@ -152,8 +152,15 @@ This really seems like a bad road to go down."
 ;; a byte-array vs. ByteBuf.
 (s/def ::msg-bytes bytes?)
 
+(s/def ::client-nonce-prefix (s/and bytes?
+                                    #(= (count %) client-nonce-prefix-length)))
+(s/def ::client-nonce-suffix (s/and bytes?
+                                    #(= (count %) client-nonce-suffix-length)))
+(s/def ::server-nonce-prefix (s/and bytes?
+                                    #(= (count %) server-nonce-prefix-length)))
 (s/def ::server-nonce-suffix (s/and bytes?
                                     #(= (count %) server-nonce-suffix-length)))
+
 (s/def ::inner-i-nonce ::server-nonce-suffix)
 ;; The server and client nonces wind up being the same length.
 ;; The difference is really in the prefix/suffix distribution.
