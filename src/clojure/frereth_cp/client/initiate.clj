@@ -235,120 +235,6 @@
         (throw (ex-info "Missing outgoing message"
                 {::specs/msg-bytes msg}))))))
 
-(s/fdef do-send-vouch
-        :args (s/cat :this ::state/state
-                     :message ::specs/msg-bytes)
-        :ret (s/keys :req [::specs/deferred
-                           ::state/state]))
-(defn do-send-vouch
-  "Send a Vouch/Initiate packet (along with a Message sub-packet)"
-  ;; We may have to send this multiple times, because it could
-  ;; very well get dropped.
-
-  ;; Actually, if that happens, it might make sense to just start
-  ;; over from the initial HELLO.
-  ;; Reference implementation doesn't seem to have anything along
-  ;; those lines.
-  ;; Once a Server sends back a Cookie, it looks as though the
-  ;; Client is irrevocably tied to it.
-  ;; This seems like a protocol flaw that's better addressed by
-  ;; haproxy. Especially since the child's only clue that a
-  ;; server has quit responding is that its write buffer is full.
-
-  ;; Depending on how much time we want to spend waiting for the
-  ;; initial server message
-  ;; (this is one of the big reasons the
-  ;; reference implementation starts out trying to contact
-  ;; multiple servers).
-
-  ;; It would be very easy to just wait
-  ;; for its minute key to definitely time out, though that seems
-  ;; like a naive approach with a terrible user experience.
-  [{log-state ::log/state
-    :keys [::log/logger]
-    :as this}
-   packet]
-  (throw (RuntimeException. "Not used. Make it go away."))
-  (if packet
-    (let [log-state (log/flush-logs! logger log-state)
-          this (assoc this ::log/state log-state)
-          {log-state ::log/state
-           deferred ::specs/deferred}
-          ;; FIXME: Instead of this, have HELLO set up a partial or lexical closure
-          ;; that we can use to send packets.
-          ;; (that's pretty close to being ready)
-          ;; Honestly, most of what I'm passing along in here is overkill that
-          ;; I set up for debugging.
-          (state/do-send-packet this
-                                (fn [success]
-                                  (log/flush-logs! logger
-                                                   (log/info log-state
-                                                             ::do-send-vouch
-                                                             "Initiate packet sent.\nWaiting for 1st message"
-                                                             {::success success}))
-                                  (state/final-wait this success))
-                                (fn [failure]
-                                  ;; Extremely unlikely, but
-                                  ;; just for the sake of paranoia
-                                  (log/flush-logs! logger
-                                                   (log/exception log-state
-                                                                  ;; Q: Am I absolutely positive that this will
-                                                                  ;; always be an exception?
-                                                                  ;; A: Even if it isn't the logger needs to be
-                                                                  ;; able to cope with other problems
-                                                                  failure
-                                                                  ::do-send-vouch
-                                                                  "Sending Initiate packet failed!"
-                                                                  {::problem failure}))
-                                  (throw (ex-info "Failed to send cookie->vouch response"
-                                                  (assoc this
-                                                         :problem failure))))
-                                (state/current-timeout this)
-                                ::sending-vouch-timed-out
-                                packet)]
-      {::state/state (assoc this
-                            ::log/state log-state)
-       ::specs/deferrable deferred})
-    (assoc this
-           ::log/state (log/warn log-state
-                                 ::do-send-vouch
-                                 "No message bytes to send")
-           ::specs/deferrable (dfrd/success-deferred ::nothing-to-send))))
-
-(s/fdef build-nonce!
-        :args (s/cat :logger ::log/logger
-                     :log-state ::log/state
-                     :keydir ::shared/keydir
-                     :safe-nonce ::shared/safe-nonce)
-        :ret (s/keys ::log/state
-                     ::specs/client-nonce-suffix))
-(defn build-nonce!
-  "Destructively build up the nonce used to encrypt the innermost Vouch"
-  [logger
-   log-state
-   keydir
-   safe-nonce]
-  (throw (RuntimeException. "This is pointless"))
-  (try
-    (b-t/byte-copy! safe-nonce K/vouch-nonce-prefix)
-    (let [log-state
-          (if keydir
-            (crypto/do-safe-nonce log-state
-                                  safe-nonce
-                                  keydir
-                                  specs/server-nonce-prefix-length
-                                  false)
-            (crypto/do-safe-nonce log-state
-                                  safe-nonce
-                                  specs/server-nonce-prefix-length))]
-      log-state)
-    (catch Exception ex
-      (log/flush-logs! logger (log/exception log-state
-                                             ex
-                                             ::build-vouch
-                                             "Setting up nonce"))
-      (throw ex))))
-
 (s/fdef encrypt-inner-vouch
         :args (s/cat :log-state ::log/state
                      :shared-secret ::shared/shared-secret
@@ -369,9 +255,9 @@
                     specs/server-nonce-suffix-length
                     nonce-suffix)
     (let [vouch (crypto/box-after shared-secret
-                                      clear-text
-                                      K/key-length
-                                      nonce)
+                                  clear-text
+                                  K/key-length
+                                  nonce)
           log-state (log/info log-state
                               ::build-vouch
                               (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
