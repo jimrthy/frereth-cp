@@ -158,6 +158,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                              :sent ::specs/network-packet)
                                 :ret ::specs/deferrable))
 
+;; Pieces used to initialize the extension
+(s/def ::extension-initializers
+  (s/keys :req [::client-extension-load-time
+                ::log/logger
+                ::log/state
+                ::msg-specs/recent
+                ::shared/extension]))
+;; What comes back from extension initialization
+(s/def ::extension-initialized (s/keys :req [::client-extension-load-time
+                                             ::log/state
+                                             ::shared/extension]))
+
 ;; FIXME: This really should be ::message-building-params.
 ;; Except that those are different.
 (s/def ::initiate-building-params (s/keys :req [::log/logger
@@ -691,8 +703,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
         result))))
 
 (s/fdef clientextension-init
-        :args (s/cat :this ::state)
-        :ret ::state)
+        :args (s/cat :this ::extension-initializers)
+        :ret ::extension-initialized)
 (defn clientextension-init
   "Initialize the client-extension"
   ;; Started from the assumptions that this is neither
@@ -745,10 +757,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               ::clientextension-init
                               "Loaded extension"
                               {::shared/extension (vec extension)})]
-      (assoc this
-             ::client-extension-load-time client-extension-load-time
-             ::log/state log-state
-             ::shared/extension extension))))
+      {::client-extension-load-time client-extension-load-time
+       ::log/state log-state
+       ::shared/extension extension})))
 
 (s/fdef fork!
         :args (s/cat :state ::state)

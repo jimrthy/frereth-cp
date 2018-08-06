@@ -2,6 +2,7 @@
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [frereth-cp.client.state :as state]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
              [bit-twiddling :as b-t]
@@ -384,9 +385,10 @@
                                                              ::do-polling-loop))))))))
 
 (s/fdef poll-servers!
-        :args (s/cat :this ::state/state
-                     :send-timeout ::specs/time
-                     :cookie-waiter ::state/cookie-waiter)
+  :args (s/cat :this ::state/state
+               :hello-packet ::shared/packet
+               :send-timeout ::specs/time
+               :cookie-waiter ::state/cookie-waiter)
         :ret ::servers-polled)
 (defn poll-servers!
   "Send hello packet to a seq of server IPs associated with a single server name.
@@ -402,9 +404,8 @@
   [{:keys [::log/logger
            ::state/server-ips]
     log-state ::log/state
-    {hello-packet ::shared/packet
-     :as packet-management} ::shared/packet-management
     :as this}
+   hello-packet
    send-timeout cookie-waiter]
   (let [log-state (log/debug log-state
                              ::poll-servers!
@@ -424,9 +425,6 @@
                      (System/nanoTime)
                      (util/millis->nanos send-timeout))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Public
-
 (s/fdef do-build-packet
         ;; FIXME: Be more restrictive about this.
         ;; Only pass/return the pieces that this
@@ -442,7 +440,7 @@
         ;; Probably the short-term key.
         ;; But definitely not the full state.
         ;; FIXME: Do that, in a different branch
-        :ret ::state/state)
+        :ret (s/keys :req [::shared/packet-management]))
 (defn do-build-packet
   "Puts plain-text hello packet into packet-management
 
@@ -464,14 +462,19 @@
   ;; Return the new packet.
   ;; Honestly, split up the calls that configure all the things
   ;; like setting up the nonce that make this problematic
-  (comment
-    ;; Unfortunately, this is outside the scope of this branch.
-    (throw (RuntimeException. "Start back here")))
   (let [;; There's a good chance this updates my extension.
         ;; That doesn't get set into stone until/unless I
         ;; manage to handshake with a server
         {log-state ::log/state
-         :as this} (state/clientextension-init this)
+         :as extension-initialized} (state/clientextension-init (select-keys this
+                                                                             [::state/client-extension-lead-time
+                                                                              ::log/logger
+                                                                              ::msg-specs/recent
+                                                                              ::shared/extension]))
+        this (into this extension-initialized)
+        _ (throw (RuntimeException. "Start back here"))
+        ;; Getting rid of the globally shared packet may make sense.
+        ;; But eliminating packet-nonce seems difficult, at best.
         {:keys [::shared/packet-nonce ::shared/packet]} packet-management
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)
         safe-nonce-prefix (vec K/hello-nonce-prefix)
@@ -499,6 +502,9 @@
                            ::shared/packet (b-s/convert packet specs/byte-array-type))))
           (assoc ::log/state (log/flush-logs! logger log-state))))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
+
 (s/fdef set-up-server-polling!
         :args (s/cat :this ::state/state
                      :wait-for-cookie! ::state/cookie-waiter
@@ -514,7 +520,8 @@
    log-state-atom
    wait-for-cookie!]
   (println "hello: polling triggered")
-  (let [this (do-build-packet this)]
+  (let [this (do-build-packet this)
+        hello-packet nil]
     ;; Q: Is a quarter second a reasonable amount of time to
     ;; wait for the send?
-    (poll-servers! this 250 wait-for-cookie!)))
+    (poll-servers! this hello-packet 250 wait-for-cookie!)))
