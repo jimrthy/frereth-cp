@@ -31,38 +31,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Helpers
 
-(defn build-inner-cookie-original
-  "This is the way it used to be done"
-  [log-state
-   client-short-pk
-   my-sk
-   minute-key
-   nonce-suffix]
-  (let [^ByteBuf buffer (Unpooled/buffer K/server-cookie-length)
-        client-short-pk (bytes client-short-pk)
-        working-nonce (byte-array K/nonce-length)
-        my-sk (bytes my-sk)]
-    (b-t/byte-copy! working-nonce 8 specs/server-nonce-suffix-length nonce-suffix)
-    (try
-      ;; Set up the raw plaintext cookie
-      (.writeBytes buffer K/all-zeros 0 K/decrypt-box-zero-bytes) ; line 315
-      (.writeBytes buffer client-short-pk 0 K/key-length)
-      (.writeBytes buffer my-sk 0 K/key-length)
-
-      (b-t/byte-copy! working-nonce K/cookie-nonce-minute-prefix)
-
-      (let [actual (.array buffer)
-            result (byte-array K/server-cookie-length)]
-        (println )
-        (crypto/secret-box actual actual K/server-cookie-length working-nonce minute-key)
-        ;; Original needs to leave 0 padding up front
-        ;; Note that the first 16 of these bytes are padding.
-        ;; They're meant to be overwritten by the nonce-suffix
-        (.getBytes buffer 0 result)
-        ;; Do that overwriting
-        (b-t/byte-copy! result nonce-suffix)
-        result))))
-
 (s/fdef build-inner-cookie
         :args (s/or :sans-nonce (s/cat :log-state ::log2/state
                                        :other-short-pk ::specs/public-short
@@ -72,7 +40,7 @@
                                        :client-short-pk ::specs/public-short
                                        :my-short-sk ::specs/secret-short
                                        :minute-key ::specs/crypto-key
-                                       :working-nonce ::specs/nonce))
+                                       :nonce-suffix ::specs/server-nonce-suffix))
         :ret (s/keys :req [::specs/byte-array
                            ::log2/log-state
                            ::specs/server-nonce-suffix]))
@@ -185,8 +153,7 @@
   "Set up the inner cookie"
   [{:keys [::state/client-short<->server-long
            ::log2/logger
-           ::state/minute-key
-           ::shared/working-nonce]
+           ::state/minute-key]
      client-short-pk ::state/client-short-pk
     log-state ::log2/state}]
   (let [client-short-pk (bytes client-short-pk)

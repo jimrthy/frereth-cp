@@ -98,17 +98,17 @@
                      ::state/state this}))
         my-short<->their-long (::state/client-short<->server-long shared-secrets)
         _ (assert my-short<->their-long)
-       working-nonce (byte-array safe-nonce)
+       safe-nonce (byte-array safe-nonce)
         ;; Note that this definitely inserts the 16-byte prefix for me
         boxed (crypto/box-after my-short<->their-long
                                 K/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes)
-                                working-nonce)
+                                safe-nonce)
         ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
         log-state (log/info log-state
                             ::build-raw
                             ""
                             {::crypto-box (b-t/->string boxed)
-                             ::shared/working-nonce (b-t/->string working-nonce)
+                             ::shared/safe-nonce (b-t/->string safe-nonce)
                              ::my-short-pk (-> my-short-pair
                                                .getPublicKey
                                                b-t/->string)
@@ -482,7 +482,7 @@
     (let [safe-nonce (concat safe-nonce-prefix (vec nonce-suffix))
           log-state (log/info log-state
                               ::do-build-packet
-                              "Packed short-term- into working- -nonces"
+                              "Packed short-term- into safe- -nonces"
                               {::short-term-nonce short-term-nonce
                                ::shared/safe-nonce safe-nonce})
           {:keys [::shared/packet]

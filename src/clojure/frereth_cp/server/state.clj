@@ -271,8 +271,6 @@
     ;; and need to be sharded.
     #_(crypto/random-bytes! (-> this :child-buffer ::buf))
     #_(crypto/random-bytes! (-> this :child-buffer ::msg))
-    ;; FIXME: Make this go away
-    (crypto/random-bytes! (::shared/working-nonce work-area))
     (crypto/random-bytes! (::shared/text work-area)))
   (when-let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
     (crypto/random-bytes! (.getPublicKey short-term-keys))

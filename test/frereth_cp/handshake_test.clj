@@ -18,12 +18,12 @@
   ;; when I need to look at the individual bytes
   (let [client-extension (byte-array (take K/extension-length (repeat 0)))
         server-extension (byte-array (take K/extension-length (range)))
-        working-nonce (byte-array (take K/nonce-length (drop 40 (range))))
+        safe-nonce (byte-array (take K/nonce-length (drop 40 (range))))
         boxed (byte-array K/cookie-packet-length)
         ;; Make sure we have plenty of room for writing
         dst (Unpooled/buffer (* 2 K/cookie-packet-length))
         ;; Built from the array, offset, and the length
-        client-nonce-suffix-buffer (Unpooled/wrappedBuffer working-nonce
+        client-nonce-suffix-buffer (Unpooled/wrappedBuffer safe-nonce
                                                            specs/server-nonce-prefix-length
                                                            specs/server-nonce-suffix-length)
         client-nonce-suffix (byte-array specs/server-nonce-suffix-length)

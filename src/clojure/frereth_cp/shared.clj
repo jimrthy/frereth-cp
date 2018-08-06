@@ -86,14 +86,11 @@
 (s/def ::secret-key (s/and bytes? #(= (count %) K/key-length)))
 (s/def ::symmetric-key (s/and bytes? #(= (count %) K/key-length)))
 
-;; STARTED: Replace this:
-(s/def ::working-nonce (s/and bytes? #(= (count %) K/nonce-length)))
-;; with this:
 (s/def ::safe-nonce (s/and sequential?
                            #(every? bytes? %)))
 
 (s/def ::text bytes?)
-(s/def ::work-area (s/keys :req [::text ::working-nonce]))
+(s/def ::work-area (s/keys :req [::text]))
 
 (s/def ::host (s/or :name string?
                     :address ::specs/internet-address))
@@ -189,8 +186,7 @@
         :ret ::work-area)
 (defn default-work-area
   []
-  {::working-nonce (byte-array K/nonce-length)
-   ::text (byte-array 2048)})
+  {::text (byte-array 2048)})
 
 ;;; encode-server name no longer seems to be used anywhere.
 ;;; TODO: Verify that and then eliminate it

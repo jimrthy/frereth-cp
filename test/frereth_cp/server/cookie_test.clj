@@ -19,10 +19,10 @@
 (comment
   (let [initial-log-state (log/init ::build-inner)
         {log-state ::log/state
-         working-nonce ::crypto/safe-nonce}
+         safe-nonce ::crypto/safe-nonce}
         (crypto/get-safe-nonce initial-log-state)]
-    (vec working-nonce)))
-(def working-nonce [-84 -68 113 9 -76 70 -40 48 109 -74 84 49 23 -1 -55 106])
+    (vec safe-nonce)))
+(def safe-nonce [-84 -68 113 9 -76 70 -40 48 109 -74 84 49 23 -1 -55 106])
 
 (def minute-key
   [-25 -71 31 -101 88 27 116 92 100 -67 101 -76 -116 -94 -74 45 10 -60 126 -38 127 69 48 -111 -75 -32 93 123 26 103 85 -36])
@@ -38,14 +38,14 @@
                                                      (byte-array client-short-pk)
                                                      (byte-array server-short-sk)
                                                      (byte-array minute-key)
-                                                     (byte-array working-nonce))
+                                                     (byte-array safe-nonce))
         original' (vec original)
         {nonce-suffix ::specs/server-nonce-suffix
          easier ::specs/byte-array} (cookie/build-inner-cookie initial-log-state
                                                                (byte-array client-short-pk)
                                                                (byte-array server-short-sk)
                                                                (byte-array minute-key)
-                                                               (byte-array working-nonce))
+                                                               (byte-array safe-nonce))
         easier' (vec easier)]
     (is (= original' easier'))
     (when (not= original' easier')

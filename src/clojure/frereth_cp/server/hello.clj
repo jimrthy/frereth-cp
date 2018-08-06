@@ -3,20 +3,23 @@
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
-            [frereth-cp.server.cookie :as cookie]
-            [frereth-cp.server.helpers :as helpers]
-            [frereth-cp.server.shared-specs :as srvr-specs]
-            [frereth-cp.server.state :as state]
+            [frereth-cp.server
+             [cookie :as cookie]
+             [helpers :as helpers]
+             [shared-specs :as srvr-specs]
+             [state :as state]]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log2]
+             [serialization :as serial]
+             [specs :as specs]]
             [frereth-cp.util :as util]
-            [manifold.deferred :as deferred]
-            [manifold.stream :as stream])
+            [manifold
+             [deferred :as deferred]
+             [stream :as stream]])
   (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
 
@@ -171,16 +174,14 @@
     ;; key and the short-term private key so it didn't just send us random garbage.
     (if clear-text
       (let [minute-key (get-in state [::state/cookie-cutter ::state/minute-key])
-            {:keys [::shared/text
-                    ::shared/working-nonce]} working-area]
+            {:keys [::shared/text]} working-area]
         (assert minute-key (str "Missing minute-key among "
                                 (keys state)))
         {::srvr-specs/cookie-components {::state/client-short<->server-long shared-secret
                                          ::state/client-short-pk clnt-short-pk
                                          ::state/minute-key minute-key
                                          ::srvr-specs/clear-text clear-text
-                                         ::shared/text text
-                                         ::shared/working-nonce working-nonce}
+                                         ::shared/text text}
          ::K/hello-spec fields
          ::log2/state log-state})
       {::log2/state (log2/warn log-state

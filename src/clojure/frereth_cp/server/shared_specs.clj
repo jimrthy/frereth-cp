@@ -9,6 +9,5 @@
 (s/def ::cookie-components (s/keys :req [::clear-text
                                          ::log/logger
                                          ::log/state
-                                         ::shared/working-nonce
                                          ::state/client-short<->server-long
                                          ::state/minute-key]))
