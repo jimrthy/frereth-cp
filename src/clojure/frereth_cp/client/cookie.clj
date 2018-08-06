@@ -98,7 +98,6 @@
         :args (s/cat :this (s/keys :req [::log/state
                                          ::shared/extension
                                          ::shared/packet
-                                         ::shared/work-area
                                          ::state/server-extension
                                          ::state/server-security
                                          ::state/shared-secrets]))
@@ -233,8 +232,6 @@
             ;; Line 312
             (if-let [decrypted (decrypt-cookie-packet (assoc (select-keys this
                                                                           [::shared/extension
-                                                                           ;; FIXME: This needs to go away
-                                                                           ::shared/work-area
                                                                            ::state/server-extension
                                                                            ::state/server-security
                                                                            ::state/shared-secrets])

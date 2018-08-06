@@ -450,17 +450,16 @@
   for side-effects, even though it has trappings to make it look
   functional."
   ;; A major part of the way this is written revolves around
-  ;; updating packet-management and work-area in place.
+  ;; updating packet-management in place.
   ;; That seems like premature optimization here.
   ;; Though it seems as though it might make sense for
   ;; sending messages.
   ;; Then again, if the implementation isn't shared...can
   ;; it possibly be worth the trouble?
   [{:keys [::log/logger
-           ::shared/packet-management
-           ::shared/work-area]
+           ::shared/packet-management]
     :as this}]
-  ;; FIXME: Eliminate things like packet-management and work-area.
+  ;; FIXME: Eliminate packet-management.
   ;; Be explicit about the actual parameters.
   ;; Return the new packet.
   ;; Honestly, split up the calls that configure all the things

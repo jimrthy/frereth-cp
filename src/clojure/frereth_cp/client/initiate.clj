@@ -32,8 +32,7 @@
 (s/def ::vouch-building-params (s/keys :req [::log/logger
                                              ::shared/my-keys
                                              ::shared/packet-management
-                                             ::state/shared-secrets
-                                             ::shared/work-area]))
+                                             ::state/shared-secrets]))
 (s/def ::vouch-built (s/keys :req [::specs/inner-i-nonce
                                    ::log/state
                                    ::specs/vouch]))
@@ -42,7 +41,6 @@
 (s/def ::message-building-params (s/keys :req [::log/state
                                                ::specs/inner-i-nonce
                                                ::shared/my-keys
-                                               ::shared/work-area
                                                ::specs/vouch
                                                ::state/shared-secrets]))
 
@@ -60,8 +58,7 @@
     inner-nonce-suffix ::specs/inner-i-nonce
     {^TweetNaclFast$Box$KeyPair long-pair ::shared/long-pair
      :keys [::specs/srvr-name]} ::shared/my-keys
-    :keys [::shared/work-area
-           ::specs/vouch
+    :keys [::specs/vouch
            ::state/shared-secrets]
     :as this}
    msg
@@ -114,7 +111,7 @@
                              "Missing server name"
                              (select-keys this [::shared/my-keys]))})))
 
-(s/fdef build-initiate-packet!
+(s/fdef build-initiate-packet
         :args (s/cat :this ::state/initiate-building-params
                      :msg-bytes (s/and ::specs/msg-bytes
                                        ;; Just be explicit about the
@@ -138,12 +135,8 @@
                    (+ 544 (count legal-to-send)))
                 true))
         :ret (s/nilable ::shared/packet))
-(defn build-initiate-packet!
-  "Combine message buffer and client state into an Initiate packet
-
-  This is destructive in the sense that it overwrites the byte-arrays
-  in ::shared/work-area
-  FIXME: Eliminate that"
+(defn build-initiate-packet
+  "Combine message buffer and client state into an Initiate packet"
   [{log-state ::log/state
     :keys [::log/logger
            ::msg-specs/message-loop-name
@@ -151,7 +144,7 @@
     :as this}
    ^bytes msg]
   (let [log-state (log/debug log-state
-                             ::build-initiate-packet!
+                             ::build-initiate-packet
                              "Trying to build initiated packet"
                              {::msg-specs/message-loop-name (or message-loop-name
                                                                 (str "'Name Missing', among:\n" (keys this)))
@@ -163,15 +156,6 @@
                       {::state/server-security server-security})))
     (if msg
       (if (K/legal-vouch-message-length? msg)
-        ;; I really don't like this approach to a shared work-area.
-        ;; It kind-of made sense with the original approach, which involved
-        ;; locking down access strictly from a single thread, using an agent.
-        ;; Now, not so much. Though, realistically, there probably won't be
-        ;; multiple threads touching a single client (Q: will there?)
-        ;; At some point, I became convinced that the reference implementation
-        ;; was just reusing a portion of the incoming nonce. Which would have
-        ;; have this extremely dicey.
-        ;; This is absolutely not the case.
         ;; c.f. lines 329-334 in the reference spec.
         (let [{log-state ::log/state
                nonce-suffix ::specs/client-nonce-suffix} (crypto/get-safe-client-nonce-suffix log-state)
@@ -180,7 +164,6 @@
                :as initiate-interior} (build-initiate-interior (select-keys this
                                                                             [::log/state
                                                                              ::shared/my-keys
-                                                                             ::shared/work-area
                                                                              ::specs/inner-i-nonce
                                                                              ::specs/vouch
                                                                              ::state/shared-secrets])
@@ -188,7 +171,7 @@
                                                                nonce-suffix)]
           (if crypto-box
             (let [log-state (log/info log-state
-                                      ::build-initiate-packet!
+                                      ::build-initiate-packet
                                       "Stuffing crypto-box into Initiate packet"
                                       {::specs/crypto-box (when crypto-box
                                                             (b-t/->string crypto-box))
@@ -215,7 +198,7 @@
                    :as filtered} (message/filter-initial-message-bytes log-state
                                                                        result-bytes)]
               (log/flush-logs! logger (log/debug log-state
-                                                 ::build-initiate-packet!
+                                                 ::build-initiate-packet
                                                  ""
                                                  {::filtered filtered}))
               result)
@@ -226,7 +209,7 @@
                                                  ::log/state)})))))
         (do
           (log/flush-logs! logger (log/warn log-state
-                                            ::build-initiate-packet!
+                                            ::build-initiate-packet
                                             "Invalid message length from child"
                                             {::message-length (count msg)}))
           nil))
@@ -277,8 +260,7 @@
 (defn build-inner-vouch
   "Build the innermost vouch/nonce pair"
   [{:keys [::shared/my-keys
-           ::state/shared-secrets
-           ::shared/work-area]
+           ::state/shared-secrets]
     log-state ::log/state
     :as this}]
   (let [{log-state ::log/state

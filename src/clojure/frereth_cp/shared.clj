@@ -181,13 +181,6 @@
    ;; seems like a train wreck waiting to happen)
    ::packet-nonce 0})
 
-(s/fdef default-work-area
-        :args (s/cat)
-        :ret ::work-area)
-(defn default-work-area
-  []
-  {})
-
 ;;; encode-server name no longer seems to be used anywhere.
 ;;; TODO: Verify that and then eliminate it
 (s/fdef encode-server-name

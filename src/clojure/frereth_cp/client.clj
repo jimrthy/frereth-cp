@@ -283,18 +283,14 @@
             ;; But that would create circular imports.
             ;; This is a red flag.
             ;; FIXME: Come up with a better place for it to live.
-            (assoc ::state/packet-builder initiate/build-initiate-packet!)
+            (assoc ::state/packet-builder initiate/build-initiate-packet)
             state/initialize-mutable-state!
             (assoc
              ;; This seems very cheese-ball, but they
-             ;; *do* need to be part of the agent.
-             ;; Assuming the agent just doesn't go completely away.
-             ;; We definitely don't want multiple threads
-             ;; messing with them.
-             ;; TODO: Now that the agent has gone away, eliminate
-             ;; these also.
-             ::shared/packet-management (shared/default-packet-manager)
-             ::shared/work-area (shared/default-work-area)))]
+             ;; did need to be part of the agent.
+             ;; Now that the agent has gone completely away,
+             ;; so should packet-management
+             ::shared/packet-management (shared/default-packet-manager)))]
     (dfrd/on-realized (::state/terminated result)
                       (partial unexpectedly-terminated-successfully result)
                       (partial unexpectedly-terminated-unsuccessfully result))

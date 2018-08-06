@@ -123,8 +123,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ::server-security
                                      ;; The only thing mutable about this is that I don't have it all in beginning
                                      ::shared-secrets
-                                     ::terminated
-                                     ::shared/work-area]
+                                     ::terminated]
                                :opt [::child
                                      ::specs/io-handle
                                      ;; Q: Why am I tempted to store this at all?
@@ -440,7 +439,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                       ::msg-specs/message-loop-name
                       ::shared/extension
                       ::shared/my-keys
-                      ::shared/work-area
                       ::specs/inner-i-nonce
                       ::specs/vouch
                       ::packet-builder
