@@ -31,7 +31,6 @@
 ;;; These pieces are about the innermost nonce
 (s/def ::vouch-building-params (s/keys :req [::log/logger
                                              ::shared/my-keys
-                                             ::shared/packet-management
                                              ::state/shared-secrets]))
 (s/def ::vouch-built (s/keys :req [::specs/inner-i-nonce
                                    ::log/state
