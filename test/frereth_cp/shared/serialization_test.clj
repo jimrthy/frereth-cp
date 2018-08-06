@@ -105,7 +105,7 @@
                   clnt-xtn gen-xtn
                   clnt-short-pk gen-key
                   cookie (fixed-length-byte-array-generator K/server-cookie-length)
-                  outer-i-nonce (fixed-length-byte-array-generator K/client-nonce-suffix-length)
+                  outer-i-nonce (fixed-length-byte-array-generator specs/client-nonce-suffix-length)
                   vouch-wrapper (gen/fmap byte-array
                                           (gen/fmap (fn [x]
                                                       (assert (every? (complement nil?) x))
@@ -146,7 +146,7 @@
     clnt-xtn gen-xtn
     clnt-short-pk gen-key
     zeros (gen/return (byte-array (take K/zero-box-length (repeat 0))))
-    client-nonce-suffix (fixed-length-byte-array-generator K/client-nonce-suffix-length)
+    client-nonce-suffix (fixed-length-byte-array-generator specs/client-nonce-suffix-length)
     crypto-box (fixed-length-byte-array-generator K/hello-crypto-box-length)]
    (let [hello {::K/hello-prefix hello-prefix
                 ::K/srvr-xtn srvr-xtn

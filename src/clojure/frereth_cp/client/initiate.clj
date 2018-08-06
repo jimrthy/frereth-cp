@@ -289,15 +289,14 @@
         ;; pieces below here can/will throw their own exceptions
         ;; that I don't want to handle.
         ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)
-        ;; FIXME: Make this shared byte array go away
-        {:keys [::shared/text]} work-area]
-    (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
+        clear-text (byte-array K/key-length)]
+    (b-t/byte-copy! clear-text 0 K/key-length (.getPublicKey short-pair))
     (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
       (let [{log-state ::log/state
              :keys [::specs/vouch]} (encrypt-inner-vouch log-state
                                                          shared-secret
                                                          nonce-suffix
-                                                         text)]
+                                                         clear-text)]
         (assert log-state)
         {::specs/inner-i-nonce nonce-suffix
          ::log/state log-state

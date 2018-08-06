@@ -99,8 +99,9 @@
   [{:keys [::state/current-client]
     log-state ::log2/state
     :as state}
-   ^bytes message]
-  (let [length (count message)]
+   message]
+  (let [message (bytes message)
+        length (count message)]
     (if (= length K/hello-packet-length)
       (let [log-state (log2/info log-state
                                  ::open-packet
@@ -145,14 +146,9 @@
         :ret (s/keys :opt [::K/hello-spec ::srvr-specs/cookie-components]
                      :req [::log2/state]))
 (defn do-handle
-  [{:keys [::shared/working-area]
-    log-state ::log2/state
+  [{log-state ::log2/state
     :as state}
-   ;; TODO: Evaluate the impact of just using bytes instead
-   ;; Especially since I've pretty thoroughly embraced that approach
-   ;; until/unless I have numbers that indicate it's a significant
-   ;; performance hit.
-   ^ByteBuf message]
+   message]
   (let [log-state (log2/debug log-state
                               ::do-handle
                               "Have what looks like a HELLO packet")
@@ -174,14 +170,13 @@
     ;; key and the short-term private key so it didn't just send us random garbage.
     (if clear-text
       (let [minute-key (get-in state [::state/cookie-cutter ::state/minute-key])
-            {:keys [::shared/text]} working-area]
+            text (byte-array 2048)]
         (assert minute-key (str "Missing minute-key among "
                                 (keys state)))
         {::srvr-specs/cookie-components {::state/client-short<->server-long shared-secret
                                          ::state/client-short-pk clnt-short-pk
                                          ::state/minute-key minute-key
-                                         ::srvr-specs/clear-text clear-text
-                                         ::shared/text text}
+                                         ::srvr-specs/clear-text clear-text}
          ::K/hello-spec fields
          ::log2/state log-state})
       {::log2/state (log2/warn log-state

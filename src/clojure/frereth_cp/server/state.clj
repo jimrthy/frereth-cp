@@ -270,8 +270,7 @@
     ;; Of course, the entire point may be messages that are too big
     ;; and need to be sharded.
     #_(crypto/random-bytes! (-> this :child-buffer ::buf))
-    #_(crypto/random-bytes! (-> this :child-buffer ::msg))
-    (crypto/random-bytes! (::shared/text work-area)))
+    #_(crypto/random-bytes! (-> this :child-buffer ::msg)))
   (when-let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
     (crypto/random-bytes! (.getPublicKey short-term-keys))
     (crypto/random-bytes! (.getSecretKey short-term-keys)))

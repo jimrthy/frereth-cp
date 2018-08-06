@@ -224,7 +224,7 @@
                                   -1 0)))
         ;; TODO: Revisit the original and decide whether it's worth the trouble.
         ;; ALT: Compare the prefix as a vector. See how much of a performance hit we take
-        ;; It doesn't seem likely that timing attack matter here. These get sent in
+        ;; It doesn't seem likely that timing attacks matter here. These get sent in
         ;; clear-text.
         ;; As always: check with a cryptographer.
         verified (and (b-t/bytes= K/client-header-prefix

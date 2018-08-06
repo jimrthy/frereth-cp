@@ -186,7 +186,7 @@
         :ret ::work-area)
 (defn default-work-area
   []
-  {::text (byte-array 2048)})
+  {})
 
 ;;; encode-server name no longer seems to be used anywhere.
 ;;; TODO: Verify that and then eliminate it

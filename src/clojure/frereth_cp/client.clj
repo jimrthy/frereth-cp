@@ -64,8 +64,7 @@
     (-> this
         ;; TODO: Write a mirror image version of dns-encode to just show this
         (assoc-in [::server-security ::specs/srvr-name] "name")
-        (assoc-in [::shared/packet-management ::shared/packet] "...packet bytes...")
-        (assoc-in [::shared/work-area ::shared/text] "...plain/cipher text"))))
+        (assoc-in [::shared/packet-management ::shared/packet] "...packet bytes..."))))
 
 (defn child-exited!
   [this]
