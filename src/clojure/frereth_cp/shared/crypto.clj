@@ -31,6 +31,8 @@
 ;;; It seems a little silly to encrypt a 128-bit
 ;;; block with a 256-bit key, but 128-bit keys don't
 ;;; have a lot of room for undiscovered vulnerabilities
+;; Note that this name is legit: it's a key used to encrypt the next
+;; nonce.
 (def nonce-key-length 24)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -498,6 +500,10 @@
 (defn get-safe-client-nonce-suffix
   "Get a new byte array containing the next client nonce suffix"
   [log-state]
+  ;; It's tempting to refactor this and get-safe-server-nonce-suffix
+  ;; even further to just have a common shared function that takes
+  ;; the nonce length, log state, and destination key as parameters.
+  ;; Though it does seem a bit silly.
   (let [dst (byte-array specs/client-nonce-suffix-length)
         log-state (do-safe-nonce log-state dst 0)]
     {::log2/state log-state

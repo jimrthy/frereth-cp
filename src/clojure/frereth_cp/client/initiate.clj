@@ -103,11 +103,11 @@
                                                                ::problem
                                                                "Missing"))
                                  ::shared-secret (b-t/->string secret)})]
-        {::specs/crypto-box (crypto/build-crypto-box tmplt
-                                                     src
-                                                     secret
-                                                     K/initiate-nonce-prefix
-                                                     outer-nonce-suffix)
+        {::specs/crypto-box (crypto/build-box tmplt
+                                              src
+                                              secret
+                                              K/initiate-nonce-prefix
+                                              outer-nonce-suffix)
          ::log/state log-state})
       {::log/state (log/warn log-state
                              ::build-initiate-interior
@@ -173,7 +173,8 @@
         ;; have this extremely dicey.
         ;; This is absolutely not the case.
         ;; c.f. lines 329-334 in the reference spec.
-        (let [nonce-suffix (crypto/get-safe-client-nonce-suffix)
+        (let [{log-state ::log/state
+               nonce-suffix ::specs/client-nonce-suffix} (crypto/get-safe-client-nonce-suffix log-state)
               {:keys [::specs/crypto-box]
                log-state ::log/state
                :as initiate-interior} (build-initiate-interior (select-keys this
@@ -267,6 +268,7 @@
     :keys [::log/logger]
     :as this}
    packet]
+  (throw (RuntimeException. "Not used. Make it go away."))
   (if packet
     (let [log-state (log/flush-logs! logger log-state)
           this (assoc this ::log/state log-state)
@@ -350,34 +352,35 @@
 (s/fdef encrypt-inner-vouch
         :args (s/cat :log-state ::log/state
                      :shared-secret ::shared/shared-secret
-                     :safe-nonce ::specs/nonce
+                     :nonce-suffix ::specs/server-nonce-suffix
                      :clear-text ::shared/text))
 (defn encrypt-inner-vouch
   "Encrypt the inner-most crypto box"
-  [log-state shared-secret safe-nonce clear-text]
+  [log-state shared-secret nonce-suffix clear-text]
   ;; This is the inner-most secret that the inner vouch hides.
   ;; The point is to allow the server to verify
   ;; that whoever sent this packet truly has access to the
   ;; secret keys associated with both the long-term and short-
   ;; term key's we're claiming for this session.
-  (let [encrypted (crypto/box-after shared-secret
-                                    clear-text
-                                    K/key-length
-                                    safe-nonce)
-        vouch (byte-array K/vouch-length)
-        log-state (log/info log-state
-                            ::build-vouch
-                            (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
-                                 "(FIXME: Don't log the shared secret)")
-                            {::shared/safe-nonce (b-t/->string safe-nonce)
-                             ::state/shared-secret (b-t/->string shared-secret)
-                             ::specs/vouch (b-t/->string vouch)})]
-    (b-t/byte-copy! vouch
-                    0
-                    (+ K/box-zero-bytes K/key-length)
-                    encrypted)
-    {::log/state log-state
-     ::specs/vouch vouch}))
+  (let [nonce (byte-array K/nonce-length)]
+    (b-t/byte-copy! nonce K/vouch-nonce-prefix)
+    (b-t/byte-copy! nonce
+                    specs/server-nonce-prefix-length
+                    specs/server-nonce-suffix-length
+                    nonce-suffix)
+    (let [vouch (crypto/box-after shared-secret
+                                      clear-text
+                                      K/key-length
+                                      nonce)
+          log-state (log/info log-state
+                              ::build-vouch
+                              (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
+                                   "(FIXME: Don't log the shared secret)")
+                              {::shared/safe-nonce (b-t/->string nonce)
+                               ::state/shared-secret (b-t/->string shared-secret)
+                               ::specs/vouch (b-t/->string vouch)})]
+      {::log/state log-state
+       ::specs/vouch vouch})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -404,9 +407,7 @@
         {:keys [::shared/text]} work-area]
     (b-t/byte-copy! text 0 K/key-length (.getPublicKey short-pair))
     (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
-      (let [_ (throw (RuntimeException. "Needs full nonce")) ; Not just the suffix
-            ;; Although, honestly, it would make more sense for it to add the prefix bytes
-            {log-state ::log/state
+      (let [{log-state ::log/state
              :keys [::specs/vouch]} (encrypt-inner-vouch log-state
                                                          shared-secret
                                                          nonce-suffix
