@@ -185,7 +185,21 @@
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
-(def initiate-header (.getBytes (str client-header-prefix "I")))
+(def initiate-header (.getBytes (str client-header-prefix-string "I")))
+
+(comment
+  client-header-prefix
+  (String. client-header-prefix)
+  (str vouch-nonce-prefix)
+  (String. vouch-nonce-prefix)
+  (-> initiate-header
+      vec
+      (subvec 0 (dec header-length))
+      byte-array
+      String.)
+  (String. initiate-header)
+  (str initiate-header)
+  )
 
 (def vouch-length specs/vouch-length)
 

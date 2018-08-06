@@ -206,10 +206,10 @@
   [{:keys [::shared/extension]}
    header
    rcvd-xtn]
-  (let [rcvd-prfx (-> header
-                      vec
-                      (subvec 0 (dec K/header-length))
-                      byte-array)
+  (let [rcvd-prefix (-> header
+                        vec
+                        (subvec 0 (dec K/header-length))
+                        byte-array)
         original (not= 0
                        ;; Q: Why did DJB use a bitwise and here?
                        ;; (most likely current guess: it doesn't shortcut)
@@ -217,7 +217,7 @@
                        ;; have to jump through to jump between bitwise and logical
                        ;; operations?
                        (bit-and (if (b-t/bytes= K/client-header-prefix
-                                                rcvd-prfx)
+                                                rcvd-prefix)
                                   -1 0)
                                 (if (b-t/bytes= extension
                                                 rcvd-xtn)
@@ -228,16 +228,18 @@
         ;; clear-text.
         ;; As always: check with a cryptographer.
         verified (and (b-t/bytes= K/client-header-prefix
-                                  rcvd-prfx)
+                                  rcvd-prefix)
                       (b-t/bytes= extension
                                   rcvd-xtn))]
     (when-not verified
       (log/warn (str "Dropping packet intended for someone else.\nExpected: "
                      (String. K/client-header-prefix)
                      " a " (class K/client-header-prefix)
+                     " aka " (vec K/client-header-prefix)
                      " and " (vec extension)
-                     "\nActual: " (String. rcvd-prfx)
-                     " a " (class rcvd-prfx)
+                     "\nActual: " (String. rcvd-prefix)
+                     " a " (class rcvd-prefix)
+                     " aka " vec rcvd-prefix
                      " and " (vec rcvd-xtn))))
     verified))
 
