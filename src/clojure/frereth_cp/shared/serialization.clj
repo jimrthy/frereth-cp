@@ -337,6 +337,8 @@ Needing to declare these things twice is annoying."
   ;; TODO: Refactor rename to decompose!
   "Read a C-style struct from a ByteBuf into a map, based on template"
   [tmplt ^ByteBuf src]
+  ;; It seems as though this should call .release on src
+  ;; when done
   (reduce
    (partial decompose-field! src tmplt)
    {}
@@ -344,8 +346,9 @@ Needing to declare these things twice is annoying."
 
 (defn decompose-array
   "Read a C-style struct from a byte array into a map, based on template"
-  [tmplt ^bytes src]
-  (reduce
-   (partial decompose-array-field src tmplt)
-   {::index 0}
-   (keys tmplt)))
+  [tmplt src]
+  (let [src (bytes src)]
+    (reduce
+     (partial decompose-array-field src tmplt)
+     {::index 0}
+     (keys tmplt))))

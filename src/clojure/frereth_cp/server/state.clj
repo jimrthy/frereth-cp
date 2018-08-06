@@ -203,7 +203,7 @@
 (defn alter-client-state!
   [state altered-client]
   ;; Skip incrementing the numactiveclients count.
-  ;; That's inherent in:
+  ;; We get that for free from the data structure
   (swap! (::active-clients state)
          update
          (get-in altered-client [::client-security ::shared/short-pk])
@@ -212,16 +212,22 @@
 
 (s/fdef configure-shared-secrets
         :args (s/cat :client ::client-state
-                     :server-short-sk ::shared/secret-key
-                     :client-short-pk ::shared/public-key)
+                     :client-short-pk ::shared/public-key
+                     :server-short-sk ::shared/secret-key)
         :ret ::client-state)
 (defn configure-shared-secrets
   "Return altered client state that reflects new shared key
   This almost corresponds to lines 369-371 in reference implementation,
   but does *not* have side-effects!  <----"
   [client
-   server-short-sk
-   client-short-pk]
+   client-short-pk
+   server-short-sk]
+  (when-not (and client-short-pk server-short-sk)
+    (log/error (str "Missing either '"
+                    client-short-pk
+                    "' and/or '"
+                    server-short-sk
+                    "'")))
   (-> client
       (assoc-in [::shared-secrets ::client-short<->server-short] (crypto/box-prepare client-short-pk server-short-sk))
       (assoc-in [::client-security ::short-pk] client-short-pk)
@@ -232,7 +238,7 @@
                      :client-short-key ::shared/public-key))
 (defn find-client
   [state client-short-key]
-  (-> state ::active-clients deref (get client-short-key)))
+  (get-in state [::active-clients client-short-key]))
 
 (defn hide-secrets!
   [this]
