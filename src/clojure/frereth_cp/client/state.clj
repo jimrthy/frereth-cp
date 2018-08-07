@@ -859,5 +859,5 @@ The fact that this is so big says a lot about needing to re-think my approach"
   (let [result (unchecked-inc nonce)]
     (when (= result 0)
       (throw (ex-info "nonce space expired"
-                      {:must "End communication immediately"})))
+                      {::must "End communication immediately"})))
     result))

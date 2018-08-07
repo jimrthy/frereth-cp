@@ -168,7 +168,6 @@
             (dfrd/chain
              (fn [this]
                (hello/set-up-server-polling! this
-                                             log-state-atom
                                              cookie/wait-for-cookie!))
              (fn [{log-state ::log/state
                    :as this}]

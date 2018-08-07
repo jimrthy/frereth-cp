@@ -73,22 +73,24 @@
   (dfrd/error! completion ex))
 
 
-(s/fdef build-raw
+(s/fdef build-raw-template-values
         :args (s/cat :this ::state/state
                       :short-term-nonce any?
                       :safe-nonce ::shared/safe-nonce)
         :ret (s/keys :req [::K/hello-spec ::log/state]))
-(defn build-raw
+(defn build-raw-template-values
+  "Set up the values for injecting into the template"
   [{:keys [::state/server-extension
            ::shared/extension
            ::shared/my-keys
+           ::state/server-security
            ::state/shared-secrets]
     log-state ::log/state
     :as this}
    short-term-nonce
    safe-nonce]
   (let [log-state
-        (if-let [{:keys [::state/server-security]} this]
+        (if server-security
           (log/debug log-state
                      ::build-raw
                      "server-security" server-security)
@@ -99,22 +101,21 @@
                      ::state/state this}))
         my-short<->their-long (::state/client-short<->server-long shared-secrets)
         _ (assert my-short<->their-long)
-       safe-nonce (byte-array safe-nonce)
+        safe-nonce (byte-array safe-nonce)
         ;; Note that this definitely inserts the 16-byte prefix for me
         boxed (crypto/box-after my-short<->their-long
                                 K/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes)
                                 safe-nonce)
         ^TweetNaclFast$Box$KeyPair my-short-pair (::shared/short-pair my-keys)
         log-state (log/info log-state
-                            ::build-raw
+                            ::build-raw-template-values
                             ""
                             {::crypto-box (b-t/->string boxed)
                              ::shared/safe-nonce (b-t/->string safe-nonce)
                              ::my-short-pk (-> my-short-pair
                                                .getPublicKey
                                                b-t/->string)
-                             ::server-long-pk (b-t/->string (get-in this [::state/server-security
-                                                                          ::specs/public-long]))
+                             ::server-long-pk (b-t/->string (::specs/public-long server-security))
                              ::state/client-short<->server-long (b-t/->string my-short<->their-long)})
         nonce-suffix (byte-array (vec (drop specs/client-nonce-prefix-length
                                             safe-nonce)))]
@@ -143,19 +144,29 @@
    short-term-nonce
    safe-nonce]
   (let [{raw-hello ::template
-         log-state ::log/state} (build-raw this short-term-nonce safe-nonce)
+         log-state ::log/state} (build-raw-template-values this
+                                                           short-term-nonce
+                                                           safe-nonce)
         log-state (log/info log-state
                             ::build-actual-packet
                             "Building Hello"
                             {::raw raw-hello})
-        ^ByteBuf result (serial/compose K/hello-packet-dscr raw-hello)
-        n (.readableBytes result)]
-    (when (not= K/hello-packet-length n)
-      (throw (ex-info "Built a bad HELLO"
-                      {::expected-length K/hello-packet-length
-                       ::actual n})))
-    {::shared/packet result
-     ::log/state log-state}))
+        composition-succeeded? (promise)]
+    (try
+      (let [^ByteBuf result (serial/compose K/hello-packet-dscr raw-hello)]
+        (deliver composition-succeeded? true)
+        (let [n (.readableBytes result)]
+          (when (not= K/hello-packet-length n)
+            (throw (ex-info "Built a bad HELLO"
+                            {::expected-length K/hello-packet-length
+                             ::actual n}))))
+        {::shared/packet result
+         ::log/state log-state})
+      (catch Throwable ex
+        (if (realized? composition-succeeded?)
+          (throw ex)
+          {::log/state (log/exception log-state ex ::build-actual-packet
+                                      "Failed to compose HELLO")})))))
 
 ;; This matches the global hellowait array from line 27
 (let [hello-wait-time (reduce (fn [acc n]
@@ -440,24 +451,17 @@
         ;; Probably the short-term key.
         ;; But definitely not the full state.
         ;; FIXME: Do that, in a different branch
-        :ret (s/keys :req [::shared/packet-management]))
+        :ret (s/keys :req [::log/state]
+                     :opt [::shared/packet-nonce
+                           ::shared/packet]))
 (defn do-build-packet
-  "Puts plain-text hello packet into packet-management
+  "Builds a plain-text hello packet into packet-management
 
   Note that, for all intents and purposes, this is really called
   for side-effects, even though it has trappings to make it look
   functional."
-  ;; A major part of the way this is written revolves around
-  ;; updating packet-management in place.
-  ;; That seems like premature optimization here.
-  ;; Though it seems as though it might make sense for
-  ;; sending messages.
-  ;; Then again, if the implementation isn't shared...can
-  ;; it possibly be worth the trouble?
-  [{:keys [::log/logger
-           ::shared/packet-management]
+  [{:keys [::log/logger]
     :as this}]
-  ;; FIXME: Eliminate packet-management.
   ;; Be explicit about the actual parameters.
   ;; Return the new packet.
   ;; Honestly, split up the calls that configure all the things
@@ -465,63 +469,69 @@
   (let [;; There's a good chance this updates my extension.
         ;; That doesn't get set into stone until/unless I
         ;; manage to handshake with a server
-        {log-state ::log/state
+        {:keys [::shared/extension
+                ::state/client-extension-load-time]
+         log-state ::log/state
          :as extension-initialized} (state/clientextension-init (select-keys this
-                                                                             [::state/client-extension-lead-time
+                                                                             [::state/client-extension-load-time
                                                                               ::log/logger
+                                                                              ::log/state
                                                                               ::msg-specs/recent
                                                                               ::shared/extension]))
-        this (into this extension-initialized)
-        _ (throw (RuntimeException. "Start back here"))
-        ;; Getting rid of the globally shared packet may make sense.
-        ;; But eliminating packet-nonce seems difficult, at best.
-        {:keys [::shared/packet-nonce ::shared/packet]} packet-management
+        ;; Q: Does it make any sense to initialize these here?
+        {:keys [::shared/packet-nonce ::shared/packet]} (shared/default-packet-manager)
+        ;; FIXME: Need to protect against the error that the nonce space has been exhausted.
+        ;; Though we probably don't have to worry about it here.
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)
         safe-nonce-prefix (vec K/hello-nonce-prefix)
         nonce-suffix (byte-array 8)]
     ;; Q: Is it worth coming up with a more efficient way to build this?
     (b-t/uint64-pack! nonce-suffix 0 short-term-nonce)
+    ;; Q: Why am I building this nonce from a lazy seq?
     (let [safe-nonce (concat safe-nonce-prefix (vec nonce-suffix))
           log-state (log/info log-state
                               ::do-build-packet
                               "Packed short-term- into safe- -nonces"
                               {::short-term-nonce short-term-nonce
                                ::shared/safe-nonce safe-nonce})
+          packet-builders (select-keys this [::log/state
+                                             ::state/server-extension
+                                             ::state/server-security
+                                             ::shared/my-keys
+                                             ::state/shared-secrets])
+          packet-builders (assoc packet-builders ::shared/extension extension)
           {:keys [::shared/packet]
-           log-state ::log/state} (build-actual-packet (assoc this ::log/state log-state)
+           log-state ::log/state} (build-actual-packet packet-builders
                                                         short-term-nonce
                                                         safe-nonce)
           log-state (log/info log-state
                               ::do-build-packet
                               "hello packet built. Returning/updating")]
-      (-> this
-          (update ::shared/packet-management
-                  (fn [current]
-                    (assoc current
-                           ::shared/packet-nonce short-term-nonce
-                           ::shared/packet (b-s/convert packet specs/byte-array-type))))
-          (assoc ::log/state (log/flush-logs! logger log-state))))))
+      (into extension-initialized
+            {::log/state (log/flush-logs! logger log-state)
+             ::shared/packet-management {::shared/packet-nonce short-term-nonce
+                                         ::shared/packet (b-s/convert packet specs/byte-array-type)}}))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
 (s/fdef set-up-server-polling!
         :args (s/cat :this ::state/state
-                     :wait-for-cookie! ::state/cookie-waiter
-                     ;; TODO: Spec this out
-                     :build-inner-vouch any?
-                     :servers-polled any?)
+                     :wait-for-cookie! ::state/cookie-waiter)
         :ret ::servers-polled)
 (defn set-up-server-polling!
   "Start polling the server(s) with HELLO Packets"
-  [{:keys [::log/logger]
-    :as this}
-   ;; TODO: Either use this or eliminate it.
-   log-state-atom
+  [this
    wait-for-cookie!]
   (println "hello: polling triggered")
-  (let [this (do-build-packet this)
-        hello-packet nil]
+  (let [{{hello-packet ::shared/packet} ::shared/packet-management
+         :as delta} (do-build-packet this)
+
+        this (into this delta)]
+    (println "hello/set-up-server-polling! After extending this with the keys from\n"
+             (keys delta)
+             "\nshared/extension is\n"
+             (::shared/extension this))
     ;; Q: Is a quarter second a reasonable amount of time to
     ;; wait for the send?
     (poll-servers! this hello-packet 250 wait-for-cookie!)))

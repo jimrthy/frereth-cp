@@ -99,6 +99,9 @@
   ;; This has to take constant time.
   ;; No short-cutting!
   ;; Translated from byte_isequal.c in reference implementation
+  ;; FIXME: Switch to the weavejester/clojure-crypto-equality
+  ;; libraray.
+  ;; This is the sort of wheel that should not be reinvented.
   (let [nx (count x)
         ny (count y)
         diff (reduce (fn [acc n]
