@@ -822,6 +822,11 @@ Or maybe that's (dec n)"
     "Picks a big random number and securely "
     [denominator]
     (if (not= 0 denominator)
+      ;; Using java.util.Random. here seems...wrong
+      ;; FIXME: Verify that this uses the secure rng defined
+      ;; in the lexical closure.
+      ;; FIXME: Look into using weavejester's secure-random
+      ;; library instead.
       (let [numerator (BigInteger. 256 (java.util.Random.))]
         (comment
           ;; The reference version actually does this:

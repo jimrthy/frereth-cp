@@ -53,6 +53,7 @@
 ;; (comment (dec (long (Math/pow 2 31))))
 (def ^:const max-32-int 2147483647)
 (def ^:const max-64-uint 18446744073709551999N)
+(def ^:const two-pow-48 (bit-shift-left 1 48))
 
 (def ^:const m-1
   "1 Meg"

@@ -732,12 +732,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
         [extension log-state] (if reload?
-                                (try (-> "/etc/curvecpextension"
-                                         ;; This is pretty inefficient...we really only want 16 bytes.
-                                         ;; Should be good enough for a starting point, though
-                                         slurp
-                                         (subs 0 16)
-                                         .getBytes)
+                                (try [(-> "/etc/curvecpextension"
+                                           ;; This is pretty inefficient...we really only want 16 bytes.
+                                           ;; Should be good enough for a starting point, though
+                                           slurp
+                                           (subs 0 16)
+                                           .getBytes)
+                                      log-state]
                                      (catch java.io.FileNotFoundException _
                                        ;; This really isn't all that unexpected.
                                        ;; The original goal/dream was to get CurveCP

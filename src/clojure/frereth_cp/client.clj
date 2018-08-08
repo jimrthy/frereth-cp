@@ -171,7 +171,6 @@
                                              cookie/wait-for-cookie!))
              (fn [{log-state ::log/state
                    :as this}]
-               ;; We're getting here
                (println "Outcome from hello/set-up-server-polling!")
                (pprint this)
                ;; This construct's an argument in favor of just passing the

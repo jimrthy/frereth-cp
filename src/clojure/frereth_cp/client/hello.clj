@@ -151,6 +151,7 @@
                             ::build-actual-packet
                             "Building Hello"
                             {::raw raw-hello})
+        ;; This is for the sake of tricksy exception handling
         composition-succeeded? (promise)]
     (try
       (let [^ByteBuf result (serial/compose K/hello-packet-dscr raw-hello)]
@@ -460,15 +461,20 @@
   Note that, for all intents and purposes, this is really called
   for side-effects, even though it has trappings to make it look
   functional."
-  [{:keys [::log/logger]
+  [{:keys [::log/logger
+           ::shared/packet-nonce]
     :as this}]
   ;; Be explicit about the actual parameters.
   ;; Return the new packet.
   ;; Honestly, split up the calls that configure all the things
   ;; like setting up the nonce that make this problematic
   (let [;; There's a good chance this updates my extension.
-        ;; That doesn't get set into stone until/unless I
-        ;; manage to handshake with a server
+        ;; This doesn't get set into stone until after I've
+        ;; managed to contact a server.
+        ;; However: the nonce needs to be different for
+        ;; each server.
+        ;; So building an initial packet up-front like this
+        ;; to share among all of them simply does not work.
         {:keys [::shared/extension
                 ::state/client-extension-load-time]
          log-state ::log/state
@@ -479,9 +485,16 @@
                                                                               ::msg-specs/recent
                                                                               ::shared/extension]))
         ;; Q: Does it make any sense to initialize these here?
+        ;; A: No. This just sets the packet-nonce to 0 (which means
+        ;; nil packet).
+        ;; Just before this happens, the packet-nonce should be reset to some
+        ;; random ulong.
+        ;; And then, as we send HELLO packets, update-client-short-term-nonce
+        ;; should increment it.
         {:keys [::shared/packet-nonce ::shared/packet]} (shared/default-packet-manager)
         ;; FIXME: Need to protect against the error that the nonce space has been exhausted.
         ;; Though we probably don't have to worry about it here.
+        ;; This should also happen at the top of reading a message from the child
         short-term-nonce (state/update-client-short-term-nonce packet-nonce)
         safe-nonce-prefix (vec K/hello-nonce-prefix)
         nonce-suffix (byte-array 8)]
@@ -521,17 +534,29 @@
         :ret ::servers-polled)
 (defn set-up-server-polling!
   "Start polling the server(s) with HELLO Packets"
-  [this
+  [{log-state ::log/state
+    :as this}
    wait-for-cookie!]
-  (println "hello: polling triggered")
-  (let [{{hello-packet ::shared/packet} ::shared/packet-management
-         :as delta} (do-build-packet this)
-
-        this (into this delta)]
-    (println "hello/set-up-server-polling! After extending this with the keys from\n"
-             (keys delta)
-             "\nshared/extension is\n"
-             (::shared/extension this))
+  (let [log-state (log/info log-state
+                            ::set-up-server-polling!
+                            "hello: polling triggered")
+        ;; Q: How was this number chosen?
+        ;; A: Well, it came from line 274 of curvecpclient.c
+        nonce (crypto/random-mod K/two-pow-48)
+        this (assoc-in this [::shared/packet-management
+                             ::shared/packet-nonce] nonce)
+        ;; Have to adjust nonce for each server.
+        _ (throw (RuntimeException. "Can't just build this packet once"))
+        {{hello-packet ::shared/packet} ::shared/packet-management
+         log-state ::log/state
+         :as delta} (do-build-packet (select-keys this [::log/state
+                                                        ::shared/packet-management]))
+        this (into this delta)
+        log-state (log/info log-state
+                            ::set-up-server-polling!
+                            "After extending this with delta keys"
+                            {::changed-keys (keys delta)
+                             ::shared/extension (::shared/extension this)})]
     ;; Q: Is a quarter second a reasonable amount of time to
-    ;; wait for the send?
-    (poll-servers! this hello-packet 250 wait-for-cookie!)))
+    ;; wait for the [initial] send?
+    (poll-servers! (assoc this ::log/state log-state) hello-packet 250 wait-for-cookie!)))
