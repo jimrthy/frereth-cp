@@ -86,8 +86,9 @@
 (s/def ::secret-key (s/and bytes? #(= (count %) K/key-length)))
 (s/def ::symmetric-key (s/and bytes? #(= (count %) K/key-length)))
 
-(s/def ::safe-nonce (s/and sequential?
-                           #(every? bytes? %)))
+;; This seems really silly.
+;; FIXME: Just make it go away.
+(s/def ::safe-nonce ::specs/nonce)
 
 (s/def ::text bytes?)
 (s/def ::work-area (s/keys :req [::text]))
@@ -131,6 +132,8 @@
                            ::extension
                            ::port]))
 
+;; These are actually suffixes. And must be duplicates.
+;; FIXME: Make them go away.
 (s/def ::client-nonce (s/and bytes?
                              #(= (count %) specs/client-nonce-suffix-length)))
 (s/def ::server-nonce (s/and bytes?

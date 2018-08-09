@@ -76,7 +76,8 @@
 (s/fdef build-raw-template-values
         :args (s/cat :this ::state/state
                       :short-term-nonce any?
-                      :safe-nonce ::shared/safe-nonce)
+                      :internal-nonce-suffix (s/and sequential?
+                                                    #(= (count %) ::specs/client-nonce-suffix-length)))
         :ret (s/keys :req [::K/hello-spec ::log/state]))
 (defn build-raw-template-values
   "Set up the values for injecting into the template"
@@ -88,7 +89,9 @@
     log-state ::log/state
     :as this}
    short-term-nonce
-   safe-nonce]
+   internal-nonce-suffix]
+  {:pre [my-keys
+         server-security]}
   (let [log-state
         (if server-security
           (log/debug log-state
@@ -100,9 +103,15 @@
                     {::keys (keys this)
                      ::state/state this}))
         my-short<->their-long (::state/client-short<->server-long shared-secrets)
-        _ (assert my-short<->their-long)
-        safe-nonce (byte-array safe-nonce)
-        ;; Note that this definitely inserts the 16-byte prefix for me
+        _ (assert my-short<->their-long (str "Missing client-short<->server-long among "
+                                             (keys shared-secrets)
+                                             " in "
+                                             shared-secrets))
+        safe-nonce-prefix (vec K/hello-nonce-prefix)
+        safe-nonce (-> safe-nonce-prefix
+                       (into internal-nonce-suffix)
+                       byte-array)
+        ;; Note that this inserts the 16-byte prefix for me
         boxed (crypto/box-after my-short<->their-long
                                 K/all-zeros (- K/hello-crypto-box-length K/box-zero-bytes)
                                 safe-nonce)
@@ -117,8 +126,8 @@
                                                b-t/->string)
                              ::server-long-pk (b-t/->string (::specs/public-long server-security))
                              ::state/client-short<->server-long (b-t/->string my-short<->their-long)})
-        nonce-suffix (byte-array (vec (drop specs/client-nonce-prefix-length
-                                            safe-nonce)))]
+        nonce-suffix (byte-array (drop specs/client-nonce-prefix-length
+                                       safe-nonce))]
     {::template {::K/hello-prefix nil  ; This is a constant, so there's no associated value
                  ::K/srvr-xtn server-extension
                  ::K/clnt-xtn extension
@@ -128,8 +137,8 @@
                  ::K/crypto-box boxed}
      ::log/state log-state}))
 
-(s/fdef build-actual-hello-packet
-        :args (s/cat :this ::state/state
+(s/fdef build-actual-packet
+        :args (s/cat :this ::state/state  ; FIXME: Narrow this down
                      ;; TODO: Verify that this is a valid long
                      ;; Annoying detail: Negatives are also legal, because this needs to map
                      ;; into the ulong space.
@@ -322,14 +331,103 @@
                               cookie-waiter
                               raw-packet)))))))
 
+(s/fdef do-build-packet
+  ;; FIXME: Be more restrictive about this.
+  ;; Only pass/return the pieces that this
+  ;; actually uses.
+  ;; Since that involves tracing down everything
+  ;; it calls (et al), that isn't quite trivial.
+  :args (s/cat :this (s/keys :req [::state/client-extension-load-time
+                                   ::shared/extension
+                                   ::log/logger
+                                   ::shared/my-keys
+                                   ::shared/packet-nonce
+                                   ::msg-specs/recent
+                                   ::state/server-security
+                                   ::state/shared-secrets
+                                   ::log/state]))
+  ;; However:
+  ;; It absolutely should not return much more than
+  ;; the bytes of the packet.
+  ;; And probably things like the nonce generator
+  ;; state.
+  ;; Probably the short-term key.
+  ;; But definitely not the full state.
+  ;; FIXME: Do that, in a different branch
+  :ret (s/keys :req [::log/state]
+               :opt [::shared/packet-nonce
+                     ::shared/packet]))
+
+(defn do-build-packet
+  "Builds a plain-text hello packet into packet-management
+
+  Note that, for all intents and purposes, this is really called
+  for side-effects, even though it has trappings to make it look
+  functional."
+  [{:keys [::shared/packet-nonce]
+    :as this}]
+  ;; Be explicit about the actual parameters.
+  ;; Return the new packet.
+  ;; Honestly, split up the calls that configure all the things
+  ;; like setting up the nonce that make this problematic
+  (let [;; There's a good chance this updates my extension.
+        ;; This doesn't get set into stone until after I've
+        ;; managed to contact a server.
+        ;; However: the nonce needs to be different for
+        ;; each server.
+        ;; So building an initial packet up-front like this
+        ;; to share among all of them simply does not work.
+        {:keys [::shared/extension
+                ::state/client-extension-load-time]
+         log-state ::log/state
+         :as extension-initialized} (state/clientextension-init (select-keys this
+                                                                             [::state/client-extension-load-time
+                                                                              ::log/logger
+                                                                              ::log/state
+                                                                              ::msg-specs/recent
+                                                                              ::shared/extension]))
+        ;; It's tempting to protect against the error that the nonce space has been exhausted.
+        ;; That's basically an almost-fatal error that should trigger a reconnect.
+        ;; But that decision needs to be made at a higher level.
+        ;; Though we probably don't have to worry about it here.
+        ;; This should also happen at the top of reading a message from the child
+        short-term-nonce (state/update-client-short-term-nonce packet-nonce)
+        nonce-suffix (byte-array 8)]
+    (b-t/uint64-pack! nonce-suffix 0 short-term-nonce)
+    (let [log-state (log/info log-state
+                              ::do-build-packet
+                              "Packed short-term- into safe- -nonces"
+                              {::short-term-nonce short-term-nonce
+                               ::specs/client-nonce-suffix nonce-suffix})
+          packet-builders (select-keys this [::log/state
+                                             ::state/server-extension
+                                             ::state/server-security
+                                             ::shared/my-keys
+                                             ::state/server-security
+                                             ::state/shared-secrets])
+          packet-builders (assoc packet-builders ::shared/extension extension)
+          {:keys [::shared/packet]
+           log-state ::log/state} (build-actual-packet packet-builders
+                                                       short-term-nonce
+                                                       nonce-suffix)
+          log-state (log/info log-state
+                              ::do-build-packet
+                              "hello packet possibly built. Returning/updating")]
+      (assoc extension-initialized
+             ::log/state log-state
+             ::shared/packet-nonce short-term-nonce
+             ::shared/packet (if packet
+                               (b-s/convert packet specs/byte-array-type)
+                               nil)))))
+
 (s/fdef do-polling-loop
         :args (s/cat :this ::state/state
-                     :hello-packet ::shared/message
                      :cookie-waiter ::state/cookie-waiter
                      :start-time nat-int?
                      :timeout ::specs/milli-time
                      :ips ::state/server-ips)
         :ret ::state/state)
+
 (defn do-polling-loop
   [{:keys [::log/logger
            ::specs/executor
@@ -337,10 +435,28 @@
            ::state/server-security]
     ips ::state/server-ips
     :as this}
-   hello-packet cookie-waiter start-time timeout]
+   cookie-waiter start-time timeout]
   ;; TODO: At least consider ways to rewrite this as
   ;; a dfrd/loop.
-  (let [srvr-ip (first ips)
+  (let [;; Have to adjust nonce for each server.
+        {hello-packet ::shared/packet
+         log-state ::log/state
+         :as delta} (do-build-packet (select-keys this [::state/client-extension-load-time
+                                                        ::shared/extension
+                                                        ::log/logger
+                                                        ::shared/my-keys
+                                                        ::shared/packet-nonce
+                                                        ::msg-specs/recent
+                                                        ::state/server-security
+                                                        ::state/shared-secrets
+                                                        ::log/state]))
+        this (into this (dissoc delta ::shared/packet))
+        log-state (log/info log-state
+                            ::do-polling-loop
+                            "After extending this with delta keys"
+                            {::changed-keys (keys delta)
+                             ::shared/extension (::shared/extension this)})
+        srvr-ip (first ips)
         log-state (log/info (::log/state this)
                             ::do-polling-loop
                             "Polling server"
@@ -398,7 +514,6 @@
 
 (s/fdef poll-servers!
   :args (s/cat :this ::state/state
-               :hello-packet ::shared/packet
                :send-timeout ::specs/time
                :cookie-waiter ::state/cookie-waiter)
         :ret ::servers-polled)
@@ -417,12 +532,12 @@
            ::state/server-ips]
     log-state ::log/state
     :as this}
-   hello-packet
    send-timeout cookie-waiter]
+  (throw (RuntimeException. "Pointless wrapper"))
   (let [log-state (log/debug log-state
                              ::poll-servers!
                              "Putting hello(s) onto ->server channel"
-                             {::hello-packet hello-packet
+                             {::hello-packet #_hello-packet "not created"
                               ::state/server-ips server-ips})]
     (do-polling-loop (assoc this
                             ::log/state log-state
@@ -431,99 +546,10 @@
                             ;; but what if you want the ability to try 20?
                             ;; Or don't particularly care how long it takes to get a response?
                             ;; Stick with the reference implementation version for now.
-                            ::state/server-ips (take max-server-attempts (cycle server-ips)))
-                     hello-packet
+                            )
                      cookie-waiter
                      (System/nanoTime)
                      (util/millis->nanos send-timeout))))
-
-(s/fdef do-build-packet
-        ;; FIXME: Be more restrictive about this.
-        ;; Only pass/return the pieces that this
-        ;; actually uses.
-        ;; Since that involves tracing down everything
-        ;; it calls (et al), that isn't quite trivial.
-        :args (s/cat :this ::state/state)
-        ;; However:
-        ;; It absolutely should not return much more than
-        ;; the bytes of the packet.
-        ;; And probably things like the nonce generator
-        ;; state.
-        ;; Probably the short-term key.
-        ;; But definitely not the full state.
-        ;; FIXME: Do that, in a different branch
-        :ret (s/keys :req [::log/state]
-                     :opt [::shared/packet-nonce
-                           ::shared/packet]))
-(defn do-build-packet
-  "Builds a plain-text hello packet into packet-management
-
-  Note that, for all intents and purposes, this is really called
-  for side-effects, even though it has trappings to make it look
-  functional."
-  [{:keys [::log/logger
-           ::shared/packet-nonce]
-    :as this}]
-  ;; Be explicit about the actual parameters.
-  ;; Return the new packet.
-  ;; Honestly, split up the calls that configure all the things
-  ;; like setting up the nonce that make this problematic
-  (let [;; There's a good chance this updates my extension.
-        ;; This doesn't get set into stone until after I've
-        ;; managed to contact a server.
-        ;; However: the nonce needs to be different for
-        ;; each server.
-        ;; So building an initial packet up-front like this
-        ;; to share among all of them simply does not work.
-        {:keys [::shared/extension
-                ::state/client-extension-load-time]
-         log-state ::log/state
-         :as extension-initialized} (state/clientextension-init (select-keys this
-                                                                             [::state/client-extension-load-time
-                                                                              ::log/logger
-                                                                              ::log/state
-                                                                              ::msg-specs/recent
-                                                                              ::shared/extension]))
-        ;; Q: Does it make any sense to initialize these here?
-        ;; A: No. This just sets the packet-nonce to 0 (which means
-        ;; nil packet).
-        ;; Just before this happens, the packet-nonce should be reset to some
-        ;; random ulong.
-        ;; And then, as we send HELLO packets, update-client-short-term-nonce
-        ;; should increment it.
-        {:keys [::shared/packet-nonce ::shared/packet]} (shared/default-packet-manager)
-        ;; FIXME: Need to protect against the error that the nonce space has been exhausted.
-        ;; Though we probably don't have to worry about it here.
-        ;; This should also happen at the top of reading a message from the child
-        short-term-nonce (state/update-client-short-term-nonce packet-nonce)
-        safe-nonce-prefix (vec K/hello-nonce-prefix)
-        nonce-suffix (byte-array 8)]
-    ;; Q: Is it worth coming up with a more efficient way to build this?
-    (b-t/uint64-pack! nonce-suffix 0 short-term-nonce)
-    ;; Q: Why am I building this nonce from a lazy seq?
-    (let [safe-nonce (concat safe-nonce-prefix (vec nonce-suffix))
-          log-state (log/info log-state
-                              ::do-build-packet
-                              "Packed short-term- into safe- -nonces"
-                              {::short-term-nonce short-term-nonce
-                               ::shared/safe-nonce safe-nonce})
-          packet-builders (select-keys this [::log/state
-                                             ::state/server-extension
-                                             ::state/server-security
-                                             ::shared/my-keys
-                                             ::state/shared-secrets])
-          packet-builders (assoc packet-builders ::shared/extension extension)
-          {:keys [::shared/packet]
-           log-state ::log/state} (build-actual-packet packet-builders
-                                                        short-term-nonce
-                                                        safe-nonce)
-          log-state (log/info log-state
-                              ::do-build-packet
-                              "hello packet built. Returning/updating")]
-      (into extension-initialized
-            {::log/state (log/flush-logs! logger log-state)
-             ::shared/packet-management {::shared/packet-nonce short-term-nonce
-                                         ::shared/packet (b-s/convert packet specs/byte-array-type)}}))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -535,6 +561,7 @@
 (defn set-up-server-polling!
   "Start polling the server(s) with HELLO Packets"
   [{log-state ::log/state
+    :keys [::state/server-ips]
     :as this}
    wait-for-cookie!]
   (let [log-state (log/info log-state
@@ -543,20 +570,17 @@
         ;; Q: How was this number chosen?
         ;; A: Well, it came from line 274 of curvecpclient.c
         nonce (crypto/random-mod K/two-pow-48)
-        this (assoc-in this [::shared/packet-management
-                             ::shared/packet-nonce] nonce)
-        ;; Have to adjust nonce for each server.
-        _ (throw (RuntimeException. "Can't just build this packet once"))
-        {{hello-packet ::shared/packet} ::shared/packet-management
-         log-state ::log/state
-         :as delta} (do-build-packet (select-keys this [::log/state
-                                                        ::shared/packet-management]))
-        this (into this delta)
-        log-state (log/info log-state
-                            ::set-up-server-polling!
-                            "After extending this with delta keys"
-                            {::changed-keys (keys delta)
-                             ::shared/extension (::shared/extension this)})]
+        this (assoc this ::shared/packet-nonce nonce)]
     ;; Q: Is a quarter second a reasonable amount of time to
     ;; wait for the [initial] send?
-    (poll-servers! (assoc this ::log/state log-state) hello-packet 250 wait-for-cookie!)))
+    (do-polling-loop (assoc this
+                            ::log/state log-state
+                            ;; Q: Do we really want to max out at 8?
+                            ;; 8 means over 46 seconds waiting for a response,
+                            ;; but what if you want the ability to try 20?
+                            ;; Or don't particularly care how long it takes to get a response?
+                            ;; Stick with the reference implementation version for now.
+                            ::state/server-ips (take max-server-attempts (cycle server-ips)))
+                     wait-for-cookie!
+                     (System/nanoTime)
+                     (util/millis->nanos 250))))

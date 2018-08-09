@@ -856,8 +856,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
         :ret integer?)
 (defn update-client-short-term-nonce
   "Note that this can loop right back to a negative number."
-  [^Long nonce]
-  (let [result (unchecked-inc nonce)]
+  [nonce]
+  (let [result (unchecked-inc (long nonce))]
     (when (= result 0)
       (throw (ex-info "nonce space expired"
                       {::must "End communication immediately"})))
