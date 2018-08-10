@@ -63,8 +63,7 @@
                                    {:cause (str ex)})))))]
     (-> this
         ;; TODO: Write a mirror image version of dns-encode to just show this
-        (assoc-in [::server-security ::specs/srvr-name] "name")
-        (assoc-in [::shared/packet-management ::shared/packet] "...packet bytes..."))))
+        (assoc-in [::server-security ::specs/srvr-name] "name"))))
 
 (defn child-exited!
   [this]
@@ -208,8 +207,7 @@
 (defn stop!
   [{log-state ::log/state
     :keys [::log/logger
-           ::state/chan->server
-           ::shared/packet-management]
+           ::state/chan->server]
     :or {log-state (log/init ::stop!-missing-logs)
          logger (log/std-out-log-factory)}
     :as this}]
@@ -258,8 +256,7 @@
     (assoc this
            ::chan->server nil
            ;; Q: What should this logging context be?
-           ::log/state (log/init ::ended-during-stop!)
-           ::shared/packet-management nil)))
+           ::log/state (log/init ::ended-during-stop!))))
 
 (s/fdef ctor
         :args (s/cat :opts (s/keys :req [::msg-specs/->child
@@ -282,13 +279,7 @@
             ;; This is a red flag.
             ;; FIXME: Come up with a better place for it to live.
             (assoc ::state/packet-builder initiate/build-initiate-packet)
-            state/initialize-mutable-state!
-            (assoc
-             ;; This seems very cheese-ball, but they
-             ;; did need to be part of the agent.
-             ;; Now that the agent has gone completely away,
-             ;; so should packet-management
-             ::shared/packet-management (shared/default-packet-manager)))]
+            state/initialize-mutable-state!)]
     (dfrd/on-realized (::state/terminated result)
                       (partial unexpectedly-terminated-successfully result)
                       (partial unexpectedly-terminated-unsuccessfully result))

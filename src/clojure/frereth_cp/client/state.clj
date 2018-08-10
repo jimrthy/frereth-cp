@@ -117,7 +117,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; A: Not in any sane reality.
                                      ::outgoing-message
                                      ::packet-builder
-                                     ::shared/packet-management
                                      ::msg-specs/recent
                                      ;; The only thing mutable about this is that I don't have it all in beginning
                                      ::server-security
@@ -727,7 +726,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                              ""
                              {::reload? reload?
                               ::shared/extension extension
-                              ::this this})
+                              ::this (dissoc this ::log/state)})
         client-extension-load-time (if reload?
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
@@ -748,10 +747,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                        ;; This is just a demonstrator of how well that
                                        ;; panned out.
                                        [(K/zero-bytes 16)
-                                        (log/flush-logs! logger (log/warn (log/clean-fork log-state
-                                                                                          ::clientextension-init)
-                                                                          ::clientextension-init
-                                                                          "no /etc/curvecpextension file"))]))
+                                        (log/warn log-state
+                                                  ::clientextension-init
+                                                  "no /etc/curvecpextension file")]))
+                                ;; No reload. Just return what's already here
                                 [extension log-state])]
     (assert (= (count extension) K/extension-length))
     (let [log-state (log/info log-state

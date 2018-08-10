@@ -22,6 +22,24 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
+;;; Q: Is there a better/cleaner way to set up these specs?
+
+;; For build-raw-template-values
+(s/def ::raw-template (s/keys :req [::shared/extension
+                                    ::shared/my-keys
+                                    ::state/server-extension
+                                    ::state/server-security
+                                    ::state/shared-secrets
+                                    ::log/state]))
+
+;; Pieces needed for build-actual-packet
+(s/def ::packet-builders (s/merge ::raw-template
+                                  (s/keys :req [::shared/packet-nonce])))
+
+;; These are the top-level keys that are passed into do-build-packet.
+(s/def ::top-level-packet-builders (s/merge ::state/extension-initializers
+                                            ::packet-builders))
+
 (s/def ::servers-polled (s/or :possibly-succeeded dfrd/deferrable?
                               :failed ::state/state))
 
@@ -74,23 +92,24 @@
 
 
 (s/fdef build-raw-template-values
-        :args (s/cat :this ::state/state
+        :args (s/cat :this ::raw-template
                       :short-term-nonce any?
                       :internal-nonce-suffix (s/and sequential?
                                                     #(= (count %) ::specs/client-nonce-suffix-length)))
         :ret (s/keys :req [::K/hello-spec ::log/state]))
 (defn build-raw-template-values
   "Set up the values for injecting into the template"
-  [{:keys [::state/server-extension
-           ::shared/extension
+  [{:keys [::shared/extension
            ::shared/my-keys
+           ::state/server-extension
            ::state/server-security
            ::state/shared-secrets]
     log-state ::log/state
     :as this}
    short-term-nonce
    internal-nonce-suffix]
-  {:pre [my-keys
+  {:pre [extension
+         my-keys
          server-security]}
   (let [log-state
         (if server-security
@@ -138,7 +157,7 @@
      ::log/state log-state}))
 
 (s/fdef build-actual-packet
-        :args (s/cat :this ::state/state  ; FIXME: Narrow this down
+        :args (s/cat :this ::packet-builders
                      ;; TODO: Verify that this is a valid long
                      ;; Annoying detail: Negatives are also legal, because this needs to map
                      ;; into the ulong space.
@@ -332,20 +351,7 @@
                               raw-packet)))))))
 
 (s/fdef do-build-packet
-  ;; FIXME: Be more restrictive about this.
-  ;; Only pass/return the pieces that this
-  ;; actually uses.
-  ;; Since that involves tracing down everything
-  ;; it calls (et al), that isn't quite trivial.
-  :args (s/cat :this (s/keys :req [::state/client-extension-load-time
-                                   ::shared/extension
-                                   ::log/logger
-                                   ::shared/my-keys
-                                   ::shared/packet-nonce
-                                   ::msg-specs/recent
-                                   ::state/server-security
-                                   ::state/shared-secrets
-                                   ::log/state]))
+  :args (s/cat :this ::top-level-packet-builders)
   ;; However:
   ;; It absolutely should not return much more than
   ;; the bytes of the packet.
@@ -357,13 +363,8 @@
   :ret (s/keys :req [::log/state]
                :opt [::shared/packet-nonce
                      ::shared/packet]))
-
 (defn do-build-packet
-  "Builds a plain-text hello packet into packet-management
-
-  Note that, for all intents and purposes, this is really called
-  for side-effects, even though it has trappings to make it look
-  functional."
+  "Builds a plain-text hello packet"
   [{:keys [::shared/packet-nonce]
     :as this}]
   ;; Be explicit about the actual parameters.
@@ -447,6 +448,7 @@
                                                         ::shared/my-keys
                                                         ::shared/packet-nonce
                                                         ::msg-specs/recent
+                                                        ::state/server-extension
                                                         ::state/server-security
                                                         ::state/shared-secrets
                                                         ::log/state]))
@@ -511,45 +513,6 @@
                                               (log/exception log-state
                                                              ex
                                                              ::do-polling-loop))))))))
-
-(s/fdef poll-servers!
-  :args (s/cat :this ::state/state
-               :send-timeout ::specs/time
-               :cookie-waiter ::state/cookie-waiter)
-        :ret ::servers-polled)
-(defn poll-servers!
-  "Send hello packet to a seq of server IPs associated with a single server name.
-
-  Params:
-      - this: Client state
-      - send-timeout (milliseconds): How long do we wait for the send?
-      - cookie-waiter: sets up a deferrable that does the waiting"
-  ;; Ping a bunch of potential servers (listening on an appropriate port with the
-  ;; appropriate public key) in a sequence until you get a response or a timeout.
-  ;; The main point is to avoid waiting 20-ish minutes for initial TCP connections
-  ;; to time out.
-  [{:keys [::log/logger
-           ::state/server-ips]
-    log-state ::log/state
-    :as this}
-   send-timeout cookie-waiter]
-  (throw (RuntimeException. "Pointless wrapper"))
-  (let [log-state (log/debug log-state
-                             ::poll-servers!
-                             "Putting hello(s) onto ->server channel"
-                             {::hello-packet #_hello-packet "not created"
-                              ::state/server-ips server-ips})]
-    (do-polling-loop (assoc this
-                            ::log/state log-state
-                            ;; Q: Do we really want to max out at 8?
-                            ;; 8 means over 46 seconds waiting for a response,
-                            ;; but what if you want the ability to try 20?
-                            ;; Or don't particularly care how long it takes to get a response?
-                            ;; Stick with the reference implementation version for now.
-                            )
-                     cookie-waiter
-                     (System/nanoTime)
-                     (util/millis->nanos send-timeout))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
