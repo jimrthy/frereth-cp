@@ -120,6 +120,7 @@
 ;; that has
 (s/def ::packet ::specs/msg-bytes)
 
+;; FIXME: This is obsolete and should go away
 (s/def ::packet-management (s/keys :opt [::packet]
                                    :req [::packet-nonce]))
 

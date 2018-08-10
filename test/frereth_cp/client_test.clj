@@ -2,23 +2,25 @@
   (:require [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp.client :as clnt]
+            [frereth-cp
+             [client :as client]
+             [message :as message]
+             [shared :as shared]
+             [test-factory :as factory]
+             [util :as util]]
             [frereth-cp.client
              [cookie :as cookie]
              [hello :as hello]
              [state :as state]]
-            [frereth-cp.message :as message]
             [frereth-cp.message
              [registry :as registry]
              [specs :as msg-specs]]
             [frereth-cp.server.cookie :as srvr-cookie]
-            [frereth-cp.shared :as shared]
             [frereth-cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
              [logging :as log]]
-            [frereth-cp.test-factory :as factory]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -59,8 +61,8 @@
   ;; server-test/handshake.
 
   ;; However, there is value in an edge case that it revealed.
-  (testing "The first basic thing that clnt/start does"
-    ;; Q: Should I have run clnt/start! on this?
+  (testing "The first basic thing that client/start does"
+    ;; Q: Should I have run client/start! on this?
     ;; A: Yes. Absolutely.
     ;; Q: What does that actually do?
     ;; A: It starts by sending a HELO
@@ -170,22 +172,53 @@
 
 (deftest build-hello
   (testing "Can I build a Hello packet?"
-    (let [{:keys [::client]} (factory/raw-client nil)
-          updated (hello/do-build-packet client)]
-      (let [p-m (::shared/packet-management updated)
-            nonce (::shared/packet-nonce p-m)]
-        (is p-m)
-        (is (and (integer? nonce)
-                 (not= 0 nonce)))
-        (let [buffer (::shared/packet p-m)]
-          (is buffer)
-          (is (= K/hello-packet-length (.readableBytes buffer)))
-          (let [dst (byte-array K/hello-packet-length)]
-            (.readBytes buffer dst)
-            (let [v (vec dst)]
-              (is (= (subvec v 0 (count K/hello-header))
-                     (vec K/hello-header)))
-              (is (= (subvec v 72 136) (take 64 (repeat 0)))))))))))
+    (let [server-long-pair (crypto/random-key-pair)
+          start-time (System/nanoTime)
+          {:keys [::state/chan->server]
+           :as client-state} (factory/raw-client (gensym "client/build-hello-")
+                                                 (fn []
+                                                   (log/file-writer-factory "/tmp/client/build-hello.log.edn"))
+                                                 (log/init ::build-hello)
+                                                 [127 0 0 1]
+                                                 65001
+                                                 (.getPublicKey server-long-pair)
+                                                 (fn [_]
+                                                   (throw (RuntimeException. "Don't expect any messages to client")))
+                                                 (fn [_]
+                                                   (throw (RuntimeException. "Don't expect to spawn a child"))))]
+      (when client-state
+        (try
+          ;; Note that test-factory calls start! in a future.
+          (let [hello-bundle @(strm/try-take! chan->server ::drained 500 ::timeout)
+                built-time (System/nanoTime)
+                time-delta (- built-time start-time)]
+            (is (and hello-bundle
+                     (not= hello-bundle ::drained)
+                     (not= hello-bundle ::timeout)))
+            (let [packet (:message hello-bundle)]
+              (is packet (str "Missing :message in " hello-bundle))
+              (is (= K/hello-packet-length (count packet)))
+              (let [v (vec packet)]
+                (is (= (subvec v 0 (count K/hello-header))
+                       (vec K/hello-header)))
+                ;; These really can't be equal:
+                ;; the hello version should be encrypted.
+                ;; Q: Worth decrypting to verify?
+                ;; Umm...I'm getting all zeros here.
+                ;; Wut?
+                (is (not= (subvec v 72 136) (take 64 (repeat 0))))))
+            ;; This isn't a time-critical operation.
+            ;; It's a fairly arbitrary number that's totally going to
+            ;; depend on things like hardware and underlying libraries.
+            ;; But it's worth monitoring.
+            (println "Took" (float (util/nanos->millis time-delta))
+                     "ms to get the hello-bundle"))
+          (finally
+            ;; Q: What are the odds this manages to do a real cleanup?
+            ;; As oppose to just abandoning the loops that are polling
+            ;; servers?
+            ;; Q: What's a good way to tell?
+            (client/stop! client-state)))))))
 (comment
   (vec shared/hello-header))
 
@@ -220,15 +253,16 @@
                                       (fn [ex]
                                         (println "Either way, this is obviously broken")))
                     ch))
+        ;; This obviously missed the memo that the client-agent is long dead
         client-agent (factory/raw-client spawner)
         ;; One major advantage of using agents over async-loops:
         ;; Have state instantly available for the asking
         client @client-agent
-        {:keys [::clnt/chan->server ::clnt/chan<-server]
+        {:keys [::client/chan->server ::client/chan<-server]
          :as client} client]
     (if (and chan<-server chan->server)
       (try
-        (let [client-thread (future (clnt/start! client-agent))]
+        (let [client-thread (future (client/start! client-agent))]
           (try
             (let [hello-future (strm/try-take! chan->server ::drained 500 ::timeout)
                   hello (deref hello-future)]

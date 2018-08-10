@@ -1,6 +1,7 @@
 (ns frereth-cp.shared.logging
   "Functional logging mechanism"
-  (:require [clojure.spec.alpha :as s]
+  (:require [clojure.java.io :as io]
+            [clojure.spec.alpha :as s]
             [clojure.stacktrace :as s-t]
             [clojure.string :as str]
             [frereth-cp.shared.specs :as specs]
@@ -411,6 +412,7 @@
 
 (defn file-writer-factory
   [file-name]
+  (io/make-parents file-name)
   (let [writer (BufferedWriter. (FileWriter. file-name))]
     (->OutputWriterLogger writer)))
 
