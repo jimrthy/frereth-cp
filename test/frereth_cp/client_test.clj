@@ -174,7 +174,8 @@
   (testing "Can I build a Hello packet?"
     (let [server-long-pair (crypto/random-key-pair)
           start-time (System/nanoTime)
-          {:keys [::state/chan->server]
+          {:keys [::state/chan->server
+                  ::shared/my-keys]
            :as client-state} (factory/raw-client (gensym "client/build-hello-")
                                                  (fn []
                                                    (log/file-writer-factory "/tmp/client/build-hello.log.edn"))
@@ -186,27 +187,51 @@
                                                    (throw (RuntimeException. "Don't expect any messages to client")))
                                                  (fn [_]
                                                    (throw (RuntimeException. "Don't expect to spawn a child"))))]
+      (assert client-state)
       (when client-state
         (try
           ;; Note that test-factory calls start! in a future.
           (let [hello-bundle @(strm/try-take! chan->server ::drained 500 ::timeout)
                 built-time (System/nanoTime)
                 time-delta (- built-time start-time)]
-            (is (and hello-bundle
-                     (not= hello-bundle ::drained)
-                     (not= hello-bundle ::timeout)))
+            (is hello-bundle)
+            (is (not= hello-bundle ::drained))
+            (is (not= hello-bundle ::timeout))
             (let [packet (:message hello-bundle)]
               (is packet (str "Missing :message in " hello-bundle))
               (is (= K/hello-packet-length (count packet)))
               (let [v (vec packet)]
                 (is (= (subvec v 0 (count K/hello-header))
                        (vec K/hello-header)))
-                ;; These really can't be equal:
-                ;; the hello version should be encrypted.
-                ;; Q: Worth decrypting to verify?
-                ;; Umm...I'm getting all zeros here.
-                ;; Wut?
-                (is (not= (subvec v 72 136) (take 64 (repeat 0))))))
+                ;; This is 64 bytes of 0 padding
+                (is (= (subvec v 72 136) (take 64 (repeat 0))))
+                ;; 0 nonce indicates end-of-stream
+                (let [nonce-suffix (subvec v 136 144)]
+                  (is (not= nonce-suffix (take 8 (repeat 0)))))
+                ;; block of zeroes encrypted from client's short-term
+                ;; secret key to server's long-term public key.
+                (let [crypto-zeroes (subvec v 144)
+                      payload (take 80 (repeat 0))]
+                  (is (not= crypto-zeroes payload))
+                  (let [server-sk (.getSecretKey server-long-pair)
+                        ^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair client-short-pair (::shared/short-pair my-keys)
+                        client-pk (.getPublicKey client-short-pair)
+                        shared-key (crypto/box-prepare client-pk server-sk)
+                        nonce-suffix (->> v
+                                          (drop 136)
+                                          (take 8)
+                                          vec)
+                        {clear-text-buf ::crypto/unboxed} (crypto/open-box (log/init ::build-hello)
+                                                                           K/hello-nonce-prefix
+                                                                           (byte-array nonce-suffix)
+                                                                           (byte-array crypto-zeroes)
+                                                                           shared-key)
+                        expected (take 64 (repeat 0))
+                        clear-text-array (byte-array (.readableBytes clear-text-buf))]
+                    (.getBytes clear-text-buf 0 clear-text-array)
+                    (let [clear-text (vec clear-text-array)]
+                      (is (= (count expected) (count clear-text)))
+                      (is (= expected clear-text)))))))
             ;; This isn't a time-critical operation.
             ;; It's a fairly arbitrary number that's totally going to
             ;; depend on things like hardware and underlying libraries.
