@@ -20,6 +20,7 @@
              ::shared/working-area "...")))
 
 (defn one-minute
+  "In nanoseconds"
   ([]
    (* 60 shared/nanos-in-second))
   ([now]

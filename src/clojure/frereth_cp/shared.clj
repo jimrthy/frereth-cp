@@ -119,10 +119,6 @@
 ;; that has
 (s/def ::packet ::specs/msg-bytes)
 
-;; FIXME: This is obsolete and should go away
-(s/def ::packet-management (s/keys :opt [::packet]
-                                   :req [::packet-nonce]))
-
 ;;; Want some sort of URI-foundation scheme for
 ;;; building the actual connection strings like I
 ;;; use in cljeromq. This seems like a reasonable
@@ -172,20 +168,9 @@
   (log/warn "Deprecated compose: use marshal ns instead")
   (serial/compose! tmplt fields dst))
 
-(s/fdef default-packet-manager
-        :args (s/cat)
-        :ret ::packet-management)
-(defn default-packet-manager
-  []
-  {;; Note that this is distinct from the working-area's nonce
-   ;; And it probably needs to be an atom
-   ;; Or maybe even a ref (although STM would be a disaster here...
-   ;; actually, trying to cope with this in multiple threads
-   ;; seems like a train wreck waiting to happen)
-   ::packet-nonce 0})
-
-;;; encode-server name no longer seems to be used anywhere.
-;;; TODO: Verify that and then eliminate it
+;;; encode-server name no longer seems to be used anywhere
+;;; except unit tests.
+;;; TODO: Remove those and then eliminate it
 (s/fdef encode-server-name
         :args (s/cat :name ::dns-string)
         :ret ::specs/srvr-name)
