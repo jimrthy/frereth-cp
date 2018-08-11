@@ -170,11 +170,19 @@
 
 ;;; encode-server name no longer seems to be used anywhere
 ;;; except unit tests.
-;;; TODO: Remove those and then eliminate it
+;;; That basic fact is absolutely misleading. Clients definitely
+;;; should use it to identify the servers they want to contact.
+;;; Without the kind of certificate-authority signing chain
+;;; associated with something like x509 certs, there isn't a reasonable
+;;; way (assuming x509 is "reasonable") to associate certs with long-
+;;; term public keys.
+;;; That seems to be the basic point behind CurveDNS, but that's a
+;;; different exercise in futility.
 (s/fdef encode-server-name
         :args (s/cat :name ::dns-string)
         :ret ::specs/srvr-name)
 (defn encode-server-name
+  "Convert a FQDN into DNS-compatible bytes"
   [name]
   (let [result (byte-array 256 (repeat 0))
         ns (clojure.string/split name #"\.")]
