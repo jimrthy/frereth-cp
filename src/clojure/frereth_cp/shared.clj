@@ -91,7 +91,6 @@
 (s/def ::safe-nonce ::specs/nonce)
 
 (s/def ::text bytes?)
-(s/def ::work-area (s/keys :req [::text]))
 
 (s/def ::host (s/or :name string?
                     :address ::specs/internet-address))

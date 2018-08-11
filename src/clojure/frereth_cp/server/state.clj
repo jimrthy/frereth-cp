@@ -149,8 +149,7 @@
                                ;; These fields are optional in
                                ;; server/handle
                                ::cookie-cutter
-                               ::shared/my-keys
-                               ::shared/packet-management]]
+                               ::shared/my-keys]]
   ;; This is really just for documentation.
   ;; If you try to validate this, it will make you very sad.
   (s/def ::state (s/keys :req (conj fields-safe-to-validate
@@ -254,8 +253,6 @@
 
   ;; Missing step: update cookie-cutter's next-minute
   ;; (that happens in handle-key-rotation)
-  (when-let [packet (get-in this [::shared/packet-management ::shared/packet])]
-    (crypto/randomize-buffer! packet))
   (when-let [client (this ::current-client)]
     (crypto/random-bytes! (get-in client [::client-security ::shared/short-pk])))
   ;; The shared secrets are all private, so I really can't touch them
@@ -263,14 +260,6 @@
   ;; For now, just explicitly set my versions to nil once we get past these side-effects
   ;; (i.e. at the bottom)
   #_(crypto/random-bytes (-> this ::current-client ::shared-secrets :what?))
-  (let [work-area (::shared/working-area this)]
-    ;; These next two may make more sense once I have a better idea about
-    ;; the actual messaging implementation.
-    ;; Until then, plan on just sending objects across core.async.
-    ;; Of course, the entire point may be messages that are too big
-    ;; and need to be sharded.
-    #_(crypto/random-bytes! (-> this :child-buffer ::buf))
-    #_(crypto/random-bytes! (-> this :child-buffer ::msg)))
   (when-let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
     (crypto/random-bytes! (.getPublicKey short-term-keys))
     (crypto/random-bytes! (.getSecretKey short-term-keys)))

@@ -65,8 +65,7 @@
                            :opt [::state/cookie-cutter
                                  ::state/current-client
                                  ::state/event-loop-stopper!
-                                 ::shared/my-keys
-                                 ::shared/packet-management]))
+                                 ::shared/my-keys]))
 
 (let [common-state-option-keys [::log2/logger
                                 ::log2/state
@@ -456,12 +455,10 @@
           long-pair (crypto/do-load-keypair keydir)
           this (assoc-in this [::shared/my-keys ::shared/long-pair] long-pair)
           almost (assoc this
-                        ::state/cookie-cutter (state/randomized-cookie-cutter)
-                        ::shared/packet-management (shared/default-packet-manager))
+                        ::state/cookie-cutter (state/randomized-cookie-cutter))
           log-state (log2/info log-state
                                ::start!
-                               "Kicking off event loop."
-                               {::shared/packet-management (::shared/packet-management almost)})
+                               "Kicking off event loop.")
           ;; Q: What are the odds that the next two piece needs to do logging?
           ;; A: They're small and straight-forward enough that it doesn't really seem useful
           result (assoc almost
@@ -476,8 +473,7 @@
 (defn stop!
   "Stop the ioloop (but not the read/write channels: we don't own them)"
   [{:keys [::log2/logger
-           ::state/event-loop-stopper!
-           ::shared/packet-management]
+           ::state/event-loop-stopper!]
     log-state ::log2/state
     :as this}]
   (let [log-state (log2/do-sync-clock log-state)
@@ -564,5 +560,4 @@
   (let [log-state (log2/clean-fork log-state ::server)]
     (-> cfg
         (assoc ::state/active-clients {}
-               ::state/max-active-clients max-active-clients
-               ::shared/working-area (shared/default-work-area)))))
+               ::state/max-active-clients max-active-clients))))
