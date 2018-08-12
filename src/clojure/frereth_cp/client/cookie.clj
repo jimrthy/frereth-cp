@@ -1,10 +1,7 @@
 (ns frereth-cp.client.cookie
   (:require [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
-            ;; Q: Do I *really* need to import
-            ;; initiate here?
             [frereth-cp.client
-             [initiate :as initiate]
              [state :as state]]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
@@ -382,7 +379,8 @@
           ;; as the child will be able to start sending us full-
           ;; size blocks to fill Message Packets.
           {:keys [::state/child]
-           :as this} (state/fork! this)]
+           :as this} (state/fork! (assoc this
+                                         ::log/state log-state))]
       this)
     (catch Exception ex
       (let [log-state (log/exception log-state

@@ -48,7 +48,7 @@ This really seems like a bad road to go down."
 (def byte-array-type
   "This seems redundant. Should generally just use bytes?"
   (Class/forName "[B"))
-(s/def ::byte-array (class-predicate byte-array-type))
+(s/def ::byte-array bytes?)
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
 (s/def ::nio-byte-buffer (class-predicate java.nio.ByteBuffer))
 

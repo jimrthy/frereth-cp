@@ -43,6 +43,19 @@
 (s/def ::servers-polled (s/or :possibly-succeeded dfrd/deferrable?
                               :failed ::state/state))
 
+;; Signal to continue waiting on the current server.
+;; There was something wrong with the incoming cookie, but the server
+;; still has time to make things right
+(s/def ::continue boolean?)
+;; Signal to try again with the next server
+(s/def ::recurse boolean?)
+;; How much time is left on the current poll
+(s/def remaining number?)
+(s/def ::skipping-state (s/merge ::state/state
+                                 (s/keys :opt [::continue
+                                               ::recurse
+                                               ::remaining])))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Globals
 
@@ -251,26 +264,19 @@
          timeout-ms))
       (throw (ex-info "No IPs left. Giving up" this)))))
 
-(s/fdef cookie-retrieved
-        :args (s/cat :this ::state/state
-                     :raw-packet ::specs/network-packet
-                     :cookie-waiter ::state/cookie-waiter
-                     :start-time ::specs/time
-                     :timeout ::specs/time
-                     :ips ::specs/srvr-ips)
-        :ret ::state/state)
-(defn cookie-retrieved
+(s/fdef cookie-validation
+  :args (s/cat :this ::state/state
+               :timeout number?)
+  :ret ::skipping-state)
+(defn cookie-validation
+  "Check whether the cookie matches our expectations"
   [{log-state ::log/state
-    :keys [::log/logger
-           ::shared/network-packet
+    :keys [::shared/network-packet
            ::state/server-security
            ::state/shared-secrets]
     :as this}
-   raw-packet
-   cookie-waiter
    start-time
    timeout]
-  ;; Q: Refactor the filtering/error checking pieces into their own function?
   (let [now (System/nanoTime)
         {:keys [::specs/srvr-ip
                 ::state/server-cookie]} server-security]
@@ -283,32 +289,18 @@
     ;; problems at dev time.
     ;; (By that same token: unexpected errors that show up in prod are more
     ;; likely to cause logs like this to just disappear)
-    (println "hello/cookie-retrieved:\n"
-             (dissoc this ::log/state)
-             "\nTop-level keys:\n"
-             (keys this)
-             "\nServer"
-             srvr-ip
-             "\nCookie:\n"
-             (if server-cookie
-               (b-t/->string server-cookie)
-               "missing"))
-    (if-not server-cookie
-      ;; This sort of decision-based orchestration seems difficult
-      ;; to model under manifold.
-      ;; I'd like to filter the logic out to something like a dfrd/chain,
-      ;; but I'm not sure how to represent branches and failures.
-      ;; The obvious approaches seem messy.
-      (do
-        ;; Move on the next server in the list
-        (binding [*out* *err*]
-          (println "hello/cookie-retrieved: Missing the server-cookie!!\nAmong:\n" server-security))
-        (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
-                                                                                    ::cookie-retrieved
-                                                                                    "Moving on to next ip"
-                                                                                    {::timeout timeout})))
-                          cookie-waiter
-                          raw-packet))
+    (println (str ::cookie-validation
+                  ":\n"
+                  (dissoc this ::log/state)
+                  "\nTop-level keys:\n"
+                  (keys this)
+                  "\nServer: "
+                  srvr-ip
+                  "\nCookie:\n"
+                  (if server-cookie
+                    (b-t/->string server-cookie)
+                    "missing")))
+    (if server-cookie
       (if network-packet
         (do
           (if (and server-security shared-secrets)
@@ -316,11 +308,11 @@
                                                ::cookie-retrieved
                                                "Got back a usable cookie"
                                                (dissoc this ::log/state)))
-            (do
+            (let [logger (::log/logger this)]
               (log/flush-logs! logger (log/error log-state
                                                  ::cookie-retrieved
                                                  "Got back a network-packet but missing something else"
-                                                 {::state/cookie-response this}))
+                                                 {::state/cookie-response (dissoc this ::log/state)}))
               (throw (ex-info "Network-packet missing either security or shared-secrets"
                               {::problem this})))))
         (let [elapsed (- now start-time)
@@ -329,26 +321,69 @@
                                   ::cookie-retrieved
                                   "Discarding garbage cookie")]
           (if (< 0 remaining)
-            ;; Q: Use trampoline instead?
-            ;; A: That would get into all sorts of weirdness, because this
-            ;; is nested inside a deferred handler.
-            ;; Famous Last Words:
-            ;; The call stack on this should never get all that deep.
-            (do-polling-loop
-             (assoc this ::log/state (log/flush-logs! logger (log/info log-state
-                                                                       ::cookie-retrieved
-                                                                       "Still waiting on server"
-                                                                       {::shared/host srvr-ip
-                                                                        ::millis-remaining remaining})))
-             raw-packet
-             cookie-waiter
-             start-time
-             remaining)
-            (possibly-recurse (assoc this ::log/state (log/flush-logs! logger (log/info log-state
-                                                                                        ::cookie-retrieved
-                                                                                        "Moving on to next ip")))
-                              cookie-waiter
-                              raw-packet)))))))
+            (assoc this
+                   ::continue true
+                   ::remaining remaining
+                   ::log/state (log/info log-state
+                                         ::cookie-validation
+                                         "Still waiting on server"
+                                         {::shared/host srvr-ip
+                                          ::millis-remaining remaining}))
+            (assoc this
+                   ::recurse true
+                   ::log/state (log/info log-state
+                                         ::cookie-validation
+                                         "Out of time. Next server")))))
+      (do
+        ;; Move on the next server in the list
+        (binding [*out* *err*]
+          (println "hello/cookie-retrieved: Missing the server-cookie!!\nAmong:\n" server-security))
+        (assoc this
+               ::log/state (log/info log-state
+                                     ::cookie-validation
+                                     "Moving on to next ip"
+                                     {::timeout timeout})
+               ::recurse true)))))
+
+(s/fdef cookie-retrieved
+        :args (s/cat :this ::skipping-state
+                     :raw-packet ::specs/network-packet
+                     :cookie-waiter ::state/cookie-waiter
+                     :start-time ::specs/time
+                     :timeout ::specs/time
+                     :ips ::specs/srvr-ips)
+        :ret ::state/state)
+(defn cookie-retrieved
+  [{log-state ::log/state
+    :keys [::continue
+           ::recurse
+           ::log/logger
+           ::state/server-security]
+    :as this}
+   raw-packet
+   cookie-waiter
+   start-time
+   timeout]
+  (let [this (assoc this ::log/state (log/flush-logs! logger log-state))]
+    (if-not recurse
+      (if-not continue
+        ;; It doesn't look like there's actually anything to do here
+        this
+        (let [remaining (::remaining this)]
+          ;; Q: Use trampoline instead?
+          ;; A: That would get into all sorts of weirdness, because this
+          ;; is nested inside a deferred handler.
+          ;; Famous Last Words:
+          ;; The call stack on this should never get all that deep.
+          (do-polling-loop
+           (dissoc this ::continue ::remaining)
+           raw-packet
+           cookie-waiter
+           start-time
+           remaining)))
+      (possibly-recurse (dissoc this ::recurse)
+                        cookie-waiter
+                        raw-packet))))
 
 (s/fdef do-build-packet
   :args (s/cat :this ::top-level-packet-builders)
@@ -476,26 +511,7 @@
         (dfrd/chain
          ;; Note that this is actually cookie/wait-for-cookie!
          #(cookie-waiter this timeout %)
-         ;; It's very tempting to inject a filter like this, instead
-         ;; of doing it inside cookie-retrieved, which is what happens
-         ;; now.
-         ;; TODO: Figure out a way to do so while retaining the granularity
-         ;; of things like tracing and error handling that I currently have
-         ;; in cookie-retrieved.
-         ;; Note that doing this makes the idea behind dfrd/loop and
-         ;; dfrd/recur at least plausible.
-         ;; TODO: Verify that I can recur in the middle of a dfrd/chain.
-         #_(fn [{log-state ::log/state
-               :keys [::state/server-security]
-               :as this}]
-           (if server-security
-             (let [{:keys [::specs/public-short ::state/server-cookie]} server-security]
-               (if (and public-short server-cookie)
-                 this
-                 (throw (ex-info "Missing something that should have been added to server-security"
-                                 {::state/server-security server-security}))))
-             (throw (ex-info "Missing server-security"
-                             {::available this}))))
+         #(cookie-validation % start-time timeout)
          ;; Need details like the hello-packet and cookie-waiter for recursing
          #(cookie-retrieved % hello-packet cookie-waiter start-time timeout))
         (dfrd/catch (fn [ex]

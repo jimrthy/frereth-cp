@@ -2,11 +2,14 @@
   "Common specs that are shared among message namespaces"
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.message.constants :as K]
-            [frereth-cp.shared.constants :as K-shared]
-            [frereth-cp.shared.logging :as log]
+            [frereth-cp.shared
+             [constants :as K-shared]
+             [logging :as log]
+             [specs :as shared-specs]]
             [frereth-cp.util :as util]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import [clojure.lang BigInt IDeref]
            io.netty.buffer.ByteBuf
            [java.io InputStream OutputStream]))
@@ -30,7 +33,10 @@
 ;; N.B. blocklen, in the reference, really corresponds
 ;; to the .readableBytes of a ByteBuf
 ;; Q: Does ByteBuf make sense?
-(s/def ::buf #(instance? ByteBuf %))
+;; A: Probably not. Look into switching to plain
+;; byte arrays
+;; FIXME: Make this go away
+(s/def ::buf ::shared-specs/byte-buf)
 
 ;;; Just something human-readable to help me track which log
 ;;; messages go where during intertwined tests.
