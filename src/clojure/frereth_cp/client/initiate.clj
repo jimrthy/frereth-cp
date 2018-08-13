@@ -133,7 +133,8 @@
                 (= (count real-result)
                    (+ 544 (count legal-to-send)))
                 true))
-        :ret (s/nilable ::shared/packet))
+        :ret (s/keys :req [::log/state]
+                     :opt [::shared/packet]))
 (defn build-initiate-packet
   "Combine message buffer and client state into an Initiate packet"
   [{log-state ::log/state
@@ -196,22 +197,20 @@
                    result ::message/possible-response
                    :as filtered} (message/filter-initial-message-bytes log-state
                                                                        result-bytes)]
-              (log/flush-logs! logger (log/debug log-state
-                                                 ::build-initiate-packet
-                                                 ""
-                                                 {::filtered filtered}))
-              result)
+              {::log/state (log/debug log-state
+                                      ::build-initiate-packet
+                                      ""
+                                      {::filtered filtered})
+               ::shared/packet result})
             (do
               (log/flush-logs! logger log-state)
               (throw (ex-info "Building initiate-interior failed to generate a crypto-box"
                               {::problem (dissoc initiate-interior
                                                  ::log/state)})))))
-        (do
-          (log/flush-logs! logger (log/warn log-state
-                                            ::build-initiate-packet
-                                            "Invalid message length from child"
-                                            {::message-length (count msg)}))
-          nil))
+        {::log/state (log/warn log-state
+                               ::build-initiate-packet
+                               "Invalid message length from child"
+                               {::message-length (count msg)})})
       (do
         (log/flush-logs! logger log-state)
         (throw (ex-info "Missing outgoing message"

@@ -84,7 +84,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/def ::packet-builder (s/fspec :args (s/cat :state ::child-send-state
                                               :msg-packet bytes?)
-                                 :ret ::msg-specs/buf))
+                                 :ret (s/keys :req [::log/state]
+                                              :opt [::shared/packet])))
 
 (s/def ::child ::msg-specs/io-handle)
 
@@ -662,7 +663,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; in a single thread.
 
     ;; This is the point behind ->message-exchange-mode.
-    (let [message-packet (bytes (packet-builder (assoc state ::log/state log-state) message-block))
+    (let [{log-state ::log/state
+           message-packet ::shared/packet} (packet-builder (assoc state ::log/state log-state) message-block)
           raw-message-packet (if message-packet
                                (b-s/convert message-packet specs/byte-array-type)
                                (byte-array 0))
@@ -672,7 +674,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                {::shared/message (if message-packet
                                                    (b-t/->string raw-message-packet)
                                                    "No message packet built")
-                                ::server-security server-security})]
+                                ::server-security server-security})
+          log-state (log/flush-logs! logger log-state)]
       (when-not (and srvr-name srvr-port message-packet)
         (throw (ex-info "Missing something vital"
                         {::specs/srvr-name srvr-name
