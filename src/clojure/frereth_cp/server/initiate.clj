@@ -12,6 +12,7 @@ This is the part that possibly establishes a 'connection'"
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
+             [logging :as log2]
              [serialization :as serial]
              [specs :as specs]
              [templates :as templates]]
@@ -255,11 +256,14 @@ To be fair, this layer *is* pretty special."
             (serial/decompose templates/black-box-dscr vouch-buf)))))))
 
 (s/fdef open-client-crypto-box
-        :args (s/cat :initiate ::K/initiate-packet-spec
+  :args (s/cat :log-state ::log2/state
+               :initiate ::K/initiate-packet-spec
                      :current-client ::client-state)
-        :ret ::K/initiate-client-vouch-wrapper)
+  :ret (s/keys :req [::log2/state]
+               :opt [::K/initiate-client-vouch-wrapper]))
 (defn open-client-crypto-box
-  [{:keys [::K/outer-i-nonce]
+  [log-state
+   {:keys [::K/outer-i-nonce]
     ^bytes vouch-wrapper ::K/vouch-wrapper
     :as initiate}
    current-client]
@@ -267,19 +271,24 @@ To be fair, this layer *is* pretty special."
   (log/info "Opening the Crypto box we just received from the client")
   (log/debug "The box we're opening is" (count vouch-wrapper) "bytes long")
   (let [message-length (- (count vouch-wrapper) K/minimum-vouch-length)]
-    (if-let [clear-text (crypto/open-box K/initiate-nonce-prefix
-                                         outer-i-nonce
-                                         vouch-wrapper
-                                         (get-in current-client [::state/shared-secrets
-                                                                 ::state/client-short<->server-short]))]
-      (do
-        (log/info "Decomposing...")
-        (serial/decompose (assoc-in K/initiate-client-vouch-wrapper
-                                    [::K/message ::K/length]
-                                    message-length)
-                          clear-text))
-      (do (log/info "Opening client crypto vouch failed")
-          nil))))
+    (let [{log-state ::log2/state
+           clear-text ::crypto/unboxed} (crypto/open-box log-state
+                                                         K/initiate-nonce-prefix
+                                                         outer-i-nonce
+                                                         vouch-wrapper
+                                                         (get-in current-client [::state/shared-secrets
+                                                                                 ::state/client-short<->server-short]))]
+      (if clear-text
+        {::log/state (log2/info log-state
+                                ::open-client-crypto-box
+                                "Decomposing...")
+         ::K/initiate-client-vouch-wrapper (serial/decompose (assoc-in K/initiate-client-vouch-wrapper
+                                                                       [::K/message ::K/length]
+                                                                       message-length)
+                                                             clear-text)}
+        {::log/state (log2/warn log-state
+                                ::open-client-crypto-box
+                                "Opening client crypto vouch failed")}))))
 
 (s/fdef validate-server-name
         :args (s/cat :state ::state/state
@@ -363,133 +372,215 @@ Note that that includes TODOs re:
           (.getBytes inner-pk-buf 0 inner-pk)
           (b-t/bytes= short-pk inner-pk))))))
 
+(s/fdef do-fork-child
+  :args (s/cat :state ::state/state
+               :active-client ::state/client-state
+               :client-long-pk ::shared/public-key
+               :client-short-pk ::shared/public-key
+               :server-short-sk ::shared/secret-key
+               :host ::shared/host
+               :port ::shared/port
+               :initiate ::serial/decomposed
+               :client-message-box ::K/initiate-client-vouch-wrapper)
+  :ret ::state/state)
+(defn do-fork-child
+  [{log-state ::log2/state
+    :as state}
+   active-client
+   client-long-pk
+   client-short-pk
+   server-short-sk
+   host
+   port
+   initiate
+   client-message-box]
+  (let [^ByteBuf rcvd-nonce-buffer (::K/outer-i-nonce initiate)
+        rcvd-nonce-array (byte-array specs/client-nonce-suffix-length)
+        _ (.getBytes rcvd-nonce-buffer 0 rcvd-nonce-array)
+        _ (.release rcvd-nonce-buffer)
+        rcvd-nonce (b-t/uint64-unpack rcvd-nonce-array)
+        active-client (assoc active-client
+                             ;; Seems very likely that I should convert this
+                             ;; to a byte-array
+                             ::client-extension (::K/clnt-xtn initiate)
+                             ::client-ip host
+                             ::client-port port
+                             ::state/received-nonce rcvd-nonce)
+        ;; API/design Q: Does it make sense for me to supply this?
+        ;; I'm responsible for writing to it, which means I should control
+        ;; when it closes...but it feels more than a little silly
+        writer (strm/stream)
+        ;; Q: Does it make sense to share the child-spawing code with
+        ;; the client?
+        ;; A: If not, then update that code to make it sensible.
+        spawner (::state/child-spawner! state)
+        child (spawner writer)
+        client-with-child (assoc active-client
+                                 ::state/child-interaction (assoc child
+                                                                  ::state/reader-consumed (message/add-listener! state child))
+                                 ;; Q: What is this for?
+                                 ;; It doesn't seem to match
+                                 ::state/message-len 0
+                                 ;; Reference implementation stores the client-short<->server-short
+                                 ;; keypair here again.
+                                 ;; But I already did that during a call to configure-shared-secrets
+                                 ::state/client-security (into (::state/client-security state)
+                                                               #:frereth-cp.shared.specs {:public-long client-long-pk
+                                                                                          :public-short client-short-pk
+                                                                                          :frereth-cp.server/server-short-sk server-short-sk}))
+        child-reader (::state/write->child child)
+        ;; This doesn't actually matter. That field should probably be
+        ;; considered a private black-box member from our perspective.
+        ;; But it seems helpful for keeping which is what straight
+        _ (assert (= writer child-reader))
+        state (state/alter-client-state state client-with-child)
+        ;; And then forward the message to our new(?) child
+        log-state (log2/debug log-state
+                              ::do-handle
+                              "Trying to send child-message from "
+                              {::message-box-keys (keys client-message-box)})
+        sent (strm/try-put! writer
+                            (::K/message client-message-box)
+                            K/send-child-message-timeout
+                            ::timeout)
+        forked-logs (log2/clean-fork log-state ::initiate-forwarded)
+        logger (::log2/logger state)]
+    (dfrd/on-realized sent
+                      (fn [x]
+                        (let [log-state
+                              (if (not= x ::timeout)
+                                (log2/info forked-logs
+                                           ::do-handle
+                                           "Message forwarded to new child"
+                                           {::success x})
+                                (log2/error forked-logs
+                                            ::do-handle
+                                            "Timed out trying to send message"
+                                            {::destination child}))]
+                          (log2/flush-logs! logger log-state)))
+                      (fn [x]
+                        (log2/flush-logs! logger
+                                          (log2/info forked-logs
+                                                     ::do-handle
+                                                     "Forwarding message to new child failed"
+                                                     {::problem x}))))
+    (assoc state ::log2/state log-state)))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(s/fdef handle!
-        :args (s/cat :state ::state/state
-                     :packet ::shared/network-packet))
-(defn handle!
-  [state
+(s/fdef do-handle
+  :args (s/cat :state ::state/state
+               :packet ::shared/network-packet)
+  :ret ::state/state)
+(defn do-handle
+  "Deal with an incoming initiate packet
+
+  Called for side-effects"
+  [{log-state ::log2/state
+    :keys [::log2/logger]
+    :as state}
    {:keys [:host :port]
     message :message
     :as packet}]
-  (log/info "Handling incoming initiate packet: " packet)
-  (let [message (bytes message)]
+  (let [log-state (log2/info log-state
+                             ::handle!
+                             "Handling incoming initiate packet"
+                             packet)
+        message (bytes message)]
     (or
-     (let [n (count message)]
-       (if (>= n (+ K/box-zero-bytes packet-header-length))
-         ;; Note the extra 16 bytes
-         ;; The minimum packet length is actually
-         ;; (+ 544 K/box-zero-bytes)
-         ;; Because the message *has* to have the bytes for 0
-         ;; padding, even if it's 0 length.
-         (let [tmplt (update-in K/initiate-packet-dscr
-                                [::K/vouch-wrapper ::K/length]
-                                +
-                                (- n packet-header-length))
-               initiate (serial/decompose-array tmplt message)
-               client-short-pk (bytes (::K/clnt-short-pk initiate))]
-           (if-not (possibly-re-initiate-existing-client-connection! state initiate)
-             (let [active-client (state/find-client state client-short-pk)]
-               (if-let [cookie (extract-cookie (::state/cookie-cutter state)
-                                               initiate)]
-                 (do
-                   (log/info (str "Succssfully extracted cookie"))
-                   (let [server-short-sk (bytes (::templates/srvr-short-sk cookie))
-                         _ (assert server-short-sk (str "Missing ::templates/srvr-short-sk among "
-                                                        (keys cookie)))
-                         active-client (state/configure-shared-secrets active-client
-                                                                       client-short-pk
-                                                                       server-short-sk)]
-                     (state/alter-client-state! state active-client)
-                     ;; Now we've verified that the Initiate packet came from a
-                     ;; client that has the secret key associated with the short-term
-                     ;; public key.
-                     ;; It included a secret cookie that we generated sometime within the
-                     ;; past couple of minutes.
-                     ;; Now we're ready to tackle handling the main message body cryptobox.
-                     ;; This corresponds to line 373 in the reference implementation.
-                     (try
-                       (when-let [client-message-box (open-client-crypto-box initiate active-client)]
-                         (let [client-long-pk (bytes (::K/long-term-public-key client-message-box))]
-                           (try
-                             (log/info (str "Extracted message box from client's Initiate packet.\n"
-                                            "Keys:\n"
-                                            (keys client-message-box)
-                                            "\nThe long-term public key:\n"
-                                            (do
-                                              ;; This matches both the original log
-                                              ;; message and what we see below when we
-                                              ;; try to extract the inner hidden key
-                                              #_[0x63 0xA4 0x65 0xDE
-                                                 ,,,
-                                                 0x91 0xCC 0xE3 0x02]
-                                              (b-t/->string client-long-pk))))
-                             (if (validate-server-name state client-message-box)
-                               ;; This takes us down to line 381
-                               (when (verify-client-public-key-triad state client-short-pk client-message-box)
-                                 (let [^ByteBuf rcvd-nonce-buffer (::K/outer-i-nonce initiate)
-                                       rcvd-nonce-array (byte-array specs/client-nonce-suffix-length)
-                                       _ (.getBytes rcvd-nonce-buffer 0 rcvd-nonce-array)
-                                       _ (.release rcvd-nonce-buffer)
-                                       rcvd-nonce (b-t/uint64-unpack rcvd-nonce-array)
-                                       active-client (assoc active-client
-                                                            ;; Seems very likely that I should convert this
-                                                            ;; to a byte-array
-                                                            ::client-extension (::K/clnt-xtn initiate)
-                                                            ::client-ip host
-                                                            ::client-port port
-                                                            ::state/received-nonce rcvd-nonce)
-                                       ;; API/design Q: Does it make sense for me to supply this?
-                                       ;; I'm responsible for writing to it, which means I should control
-                                       ;; when it closes...but it feels more than a little silly
-                                       writer (strm/stream)
-                                       spawner (::state/child-spawner! state)
-                                       child (spawner writer)
-                                       client-with-child (assoc active-client
-                                                                ::state/child-interaction (assoc child
-                                                                                                 ::state/reader-consumed (message/add-listener! state child))
-                                                                ;; Q: What is this for?
-                                                                ;; It doesn't seem to match
-                                                                ::state/message-len 0
-                                                                ;; Reference implementation stores the client-short<->server-short
-                                                                ;; keypair here again.
-                                                                ;; But I already did that during a call to configure-shared-secrets
-                                                                ::state/client-security (into (::state/client-security state)
-                                                                                              #:frereth-cp.shared.specs {:public-long client-long-pk
-                                                                                                                         :public-short client-short-pk
-                                                                                                                         :frereth-cp.server/server-short-sk server-short-sk}))
-                                       child-reader (::state/write->child child)]
-                                   ;; This doesn't actually matter. That field should probably be
-                                   ;; considered a private black-box member from our perspective.
-                                   ;; But it seems helpful for keeping which is what straight
-                                   (assert (= writer child-reader))
-                                   (state/alter-client-state! state client-with-child)
+     (let [n (count message)
+           state-delta (if (>= n (+ K/box-zero-bytes packet-header-length))
+                         ;; Note the extra 16 bytes
+                         ;; The minimum packet length is actually
+                         ;; (+ 544 K/box-zero-bytes)
+                         ;; Because the message *has* to have the bytes for 0
+                         ;; padding, even if it's 0 length.
+                         (let [tmplt (update-in K/initiate-packet-dscr
+                                                [::K/vouch-wrapper ::K/length]
+                                                +
+                                                (- n packet-header-length))
+                               initiate (serial/decompose-array tmplt message)
+                               client-short-pk (bytes (::K/clnt-short-pk initiate))]
+                           (if-not (possibly-re-initiate-existing-client-connection! state initiate)
+                             (let [active-client (state/find-client state client-short-pk)]
+                               (if-let [cookie (extract-cookie (::state/cookie-cutter state)
+                                                               initiate)]
+                                 (let [log-state (log2/info log-state
+                                                            ::handle!
+                                                            "Succssfully extracted cookie")
+                                       server-short-sk (bytes (::templates/srvr-short-sk cookie))
+                                       _ (assert server-short-sk (str "Missing ::templates/srvr-short-sk among "
+                                                                      (keys cookie)))
+                                       active-client (state/configure-shared-secrets active-client
+                                                                                     client-short-pk
+                                                                                     server-short-sk)
+                                       state (state/alter-client-state state active-client)]
 
-                                   ;; And then forward the message to our new(?) child
-                                   (log/debug (str "Trying to send child-message from "
-                                                   (keys client-message-box)))
-                                   (let [sent (strm/try-put! writer
-                                                             (::K/message client-message-box)
-                                                             K/send-child-message-timeout
-                                                             ::timeout)]
-                                     (dfrd/on-realized sent
-                                                       (fn [x]
-                                                         (if (not= x ::timeout)
-                                                           (log/info "Message forwarded to new child: " x)
-                                                           (log/error "Timed out trying to send message to" child)))
-                                                       (fn [x] (log/info "Forwarding message to new child failed: " x))))
-                                   ;; Q: Will there ever be an opportunity for calling this in
-                                   ;; a purely functional manner?
-                                   ;; Surely there's more to this than just the side-effects
-                                   nil)))
-                             (catch ExceptionInfo ex
-                               (log/error ex "Failure after decrypting inner client cryptobox")))))
-                       (catch ExceptionInfo ex
-                         (log/error ex "Initiate packet looked good enough to establish client session, but failed later")))))
-                 (log/error "FIXME: Debug only: cookie extraction failed")))
-             (log/warn "TODO: Handle additional Initiate packet from " client-short-pk)))
-         (log/warn (str "Truncated initiate packet. Only received " n " bytes"))))
+                                   ;; Now we've verified that the Initiate packet came from a
+                                   ;; client that has the secret key associated with the short-term
+                                   ;; public key.
+                                   ;; It included a secret cookie that we generated sometime within the
+                                   ;; past couple of minutes.
+                                   ;; Now we're ready to tackle handling the main message body cryptobox.
+                                   ;; This corresponds to line 373 in the reference implementation.
+                                   (try
+                                     (let [{log-state ::log2/state
+                                            client-message-box ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
+                                                                                                                          initiate
+                                                                                                                          active-client)]
+                                       (if client-message-box
+                                         (let [client-long-pk (bytes (::K/long-term-public-key client-message-box))
+                                               log-state (log2/info log-state
+                                                                    "Extracted message box from client's Initiate packet"
+                                                                    ;; This matches both the original log
+                                                                    ;; message and what we see below when we
+                                                                    ;; try to extract the inner hidden key
+                                                                    {::message-box-keys (keys client-message-box)
+                                                                     ::client-public-long-key (b-t/->string client-long-pk)})]
+                                           (try
+                                             (if (validate-server-name state client-message-box)
+                                               ;; This takes us down to line 381
+                                               (if (verify-client-public-key-triad state client-short-pk client-message-box)
+                                                 ;; Happy path involves updating more than just the log state
+                                                 ;; But not the full thing.
+                                                 ;; TODO: Limit this to what's actually needed
+                                                 (do-fork-child state
+                                                                active-client
+                                                                client-long-pk
+                                                                client-short-pk
+                                                                server-short-sk
+                                                                host
+                                                                port
+                                                                initiate
+                                                                client-message-box)
+                                                 {::log2/state (log2/warn log-state
+                                                                          ::do-handle
+                                                                          "Mismatched public keys"
+                                                                          {::FIXME "Show the extracted versions"
+                                                                           ::state/state state
+                                                                           ::client-short-pk client-short-pk
+                                                                           ::shared/message client-message-box})}))
+                                             (catch ExceptionInfo ex
+                                               {::log2/state (log2/exception log-state
+                                                                             ex
+                                                                             ::do-handle
+                                                                             "Failure after decrypting inner client cryptobox")})))
+                                         (assoc state ::log/state log-state)))
+                                     (catch ExceptionInfo ex
+                                       {::log2/state (log2/exception log-state
+                                                                     ex
+                                                                     ::do-handle
+                                                                     "Initiate packet looked good enough to establish client session, but failed later")})))
+                                 {::log2/state (log2/error log-state
+                                                           ::do-handle
+                                                           "FIXME: Debug only: cookie extraction failed")}))
+                             {::log2/state (log2/warn log-state
+                                                      ::do-handle
+                                                      "TODO: Handle additional Initiate packets from " client-short-pk)}))
+                         {::log2/state (log2/warn log-state
+                                                  ::do-handle
+                                                  (str "Truncated initiate packet. Only received " n " bytes"))})]
+       (into state state-delta))
      ;; If nothing's changing, just maintain status quo
      state)))
