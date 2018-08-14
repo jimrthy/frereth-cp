@@ -16,7 +16,14 @@ FIXME: Rename for better semantics before this progresses any further."
            java.util.Arrays))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal
+;;;; Specs
+
+;; FIXME: I can do better than this
+(s/def ::decomposed (s/map-of keyword? (s/or :bytes bytes?
+                                             :number integer?)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Internal
 
 (defn composition-reduction
   "Reduction function associated for run!ing from compose.
@@ -344,10 +351,16 @@ Needing to declare these things twice is annoying."
    {}
    (keys tmplt)))
 
+(s/fdef decompose-array
+  ;; FIXME: Still need a spec for the template array-map
+  :args (s/cat :tmplt map?
+               :src bytes?)
+  :ret ::decomposed)
 (defn decompose-array
   "Read a C-style struct from a byte array into a map, based on template"
   [tmplt src]
   (let [src (bytes src)]
+    ;; Q: Dissoc ::index at end?
     (reduce
      (partial decompose-array-field src tmplt)
      {::index 0}

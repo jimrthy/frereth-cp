@@ -142,7 +142,6 @@
                                ;; FIXME: Revisit this decision if/when
                                ;; that stops being the case.
                                #_::shared/keydir
-                               ::shared/working-area
 
                                ;; Worth calling out for the compare/
                                ;; contrast
@@ -176,6 +175,11 @@
   ;; TODO: ask about this approach on the mailing list.
   (s/def ::checkable-state (s/keys :req [fields-safe-to-validate])))
 
+;; This is misleading. Basically, it can update pretty much
+;; any state component. They're going to get merged using into.
+;; TODO: Need to come up with a reasonable way to spec this
+(s/def ::delta ::state)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -195,19 +199,19 @@
      ::received-nonce 0
      ::sent-nonce (crypto/random-nonce)}))
 
-(s/fdef alter-client-state!
+(s/fdef alter-client-state
         :args (s/cat :state ::state
                      :altered-client ::client-state)
-        :ret nil?)
-(defn alter-client-state!
+        :ret ::state)
+(defn alter-client-state
   [state altered-client]
   ;; Skip incrementing the numactiveclients count.
   ;; We get that for free from the data structure
-  (swap! (::active-clients state)
-         update
-         (get-in altered-client [::client-security ::shared/short-pk])
-         ;; Q: Worth surgically applying a delta?
-         (constantly altered-client)))
+  (let [client-key (get-in altered-client [::client-security ::shared/short-pk])]
+    (assoc-in state
+              [::active-clients client-key]
+              ;; Q: Worth surgically applying a delta?
+              altered-client)))
 
 (s/fdef configure-shared-secrets
         :args (s/cat :client ::client-state

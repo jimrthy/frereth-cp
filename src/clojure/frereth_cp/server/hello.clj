@@ -23,13 +23,27 @@
   (:import com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.ByteBuf))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Magic Constants
+
 (set! *warn-on-reflection* true)
+
+(def send-timeout
+  "Milliseconds to wait for putting packets onto network queue"
+  50)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
 (s/def ::opened (s/nilable ::crypto/unboxed))
 (s/def ::shared-secret ::specs/crypto-key)
+
+(s/def ::cookie-response-builder
+  (s/fspec
+   :args (s/cat :state ::state/state
+                :recipe (s/keys :req [::srvr-specs/cookie-components ::K/hello-spec]))
+   :ret (s/keys :req [::log2/state]
+                :opt [::K/cookie-packet])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
@@ -135,17 +149,17 @@
                       {::actual (count message)
                        ::expected K/hello-packet-length})))))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Public
-
-(s/fdef do-handle
+(s/fdef internal-handler
         ;; Passing around ::state/state everywhere was lazy/dumb.
         ;; TODO: Be more explicit about which keys we really and truly need.
         :args (s/cat :state ::state/state
                      :packet ::shared/message)
         :ret (s/keys :opt [::K/hello-spec ::srvr-specs/cookie-components]
                      :req [::log2/state]))
-(defn do-handle
+(defn internal-handler
+  ;; This was originally refactored out of do-handle, back when that had
+  ;; to reside in the top-level server ns
+  "FIXME: Needs a better name"
   [{log-state ::log2/state
     :as state}
    message]
@@ -182,3 +196,79 @@
       {::log2/state (log2/warn log-state
                                ::do-handle
                                "Unable to open the HELLO crypto-box: dropping")})))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
+
+(s/fdef do-handle
+  :args (s/cat :state ::state/state
+               :cookie-response-builder any?
+               :packet ::shared/network-packet)
+  :ret ::state/state)
+(defn do-handle
+  [{:keys [::log2/logger]
+    log-state ::log2/state
+    :as state}
+   cookie-response-builder
+   {:keys [:message]
+    :as packet}]
+  (let [log-state (log2/debug log-state
+                              ::do-handle
+                              "Top")
+        {log-state ::log2/state
+         :as cookie-recipe} (internal-handler (assoc state ::log2/state log-state)
+                                              message)]
+    (if cookie-recipe
+      (let [{cookie ::K/cookie-packet
+             log-state ::log2/state} (cookie/do-build-response state cookie-recipe)
+            log-state (log2/info log-state
+                                 ::handle-hello!
+                                 (str "Cookie packet built. Sending it."))]
+        (try
+          (if-let [dst (get-in state [::state/client-write-chan ::state/chan])]
+            ;; And this is why I need to refactor this. There's so much going
+            ;; on in here that it's tough to remember that this is sending back
+            ;; a map. It has to, since that's the way aleph handles
+            ;; UDP connections, but it really shouldn't need to: that's the sort
+            ;; of tightly coupled implementation detail that I can push further
+            ;; to the boundary.
+            (let [put-future (stream/try-put! dst
+                                              (assoc packet
+                                                     :message cookie)
+                                              ;; TODO: This really needs to be part of
+                                              ;; state so it can be tuned while running
+                                              send-timeout
+                                              ::timed-out)
+                  log-state (log2/info log-state
+                                       ::handle-hello!
+                                       "Cookie packet scheduled to send")
+                  forked-log-state (log2/clean-fork log-state
+                                                    ::hello-processed)]
+
+              (deferred/on-realized put-future
+                (fn [success]
+                  (log2/flush-logs! logger
+                                    (if success
+                                      (log2/info forked-log-state
+                                                 ::handle-hello!
+                                                 "Sending Cookie succeeded")
+                                      (log2/error forked-log-state
+                                                  ::handle-hello!
+                                                  "Sending Cookie failed"))))
+                (fn [err]
+                  (log2/flush-logs! logger
+                                    (log2/error forked-log-state
+                                                ::handle-hello!
+                                                "Sending Cookie failed:" err))))
+              {::log2/state (log2/flush-logs! logger log-state)})
+            (throw (ex-info "Missing destination"
+                            (or (::state/client-write-chan state)
+                                {::problem "No client-write-chan"
+                                 ::keys (keys state)
+                                 ::actual state}))))
+          (catch Exception ex
+            {::log2/state (log2/exception log-state
+                                          ex
+                                          ::handle-hello!
+                                          "Failed to send Cookie response")})))
+      {::log2/state log-state})))

@@ -35,10 +35,6 @@
 ;; (minimum-initiate-packet-length seems defensible)
 (def minimum-message-packet-length 112)
 
-(def send-timeout
-  "Milliseconds to wait for putting packets onto network queue"
-  50)
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
 
@@ -113,82 +109,6 @@
          ;; two are equivalent.
          (= (bit-and r 0xf) 0))))
 
-;;; Q: Why isn't handle-hello! part of the hello ns?
-;;; A: Because it needs access to cookie/do-build-cookie-response
-;;; TODO: Add that as a callback param that I can set up in a
-;;; partial and then move it there
-(s/fdef handle-hello!
-        :args (s/cat :state ::state/state
-                     :packet ::shared/network-packet)
-        :ret ::state/state)
-(defn handle-hello!
-  [{:keys [::log2/logger]
-    :as state}
-   {:keys [:message]
-    :as packet}]
-  (println "Top of handle-hello!\nlogger:" logger)
-  (let [{log-state ::log2/state
-         :as cookie-recipe} (hello/do-handle state message)]
-    ;; Q: Is the possibly-nil return value deliberate?
-    ;; It seems like failing to build the cookie should just return
-    ;; state as-is.
-    (when cookie-recipe
-      (let [{cookie ::K/cookie-packet
-             log-state ::log2/state} (cookie/do-build-response state cookie-recipe)
-            log-state (log2/info log-state
-                                 ::handle-hello!
-                                 (str "Cookie packet built. Sending it."))]
-        (try
-          (if-let [dst (get-in state [::state/client-write-chan ::state/chan])]
-            ;; And this is why I need to refactor this. There's so much going
-            ;; on in here that it's tough to remember that this is sending back
-            ;; a map. It has to, since that's the way aleph handles
-            ;; UDP connections, but it really shouldn't need to: that's the sort
-            ;; of tightly coupled implementation detail that I can push further
-            ;; to the boundary.
-            (let [put-future (strm/try-put! dst
-                                            (assoc packet
-                                                   :message cookie)
-                                            ;; TODO: This really needs to be part of
-                                            ;; state so it can be tuned while running
-                                            send-timeout
-                                            ::timed-out)
-                  log-state (log2/info log-state
-                                       ::handle-hello!
-                                       "Cookie packet scheduled to send")
-                  forked-log-state (log2/clean-fork log-state
-                                                    ::hello-processed)]
-
-              (dfrd/on-realized put-future
-                                (fn [success]
-                                  (log2/flush-logs! logger
-                                                    (if success
-                                                      (log2/info forked-log-state
-                                                                 ::handle-hello!
-                                                                 "Sending Cookie succeeded")
-                                                      (log2/error forked-log-state
-                                                                  ::handle-hello!
-                                                                  "Sending Cookie failed"))))
-                                (fn [err]
-                                  (log2/flush-logs! logger
-                                                    (log2/error forked-log-state
-                                                                ::handle-hello!
-                                                                "Sending Cookie failed:" err))))
-              (assoc state
-                     ::log2/state (log2/flush-logs! logger log-state)))
-            (throw (ex-info "Missing destination"
-                            (or (::state/client-write-chan state)
-                                {::problem "No client-write-chan"
-                                 ::keys (keys state)
-                                 ::actual state}))))
-          (catch Exception ex
-            (assoc state
-                   ::log2/state
-                   (log2/exception log-state
-                                   ex
-                                   ::handle-hello!
-                                   "Failed to send Cookie response"))))))))
-
 (s/fdef verify-my-packet
         :args (s/cat :this ::state
                      ;; TODO: Be more specific about these
@@ -242,17 +162,21 @@
                      " and " (vec rcvd-xtn))))
     verified))
 
-(defn handle-message!
+(s/fdef do-handle-message
+  :args (s/cat :state ::state/state
+               :packet ::shared/network-packet)
+  :ret ::state/delta)
+(defn do-handle-message
   [state packet]
   (when (>= (count packet) minimum-message-packet-length)
     (throw (ex-info "Don't stop here!"
                     {:what "Interesting part: incoming message"}))))
 
-(s/fdef handle-incoming!
+(s/fdef do-handle-incoming
         :args (s/cat :this ::state/state
                      :msg ::shared/network-packet)
         :ret ::state/state)
-(defn handle-incoming!
+(defn do-handle-incoming
   "Packet arrived from client. Do something with it."
   [{log-state ::log2/state
     :as this}
@@ -265,7 +189,7 @@
   (println "Server incoming <---------------")
   (let [log-state (log2/do-sync-clock log-state)
         log-state (log2/debug log-state
-                              ::handle-incoming!
+                              ::do-handle-incoming
                               "Top")]
     (when-not message
       (throw (ex-info "Missing message in incoming packet"
@@ -277,36 +201,38 @@
         (b-t/byte-copy! server-extension 0 K/extension-length message K/header-length)
         (if (verify-my-packet this header server-extension)
           (let [log-state (log2/debug log-state
-                                      ::handle-incoming!
+                                      ::do-handle-incoming
                                       "This packet really is for me")
                 packet-type-id (char (aget header (dec K/header-length)))
                 log-state (log2/info log-state
-                                     ::handle-incoming!
+                                     ::do-handle-incoming
                                      ""
                                      {::packet-type-id packet-type-id})
-                this (assoc this ::log2/state log-state)]
-            (println "Packet for me:" this)
-            (try
-              (.flush System/out)
-              ;; FIXME: This should at least update the log-state
-              (case packet-type-id
-                \H (handle-hello! this packet)
-                \I (initiate/handle! this packet)
-                \M (handle-message! this packet))
-              (catch Exception ex
-                (assoc this
-                       ::log2/state (log2/exception log-state
-                                                    ex
-                                                    ::handle-incoming!
-                                                    "Failed handling packet"
-                                                    {::packet-type-id packet-type-id})))))
+                this (assoc this ::log2/state (log2/debug log-state
+                                                          ::do-handle-incoming
+                                                          "Packet for me"
+                                                          (dissoc this ::log2/state)))
+                delta (try
+                        (.flush System/out)
+                        (case packet-type-id
+                          \H (hello/do-handle this
+                                              cookie/do-build-response packet)
+                          \I (initiate/do-handle this packet)
+                          \M (do-handle-message this packet))
+                        (catch Exception ex
+                          {::log2/state (log2/exception log-state
+                                                        ex
+                                                        ::do-handle-incoming
+                                                        "Failed handling packet"
+                                                        {::packet-type-id packet-type-id})}))]
+            (into this delta))
           (assoc this
                  ::log2/state (log2/info log-state
-                                         ::handle-incoming!
+                                         ::do-handle-incoming
                                          "Ignoring packet intended for someone else"))))
       (assoc this
              ::log2/state (log2/debug log-state
-                                      ::handle-incoming!
+                                      ::do-handle-incoming
                                       "Ignoring packet of illegal length"
                                       {::message-length (count message)
                                        ::shared/network-packet packet
@@ -351,9 +277,9 @@
                  (try
                    ;; Q: Do I want unhandled exceptions to be fatal errors?
                    (let [{log-state ::log2/state
-                          :as modified-state} (handle-incoming! (assoc this
-                                                                       ::log2/state log-state)
-                                                                msg)
+                          :as modified-state} (do-handle-incoming (assoc this
+                                                                         ::log2/state log-state)
+                                                                  msg)
                          log-state (log2/info log-state
                                               ::input-reducer
                                               "Updated state based on incoming msg"
@@ -463,8 +389,9 @@
           ;; A: They're small and straight-forward enough that it doesn't really seem useful
           result (assoc almost
                         ::state/event-loop-stopper! (build-event-loop-stopper almost))
-          flushed-logs (log2/flush-logs! logger log-state)
-          began (begin! (assoc result ::log2/state (log2/clean-fork flushed-logs ::input-reducer)))]
+          flushed-logs (log2/flush-logs! logger log-state)]
+      ;; Q: Why did I fork these logs?
+      (begin! (assoc result ::log2/state (log2/clean-fork flushed-logs ::input-reducer)))
       (assoc result ::log2/state flushed-logs))))
 
 (s/fdef stop!
