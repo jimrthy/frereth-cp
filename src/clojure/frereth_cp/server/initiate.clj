@@ -201,6 +201,9 @@ To be fair, this layer *is* pretty special."
 (defn verify-client-pk-in-vouch
   [initiate hidden-pk]
   (let [expected (bytes (::K/clnt-short-pk initiate))]
+    ;; This is disconcerting.
+    ;; The values I'm seeing here very obviously do not match.
+    ;; But apparently bytes= thinks they do.
     (log/debug "Cookie extraction succeeded. Q: Do the contents match?"
                "\nExpected:\n"
                (shared/bytes->string expected)
@@ -211,7 +214,7 @@ To be fair, this layer *is* pretty special."
 (s/fdef extract-cookie
         :args (s/cat :cookie-cutter ::state/cookie-cutter
                      :initiate-packet ::K/initiate-packet-spec)
-        :ret ::templates/cookie-spec)
+        :ret (s/nilable ::templates/cookie-spec))
 (defn extract-cookie
   [{:keys [::state/minute-key
            ::state/last-minute-key]
@@ -268,27 +271,40 @@ To be fair, this layer *is* pretty special."
     :as initiate}
    current-client]
 
-  (log/info "Opening the Crypto box we just received from the client")
-  (log/debug "The box we're opening is" (count vouch-wrapper) "bytes long")
-  (let [message-length (- (count vouch-wrapper) K/minimum-vouch-length)]
-    (let [{log-state ::log2/state
-           clear-text ::crypto/unboxed} (crypto/open-box log-state
-                                                         K/initiate-nonce-prefix
-                                                         outer-i-nonce
-                                                         vouch-wrapper
-                                                         (get-in current-client [::state/shared-secrets
-                                                                                 ::state/client-short<->server-short]))]
-      (if clear-text
-        {::log/state (log2/info log-state
-                                ::open-client-crypto-box
-                                "Decomposing...")
-         ::K/initiate-client-vouch-wrapper (serial/decompose (assoc-in K/initiate-client-vouch-wrapper
-                                                                       [::K/message ::K/length]
-                                                                       message-length)
-                                                             clear-text)}
-        {::log/state (log2/warn log-state
-                                ::open-client-crypto-box
-                                "Opening client crypto vouch failed")}))))
+  (println "Mark: top of open-client-crypto-box")
+  (let [log-state (log2/info log-state
+                             ::open-client-crypto-box
+                             "Opening the Crypto box we just received from the client")
+        vouch-length (count vouch-wrapper)
+        log-state (log2/debug log-state
+                              ::open-client-crypto-box
+                              (str "The box we're opening is " vouch-length " bytes long"))
+        message-length (- vouch-length K/minimum-vouch-length)
+        {log-state ::log2/state
+         clear-text ::crypto/unboxed
+         :as unboxed} (try
+                        (crypto/open-box log-state
+                                         K/initiate-nonce-prefix
+                                         outer-i-nonce
+                                         vouch-wrapper
+                                         (get-in current-client [::state/shared-secrets
+                                                                 ::state/client-short<->server-short]))
+                        (catch Exception ex
+                          (println "Mark: Opening crypto-box failed")
+                          {::log2/state (log2/exception log-state ex
+                                                        ::open-client-crypto-box)}))]
+    (println (str "Mark: crypto-box open succeeded. unboxed: '" (dissoc unboxed ::log2/state) "'."))
+    (if clear-text
+      {::log2/state (log2/info log-state
+                               ::open-client-crypto-box
+                               "Decomposing...")
+       ::K/initiate-client-vouch-wrapper (serial/decompose (assoc-in K/initiate-client-vouch-wrapper
+                                                                     [::K/message ::K/length]
+                                                                     message-length)
+                                                           clear-text)}
+      {::log2/state (log2/warn log-state
+                               ::open-client-crypto-box
+                               "Opening client crypto vouch failed")})))
 
 (s/fdef validate-server-name
         :args (s/cat :state ::state/state
@@ -472,11 +488,11 @@ Note that that includes TODOs re:
 (s/fdef do-handle
   :args (s/cat :state ::state/state
                :packet ::shared/network-packet)
-  :ret ::state/state)
+  :ret ::state/delta)
 (defn do-handle
   "Deal with an incoming initiate packet
 
-  Called for side-effects"
+  Called mostly for side-effects, but the return value matters."
   [{log-state ::log2/state
     :keys [::log2/logger]
     :as state}
@@ -488,6 +504,7 @@ Note that that includes TODOs re:
                              "Handling incoming initiate packet"
                              packet)
         message (bytes message)]
+    (println "Mark: top of initiate/do-handle")
     (or
      (let [n (count message)
            state-delta (if (>= n (+ K/box-zero-bytes packet-header-length))
@@ -502,6 +519,7 @@ Note that that includes TODOs re:
                                                 (- n packet-header-length))
                                initiate (serial/decompose-array tmplt message)
                                client-short-pk (bytes (::K/clnt-short-pk initiate))]
+                           (println "Mark: Check for re-initiate")
                            (if-not (possibly-re-initiate-existing-client-connection! state initiate)
                              (let [active-client (state/find-client state client-short-pk)]
                                (if-let [cookie (extract-cookie (::state/cookie-cutter state)
@@ -516,7 +534,6 @@ Note that that includes TODOs re:
                                                                                      client-short-pk
                                                                                      server-short-sk)
                                        state (state/alter-client-state state active-client)]
-
                                    ;; Now we've verified that the Initiate packet came from a
                                    ;; client that has the secret key associated with the short-term
                                    ;; public key.
@@ -525,6 +542,7 @@ Note that that includes TODOs re:
                                    ;; Now we're ready to tackle handling the main message body cryptobox.
                                    ;; This corresponds to line 373 in the reference implementation.
                                    (try
+                                     (println "Mark: trying to open the client's crypto box")
                                      (let [{log-state ::log2/state
                                             client-message-box ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
                                                                                                                           initiate
@@ -539,6 +557,7 @@ Note that that includes TODOs re:
                                                                     {::message-box-keys (keys client-message-box)
                                                                      ::client-public-long-key (b-t/->string client-long-pk)})]
                                            (try
+                                             (println "Mark: validating server name")
                                              (if (validate-server-name state client-message-box)
                                                ;; This takes us down to line 381
                                                (if (verify-client-public-key-triad state client-short-pk client-message-box)
@@ -566,7 +585,7 @@ Note that that includes TODOs re:
                                                                              ex
                                                                              ::do-handle
                                                                              "Failure after decrypting inner client cryptobox")})))
-                                         (assoc state ::log/state log-state)))
+                                         (assoc state ::log2/state log-state)))
                                      (catch ExceptionInfo ex
                                        {::log2/state (log2/exception log-state
                                                                      ex
@@ -581,6 +600,6 @@ Note that that includes TODOs re:
                          {::log2/state (log2/warn log-state
                                                   ::do-handle
                                                   (str "Truncated initiate packet. Only received " n " bytes"))})]
-       (into state state-delta))
+       state-delta)
      ;; If nothing's changing, just maintain status quo
-     state)))
+     {})))
