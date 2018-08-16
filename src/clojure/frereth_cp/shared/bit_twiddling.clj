@@ -102,6 +102,12 @@
   ;; FIXME: Switch to the weavejester/clojure-crypto-equality
   ;; libraray.
   ;; This is the sort of wheel that should not be reinvented.
+  ;; Except that weavejester ignored the constant-time aspects.
+  ;; Q: Would he be open to switching to something like this?
+  ;; Bigger Q: Is this a faithful translation?
+  ;; I run across pieces that compare successfully here but
+  ;; absolutely should not.
+  ;; FIXME: Verify whether that analysis is true.
   (let [nx (count x)
         ny (count y)
         diff (reduce (fn [acc n]

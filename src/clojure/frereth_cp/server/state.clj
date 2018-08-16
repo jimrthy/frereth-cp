@@ -71,6 +71,8 @@
                                          ::read<-child
                                          ::write->child]))
 
+;; These are defined both here and client.state.
+;; FIXME: Move them into shared
 (s/def ::client-short<->server-long ::shared/shared-secret)
 (s/def ::client-short<->server-short ::shared/shared-secret)
 (s/def ::client-long<->server-long ::shared/shared-secret)
