@@ -228,19 +228,21 @@
    client-short-pk
    server-short-sk]
   (when-not (and client-short-pk server-short-sk)
-    (log/error (str "Missing either '"
-                    client-short-pk
-                    "' and/or '"
-                    server-short-sk
-                    "'")))
+    (throw (ex-info "Missing key"
+                    {::server-short-sk server-short-sk
+                     ::client-short-pk client-short-pk})))
   (-> client
       (assoc-in [::shared-secrets ::client-short<->server-short] (crypto/box-prepare client-short-pk server-short-sk))
+      ;; Q: Is there a client-security entry already present? Could we just overwrite
+      ;; the map directly rather than calling assoc-in twice?
+      ;; Q: Would the risk be worth the extra clarity?
       (assoc-in [::client-security ::short-pk] client-short-pk)
       (assoc-in [::client-security ::server-short-sk] server-short-sk)))
 
 (s/fdef find-client
         :args (s/cat :state ::state
-                     :client-short-key ::shared/public-key))
+                     :client-short-key ::shared/public-key)
+        :ret (s/nilable ::client-state))
 (defn find-client
   [state client-short-key]
   (get-in state [::active-clients client-short-key]))
