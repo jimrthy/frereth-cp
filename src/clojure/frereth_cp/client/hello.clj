@@ -258,7 +258,6 @@
          (assoc this
                 ::log-state log-state
                 ::state/server-ips remaining-ips)
-         raw-packet
          cookie-waiter
          (System/nanoTime)
          timeout-ms))
