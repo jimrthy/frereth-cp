@@ -615,12 +615,13 @@ Note that that includes TODOs re:
                                                                        ex
                                                                        ::do-handle
                                                                        "Initiate packet looked good enough to establish client session, but failed later")})))
+                                   ;; Just log a quick message about the failure for now.
+                                   ;; It seems likely that we should really gather more info, especially in terms
+                                   ;; of identifying the source of garbage.
                                    {::log2/state (log2/error log-state
                                                              ::do-handle
                                                              "FIXME: Debug only: cookie extraction failed")}))
-                               {::log2/state (log2/warn log-state
-                                                        ::do-handle
-                                                        "TODO: Handle additional Initiate packets from " client-short-pk)})))
+                               (throw (RuntimeException. "TODO: Handle additional Initiate packets from " client-short-pk)))))
                          {::log2/state (log2/warn log-state
                                                   ::do-handle
                                                   (str "Truncated initiate packet. Only received " n " bytes"))})]
