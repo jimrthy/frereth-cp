@@ -4,11 +4,12 @@
             [clojure.tools.logging :as log]
             [frereth-cp.server.helpers :as helpers]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log2]
-            [frereth-cp.shared.specs :as shared-specs]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log2]
+             [specs :as shared-specs]]
             [manifold.stream :as strm]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -103,7 +104,15 @@
                                     ::shared-secrets]))
 (s/def ::current-client ::client-state)
 
-(s/def ::active-clients (s/map-of ::shared/public-key ::client-state))
+;; We're using the client's short-term public key as the key into the
+;; active-clients map.
+;; A byte-array is a terrible thing to use for a hash key. So translate
+;; it into a vector.
+(s/def ::public-key-vec (s/and vector?
+                               #(= (count %) shared-specs/client-key-length)
+                               (fn [bs]
+                                 (every? #(instance? Byte %) bs))))
+(s/def ::active-clients (s/map-of ::public-key-vec ::client-state))
 (s/def ::max-active-clients nat-int?)
 
 ;; TODO: Make this go away. Switch to the version in message.specs
@@ -211,7 +220,7 @@
   ;; We get that for free from the data structure
   (let [client-key (get-in altered-client [::client-security ::shared/short-pk])]
     (assoc-in state
-              [::active-clients client-key]
+              [::active-clients (vec client-key)]
               ;; Q: Worth surgically applying a delta?
               altered-client)))
 
@@ -245,7 +254,7 @@
         :ret (s/nilable ::client-state))
 (defn find-client
   [state client-short-key]
-  (get-in state [::active-clients client-short-key]))
+  (get-in state [::active-clients (vec client-short-key)]))
 
 (defn hide-secrets!
   [this]
