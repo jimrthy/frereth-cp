@@ -360,8 +360,9 @@ Needing to declare these things twice is annoying."
   "Read a C-style struct from a byte array into a map, based on template"
   [tmplt src]
   (let [src (bytes src)]
-    ;; Q: Dissoc ::index at end?
-    (reduce
-     (partial decompose-array-field src tmplt)
-     {::index 0}
-     (keys tmplt))))
+    (dissoc
+     (reduce
+      (partial decompose-array-field src tmplt)
+      {::index 0}
+      (keys tmplt))
+     ::index)))

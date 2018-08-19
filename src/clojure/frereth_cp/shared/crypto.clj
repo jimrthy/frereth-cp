@@ -839,9 +839,11 @@ Or maybe that's (dec n)"
         (mod numerator denominator))
       0)))
 
+;;; TODO: add an optional arity to both this and
+;;; secret-unbox to allow the caller to supply a dst parameter that gets
+;;; modified in place.
 (s/fdef secret-box
-        :args (s/cat :dst bytes?
-                     :cleartext bytes?
+        :args (s/cat :cleartext bytes?
                      :length integer?
                      :nonce ::specs/nonce
                      :key ::specs/crypto-key)
@@ -853,24 +855,34 @@ Note that this does not do anything about the initial padding.
 
 It may be an implementation detail, but box-after above is really
 just a wrapper around this"
-  [dst cleartext length nonce key]
-  (let [key (bytes key)]
-       (TweetNaclFast/crypto_secretbox dst cleartext
-                                       length nonce key)))
+  [cleartext length nonce key]
+  (let [key (bytes key)
+        dst (byte-array length)]
+    (TweetNaclFast/crypto_secretbox dst cleartext
+                                    length nonce key)))
 
+(s/fdef secret-unbox
+  :args (s/cat :cipher-text bytes?
+               :length integer?
+               :nonce ::specs/nonce
+               :key ::specs/crypto-key)
+  ;; dst has a size relationship to cipher-text.
+  ;; TODO: Spec that.
+  :ret bytes?)
 (defn secret-unbox
   "Symmetric-key decryption"
-  [dst cipher-text length nonce key]
-  (when (not= 0
-              (TweetNaclFast/crypto_secretbox_open dst
-                                                   cipher-text
-                                                   length
-                                                   nonce
-                                                   key))
-    (throw (ex-info "Symmetric unboxing failed"
-                    {::destination dst
-                     ::cipher-text cipher-text
-                     ::length length
-                     ::nonce nonce
-                     ::key key})))
-  dst)
+  [cipher-text length nonce key]
+  (let [dst (byte-array length)]
+    (when (not= 0
+                (TweetNaclFast/crypto_secretbox_open dst
+                                                     cipher-text
+                                                     length
+                                                     nonce
+                                                     key))
+      (throw (ex-info "Symmetric unboxing failed"
+                      {::destination dst
+                       ::cipher-text cipher-text
+                       ::length length
+                       ::nonce nonce
+                       ::key key})))
+    dst))

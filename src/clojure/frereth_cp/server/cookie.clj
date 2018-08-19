@@ -76,6 +76,8 @@
                                ::build-inner-cookie
                                "Encrypting inner cookie"
                                {::specs/server-nonce-suffix (vec nonce-suffix)})
+         ;; In theory, this should be using secret-box.
+         ;; The implementation's the same, so it doesn't matter.
          boxed-cookie (crypto/build-box templates/black-box-dscr
                                         {::templates/clnt-short-pk client-short-pk
                                          ::templates/srvr-short-sk my-short-sk}

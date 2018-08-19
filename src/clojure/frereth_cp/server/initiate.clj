@@ -41,31 +41,22 @@ This is the part that possibly establishes a 'connection'"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal implementation
 
-(s/fdef decrypt-initiate-vouch!
-        :args (s/cat :nonce :shared/client-nonce
-                     :box (s/and bytes?
-                                 #(< (count %) K/minimum-vouch-length)))
-        :ret (s/nilable bytes?))
+(s/fdef decrypt-initiate-vouch
+  :args (s/cat :log-state ::log2/state
+               :shared-key ::specs/crypto-key
+               :nonce-suffix :shared/client-nonce
+               :box (s/and bytes?
+                           #(< (count %) K/minimum-vouch-length)))
+  :ret (s/keys :req [::log2/state]
+               :opt [::crypto/unboxed]))
 ;; TODO: Write server-test/vouch-extraction to gain confidence that
 ;; this works
-(defn decrypt-initiate-vouch!
-  [shared-key nonce-suffix box nonce]
-  (b-t/byte-copy! nonce K/initiate-nonce-prefix)
-  (b-t/byte-copy! nonce
-                  specs/client-nonce-prefix-length
-                  specs/client-nonce-suffix-length
-                  nonce-suffix)
-  (try
-    (let [plain-vector (crypto/open-after box 0 (count box) nonce shared-key)]
-      ;; Stuffing this into a vector and then extracting it back to a
-      ;; byte-array is a wasted round-trip.
-      ;; FIXME: Add a crypto routine to avoid that.
-      ;; It may be premature optimization that clutters the API,
-      ;; but it cuts out the extra conversion here, and it certainly
-      ;; won't hurt performance.
-      (byte-array plain-vector))
-    (catch ExceptionInfo ex
-      (log/error ex (util/pretty (.getData ex))))))
+(defn decrypt-initiate-vouch
+  [log-state
+   shared-key
+   nonce-suffix
+   box]
+  (crypto/open-box log-state  K/initiate-nonce-prefix nonce-suffix box shared-key))
 
 (s/fdef possibly-re-initiate-existing-client-connection!
         :args (s/cat :state ::state
@@ -91,7 +82,8 @@ This is the part that possibly establishes a 'connection'"
   ;; In the reference implementation, this basically corresponds to
   ;; lines 341-358.
   ;; Find the matching client (if any).
-  (let [client-short-key (::clnt-short-pk initiate)]
+  (let [client-short-key (::clnt-short-pk initiate)
+        log-label ::possibly-re-initiate-existing-client-connection!]
     ;; This seems scary.
     ;; It's an under-the-hood implementation detail, but seems
     ;; worth mentioning that, under the hood, state converts the
@@ -99,7 +91,7 @@ This is the part that possibly establishes a 'connection'"
     (if-let [client (state/find-client state client-short-key)]
       ;; If there is one, extract the message portion
       (let [log-state (log2/info log-state
-                                 ::possibly-re-initiate-existing-client-connection!
+                                 log-label
                                  "Initiate packet from known client")
             packet-nonce-bytes (::specs/nonce initiate)
             packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
@@ -109,9 +101,9 @@ This is the part that possibly establishes a 'connection'"
           ;; Need to forward it along
           (let [vouch (:K/vouch initiate)
                 shared-key (::state/client-short<->server-short client)]
-            (if-let [plain-text (decrypt-initiate-vouch! shared-key
-                                                         packet-nonce-bytes
-                                                         vouch)]
+            (if-let [plain-text (decrypt-initiate-vouch shared-key
+                                                        packet-nonce-bytes
+                                                        vouch)]
               ;; Line 351
               (let [state (update-in state [client-short-key ::state/received-nonce] packet-nonce)]
                 ;; That takes us down to line 352.
@@ -127,87 +119,96 @@ This is the part that possibly establishes a 'connection'"
                 ;; writeall(activeclients[i].tochild, text+383, r-543)
                 (throw (RuntimeException. "start back here")))
               {::log/state (log2/warn log-state
-
+                                      log-label
                                       "Unable to decrypt incoming vouch")
                ::handled? true}))
           {::log2/state (log2/debug log-state
+                                    log-label
                                     "Discarding obsolete nonce"
                                     {::shared/packet-nonce packet-nonce
                                      ::last-packet-nonce last-packet-nonce})
            ::handled? true}))
-      {::log2/state log-state})))
+      {::log2/state (log2/debug log-state
+                                log-label
+                                "Not an existing client")})))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
-
-(s/fdef decrypt-inner-vouch!
-        :args (s/cat :cookie-cutter ::state/cookie-cutter
-                     :dst any?
-                     :hello-cookie any?)
-        :ret boolean?)
-;; FIXME: Have this return the logs.
-;; And possibly the extracted cookie bytes, if we managed to
-;; decrypt them.
-(defn decrypt-inner-vouch!
-  [cookie-cutter dst hello-cookie]
-  (log/debug "Trying to extract cookie based on current minute-key")
-  ;;; Set it up to extract from the current minute key
-
-  ;; Start with the initial 0-padding
-  (b-t/zero-out! dst 0 K/box-zero-bytes)
-  ;; Copy over the 80 bytes of crypto text from the initial cookie.
-  ;; Note that this part is tricky:
-  ;; The "real" initial cookie is 96 bytes long:
-  ;; * 32 bytes of padding
-  ;; * 32 bytes of client short-term key
-  ;; * 32 bytes of server short-term key
-  ;; That's 80 bytes crypto text.
-  ;; But then the "crypto black box" that just round-tripped
-  ;; through the client includes 16 bytes of a nonce, taking
-  ;; it back up to 96 bytes.
-  (b-t/byte-copy! dst
-                  K/box-zero-bytes
-                  K/hello-crypto-box-length
-                  hello-cookie
-                  specs/server-nonce-suffix-length)
-  (let [;; Q: How much faster/more efficient is it to have a
+(s/fdef decrypt-inner-vouch
+  :args (s/cat :log-state ::log2/state
+               :cookie-cutter ::state/cookie-cutter
+               :hello-cookie ::K/cookie)
+  :ret (s/keys :req [::log2/state]
+               :opt [::crypto/unboxed]))
+(defn decrypt-inner-vouch
+  [log-state cookie-cutter hello-cookie]
+  (comment
+    ;; This approach seems much cleaner.
+    ;; Or possibly more succint.
+    ;; TODO: Consider.
+    (try
+      (let [opener #(crypto/open-box %1 K/initiate-nonce-prefix nonce-suffix box %2)
+            {log-state ::log2/state
+             clear-text ::crypto/unboxed} (opener log-state minute-key)
+            ;; It seems like there must be a more elegant way to handle this
+            {log-state ::log2/state
+             clear-text ::crypto/unboxed} (if-not clear-text
+                                            (opener log-state last-minute-key)
+                                            {::log2/state log-state
+                                             ::crypto/unboxed clear-text})]
+        ;; This is another area where it really seems like I should just
+        ;; skip the conversion to a ByteBuf
+        {::log2/state log-state
+         ::crypto/unboxed clear-text})
+      (catch Exception ex
+        {::log2/state (log2/exception log-state ex ::decrypt-initiate-vouch)})))
+  (let [log-state (log2/debug log-state
+                              ::decrypt-inner-vouch
+                              "Trying to extract cookie based on current minute-key")
+        src (byte-array K/hello-crypto-box-length)
+        ;; Q: How much faster/more efficient is it to have a
         ;; io.netty.buffer.PooledByteBufAllocator around that
         ;; I could use for either .heapBuffer or .directBuffer?
         ;; (as opposed to creating my own local in the let above)
-        nonce (byte-array K/nonce-length)]
+        nonce-suffix (byte-array specs/server-nonce-suffix-length)]
+    ;; the 80 bytes of
+    ;; We're trying to decrypt  the 80 bytes of crypto text from the
+    ;; initial cookie.
+    ;; Note that this part is tricky:
+    ;; The "real" initial cookie is 96 bytes long:
+    ;; * 32 bytes of padding
+    ;; * 32 bytes of client short-term key
+    ;; * 32 bytes of server short-term key
+    ;; That's 80 bytes of crypto text (because 16
+    ;; bytes of padding sticks around).
+    ;; But then the "crypto black box" that just round-tripped
+    ;; through the client includes 16 bytes of the nonce, taking
+    ;; it back up to 96 bytes.
+    (b-t/byte-copy! src
+                    0
+                    K/hello-crypto-box-length
+                    hello-cookie
+                    specs/server-nonce-suffix-length)
+    (b-t/byte-copy! nonce-suffix
+                    0
+                    specs/server-nonce-suffix-length
+                    hello-cookie)
     (try
-      (b-t/byte-copy! nonce K/cookie-nonce-minute-prefix)
-      (b-t/byte-copy! nonce
-                      specs/server-nonce-prefix-length
-                      specs/server-nonce-suffix-length
-                      hello-cookie)
-      (crypto/secret-unbox dst dst K/server-cookie-length nonce (::state/minute-key cookie-cutter))
-      true
-      (catch ExceptionInfo _
-        ;; Try again with the previous minute-key
-        (log/debug "That failed. Try again with the previous minute-key")
-        (shared/zero-out! dst 0 K/box-zero-bytes)
-        (b-t/byte-copy! dst
-                        K/box-zero-bytes
-                        K/hello-crypto-box-length
-                        hello-cookie
-                        specs/server-nonce-suffix-length)
-
-        (try
-          (crypto/secret-unbox dst
-                               dst
-                               K/server-cookie-length
-                               nonce
-                               (::state/last-minute-key cookie-cutter))
-          true
-          (catch ExceptionInfo _
-            ;; Reference implementation just silently discards the
-            ;; failure.
-            ;; That's more efficient at this level, but seems to
-            ;; discard the possibilities of attack mitigation.
-            (log/warn "Extracting the original crypto-box failed")
-            ;; Be explicit about returning failure
-            false))))))
+      (let [opener #(crypto/open-box %1
+                                     K/cookie-nonce-minute-prefix
+                                     nonce-suffix
+                                     src
+                                     %2)
+            {log-state ::log2/state
+             unboxed ::crypto/unboxed
+             :as opened} (opener log-state
+                                 (::state/minute-key cookie-cutter))]
+        (if-not unboxed
+          ;; Try again with the previous minute-key
+          (let [log-state (log2/debug log-state
+                                      ::decrypt-inner-vouch
+                                      "Couldn't decrypt w/ current minute-key")]
+            (opener log-state
+                    (::state/last-minute-key cookie-cutter)))
+          opened)))))
 
 (s/fdef verify-client-pk-in-vouch
         :args (s/cat :destructured-initiate-packet ::K/initiate-packet-spec
@@ -221,9 +222,18 @@ This is the part that possibly establishes a 'connection'"
     ;; This is disconcerting.
     ;; The values I'm seeing here very obviously do not match.
     ;; But apparently bytes= thinks they do.
-    ;; FIXME: What are the odds that I'm missing a
-    ;; box-opening step? And that, somehow, the crypto
-    ;; text (?) evaluates as bytes= to the clear text?
+
+    ;; The root problem is that I jumped the gun on calling this.
+    ;; I haven't actually opened the inner cryptobox yet, so
+    ;; of course they don't match.
+
+    ;; A bigger concern is that, somehow, the crypto
+    ;; text (?) evaluates as bytes= to the clear text.
+
+    ;; I have that staged off in its own branch to tackle in
+    ;; isolation, but I don't think I can justify going much
+    ;; further down this road until I understand what's going
+    ;; on there.
     (throw (RuntimeException. "Start back with this"))
     (log/debug "Cookie extraction succeeded. Q: Do the contents match?"
                "\nExpected:\n"
@@ -273,16 +283,18 @@ This is the part that possibly establishes a 'connection'"
                                                         client-short-pk)}))
 
 (s/fdef extract-cookie
-        :args (s/cat :cookie-cutter ::state/cookie-cutter
-                     :initiate-packet ::K/initiate-packet-spec)
+  :args (s/cat :log-state ::log2/state
+               :cookie-cutter ::state/cookie-cutter
+               :initiate-packet ::K/initiate-packet-spec)
         :ret (s/nilable ::templates/cookie-spec))
 (defn extract-cookie
-  "Verify we can open our secret crypto box
+  "Verify we can open the original cookie
 
   ...using either the current or previous minute-key.
 
   This corresponds to lines 359-368. "
-  [{:keys [::state/minute-key
+  [log-state
+   {:keys [::state/minute-key
            ::state/last-minute-key]
     :as cookie-cutter}
    initiate]
@@ -300,30 +312,27 @@ This is the part that possibly establishes a 'connection'"
   ;; Although that approach is undeniably faster than throwing
   ;; an exception and logging the problem
   (let [hello-cookie (bytes (::K/cookie initiate))
-        inner-vouch-bytes (byte-array K/server-cookie-length)]
-    (when (decrypt-inner-vouch! cookie-cutter inner-vouch-bytes hello-cookie)
-      ;; Reference code:
-      ;; Verifies that the "first" 32 bytes (after the 32 bytes of
-      ;; decrypted 0 padding) of the 80 bytes it decrypted
-      ;; out of the inner vouch match the client short-term
-      ;; key in the outer initiate packet.
-      (let [full-decrypted-vouch (vec inner-vouch-bytes)
-            ;; Round-tripping through a vector seems pretty ridiculous.
-            ;; I really just want to verify that the first 32 bytes match
-            ;; the supplied key.
-            ;; Except that it's really bytes 16-47, isn't it?
-            key-array (byte-array (subvec full-decrypted-vouch 0 K/key-length))]
-        ;; This hasn't decrypted the "real" inner crypto box.
-        ;; That really happens in verify-client-public-key-triad.
-        ;; TODO: Need to untangle the chain of logic and nested
-        ;; function calls.
-        (throw (RuntimeException. "I'm expecting too much here"))
-        (when (verify-client-pk-in-vouch initiate key-array)
-          ;; TODO: Need to add a Pooled Allocator to the server state
-          ;; for this.
-          ;; Q: Don't I?
-          (let [vouch-buf (Unpooled/wrappedBuffer inner-vouch-bytes)]
-            (serial/decompose templates/black-box-dscr vouch-buf)))))))
+        {log-state ::log2=state
+         ^ByteBuf inner-vouch-buffer ::crypto/unboxed} (decrypt-inner-vouch log-state
+                                                                            cookie-cutter
+                                                                            hello-cookie)]
+    (when inner-vouch-buffer
+      ;; Yet again: Converting this to a ByteBuf was a mistake
+      (let [inner-vouch-bytes (byte-array (.readableBytes inner-vouch-buffer))]
+        (.readBytes inner-vouch-buffer inner-vouch-bytes)
+        ;; Reference code:
+        ;; Verifies that the "first" 32 bytes (after the 32 bytes of
+        ;; decrypted 0 padding) of the 80 bytes it decrypted
+        ;; out of the inner vouch match the client short-term
+        ;; key in the outer initiate packet.
+        (let [full-decrypted-vouch (vec inner-vouch-bytes)
+              ;; Round-tripping through a vector seems pretty ridiculous.
+              ;; I really just want to verify that the first 32 bytes match
+              ;; the supplied key.
+              ;; Note that the initial padding has been discarded
+              key-array (byte-array (subvec full-decrypted-vouch 0 K/key-length))]
+          (when (verify-client-pk-in-vouch initiate key-array)
+            (serial/decompose-array templates/black-box-dscr inner-vouch-bytes)))))))
 
 (s/fdef open-client-crypto-box
   :args (s/cat :log-state ::log2/state
@@ -598,7 +607,9 @@ Note that that includes TODOs re:
           (let [{:keys [::handled]
                  log-state ::log2/state} (possibly-re-initiate-existing-client-connection! state initiate)]
             (if-not handled
-              (if-let [cookie (extract-cookie (::state/cookie-cutter state)
+              (if-let [cookie (extract-cookie log-state
+                                              (::state/cookie-cutter state)
+
                                               initiate)]
                 (let [log-state (log2/info log-state
                                            ::handle!
