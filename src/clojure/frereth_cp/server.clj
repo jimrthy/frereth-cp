@@ -225,7 +225,13 @@
                                                         ::do-handle-incoming
                                                         "Failed handling packet"
                                                         {::packet-type-id packet-type-id})}))]
-            (into this delta))
+            (as-> this x
+              (into x delta)
+              (assoc x
+                     ::log2/state
+                     (log2/debug (::log2/state x)
+                                 ::do-handle-incoming
+                                 "Handled"))))
           (assoc this
                  ::log2/state (log2/info log-state
                                          ::do-handle-incoming
@@ -285,7 +291,7 @@
                                               "Updated state based on incoming msg"
                                               (helpers/hide-long-arrays (dissoc modified-state ::log2/state)))]
                      (assoc modified-state
-                            ::log2/state log-state))
+                            ::log2/state (log2/flush-logs! logger log-state)))
                    (catch clojure.lang.ExceptionInfo ex
                      (assoc this
                             ::log2/state (log2/exception log-state

@@ -434,6 +434,7 @@
           nonce-prefix-length (count nonce-prefix)]
       (.getBytes buffer 0 dst)
       (b-t/byte-copy! nonce nonce-prefix)
+      ;; FIXME: Convert this to a log message
       (println "Copying"
                nonce-suffix-length
                "bytes into a"
@@ -636,7 +637,11 @@
    box-length
    nonce
    shared-key]
-  {:pre [(bytes? shared-key)]}
+  ;; The failure I'm getting here doesn't seem to make any sense.
+  (assert (bytes? shared-key) (str "Expected shared-key to be a byte-array.\nInstead got: '"
+                                   shared-key
+                                   "', a "
+                                   (class shared-key)))
   (if (and (not (nil? box))
            (>= (count box) (+ box-offset box-length))
            (>= box-length K/box-zero-bytes))
@@ -728,6 +733,10 @@
                                       (str "Failed to open box\n")
                                       (.getData ex))}))))
 
+(s/fdef random-array
+  :args (s/cat :n integer?)
+  :fn #(= (count (:ret %)) :n)
+  :ret bytes?)
 (defn random-array
   "Returns an array of n random bytes"
   ^bytes [^Long n]
