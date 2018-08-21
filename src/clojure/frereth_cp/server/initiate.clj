@@ -74,7 +74,8 @@ This is the part that possibly establishes a 'connection'"
         :args (s/cat :state ::state
                      :initiate-packet ::K/initiate-packet-spec)
         :ret (s/keys :req [::log2/state]
-                     :opt [::handled?]))
+                     :opt [::handled?
+                           ::state/client-state]))
 (defn possibly-re-initiate-existing-client-connection!
   "Client can send as many Initiate packets as it likes.
 
@@ -117,6 +118,14 @@ This is the part that possibly establishes a 'connection'"
                                                       packet-nonce-bytes
                                                       vouch)]
               ;; Line 351
+              ;; This is totally broken.
+              ;; First, really should use find-client to get to this one.
+              ;; But then we still need to inject the new packet-nonce.
+              ;; assoc-in makes sense for that, but not update-in.
+              ;; This seems worth adding something like an update-client fn,
+              ;; or even update-client-packet-nonce.
+              ;; Need something along those lines.
+              ;; Key point: don't duplicate the message-forwarding code.
               (let [state (update-in state [client-short-key ::state/received-nonce] packet-nonce)]
                 ;; That takes us down to line 352.
                 ;; Q: What's going on there?
@@ -129,6 +138,9 @@ This is the part that possibly establishes a 'connection'"
                 ;; before sending the array to the associated child
                 ;; process in the next line:
                 ;; writeall(activeclients[i].tochild, text+383, r-543)
+                ;; Ultimately, we should just return this.
+                {::log2/state log-state
+                 ::state/client-state (state/find-client state client-short-key)}
                 (throw (RuntimeException. "start back here")))
               {::log/state (log2/warn log-state
                                       log-label
@@ -520,7 +532,7 @@ Note that that includes TODOs re:
           (.getBytes inner-pk-buf 0 inner-pk)
           (b-t/bytes= short-pk inner-pk))))))
 
-(s/fdef do-fork-child
+(s/fdef do-fork-child!
   :args (s/cat :state ::state/state
                :active-client ::state/client-state
                :client-long-pk ::shared/public-key
@@ -531,7 +543,7 @@ Note that that includes TODOs re:
                :initiate ::serial/decomposed
                :client-message-box ::K/initiate-client-vouch-wrapper)
   :ret ::state/state)
-(defn do-fork-child
+(defn do-fork-child!
   [{log-state ::log2/state
     :as state}
    active-client
@@ -614,10 +626,108 @@ Note that that includes TODOs re:
                                                      {::problem x}))))
     (assoc state ::log2/state log-state)))
 
+(s/fdef build-new-client!
+  :args (s/cat :log-state-atom ::log2/state-atom
+               :state ::state/state
+               :packet ::shared/network-packet
+               :initiate ::K/initiate-packet-spec)
+  ;; Q: Is it worth calling out the log-state as something
+  ;; special?
+  :ret (s/keys :req [::log2/state]
+               :opt [::state/delta]))
+(defn build-new-client!
+  [log-state-atom
+   {log-state ::log2/state
+    :as state}
+   {:keys [:host :port]
+    :as packet}
+   {:keys [::K/clnt-short-pk]
+    :as initiate}]
+  (let [{cookie ::templates/cookie-spec
+         log-state ::log2/state
+         :as cookie-extraction} (extract-cookie log-state
+                                                (::state/cookie-cutter state)
+                                                initiate)]
+    (reset! log-state-atom log-state)
+    (if cookie
+      (let [log-state (swap! log-state-atom #(log2/info %
+                                                        ::handle!
+                                                        "Succssfully extracted cookie"))
+            client-short-pk (bytes clnt-short-pk)
+            {active-client ::state/client-state
+             server-short-sk ::shared/secret-key
+             {log-state ::log2/state
+              :as state} ::state/state} (configure-new-active-client (assoc state ::log2/state log-state)
+                                                                     client-short-pk
+                                                                     cookie)]
+        (reset! log-state-atom log-state)
+        ;; It included a secret cookie that we generated sometime within the
+        ;; past couple of minutes.
+        ;; Now we're ready to tackle handling the main message body cryptobox.
+        ;; This corresponds to line 373 in the reference implementation.
+        (try
+          (println "Mark: trying to open the client's crypto box")
+          (let [{log-state ::log2/state
+                 client-message-box ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
+                                                                                               initiate
+                                                                                               active-client)]
+            (println "Mark: real result from opening crypto box:"
+                     client-message-box)
+            (reset! log-state-atom log-state)
+            (if client-message-box
+              (let [client-long-pk (bytes (::K/long-term-public-key client-message-box))
+                    log-state (log2/info log-state
+                                         "Extracted message box from client's Initiate packet"
+                                         ;; This matches both the original log
+                                         ;; message and what we see below when we
+                                         ;; try to extract the inner hidden key
+                                         {::message-box-keys (keys client-message-box)
+                                          ::client-public-long-key (b-t/->string client-long-pk)})]
+                (reset! log-state-atom log-state)
+                (try
+                  (println "Mark: validating server name")
+                  (if (validate-server-name state client-message-box)
+                    ;; This takes us down to line 381
+                    (if (verify-client-public-key-triad state client-short-pk client-message-box)
+                      ;; TODO: Limit the state parameter and return value to what's actually needed
+                      (do-fork-child! state
+                                      active-client
+                                      client-long-pk
+                                      client-short-pk
+                                      server-short-sk
+                                      host
+                                      port
+                                      initiate
+                                      client-message-box)
+                      {::log2/state (log2/warn log-state
+                                               ::do-handle
+                                               "Mismatched public keys"
+                                               {::FIXME "Show the extracted versions"
+                                                ::state/state state
+                                                ::client-short-pk client-short-pk
+                                                ::shared/message client-message-box})}))
+                  (catch ExceptionInfo ex
+                    {::log2/state (log2/exception @log-state-atom
+                                                  ex
+                                                  ::do-handle
+                                                  "Failure after decrypting inner client cryptobox")})))
+              (assoc state ::log2/state log-state)))
+          (catch Exception ex
+            {::log2/state (log2/exception @log-state-atom
+                                          ex
+                                          ::do-handle
+                                          "Initiate packet looked good enough to establish client session, but failed later")})))
+      ;; Just log a quick message about the failure for now.
+      ;; It seems likely that we should really gather more info, especially in terms
+      ;; of identifying the source of garbage.
+      {::log2/state (log2/error log-state
+                                ::do-handle
+                                "FIXME: Debug only: cookie extraction failed")})))
+
 (s/fdef decompose-initiate-packet
   :args (s/cat :packet-length nat-int?
                :message-packet ::shared/message)
-  :ret ::serial/decomposed)
+  :ret ::K/initiate-packet-spec)
 (defn decompose-initiate-packet
   [packet-length
    message-packet]
@@ -646,8 +756,7 @@ Note that that includes TODOs re:
   [{log-state ::log2/state
     :keys [::log2/logger]
     :as state}
-   {:keys [:host :port]
-    message :message
+   {:keys [:message]
     :as packet}]
   (let [log-state-atom (atom (log2/info log-state
                                         ::handle!
@@ -658,10 +767,10 @@ Note that that includes TODOs re:
     (try
       (let [n (count message)]
         (if (>= n (+ K/box-zero-bytes packet-header-length))
-          (let [initiate (decompose-initiate-packet n message)
-                client-short-pk (bytes (::K/clnt-short-pk initiate))]
+          (let [initiate (decompose-initiate-packet n message)]
             (println "Mark: Check for re-initiate")
-            (let [{:keys [::handled]
+            (let [{:keys [::handled
+                          ::state/client-state]
                    ;; The way this is handled is wrong.
                    ;; Have this return the active client, if any.
                    ;; Then we can eliminate the message-forwarding duplication
@@ -670,87 +779,16 @@ Note that that includes TODOs re:
                                                                                              initiate)]
               (reset! log-state-atom log-state)
               (if-not handled
-                (let [{cookie ::templates/cookie-spec
-                       log-state ::log2/state
-                       :as cookie-extraction} (extract-cookie log-state
-                                                              (::state/cookie-cutter state)
-
-                                                              initiate)]
-                  (reset! log-state-atom log-state)
-                  (if cookie
-                    (let [log-state (log2/info log-state
-                                               ::handle!
-                                               "Succssfully extracted cookie")
-                          {active-client ::state/client-state
-                           server-short-sk ::shared/secret-key
-                           {log-state ::log2/state
-                            :as state} ::state/state} (configure-new-active-client (assoc state ::log2/state log-state)
-                                                                                   client-short-pk
-                                                                                   cookie)]
-                      (reset! log-state-atom log-state)
-                      ;; It included a secret cookie that we generated sometime within the
-                      ;; past couple of minutes.
-                      ;; Now we're ready to tackle handling the main message body cryptobox.
-                      ;; This corresponds to line 373 in the reference implementation.
-                      (try
-                        (println "Mark: trying to open the client's crypto box")
-                        (let [{log-state ::log2/state
-                               client-message-box ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
-                                                                                                             initiate
-                                                                                                             active-client)]
-                          (println "Mark: real result from opening crypto box:"
-                                   client-message-box)
-                          (reset! log-state-atom log-state)
-                          (if client-message-box
-                            (let [client-long-pk (bytes (::K/long-term-public-key client-message-box))
-                                  log-state (log2/info log-state
-                                                       "Extracted message box from client's Initiate packet"
-                                                       ;; This matches both the original log
-                                                       ;; message and what we see below when we
-                                                       ;; try to extract the inner hidden key
-                                                       {::message-box-keys (keys client-message-box)
-                                                        ::client-public-long-key (b-t/->string client-long-pk)})]
-                              (reset! log-state-atom log-state)
-                              (try
-                                (println "Mark: validating server name")
-                                (if (validate-server-name state client-message-box)
-                                  ;; This takes us down to line 381
-                                  (if (verify-client-public-key-triad state client-short-pk client-message-box)
-                                    ;; TODO: Limit the state parameter and return value to what's actually needed
-                                    (do-fork-child state
-                                                   active-client
-                                                   client-long-pk
-                                                   client-short-pk
-                                                   server-short-sk
-                                                   host
-                                                   port
-                                                   initiate
-                                                   client-message-box)
-                                    {::log2/state (log2/warn log-state
-                                                             ::do-handle
-                                                             "Mismatched public keys"
-                                                             {::FIXME "Show the extracted versions"
-                                                              ::state/state state
-                                                              ::client-short-pk client-short-pk
-                                                              ::shared/message client-message-box})}))
-                                (catch ExceptionInfo ex
-                                  {::log2/state (log2/exception @log-state-atom
-                                                                ex
-                                                                ::do-handle
-                                                                "Failure after decrypting inner client cryptobox")})))
-                            (assoc state ::log2/state log-state)))
-                        (catch Exception ex
-                          {::log2/state (log2/exception @log-state-atom
-                                                        ex
-                                                        ::do-handle
-                                                        "Initiate packet looked good enough to establish client session, but failed later")})))
-                    ;; Just log a quick message about the failure for now.
-                    ;; It seems likely that we should really gather more info, especially in terms
-                    ;; of identifying the source of garbage.
-                    {::log2/state (log2/error log-state
-                                              ::do-handle
-                                              "FIXME: Debug only: cookie extraction failed")}))
-                (throw (RuntimeException. "TODO: Handle additional Initiate packets from " client-short-pk)))))
+                (let [client-state (or client-state
+                                       (build-new-client! log-state-atom
+                                                          state
+                                                          packet
+                                                          initiate))]
+                  (throw (RuntimeException. "Forward along the message portion")))
+                (throw (RuntimeException. "TODO: Handle additional Initiate packets from " (-> initiate
+                                                                                               ::K/clnt-short-pk
+                                                                                               bytes
+                                                                                               vec))))))
           {::log2/state (log2/warn log-state
                                    ::do-handle
                                    (str "Truncated initiate packet. Only received " n " bytes"))}))
