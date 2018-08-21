@@ -640,8 +640,9 @@
   ;; The failure I'm getting here doesn't seem to make any sense.
   (assert (bytes? shared-key) (str "Expected shared-key to be a byte-array.\nInstead got: '"
                                    shared-key
-                                   "', a "
-                                   (class shared-key)))
+                                   "', a '"
+                                   (class shared-key)
+                                   "'"))
   (if (and (not (nil? box))
            (>= (count box) (+ box-offset box-length))
            (>= box-length K/box-zero-bytes))

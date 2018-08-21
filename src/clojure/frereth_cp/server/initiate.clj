@@ -288,16 +288,19 @@ This is the part that possibly establishes a 'connection'"
                      ::state/client-state
                      ::state/state]))
 (defn configure-new-active-client
-  "Update the active-client in state. Juggle around some other values"
+  "Set up a new active-client"
   [state
    client-short-pk
    cookie]
-  (let [active-client (state/find-client state
-                                         client-short-pk)
+  ;; We established earlier, when we called
+  ;; possibly-re-initiate-existing-client-connection!,
+  ;; that state is not tracking this client
+  (let [active-client (state/alloc-client)
         {:keys [::templates/srvr-short-sk]}  cookie
         server-short-sk (bytes srvr-short-sk)]
-    (assert server-short-sk (str "Missing ::templates/srvr-short-sk among "
-                                 (keys cookie)))
+    (when-not server-short-sk
+      (throw (ex-info "Missing ::templates/srvr-short-sk "
+                      {::cookie-keys (keys cookie)})))
     {::state/client-state active-client
      ::shared/secret-key server-short-sk
      ::state/state (update-state-with-new-active-client state
@@ -390,21 +393,28 @@ This is the part that possibly establishes a 'connection'"
             _ (println "Mark: 2")
             message-length (- vouch-length K/minimum-vouch-length)
             _ (println "Mark: 3")
+            shared-key (bytes (get-in current-client [::state/shared-secrets
+                                                      ::state/client-short<->server-short]))
+            _ (when-not shared-key
+                (throw (ex-info "Missing shared key"
+                                {::problem current-client
+                                 ::problem-keys (keys current-client)})))
             {log-state ::log2/state
              clear-text ::crypto/unboxed
              :as unboxed} (try
-                            (let [result
+                            (let [
+                                  result
                                   (crypto/open-box log-state
                                                    K/initiate-nonce-prefix
                                                    outer-i-nonce
                                                    vouch-wrapper
-                                                   (bytes (get-in current-client [::state/shared-secrets
-                                                                                  ::state/client-short<->server-short])))]
+                                                   shared-key)]
                               (println "Mark: opening client's cryptobox succeeded")
                               result)
                             (catch Throwable ex
                               (println "Mark: Opening crypto-box failed:" ex)
-                              {::log2/state (log2/exception log-state ex
+                              {::log2/state (log2/exception log-state
+                                                            ex
                                                             ::open-client-crypto-box)}))]
         (try
           (println (str "Mark: crypto-box open succeeded. unboxed: '" (dissoc unboxed ::log2/state) "'."))
@@ -421,9 +431,11 @@ This is the part that possibly establishes a 'connection'"
                                      "Opening client crypto vouch failed")})
           (catch Exception ex
             {::log2/state (log2/exception log-state
+                                          ex
                                           ::open-client-crypto-box)})))
       (catch Exception ex
         {::log2/state (log2/exception log-state
+                                      ex
                                       ::open-client-crypto-box)}))))
 
 (s/fdef validate-server-name
@@ -650,6 +662,9 @@ Note that that includes TODOs re:
                 client-short-pk (bytes (::K/clnt-short-pk initiate))]
             (println "Mark: Check for re-initiate")
             (let [{:keys [::handled]
+                   ;; The way this is handled is wrong.
+                   ;; Have this return the active client, if any.
+                   ;; Then we can eliminate the message-forwarding duplication
                    log-state ::log2/state} (possibly-re-initiate-existing-client-connection! (assoc state
                                                                                                     ::log2/state @log-state-atom)
                                                                                              initiate)]
