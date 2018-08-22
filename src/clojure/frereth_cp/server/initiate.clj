@@ -281,44 +281,41 @@ This is the part that possibly establishes a 'connection'"
                :server-short-sk bytes?
                :nearly-active-client ::state/client-state
                :client-short-pk any?)
-  :ret ::state/state)
+  :ret ::state/client-state)
 (defn update-state-with-new-active-client
   [state
    server-short-sk
-   nearly-active-client
    client-short-pk]
-  (let [active-client (state/configure-shared-secrets nearly-active-client
-                                                      client-short-pk
-                                                      server-short-sk)]
-    (state/alter-client-state state active-client)))
+  (throw (RuntimeException. "Obsolete"))
+  (state/configure-shared-secrets client-short-pk
+                                  server-short-sk))
 
 (s/fdef configure-new-active-client
   :args (s/cat :state ::state/state
                :client-short-pk ::shared/short-pk
                :cookie ::templates/cookie-spec)
   :ret (s/keys :req [::shared/secret-key
-                     ::state/client-state
-                     ::state/state]))
+                     ::state/client-state]))
 (defn configure-new-active-client
   "Set up a new active-client"
   [state
    client-short-pk
    cookie]
-  ;; We established earlier, when we called
-  ;; possibly-re-initiate-existing-client-connection!,
-  ;; that state is not tracking this client
-  (let [active-client (state/alloc-client)
-        {:keys [::templates/srvr-short-sk]}  cookie
+  (throw (RuntimeException. "Obsolete"))
+  (let [{:keys [::templates/srvr-short-sk]} cookie
         server-short-sk (bytes srvr-short-sk)]
     (when-not server-short-sk
       (throw (ex-info "Missing ::templates/srvr-short-sk "
                       {::cookie-keys (keys cookie)})))
-    {::state/client-state active-client
-     ::shared/secret-key server-short-sk
-     ::state/state (update-state-with-new-active-client state
-                                                        server-short-sk
-                                                        active-client
-                                                        client-short-pk)}))
+    ;; We established earlier, when we called
+    ;; possibly-re-initiate-existing-client-connection!,
+    ;; that state is not tracking this client.
+    ;; So start by allocating a new client.
+    (let [active-client (update-state-with-new-active-client state
+                                                             server-short-sk
+                                                             client-short-pk)]
+      {::state/client-state active-client
+       ::state/server-short-sk server-short-sk})))
 
 (s/fdef extract-cookie
   :args (s/cat :log-state ::log2/state
@@ -381,7 +378,7 @@ This is the part that possibly establishes a 'connection'"
 (s/fdef open-client-crypto-box
   :args (s/cat :log-state ::log2/state
                :initiate ::K/initiate-packet-spec
-                     :current-client ::client-state)
+               :client-short<->server-short ::state/client-short<->server-short)
   :ret (s/keys :req [::log2/state]
                :opt [::K/initiate-client-vouch-wrapper]))
 (defn open-client-crypto-box
@@ -389,7 +386,7 @@ This is the part that possibly establishes a 'connection'"
    {:keys [::K/outer-i-nonce]
     ^bytes vouch-wrapper ::K/vouch-wrapper
     :as initiate}
-   current-client]
+   client-short<->server-short]
 
   (println "Mark: top of open-client-crypto-box")
   (let [log-state (log2/info log-state
@@ -405,17 +402,13 @@ This is the part that possibly establishes a 'connection'"
             _ (println "Mark: 2")
             message-length (- vouch-length K/minimum-vouch-length)
             _ (println "Mark: 3")
-            shared-key (bytes (get-in current-client [::state/shared-secrets
-                                                      ::state/client-short<->server-short]))
+            shared-key (bytes client-short<->server-short)
             _ (when-not shared-key
-                (throw (ex-info "Missing shared key"
-                                {::problem current-client
-                                 ::problem-keys (keys current-client)})))
+                (throw (RuntimeException. "Missing shared key")))
             {log-state ::log2/state
              clear-text ::crypto/unboxed
              :as unboxed} (try
-                            (let [
-                                  result
+                            (let [result
                                   (crypto/open-box log-state
                                                    K/initiate-nonce-prefix
                                                    outer-i-nonce
@@ -626,6 +619,8 @@ Note that that includes TODOs re:
                                                      {::problem x}))))
     (assoc state ::log2/state log-state)))
 
+;; TODO: Rename to build-new-client
+;; Q: How much of this do I really need?
 (s/fdef build-new-client!
   :args (s/cat :log-state-atom ::log2/state-atom
                :state ::state/state
@@ -654,13 +649,20 @@ Note that that includes TODOs re:
                                                         ::handle!
                                                         "Succssfully extracted cookie"))
             client-short-pk (bytes clnt-short-pk)
-            {active-client ::state/client-state
-             server-short-sk ::shared/secret-key
-             {log-state ::log2/state
-              :as state} ::state/state} (configure-new-active-client (assoc state ::log2/state log-state)
-                                                                     client-short-pk
-                                                                     cookie)]
-        (reset! log-state-atom log-state)
+            ;; Don't have enough information extracted to set up the new client yet
+            #_[{active-client ::state/client-state
+                :keys [::state/server-short-sk]} (configure-new-active-client (assoc state ::log2/state log-state)
+                                                                              client-short-pk
+                                                                              cookie)]
+            {:keys [::templates/clnt-short-pk
+                    ::templates/srvr-short-sk]
+             :as cookie-black-box} (serial/decompose templates/black-box-dscr
+                                                     cookie)
+            server-short-sk (bytes srvr-short-sk)
+            ;; FIXME: Need this now
+            client-short<->server-short nil]
+        (throw (RuntimeException. "Start back w/ shared short key"))
+        (reset! log-state-atom (::log-state state))
         ;; It included a secret cookie that we generated sometime within the
         ;; past couple of minutes.
         ;; Now we're ready to tackle handling the main message body cryptobox.
@@ -670,7 +672,7 @@ Note that that includes TODOs re:
           (let [{log-state ::log2/state
                  client-message-box ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
                                                                                                initiate
-                                                                                               active-client)]
+                                                                                               client-short<->server-short)]
             (println "Mark: real result from opening crypto box:"
                      client-message-box)
             (reset! log-state-atom log-state)
@@ -689,16 +691,21 @@ Note that that includes TODOs re:
                   (if (validate-server-name state client-message-box)
                     ;; This takes us down to line 381
                     (if (verify-client-public-key-triad state client-short-pk client-message-box)
-                      ;; TODO: Limit the state parameter and return value to what's actually needed
-                      (do-fork-child! state
-                                      active-client
-                                      client-long-pk
-                                      client-short-pk
-                                      server-short-sk
-                                      host
-                                      port
-                                      initiate
-                                      client-message-box)
+                      (let [{{client-short-pk ::shared/short-pk} ::state/client-security
+                             :as active-client} (state/new-client packet cookie)
+                            state (state/alter-client-state (assoc state
+                                                                   ::log2/state log-state)
+                                                            active-client)]
+                        ;; TODO: Limit the state parameter and return value to what's actually needed
+                        (do-fork-child! state
+                                        active-client
+                                        client-long-pk
+                                        client-short-pk
+                                        server-short-sk
+                                        host
+                                        port
+                                        initiate
+                                        client-message-box))
                       {::log2/state (log2/warn log-state
                                                ::do-handle
                                                "Mismatched public keys"

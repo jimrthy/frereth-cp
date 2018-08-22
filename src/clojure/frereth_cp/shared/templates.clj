@@ -16,10 +16,16 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Cookie packets
 
-;; line 315 - tie into the 0 padding that's part of the buffer getting created here
+;; server line 315 - tie into the 0 padding that's part of the buffer
+;; getting created here.
 ;; Note that we don't want/need it: box-after in crypto handles that
-(def black-box-dscr (array-map ::clnt-short-pk {::K/type ::K/bytes ::K/length K/client-key-length}
-                               ::srvr-short-sk {::K/type ::K/bytes ::K/length K/server-key-length}))
+(def black-box-dscr (array-map ::clnt-short-pk {::K/type ::K/bytes
+                                                ::K/length K/client-key-length}
+                               ::srvr-short-sk {::K/type ::K/bytes
+                                                ::K/length K/server-key-length}))
+;; This is the clear text of the black-box cookie.
+(s/def ::srvr-cookie (s/keys :req [::clnt-short-pk
+                                   ::srvr-short-sk]))
 (s/def ::inner-cookie (partial specs/counted-bytes K/server-cookie-length))
 (def cookie
   (array-map ::s' {::K/type ::K/bytes ::K/length K/server-key-length}

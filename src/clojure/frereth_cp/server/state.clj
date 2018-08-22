@@ -9,7 +9,9 @@
              [constants :as K]
              [crypto :as crypto]
              [logging :as log2]
-             [specs :as shared-specs]]
+             [specs :as shared-specs]
+             [serialization :as serial]
+             [templates :as templates]]
             [manifold.stream :as strm]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -30,6 +32,11 @@
 ;; A: Reference implementation has was looks like TODO items
 ;; about things like caching, policy management, and validating.
 ;; So almost definitely.
+;; Although: there's also the perfectly legitimate use-case of
+;; 1 client opening multiple connections.
+;; Honestly, that's something to decide at the individual child
+;; level.
+;; Which means sending the long-pk to said child.
 (s/def ::client-security (s/keys :opt [::shared-specs/public-long
                                        ::shared-specs/public-short
                                        ::server-short-sk]))
@@ -65,11 +72,9 @@
 ;;; implementation to avoid duplication.
 ;; OK, now life starts getting interesting.
 ;; What, exactly, do we need to do here?
-(s/def ::child-id int?)
 (s/def ::read<-child strm/sourceable?)
 (s/def ::write->child strm/sinkable?)
-(s/def ::child-interaction (s/keys :req [::child-id
-                                         ::read<-child
+(s/def ::child-interaction (s/keys :req [::read<-child
                                          ::write->child]))
 
 ;; These are defined both here and client.state.
@@ -84,8 +89,7 @@
 
 (s/def ::message-len int?)
 (s/def ::received-nonce int?)
-(s/def ::client-state (s/keys :req [::child-interaction
-                                    ;; The names for the next 2 seem silly, at best
+(s/def ::client-state (s/keys :req [;; The names for the next 2 seem silly, at best
                                     ;; ::host and ::port seem like better options
                                     ;; But this matches the reference implementation
                                     ;; and should reduce confusion
@@ -101,7 +105,8 @@
                                     ::received-nonce
                                     ;; TODO: Needs spec
                                     ::sent-nonce
-                                    ::shared-secrets]))
+                                    ::shared-secrets]
+                              :opt [::child-interaction]))
 (s/def ::current-client ::client-state)
 
 ;; We're using the client's short-term public key as the key into the
@@ -192,37 +197,7 @@
 (s/def ::delta ::state)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
-
-(s/fdef alloc-client
-        :args (s/cat)
-        :ret ::client-state)
-(defn alloc-client
-  []
-  (let [interact {::child-id -1}
-        sec {::shared/long-pk (crypto/random-key)
-             ::shared/short-pk (crypto/random-key)}]
-    {::child-interaction interact
-     ::client-security sec
-     ::shared/extension (crypto/random-bytes! (byte-array 16))
-     ::message (crypto/random-bytes! (byte-array K/message-len))
-     ::message-len 0
-     ::received-nonce 0
-     ::sent-nonce (crypto/random-nonce)}))
-
-(s/fdef alter-client-state
-        :args (s/cat :state ::state
-                     :altered-client ::client-state)
-        :ret ::state)
-(defn alter-client-state
-  [state altered-client]
-  ;; Skip incrementing the numactiveclients count.
-  ;; We get that for free from the data structure
-  (let [client-key (get-in altered-client [::client-security ::shared/short-pk])]
-    (assoc-in state
-              [::active-clients (vec client-key)]
-              ;; Q: Worth surgically applying a delta?
-              altered-client)))
+;;; Internal Implementation
 
 (s/fdef configure-shared-secrets
         :args (s/cat :client ::client-state
@@ -247,6 +222,67 @@
       ;; Q: Would the risk be worth the extra clarity?
       (assoc-in [::client-security ::short-pk] client-short-pk)
       (assoc-in [::client-security ::server-short-sk] server-short-sk)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Public
+
+(s/fdef alloc-client
+        :args (s/cat)
+        :ret ::client-state)
+(defn alloc-client
+  []
+  ;; Q: What's the point?
+  ;; I think I was trying to remain faithful to the
+  ;; reference implementation.
+  ;; But, seriously?
+  ;; This is awful..
+  (throw (RuntimeException. "This was a terrible idea."))
+  (let [interact {::child-id -1}
+        sec {::shared/long-pk (crypto/random-key)
+             ::shared/short-pk (crypto/random-key)}]
+    {::child-interaction interact
+     ::client-security sec
+     ::shared/extension (crypto/random-bytes! (byte-array 16))
+     ::message (crypto/random-bytes! (byte-array K/message-len))
+     ::message-len 0
+     ::received-nonce 0
+     ::sent-nonce (crypto/random-nonce)}))
+
+(s/fdef new-client
+  :args (s/cat :packet ::shared/network-packet
+               :cookie ::templates/srvr-cookie)
+  :ret ::client-state)
+(defn new-client
+  [{:keys [:host :port]
+    :as packet}
+   {:keys [::templates/clnt-short-pk
+           ::templates/srvr-short-sk]
+    :as cookie}]
+  (throw (RuntimeException. "Fill in with real values"))
+  {::client-ip host
+   ::client-port port
+   ::client-security {::shared/long-pk (crypto/random-key)
+                      ::shared/short-pk (bytes clnt-short-pk)
+                      ::server-short-sk (bytes srvr-short-sk)}
+   ::shared/extension (crypto/random-bytes! (byte-array 16))
+   ::message (crypto/random-bytes! (byte-array K/message-len))
+   ::message-len 0
+   ::received-nonce 0
+   ::sent-nonce (crypto/random-nonce)})
+
+(s/fdef alter-client-state
+        :args (s/cat :state ::state
+                     :altered-client ::client-state)
+        :ret ::state)
+(defn alter-client-state
+  [state altered-client]
+  ;; Skip incrementing the numactiveclients count.
+  ;; We get that for free from the data structure
+  (let [client-key (get-in altered-client [::client-security ::shared/short-pk])]
+    (assoc-in state
+              [::active-clients (vec client-key)]
+              ;; Q: Worth surgically applying a delta?
+              altered-client)))
 
 (s/fdef find-client
         :args (s/cat :state ::state
