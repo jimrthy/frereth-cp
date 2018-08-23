@@ -2,8 +2,6 @@
   "Implement the server half of the CurveCP protocol"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            ;; FIXME: Finish the switch to log2
-            [clojure.tools.logging :as log]
             [frereth-cp.server
              [cookie :as cookie]
              [hello :as hello]
@@ -84,30 +82,41 @@
 
   (s/def ::post-state-options (s/keys :req (conj common-state-option-keys ::state/max-active-clients))))
 
+(s/def ::okay? boolean?)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
 (s/fdef check-packet-length
-        :args (s/cat :packet bytes?)
-        :ret boolean?)
+  :args (s/cat :log-state ::log2/state
+               :packet bytes?)
+  :ret (s/keys :req [::log2/state
+                     ::okay?]))
 (defn check-packet-length
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
-  [^bytes packet]
+  [log-state packet]
   ;; So far, for unit tests, I'm getting the [B I expect
   ;; Note that this is actually wrong: I really should be
   ;; getting ByteBuf instances off the wire.
   ;; FIXME: Revisit this.
-  ;; For that matter, I should convert this over to new-style logging.
-  (log/debug (str "Incoming: " packet ", a " (class packet)))
-  ;; For now, retain the name r for compatibility/historical reasons
-  (let [r (count packet)]
-    (log/info (str "Incoming packet contains " r " somethings"))
-    (and (<= 80 r 1184)
-         ;; i.e. (= (rem r 16) 0)
-         ;; TODO: Keep an eye out for potential benchmarks
-         ;; The compiler really should be smart enough so the
-         ;; two are equivalent.
-         (= (bit-and r 0xf) 0))))
+  (let [log-state (log2/debug log-state
+                              ::check-packet-length
+                              "Incoming"
+                              {::packet packet
+                               ::packet-class (class packet)})
+        packet (bytes packet)
+        ;; For now, retain the name r for compatibility/historical reasons
+        r (count packet)
+        log-state (log2/info log-state
+                             ::check-packet-length
+                             (str "Incoming packet contains " r " somethings"))]
+    {::okay? (and (<= 80 r 1184)
+                  ;; i.e. (= (rem r 16) 0)
+                  ;; TODO: Keep an eye out for potential benchmarks
+                  ;; The compiler really should be smart enough so the
+                  ;; two are equivalent.
+                  (= (bit-and r 0xf) 0))
+     ::log2/state log-state}))
 
 (s/fdef verify-my-packet
         :args (s/cat :this ::state
@@ -119,10 +128,12 @@
                      ;; (I kind-of suspect that shared.constants
                      ;; has to do with a serialization template)
                      :server-extension bytes?)
-        :ret boolean?)
+        :ret (s/keys :req [::okay?
+                           ::log2/state]))
 (defn verify-my-packet
   "Was this packet really intended for this server?"
-  [{:keys [::shared/extension]}
+  [{:keys [::shared/extension]
+    log-state ::log2/state}
    header
    rcvd-xtn]
   (let [rcvd-prefix (-> header
@@ -150,17 +161,21 @@
                                   rcvd-prefix)
                       (b-t/bytes= extension
                                   rcvd-xtn))]
-    (when-not verified
-      (log/warn (str "Dropping packet intended for someone else.\nExpected: "
-                     (String. K/client-header-prefix)
-                     " a " (class K/client-header-prefix)
-                     " aka " (vec K/client-header-prefix)
-                     " and " (vec extension)
-                     "\nActual: " (String. rcvd-prefix)
-                     " a " (class rcvd-prefix)
-                     " aka " vec rcvd-prefix
-                     " and " (vec rcvd-xtn))))
-    verified))
+
+    {::okay? verified
+     ::log2/state (if-not verified
+                    (log2/warn log-state
+                               ::verify-my-packet
+                               "Dropping packet intended for someone else."
+                               {::K/client-header-prefix (String. K/client-header-prefix)
+                                ::K/client-header-prefix-class (class K/client-header-prefix)
+                                ::K/client-header-prefix-vec (vec K/client-header-prefix)
+                                ::shared/extension (vec extension)
+                                ::received-prefix (String. rcvd-prefix)
+                                ::received-prefix-class (class rcvd-prefix)
+                                ::received-prefix-vec (vec rcvd-prefix)
+                                ::received-extension (vec rcvd-xtn)})
+                    log-state)}))
 
 (s/fdef do-handle-message
   :args (s/cat :state ::state/state
@@ -182,67 +197,69 @@
     :as this}
    {:keys [:host
            :port]
-    ;; Q: How much performance do we really lose if we
-    ;; set up the socket to send a B] rather than a ByteBuf?
-    ^bytes message :message
+    message :message
     :as packet}]
-  (println "Server incoming <---------------")
   (let [log-state (log2/do-sync-clock log-state)
         log-state (log2/debug log-state
                               ::do-handle-incoming
-                              "Top")]
+                              "Server incoming <---------------")
+        ;; Q: How much performance do we really lose if we
+        ;; set up the socket to send a B] rather than a ByteBuf?
+        message (bytes message)]
     (when-not message
       (throw (ex-info "Missing message in incoming packet"
                       {::problem packet})))
-    (if (check-packet-length message)
-      (let [header (byte-array K/header-length)
-            server-extension (byte-array K/extension-length)]
-        (b-t/byte-copy! header 0 K/header-length message)
-        (b-t/byte-copy! server-extension 0 K/extension-length message K/header-length)
-        (if (verify-my-packet this header server-extension)
-          (let [log-state (log2/debug log-state
-                                      ::do-handle-incoming
-                                      "This packet really is for me")
-                packet-type-id (char (aget header (dec K/header-length)))
-                log-state (log2/info log-state
-                                     ::do-handle-incoming
-                                     ""
-                                     {::packet-type-id packet-type-id})
-                this (assoc this ::log2/state (log2/debug log-state
+    (let [{log-state ::log2/state
+           :keys [::okay?]} (check-packet-length log-state message)]
+      (if okay?
+        (let [header (byte-array K/header-length)
+              server-extension (byte-array K/extension-length)]
+          (b-t/byte-copy! header 0 K/header-length message)
+          (b-t/byte-copy! server-extension 0 K/extension-length message K/header-length)
+          (if (verify-my-packet this header server-extension)
+            (let [log-state (log2/debug log-state
+                                        ::do-handle-incoming
+                                        "This packet really is for me")
+                  packet-type-id (char (aget header (dec K/header-length)))
+                  log-state (log2/info log-state
+                                       ::do-handle-incoming
+                                       ""
+                                       {::packet-type-id packet-type-id})
+                  this (assoc this ::log2/state (log2/debug log-state
+                                                            ::do-handle-incoming
+                                                            "Packet for me"
+                                                            (dissoc this ::log2/state)))
+                  delta (try
+                          (.flush System/out)
+                          (case packet-type-id
+                            \H (hello/do-handle this
+                                                cookie/do-build-response packet)
+                            \I (initiate/do-handle this packet)
+                            \M (do-handle-message this packet))
+                          (catch Exception ex
+                            {::log2/state (log2/exception log-state
+                                                          ex
                                                           ::do-handle-incoming
-                                                          "Packet for me"
-                                                          (dissoc this ::log2/state)))
-                delta (try
-                        (.flush System/out)
-                        (case packet-type-id
-                          \H (hello/do-handle this
-                                              cookie/do-build-response packet)
-                          \I (initiate/do-handle this packet)
-                          \M (do-handle-message this packet))
-                        (catch Exception ex
-                          {::log2/state (log2/exception log-state
-                                                        ex
-                                                        ::do-handle-incoming
-                                                        "Failed handling packet"
-                                                        {::packet-type-id packet-type-id})}))]
-            (as-> this x
-              (into x delta)
-              (assoc x
-                     ::log2/state
-                     (log2/debug (::log2/state x)
-                                 ::do-handle-incoming
-                                 "Handled"))))
-          (assoc this
-                 ::log2/state (log2/info log-state
-                                         ::do-handle-incoming
-                                         "Ignoring packet intended for someone else"))))
-      (assoc this
-             ::log2/state (log2/debug log-state
-                                      ::do-handle-incoming
-                                      "Ignoring packet of illegal length"
-                                      {::message-length (count message)
-                                       ::shared/network-packet packet
-                                       ::pretty (b-t/->string message)})))))
+                                                          "Failed handling packet"
+                                                          {::packet-type-id packet-type-id})}))]
+              (as-> this x
+                (into x delta)
+                (assoc x
+                       ::log2/state
+                       (log2/debug (::log2/state x)
+                                   ::do-handle-incoming
+                                   "Handled"))))
+            (assoc this
+                   ::log2/state (log2/info log-state
+                                           ::do-handle-incoming
+                                           "Ignoring packet intended for someone else"))))
+        (assoc this
+               ::log2/state (log2/debug log-state
+                                        ::do-handle-incoming
+                                        "Ignoring packet of illegal length"
+                                        {::message-length (count message)
+                                         ::shared/network-packet packet
+                                         ::pretty (b-t/->string message)}))))))
 
 (s/fdef input-reducer
         :args (s/cat :this ::state/state

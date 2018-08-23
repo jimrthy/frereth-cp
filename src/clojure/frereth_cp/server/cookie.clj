@@ -2,7 +2,6 @@
   "For dealing with cookie packets on the server side"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.server
              [shared-specs :as srvr-specs]
              [state :as state]]
@@ -52,11 +51,12 @@
     minute-key]
    (let [{log-state ::log2/state
           nonce-suffix ::specs/server-nonce-suffix
-          :as safe-nonce} (crypto/get-safe-server-nonce-suffix log-state)]
-     (log/debug (str "Building inner cookie from "
-                     (count nonce-suffix)
-                     " bytes found in"
-                     (dissoc safe-nonce ::log2/state)))
+          :as safe-nonce} (crypto/get-safe-server-nonce-suffix log-state)
+         log-state (log2/debug log-state
+                               ::build-inner-cookie
+                               "Building inner cookie from "
+                               {::nonce-suffix-length (count nonce-suffix)
+                                ::safe-nance (dissoc safe-nonce ::log2/state)})]
      (build-inner-cookie log-state client-short-pk my-short-sk minute-key nonce-suffix)))
   ;; This arity really only exists for the sake of testing:
   ;; Being able to reproduce the nonce makes life much easier in that regard
@@ -143,8 +143,8 @@
                                   "Encrypting the real cookie succeeded")
          ::templates/encrypted-cookie result})
       (catch Throwable ex
-        (log/error ex "Trying to build the crypto box")
-        {::log2/state (log2/exception log-state ex ::build-cookie-wrapper)}))))
+        {::log2/state (log2/exception log-state ex ::build-cookie-wrapper
+                                      "Trying to build the crypto box")}))))
 
 (s/fdef prepare-packet!
         :args (s/cat :this ::state/state)
@@ -178,14 +178,20 @@
                              {::templates/inner-cookie
                               (try (with-out-str (b-s/print-bytes cookie))
                                    (catch Exception ex
-                                     (log/error ex "Trying to show cookie contents")
-                                     (vec cookie)))
+                                     (log2/exception (log2/clean-fork log-state ::print-cookie)
+                                                     ex
+                                                     ::prepare-cookie!
+                                                     "Trying to show cookie contents"
+                                                     {::templates/inner-cookie (vec cookie)})))
                               ::shared-secret (str "FIXME: Don't log this!\n"
                                                    (try
                                                      (with-out-str (b-s/print-bytes client-short<->server-long))
                                                      (catch Exception ex
-                                                       (log/error ex "Trying to show shared key")
-                                                       (vec client-short<->server-long))))})]
+                                                       (log2/exception (log2/clean-fork log-state ::print-client-short<->server-long)
+                                                                       ex
+                                                                       ::prepare-cookie!
+                                                                       "Trying to show shared key"
+                                                                       {::state/client-short<->server-long (vec client-short<->server-long)}))))})]
     {::templates/encrypted-cookie cookie
      ::K/srvr-nonce-suffix nonce-suffix
      ::log2/state log-state}))

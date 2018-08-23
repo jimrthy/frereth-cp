@@ -1,7 +1,6 @@
 (ns frereth-cp.server.state
   "Managing CurveCP server state"
   (:require [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.server.helpers :as helpers]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
@@ -295,37 +294,45 @@
   (get-in state [::active-clients (vec client-short-key)]))
 
 (defn hide-secrets!
-  [this]
-  (log/info "Hiding secrets")
-  ;; This is almost the top of the server's for(;;)
-  ;; Missing step: reset timeout
-  ;; Missing step: copy :minute-key into :last-minute-key
-  ;; (that's handled by key rotation. Don't need to bother
-  ;; if we're "just" cleaning up on exit)
-  (let [minute-key-array (get-in this [::cookie-cutter ::minute-key])]
-    (assert minute-key-array)
-    (crypto/random-bytes! minute-key-array))
+  "Scrambles sensitive byte-arrays in place"
+  [{log-state ::log2/state
+    :as this}]
+  (let [log-state (log2/info log-state
+                             ::hide-secrets!
+                             "Top")
+        this (assoc this ::log2/state log-state)]
+    ;; This is almost the top of the server's for(;;)
+    ;; Missing step: reset timeout
+    ;; Missing step: copy :minute-key into :last-minute-key
+    ;; (that's handled by key rotation. Don't need to bother
+    ;; if we're "just" cleaning up on exit)
+    (let [minute-key-array (get-in this [::cookie-cutter ::minute-key])]
+      (assert minute-key-array)
+      (crypto/random-bytes! minute-key-array))
 
-  ;; Missing step: update cookie-cutter's next-minute
-  ;; (that happens in handle-key-rotation)
-  (when-let [client (this ::current-client)]
-    (crypto/random-bytes! (get-in client [::client-security ::shared/short-pk])))
-  ;; The shared secrets are all private, so I really can't touch them
-  ;; Q: What *is* the best approach to clearing them then?
-  ;; For now, just explicitly set my versions to nil once we get past these side-effects
-  ;; (i.e. at the bottom)
-  #_(crypto/random-bytes (-> this ::current-client ::shared-secrets :what?))
-  (when-let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
-    (crypto/random-bytes! (.getPublicKey short-term-keys))
-    (crypto/random-bytes! (.getSecretKey short-term-keys)))
-  ;; Clear the shared secrets in the current client
-  ;; Maintaning these anywhere I don't need them seems like an odd choice.
-  ;; Actually, keeping them in 2 different places seems odd.
-  ;; Q: What's the point to current-client at all?
-  (assoc-in this [::current-client ::shared-secrets] {::client-short<->server-long nil
-                                                      ::client-short<->server-short nil
-                                                      ::client-long<->server-long nil}))
+    ;; Missing step: update cookie-cutter's next-minute
+    ;; (that happens in handle-key-rotation)
+    (when-let [client (this ::current-client)]
+      (crypto/random-bytes! (get-in client [::client-security ::shared/short-pk])))
+    ;; The shared secrets are all private, so I really can't touch them
+    ;; Q: What *is* the best approach to clearing them then?
+    ;; For now, just explicitly set my versions to nil once we get past these side-effects
+    ;; (i.e. at the bottom)
+    #_(crypto/random-bytes (-> this ::current-client ::shared-secrets :what?))
+    (when-let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
+      (crypto/random-bytes! (.getPublicKey short-term-keys))
+      (crypto/random-bytes! (.getSecretKey short-term-keys)))
+    ;; Clear the shared secrets in the current client
+    ;; Maintaning these anywhere I don't need them seems like an odd choice.
+    ;; Actually, keeping them in 2 different places seems odd.
+    ;; Q: What's the point to current-client at all?
+    (assoc-in this [::current-client ::shared-secrets] {::client-short<->server-long nil
+                                                        ::client-short<->server-short nil
+                                                        ::client-long<->server-long nil})))
 
+(s/fdef handle-key-rotation
+  :args (s/cat :state ::state)
+  :ret ::delta)
 (defn handle-key-rotation
   "Doing it this way means that state changes are only seen locally
 
@@ -338,32 +345,53 @@
   Om next are trying to solve. So that approach might not be as obvious as it
   seems at first."
   [{:keys [::cookie-cutter]
+    log-state ::log2/state
     :as state}]
   (try
-    (log/info "Checking whether it's time to rotate keys or not")
-    (let [now (System/nanoTime)
+    (let [log-state (log2/info log-state
+                               ::handle-key-rotation
+                               "Checking whether it's time to rotate keys or not")
+          now (System/nanoTime)
           next-minute (::next-minute cookie-cutter)
-          _ (log/debug "next-minute:" next-minute "out of" (keys state)
-                     "with cookie-cutter" cookie-cutter)
-          timeout (- next-minute now)]
-      (log/info "Top of handle-key-rotation. Remaining timeout:" timeout)
+          timeout (- next-minute now)
+          log-state (log2/debug log-state
+                                ::handle-key-rotation
+                                ""
+                                {::next-minute next-minute
+                                 ::state-keys (keys state)
+                                 ::cookie-cutter cookie-cutter
+                                 ::timeout timeout})]
       (if (<= timeout 0)
-        (let [timeout (helpers/one-minute now)]
-          (log/info "Saving key for previous minute")
-          (try
-            (b-t/byte-copy! (::last-minute-key cookie-cutter)
-                               (::minute-key cookie-cutter))
-            ;; Q: Why aren't we setting up the next minute-key here and now?
-            (catch Exception ex
-              (log/error "Key rotation failed:" ex "a" (class ex))))
-          (log/warn "Saved key for previous minute. Hiding:")
-          (assoc (hide-secrets! state)
+        (let [timeout (helpers/one-minute now)
+              log-state (log2/info log-state
+                                   ::handle-key-rotation
+                                   "Saving key for previous minute")
+              log-state
+              (try
+                (b-t/byte-copy! (::last-minute-key cookie-cutter)
+                                (::minute-key cookie-cutter))
+                ;; Q: Why aren't we setting up the next minute-key here and now?
+                (catch Exception ex
+                  (log2/exception log-state
+                                  ex
+                                  "Key rotation failed")))
+              log-state (log2/warn log-state
+                                   ::handle-key-rotation
+                                   "Saved key for previous minute. Hiding")]
+          (assoc (hide-secrets! (assoc state ::log2/state log-state))
                  ::timeout timeout))
-        (assoc state ::timeout timeout)))
+        (assoc state
+               ::timeout timeout
+               ::log2/state log-state)))
     (catch Exception ex
-      (log/error "Rotation failed:" ex "\nStack trace:")
-      (.printStackTrace ex)
-      state)))
+      ;; Unfortunately, this will lose logs that happened before the
+      ;; exception.
+      ;; Q: Are those worth adding a log-state-atom?
+      ;; A: Not until this is a problem.
+      (assoc state
+             ::log2/state (log2/exception log-state
+                                          ex
+                                          ::handle-key-rotation)))))
 
 (defn randomized-cookie-cutter
   []

@@ -2,7 +2,6 @@
   "For coping with incoming HELLO packets"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.server
              [cookie :as cookie]
              [helpers :as helpers]

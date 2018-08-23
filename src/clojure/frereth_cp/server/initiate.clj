@@ -3,7 +3,6 @@
 
 This is the part that possibly establishes a 'connection'"
   (:require [clojure.spec.alpha :as s]
-            [clojure.tools.logging :as log]
             [frereth-cp.server
              [message :as message]
              [state :as state]]
@@ -142,7 +141,7 @@ This is the part that possibly establishes a 'connection'"
                 {::log2/state log-state
                  ::state/client-state (state/find-client state client-short-key)}
                 (throw (RuntimeException. "start back here")))
-              {::log/state (log2/warn log-state
+              {::log2/state (log2/warn log-state
                                       log-label
                                       "Unable to decrypt incoming vouch")
                ::handled? true}))
@@ -446,22 +445,26 @@ This is the part that possibly establishes a 'connection'"
 (s/fdef validate-server-name
         :args (s/cat :state ::state/state
                      :inner-client-box ::K/initiate-client-vouch-wrapper)
-        :ret boolean?)
+        :ret (s/keys :req [::log2/state]
+                     :opt [::matched?]))
 (defn validate-server-name
-  [state inner-client-box]
+  [{log-state ::log2/state
+    :as state} inner-client-box]
   (let [rcvd-name (::specs/srvr-name inner-client-box)
         rcvd-name (bytes rcvd-name)
         my-name (get-in state [::shared/my-keys ::specs/srvr-name])
-        match (b-t/bytes= rcvd-name my-name)]
-    (when-not match
-      (log/warn (str "Message was intended for another server\n"
-                     "Sent to:\n"
-                     (b-t/->string rcvd-name)
-                     "My name:\n\""
-                     (b-t/->string my-name)
-                     "\"\nout of:\n"
-                     (keys (::shared/my-keys state)))))
-    match))
+        match (b-t/bytes= rcvd-name my-name)
+        base-result {::log2/state (if match
+                                    log-state
+                                    (log2/warn log-state
+                                               ::validate-server-name
+                                               "Message was intended for another server"
+                                               {::specs/srvr-name (b-t/->string rcvd-name)
+                                                ::my-name (b-t/->string my-name)
+                                                ::shared/my-keys (::shared/my-keys state)}))}]
+    (if match
+      (assoc base-result ::matched? match)
+      base-result)))
 
 (s/fdef verify-client-public-key-triad
         :args (s/cat :state ::state/state
@@ -682,29 +685,32 @@ Note that that includes TODOs re:
                 (reset! log-state-atom log-state)
                 (try
                   (println "Mark: validating server name")
-                  (if (validate-server-name state client-message-box)
-                    ;; This takes us down to line 381
-                    (if (verify-client-public-key-triad state client-short-pk client-message-box)
-                      (let [state (state/alter-client-state (assoc state
-                                                                   ::log2/state log-state)
-                                                            active-client)]
-                        ;; TODO: Limit the state parameter and return value to what's actually needed
-                        (do-fork-child! state
-                                        active-client
-                                        client-long-pk
-                                        client-short-pk
-                                        server-short-sk
-                                        host
-                                        port
-                                        initiate
-                                        client-message-box))
-                      {::log2/state (log2/warn log-state
-                                               ::do-handle
-                                               "Mismatched public keys"
-                                               {::FIXME "Show the extracted versions"
-                                                ::state/state state
-                                                ::client-short-pk client-short-pk
-                                                ::shared/message client-message-box})}))
+                  (let [{:keys [::matched?]
+                         log-state ::log2/state} (validate-server-name state client-message-box)]
+                    (if matched?
+                      ;; This takes us down to line 381
+                      (if (verify-client-public-key-triad state client-short-pk client-message-box)
+                        (let [state (state/alter-client-state (assoc state
+                                                                     ::log2/state log-state)
+                                                              active-client)]
+                          ;; TODO: Limit the state parameter and return value to what's actually needed
+                          (do-fork-child! state
+                                          active-client
+                                          client-long-pk
+                                          client-short-pk
+                                          server-short-sk
+                                          host
+                                          port
+                                          initiate
+                                          client-message-box))
+                        {::log2/state (log2/warn log-state
+                                                 ::do-handle
+                                                 "Mismatched public keys"
+                                                 {::FIXME "Show the extracted versions"
+                                                  ::state/state state
+                                                  ::client-short-pk client-short-pk
+                                                  ::shared/message client-message-box})})
+                      log-state))
                   (catch ExceptionInfo ex
                     {::log2/state (log2/exception @log-state-atom
                                                   ex
