@@ -547,19 +547,7 @@ Note that that includes TODOs re:
    port
    initiate
    client-message-box]
-  (let [^ByteBuf rcvd-nonce-buffer (::K/outer-i-nonce initiate)
-        rcvd-nonce-array (byte-array specs/client-nonce-suffix-length)
-        _ (.getBytes rcvd-nonce-buffer 0 rcvd-nonce-array)
-        _ (.release rcvd-nonce-buffer)
-        rcvd-nonce (b-t/uint64-unpack rcvd-nonce-array)
-        active-client (assoc active-client
-                             ;; Seems very likely that I should convert this
-                             ;; to a byte-array
-                             ::client-extension (::K/clnt-xtn initiate)
-                             ::client-ip host
-                             ::client-port port
-                             ::state/received-nonce rcvd-nonce)
-        ;; API/design Q: Does it make sense for me to supply this?
+  (let [;; API/design Q: Does it make sense for me to supply this?
         ;; I'm responsible for writing to it, which means I should control
         ;; when it closes...but it feels more than a little silly
         writer (strm/stream)
@@ -619,7 +607,8 @@ Note that that includes TODOs re:
                                                      {::problem x}))))
     (assoc state ::log2/state log-state)))
 
-;; TODO: Rename to build-new-client
+;; TODO: Move the fork! call elsewhere so we can rename this to
+;; build-new-client
 ;; Q: How much of this do I really need?
 (s/fdef build-new-client!
   :args (s/cat :log-state-atom ::log2/state-atom
@@ -638,7 +627,9 @@ Note that that includes TODOs re:
     :as packet}
    {:keys [::K/clnt-short-pk]
     :as initiate}]
-  (let [{cookie ::templates/cookie-spec
+  (let [{{:keys [::templates/clnt-short-pk
+                 ::templates/srvr-short-sk]
+          :as cookie} ::templates/cookie-spec
          log-state ::log2/state
          :as cookie-extraction} (extract-cookie log-state
                                                 (::state/cookie-cutter state)
@@ -649,25 +640,25 @@ Note that that includes TODOs re:
                                                         ::handle!
                                                         "Succssfully extracted cookie"))
             client-short-pk (bytes clnt-short-pk)
-            ;; Don't have enough information extracted to set up the new client yet
-            #_[{active-client ::state/client-state
-                :keys [::state/server-short-sk]} (configure-new-active-client (assoc state ::log2/state log-state)
-                                                                              client-short-pk
-                                                                              cookie)]
-            {:keys [::templates/clnt-short-pk
-                    ::templates/srvr-short-sk]
-             :as cookie-black-box} (serial/decompose templates/black-box-dscr
-                                                     cookie)
+            {{client-short-pk ::shared/short-pk} ::state/client-security
+             :as active-client} (state/new-client packet
+                                                  cookie
+                                                  initiate)
             server-short-sk (bytes srvr-short-sk)
-            ;; FIXME: Need this now
-            client-short<->server-short nil]
-        (throw (RuntimeException. "Start back w/ shared short key"))
-        (reset! log-state-atom (::log-state state))
+            active-client (state/configure-shared-secrets active-client
+                                                          clnt-short-pk
+                                                          srvr-short-sk)
+            client-short<->server-short (get-in active-client
+                                                [::state/shared-secrets
+                                                 ::state/client-short<->server-short])]
         ;; It included a secret cookie that we generated sometime within the
         ;; past couple of minutes.
         ;; Now we're ready to tackle handling the main message body cryptobox.
         ;; This corresponds to line 373 in the reference implementation.
         (try
+          (when-not client-short<->server-short
+            (throw (ex-info "Missing shared short key"
+                            {::state/active-client active-client})))
           (println "Mark: trying to open the client's crypto box")
           (let [{log-state ::log2/state
                  client-message-box ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
@@ -678,6 +669,9 @@ Note that that includes TODOs re:
             (reset! log-state-atom log-state)
             (if client-message-box
               (let [client-long-pk (bytes (::K/long-term-public-key client-message-box))
+                    active-client (assoc-in active-client
+                                            [::state/client-security ::shared/long-pk]
+                                            client-long-pk)
                     log-state (log2/info log-state
                                          "Extracted message box from client's Initiate packet"
                                          ;; This matches both the original log
@@ -691,9 +685,7 @@ Note that that includes TODOs re:
                   (if (validate-server-name state client-message-box)
                     ;; This takes us down to line 381
                     (if (verify-client-public-key-triad state client-short-pk client-message-box)
-                      (let [{{client-short-pk ::shared/short-pk} ::state/client-security
-                             :as active-client} (state/new-client packet cookie)
-                            state (state/alter-client-state (assoc state
+                      (let [state (state/alter-client-state (assoc state
                                                                    ::log2/state log-state)
                                                             active-client)]
                         ;; TODO: Limit the state parameter and return value to what's actually needed

@@ -175,8 +175,7 @@ Needing to declare these things twice is annoying."
         ;; Don't really have a way to check the before/after
         ;; (.tell src)
         ;; Q: Are there any other possibilities?
-        :ret (s/map-of keyword? (s/or :bytes bytes?
-                                      :number integer?)))
+        :ret ::decomposed)
 (defn decompose-array-field
   "Refactored from inside a reduce"
   [^bytes src
@@ -221,8 +220,14 @@ Needing to declare these things twice is annoying."
                                     ::source src})))
            ::index (+ index (calculate-length dscr)))))
 
+(s/fdef read-byte-array
+  :args (s/cat :dscr map?  ; still needs a real spec
+               :src ::specs/byte-buf)
+  :ret bytes?)
 (defn read-byte-array!
-  "From a ByteBuf"
+  "From a ByteBuf
+
+  Destructive in the sense that it updates the readIndex in src"
   [dscr src]
   (let [^Long len (calculate-length dscr)
         dst (byte-array len)]
@@ -246,8 +251,7 @@ Needing to declare these things twice is annoying."
         ;; Don't really have a way to check the before/after
         ;; (.tell src)
         ;; Q: Are there any other possibilities?
-        :ret (s/map-of keyword? (s/or :bytes bytes?
-                                      :number integer?)))
+        :ret ::decomposed)
 (defn decompose-field!
   "Refactored from inside a reduce"
   [src tmplt acc k]

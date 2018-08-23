@@ -12,7 +12,8 @@
              [specs :as shared-specs]
              [serialization :as serial]
              [templates :as templates]]
-            [manifold.stream :as strm]))
+            [manifold.stream :as strm])
+  (:import [io.netty.buffer ByteBuf]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Specs
@@ -99,9 +100,6 @@
                                     ::client-port
                                     ::client-security
                                     ::shared/extension
-                                    ;; TODO: Needs spec
-                                    ::message
-                                    ::message-len
                                     ::received-nonce
                                     ;; TODO: Needs spec
                                     ::sent-nonce
@@ -199,30 +197,6 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Implementation
 
-(s/fdef configure-shared-secrets
-        :args (s/cat :client ::client-state
-                     :client-short-pk ::shared/public-key
-                     :server-short-sk ::shared/secret-key)
-        :ret ::client-state)
-(defn configure-shared-secrets
-  "Return altered client state that reflects new shared key
-  This almost corresponds to lines 369-371 in reference implementation,
-  but does *not* have side-effects!  <----"
-  [client
-   client-short-pk
-   server-short-sk]
-  (when-not (and client-short-pk server-short-sk)
-    (throw (ex-info "Missing key"
-                    {::server-short-sk server-short-sk
-                     ::client-short-pk client-short-pk})))
-  (-> client
-      (assoc-in [::shared-secrets ::client-short<->server-short] (crypto/box-prepare client-short-pk server-short-sk))
-      ;; Q: Is there a client-security entry already present? Could we just overwrite
-      ;; the map directly rather than calling assoc-in twice?
-      ;; Q: Would the risk be worth the extra clarity?
-      (assoc-in [::client-security ::short-pk] client-short-pk)
-      (assoc-in [::client-security ::server-short-sk] server-short-sk)))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
@@ -248,27 +222,55 @@
      ::received-nonce 0
      ::sent-nonce (crypto/random-nonce)}))
 
+(s/fdef configure-shared-secrets
+        :args (s/cat :client ::client-state
+                     :client-short-pk ::shared/public-key
+                     :server-short-sk ::shared/secret-key)
+        :ret ::client-state)
+(defn configure-shared-secrets
+  "Return altered client state that reflects new shared key
+  This almost corresponds to lines 369-371 in reference implementation,
+  but does *not* have side-effects!  <----"
+  [client
+   client-short-pk
+   server-short-sk]
+  (when-not (and client-short-pk server-short-sk)
+    (throw (ex-info "Missing key"
+                    {::server-short-sk server-short-sk
+                     ::client-short-pk client-short-pk})))
+  (-> client
+      (assoc-in [::shared-secrets ::client-short<->server-short] (crypto/box-prepare client-short-pk server-short-sk))
+      ;; Q: Is there a client-security entry already present? Could we just overwrite
+      ;; the map directly rather than calling assoc-in twice?
+      ;; Q: Would the risk be worth the extra clarity?
+      (assoc-in [::client-security ::short-pk] client-short-pk)
+      (assoc-in [::client-security ::server-short-sk] server-short-sk)))
+
 (s/fdef new-client
   :args (s/cat :packet ::shared/network-packet
-               :cookie ::templates/srvr-cookie)
+               :cookie ::templates/srvr-cookie
+               :initiate ::K/initiate-packet-spec)
+  ;; This doesn't *really* return a full-fledged client-state.
+  ;; There are several missing keys.
+  ;; TODO: create a subset spec to cover these pieces.
   :ret ::client-state)
 (defn new-client
   [{:keys [:host :port]
     :as packet}
    {:keys [::templates/clnt-short-pk
            ::templates/srvr-short-sk]
-    :as cookie}]
-  (throw (RuntimeException. "Fill in with real values"))
-  {::client-ip host
-   ::client-port port
-   ::client-security {::shared/long-pk (crypto/random-key)
-                      ::shared/short-pk (bytes clnt-short-pk)
-                      ::server-short-sk (bytes srvr-short-sk)}
-   ::shared/extension (crypto/random-bytes! (byte-array 16))
-   ::message (crypto/random-bytes! (byte-array K/message-len))
-   ::message-len 0
-   ::received-nonce 0
-   ::sent-nonce (crypto/random-nonce)})
+    :as cookie}
+   {:keys [::K/clnt-xtn]
+    :as initiate}]
+  (let [raw-rcvd-nonce (::K/outer-i-nonce initiate)
+        received-nonce-array (bytes raw-rcvd-nonce)
+        received-nonce (b-t/uint64-unpack received-nonce-array)]
+    {::client-ip host
+     ::client-port port
+     ::client-security {::shared/short-pk (bytes clnt-short-pk)
+                        ::server-short-sk (bytes srvr-short-sk)}
+     ::shared/extension clnt-xtn
+     ::received-nonce received-nonce}))
 
 (s/fdef alter-client-state
         :args (s/cat :state ::state
