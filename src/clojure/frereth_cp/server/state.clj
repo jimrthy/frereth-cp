@@ -7,7 +7,7 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log2]
+             [logging :as log]
              [specs :as shared-specs]
              [serialization :as serial]
              [templates :as templates]]
@@ -144,8 +144,8 @@
                                ::client-read-chan
                                ::client-write-chan
                                ::max-active-clients
-                               ::log2/logger
-                               ::log2/state
+                               ::log/logger
+                               ::log/state
                                ::shared/extension
                                ;; Q: Does this make any sense here?
                                ;; A: Definitely not.
@@ -295,12 +295,12 @@
 
 (defn hide-secrets!
   "Scrambles sensitive byte-arrays in place"
-  [{log-state ::log2/state
+  [{log-state ::log/state
     :as this}]
-  (let [log-state (log2/info log-state
-                             ::hide-secrets!
-                             "Top")
-        this (assoc this ::log2/state log-state)]
+  (let [log-state (log/info log-state
+                            ::hide-secrets!
+                            "Top")
+        this (assoc this ::log/state log-state)]
     ;; This is almost the top of the server's for(;;)
     ;; Missing step: reset timeout
     ;; Missing step: copy :minute-key into :last-minute-key
@@ -345,53 +345,53 @@
   Om next are trying to solve. So that approach might not be as obvious as it
   seems at first."
   [{:keys [::cookie-cutter]
-    log-state ::log2/state
+    log-state ::log/state
     :as state}]
   (try
-    (let [log-state (log2/info log-state
-                               ::handle-key-rotation
-                               "Checking whether it's time to rotate keys or not")
+    (let [log-state (log/info log-state
+                              ::handle-key-rotation
+                              "Checking whether it's time to rotate keys or not")
           now (System/nanoTime)
           next-minute (::next-minute cookie-cutter)
           timeout (- next-minute now)
-          log-state (log2/debug log-state
-                                ::handle-key-rotation
-                                ""
-                                {::next-minute next-minute
-                                 ::state-keys (keys state)
-                                 ::cookie-cutter cookie-cutter
-                                 ::timeout timeout})]
+          log-state (log/debug log-state
+                               ::handle-key-rotation
+                               ""
+                               {::next-minute next-minute
+                                ::state-keys (keys state)
+                                ::cookie-cutter cookie-cutter
+                                ::timeout timeout})]
       (if (<= timeout 0)
         (let [timeout (helpers/one-minute now)
-              log-state (log2/info log-state
-                                   ::handle-key-rotation
-                                   "Saving key for previous minute")
+              log-state (log/info log-state
+                                  ::handle-key-rotation
+                                  "Saving key for previous minute")
               log-state
               (try
                 (b-t/byte-copy! (::last-minute-key cookie-cutter)
                                 (::minute-key cookie-cutter))
                 ;; Q: Why aren't we setting up the next minute-key here and now?
                 (catch Exception ex
-                  (log2/exception log-state
-                                  ex
-                                  "Key rotation failed")))
-              log-state (log2/warn log-state
-                                   ::handle-key-rotation
-                                   "Saved key for previous minute. Hiding")]
-          (assoc (hide-secrets! (assoc state ::log2/state log-state))
+                  (log/exception log-state
+                                 ex
+                                 "Key rotation failed")))
+              log-state (log/warn log-state
+                                  ::handle-key-rotation
+                                  "Saved key for previous minute. Hiding")]
+          (assoc (hide-secrets! (assoc state ::log/state log-state))
                  ::timeout timeout))
         (assoc state
                ::timeout timeout
-               ::log2/state log-state)))
+               ::log/state log-state)))
     (catch Exception ex
       ;; Unfortunately, this will lose logs that happened before the
       ;; exception.
       ;; Q: Are those worth adding a log-state-atom?
       ;; A: Not until this is a problem.
       (assoc state
-             ::log2/state (log2/exception log-state
-                                          ex
-                                          ::handle-key-rotation)))))
+             ::log/state (log/exception log-state
+                                        ex
+                                        ::handle-key-rotation)))))
 
 (defn randomized-cookie-cutter
   []

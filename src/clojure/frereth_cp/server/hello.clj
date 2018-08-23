@@ -12,7 +12,7 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log2]
+             [logging :as log]
              [serialization :as serial]
              [specs :as specs]]
             [frereth-cp.util :as util]
@@ -41,7 +41,7 @@
   (s/fspec
    :args (s/cat :state ::state/state
                 :recipe (s/keys :req [::srvr-specs/cookie-components ::K/hello-spec]))
-   :ret (s/keys :req [::log2/state]
+   :ret (s/keys :req [::log/state]
                 :opt [::K/cookie-packet])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -51,14 +51,14 @@
         :args (s/cat :state ::state/state
                      :message any?
                      :crypto-box ::K/crypto-box)
-        :ret (s/keys :req [::log2/state ::opened ::shared-secret]))
+        :ret (s/keys :req [::log/state ::opened ::shared-secret]))
 (defn open-hello-crypto-box
   [{:keys [::client-short-pk
            ::state/cookie-cutter]
     ^bytes nonce-suffix ::nonce-suffix
     {^TweetNaclFast$Box$KeyPair long-keys ::shared/long-pair
      :as my-keys} ::shared/my-keys
-    log-state ::log2/state
+    log-state ::log/state
     :as state}
    message
    ^bytes crypto-box]
@@ -67,36 +67,36 @@
     ;; Log whichever was missing and throw
     (let [log-state
           (if my-keys
-            (log2/error log-state
-                        ::open-hello-crypto-box
-                        "Missing ::shared/long-pair"
-                        {::available-keys (keys my-keys)})
-            (log2/error log-state
-                        "Missing ::shared/my-keys"
-                        {::available-keys (keys state)}))])
+            (log/error log-state
+                       ::open-hello-crypto-box
+                       "Missing ::shared/long-pair"
+                       {::available-keys (keys my-keys)})
+            (log/error log-state
+                       "Missing ::shared/my-keys"
+                       {::available-keys (keys state)}))])
     (throw (ex-info "Missing long-term keypair" log-state)))
   (let [my-sk (.getSecretKey long-keys)
         ;; Q: Is this worth saving? It's used again for
         ;; the outer crypto-box in the Cookie from the server
         shared-secret (crypto/box-prepare client-short-pk my-sk)
-        log-state (log2/debug log-state
-                              ::open-hello-crypto-box
-                              "Incoming HELLO"
-                              {::client-short-pk (with-out-str (b-s/print-bytes client-short-pk))
-                               ::my-long-pk (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))})
-        log-state (log2/debug log-state
-                              ::open-hello-crypto-box
-                              "Trying to open"
-                              {::box-length K/hello-crypto-box-length
-                               ::crypto-box (with-out-str (b-s/print-bytes crypto-box))
-                               ::shared/nonce-suffix (with-out-str (b-s/print-bytes nonce-suffix))})
-        {:keys [::log2/state ::crypto/unboxed]} (crypto/open-box
-                                                 log-state
-                                                 K/hello-nonce-prefix
-                                                 nonce-suffix
-                                                 crypto-box
-                                                 shared-secret)]
-    {::log2/state log-state
+        log-state (log/debug log-state
+                             ::open-hello-crypto-box
+                             "Incoming HELLO"
+                             {::client-short-pk (with-out-str (b-s/print-bytes client-short-pk))
+                              ::my-long-pk (with-out-str (b-s/print-bytes (.getPublicKey long-keys)))})
+        log-state (log/debug log-state
+                             ::open-hello-crypto-box
+                             "Trying to open"
+                             {::box-length K/hello-crypto-box-length
+                              ::crypto-box (with-out-str (b-s/print-bytes crypto-box))
+                              ::shared/nonce-suffix (with-out-str (b-s/print-bytes nonce-suffix))})
+        {:keys [::log/state ::crypto/unboxed]} (crypto/open-box
+                                                log-state
+                                                K/hello-nonce-prefix
+                                                nonce-suffix
+                                                crypto-box
+                                                shared-secret)]
+    {::log/state log-state
      ::opened unboxed
      ::shared-secret shared-secret}))
 
@@ -104,19 +104,19 @@
         ;; The thing about this approach to spec is that
         ;; we also need all the pieces in ::state/state
         ;; that open-hello-crypto-box needs.
-        :args (s/cat :state (s/keys :req [::log2/state
+        :args (s/cat :state (s/keys :req [::log/state
                                           ::state/current-client])
                      :message bytes?)
-        :ret (s/keys :req [::K/hello-spec ::log2/state ::opened ::shared-secret]))
+        :ret (s/keys :req [::K/hello-spec ::log/state ::opened ::shared-secret]))
 (defn open-packet
   [{:keys [::state/current-client]
-    log-state ::log2/state
+    log-state ::log/state
     :as state}
    message]
   (let [message (bytes message)
         length (count message)]
     (if (= length K/hello-packet-length)
-      (let [log-state (log2/info log-state
+      (let [log-state (log/info log-state
                                  ::open-packet
                                  "This is the correct size")
             ;; Q: Is the convenience here worth the [hypothetical] performance hit of using decompose?
@@ -154,17 +154,17 @@
         :args (s/cat :state ::state/state
                      :packet ::shared/message)
         :ret (s/keys :opt [::K/hello-spec ::srvr-specs/cookie-components]
-                     :req [::log2/state]))
+                     :req [::log/state]))
 (defn internal-handler
   ;; This was originally refactored out of do-handle, back when that had
   ;; to reside in the top-level server ns
   "FIXME: Needs a better name"
-  [{log-state ::log2/state
+  [{log-state ::log/state
     :as state}
    message]
-  (let [log-state (log2/debug log-state
-                              ::do-handle
-                              "Have what looks like a HELLO packet")
+  (let [log-state (log/debug log-state
+                             ::do-handle
+                             "Have what looks like a HELLO packet")
         {:keys [::shared-secret]
          clear-text ::opened
          {:keys [::K/clnt-short-pk
@@ -173,9 +173,9 @@
                  ::K/crypto-box]
           :as fields} ::K/hello-spec
          :as unboxed} (open-packet state message)
-        log-state (log2/info log-state
-                             ::do-handle
-                             "box opened successfully")]
+        log-state (log/info log-state
+                            ::do-handle
+                            "box opened successfully")]
     ;; We don't actually care about the contents of the bytes we just decrypted.
     ;; They should be all zeroes for now, but that's really an area for possible future
     ;; expansion.
@@ -191,10 +191,10 @@
                                          ::state/minute-key minute-key
                                          ::srvr-specs/clear-text clear-text}
          ::K/hello-spec fields
-         ::log2/state log-state})
-      {::log2/state (log2/warn log-state
-                               ::do-handle
-                               "Unable to open the HELLO crypto-box: dropping")})))
+         ::log/state log-state})
+      {::log/state (log2/warn log-state
+                              ::do-handle
+                              "Unable to open the HELLO crypto-box: dropping")})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -205,24 +205,24 @@
                :packet ::shared/network-packet)
   :ret ::state/state)
 (defn do-handle
-  [{:keys [::log2/logger]
-    log-state ::log2/state
+  [{:keys [::log/logger]
+    log-state ::log/state
     :as state}
    cookie-response-builder
    {:keys [:message]
     :as packet}]
-  (let [log-state (log2/debug log-state
-                              ::do-handle
-                              "Top")
-        {log-state ::log2/state
-         :as cookie-recipe} (internal-handler (assoc state ::log2/state log-state)
+  (let [log-state (log/debug log-state
+                             ::do-handle
+                             "Top")
+        {log-state ::log/state
+         :as cookie-recipe} (internal-handler (assoc state ::log/state log-state)
                                               message)]
     (if cookie-recipe
       (let [{cookie ::K/cookie-packet
-             log-state ::log2/state} (cookie/do-build-response state cookie-recipe)
-            log-state (log2/info log-state
-                                 ::handle-hello!
-                                 (str "Cookie packet built. Sending it."))]
+             log-state ::log/state} (cookie/do-build-response state cookie-recipe)
+            log-state (log/info log-state
+                                ::handle-hello!
+                                (str "Cookie packet built. Sending it."))]
         (try
           (if-let [dst (get-in state [::state/client-write-chan ::state/chan])]
             ;; And this is why I need to refactor this. There's so much going
@@ -238,36 +238,36 @@
                                               ;; state so it can be tuned while running
                                               send-timeout
                                               ::timed-out)
-                  log-state (log2/info log-state
-                                       ::handle-hello!
-                                       "Cookie packet scheduled to send")
-                  forked-log-state (log2/clean-fork log-state
+                  log-state (log/info log-state
+                                      ::handle-hello!
+                                      "Cookie packet scheduled to send")
+                  forked-log-state (log/clean-fork log-state
                                                     ::hello-processed)]
 
               (deferred/on-realized put-future
                 (fn [success]
-                  (log2/flush-logs! logger
-                                    (if success
-                                      (log2/info forked-log-state
-                                                 ::handle-hello!
-                                                 "Sending Cookie succeeded")
-                                      (log2/error forked-log-state
-                                                  ::handle-hello!
-                                                  "Sending Cookie failed"))))
-                (fn [err]
-                  (log2/flush-logs! logger
-                                    (log2/error forked-log-state
+                  (log/flush-logs! logger
+                                   (if success
+                                     (log/info forked-log-state
+                                               ::handle-hello!
+                                               "Sending Cookie succeeded")
+                                     (log/error forked-log-state
                                                 ::handle-hello!
-                                                "Sending Cookie failed:" err))))
-              {::log2/state (log2/flush-logs! logger log-state)})
+                                                "Sending Cookie failed"))))
+                (fn [err]
+                  (log/flush-logs! logger
+                                   (log/error forked-log-state
+                                              ::handle-hello!
+                                              "Sending Cookie failed:" err))))
+              {::log/state (log/flush-logs! logger log-state)})
             (throw (ex-info "Missing destination"
                             (or (::state/client-write-chan state)
                                 {::problem "No client-write-chan"
                                  ::keys (keys state)
                                  ::actual state}))))
           (catch Exception ex
-            {::log2/state (log2/exception log-state
-                                          ex
-                                          ::handle-hello!
-                                          "Failed to send Cookie response")})))
-      {::log2/state log-state})))
+            {::log/state (log/exception log-state
+                                        ex
+                                        ::handle-hello!
+                                        "Failed to send Cookie response")})))
+      {::log/state log-state})))

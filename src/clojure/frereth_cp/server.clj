@@ -15,7 +15,7 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log2]
+             [logging :as log]
              [specs :as specs]]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
@@ -43,8 +43,8 @@
                                  ::state/client-read-chan
                                  ::state/client-write-chan
                                  ::state/max-active-clients
-                                 ::log2/logger
-                                 ::log2/state
+                                 ::log/logger
+                                 ::log/state
                                  ::shared/extension
                                  ;; Note that this really only makes sense
                                  ;; in terms of loading up my-keys.
@@ -61,8 +61,8 @@
                                  ::state/event-loop-stopper!
                                  ::shared/my-keys]))
 
-(let [common-state-option-keys [::log2/logger
-                                ::log2/state
+(let [common-state-option-keys [::log/logger
+                                ::log/state
                                 ::shared/extension
                                 ;; Honestly, this should be an xor.
                                 ;; It makes sense for the caller to
@@ -88,9 +88,9 @@
 ;;; Internal
 
 (s/fdef check-packet-length
-  :args (s/cat :log-state ::log2/state
+  :args (s/cat :log-state ::log/state
                :packet bytes?)
-  :ret (s/keys :req [::log2/state
+  :ret (s/keys :req [::log/state
                      ::okay?]))
 (defn check-packet-length
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
@@ -99,24 +99,24 @@
   ;; Note that this is actually wrong: I really should be
   ;; getting ByteBuf instances off the wire.
   ;; FIXME: Revisit this.
-  (let [log-state (log2/debug log-state
-                              ::check-packet-length
-                              "Incoming"
-                              {::packet packet
-                               ::packet-class (class packet)})
+  (let [log-state (log/debug log-state
+                             ::check-packet-length
+                             "Incoming"
+                             {::packet packet
+                              ::packet-class (class packet)})
         packet (bytes packet)
         ;; For now, retain the name r for compatibility/historical reasons
         r (count packet)
-        log-state (log2/info log-state
-                             ::check-packet-length
-                             (str "Incoming packet contains " r " somethings"))]
+        log-state (log/info log-state
+                            ::check-packet-length
+                            (str "Incoming packet contains " r " somethings"))]
     {::okay? (and (<= 80 r 1184)
                   ;; i.e. (= (rem r 16) 0)
                   ;; TODO: Keep an eye out for potential benchmarks
                   ;; The compiler really should be smart enough so the
                   ;; two are equivalent.
                   (= (bit-and r 0xf) 0))
-     ::log2/state log-state}))
+     ::log/state log-state}))
 
 (s/fdef verify-my-packet
         :args (s/cat :this ::state
@@ -129,11 +129,11 @@
                      ;; has to do with a serialization template)
                      :server-extension bytes?)
         :ret (s/keys :req [::okay?
-                           ::log2/state]))
+                           ::log/state]))
 (defn verify-my-packet
   "Was this packet really intended for this server?"
   [{:keys [::shared/extension]
-    log-state ::log2/state}
+    log-state ::log/state}
    header
    rcvd-xtn]
   (let [rcvd-prefix (-> header
@@ -163,19 +163,19 @@
                                   rcvd-xtn))]
 
     {::okay? verified
-     ::log2/state (if-not verified
-                    (log2/warn log-state
-                               ::verify-my-packet
-                               "Dropping packet intended for someone else."
-                               {::K/client-header-prefix (String. K/client-header-prefix)
-                                ::K/client-header-prefix-class (class K/client-header-prefix)
-                                ::K/client-header-prefix-vec (vec K/client-header-prefix)
-                                ::shared/extension (vec extension)
-                                ::received-prefix (String. rcvd-prefix)
-                                ::received-prefix-class (class rcvd-prefix)
-                                ::received-prefix-vec (vec rcvd-prefix)
-                                ::received-extension (vec rcvd-xtn)})
-                    log-state)}))
+     ::log/state (if-not verified
+                   (log/warn log-state
+                             ::verify-my-packet
+                             "Dropping packet intended for someone else."
+                             {::K/client-header-prefix (String. K/client-header-prefix)
+                              ::K/client-header-prefix-class (class K/client-header-prefix)
+                              ::K/client-header-prefix-vec (vec K/client-header-prefix)
+                              ::shared/extension (vec extension)
+                              ::received-prefix (String. rcvd-prefix)
+                              ::received-prefix-class (class rcvd-prefix)
+                              ::received-prefix-vec (vec rcvd-prefix)
+                              ::received-extension (vec rcvd-xtn)})
+                   log-state)}))
 
 (s/fdef do-handle-message
   :args (s/cat :state ::state/state
@@ -193,23 +193,23 @@
         :ret ::state/state)
 (defn do-handle-incoming
   "Packet arrived from client. Do something with it."
-  [{log-state ::log2/state
+  [{log-state ::log/state
     :as this}
    {:keys [:host
            :port]
     message :message
     :as packet}]
-  (let [log-state (log2/do-sync-clock log-state)
-        log-state (log2/debug log-state
-                              ::do-handle-incoming
-                              "Server incoming <---------------")
+  (let [log-state (log/do-sync-clock log-state)
+        log-state (log/debug log-state
+                             ::do-handle-incoming
+                             "Server incoming <---------------")
         ;; Q: How much performance do we really lose if we
         ;; set up the socket to send a B] rather than a ByteBuf?
         message (bytes message)]
     (when-not message
       (throw (ex-info "Missing message in incoming packet"
                       {::problem packet})))
-    (let [{log-state ::log2/state
+    (let [{log-state ::log/state
            :keys [::okay?]} (check-packet-length log-state message)]
       (if okay?
         (let [header (byte-array K/header-length)
@@ -217,18 +217,18 @@
           (b-t/byte-copy! header 0 K/header-length message)
           (b-t/byte-copy! server-extension 0 K/extension-length message K/header-length)
           (if (verify-my-packet this header server-extension)
-            (let [log-state (log2/debug log-state
-                                        ::do-handle-incoming
-                                        "This packet really is for me")
-                  packet-type-id (char (aget header (dec K/header-length)))
-                  log-state (log2/info log-state
+            (let [log-state (log/debug log-state
                                        ::do-handle-incoming
-                                       ""
-                                       {::packet-type-id packet-type-id})
-                  this (assoc this ::log2/state (log2/debug log-state
-                                                            ::do-handle-incoming
-                                                            "Packet for me"
-                                                            (dissoc this ::log2/state)))
+                                       "This packet really is for me")
+                  packet-type-id (char (aget header (dec K/header-length)))
+                  log-state (log/info log-state
+                                      ::do-handle-incoming
+                                      ""
+                                      {::packet-type-id packet-type-id})
+                  this (assoc this ::log/state (log2/debug log-state
+                                                           ::do-handle-incoming
+                                                           "Packet for me"
+                                                           (dissoc this ::log/state)))
                   delta (try
                           (.flush System/out)
                           (case packet-type-id
@@ -237,29 +237,29 @@
                             \I (initiate/do-handle this packet)
                             \M (do-handle-message this packet))
                           (catch Exception ex
-                            {::log2/state (log2/exception log-state
-                                                          ex
-                                                          ::do-handle-incoming
-                                                          "Failed handling packet"
-                                                          {::packet-type-id packet-type-id})}))]
+                            {::log/state (log/exception log-state
+                                                        ex
+                                                        ::do-handle-incoming
+                                                        "Failed handling packet"
+                                                        {::packet-type-id packet-type-id})}))]
               (as-> this x
                 (into x delta)
                 (assoc x
-                       ::log2/state
-                       (log2/debug (::log2/state x)
-                                   ::do-handle-incoming
-                                   "Handled"))))
+                       ::log/state
+                       (log/debug (::log/state x)
+                                  ::do-handle-incoming
+                                  "Handled"))))
             (assoc this
-                   ::log2/state (log2/info log-state
-                                           ::do-handle-incoming
-                                           "Ignoring packet intended for someone else"))))
+                   ::log/state (log/info log-state
+                                         ::do-handle-incoming
+                                         "Ignoring packet intended for someone else"))))
         (assoc this
-               ::log2/state (log2/debug log-state
-                                        ::do-handle-incoming
-                                        "Ignoring packet of illegal length"
-                                        {::message-length (count message)
-                                         ::shared/network-packet packet
-                                         ::pretty (b-t/->string message)}))))))
+               ::log/state (log/debug log-state
+                                      ::do-handle-incoming
+                                      "Ignoring packet of illegal length"
+                                      {::message-length (count message)
+                                       ::shared/network-packet packet
+                                       ::pretty (b-t/->string message)}))))))
 
 (s/fdef input-reducer
         :args (s/cat :this ::state/state
@@ -271,64 +271,64 @@
 (defn input-reducer
   "Convert input into the next state"
   [{:keys [::state/client-read-chan
-           ::log2/logger]
-    log-state ::log2/state
+           ::log/logger]
+    log-state ::log/state
     :as this}
    msg]
-  (let [log-state (log2/info log-state
-                             ::input-reducer
-                             "Top of Server Event loop"
-                             {::shared/network-packet msg
-                              ::state/chan (::state/chan client-read-chan)
-                              ::state/client-read-chan client-read-chan})
+  (let [log-state (log/info log-state
+                            ::input-reducer
+                            "Top of Server Event loop"
+                            {::shared/network-packet msg
+                             ::state/chan (::state/chan client-read-chan)
+                             ::state/client-read-chan client-read-chan})
         result (case msg
-                 ::stop (do (log2/flush-logs! logger (log2/warn log-state
-                                                                ::input-reducer
-                                                                "Received stop signal"))
+                 ::stop (do (log/flush-logs! logger (log/warn log-state
+                                                              ::input-reducer
+                                                              "Received stop signal"))
                             (reduced ::exited))
-                 ::rotate (let [log-state (log2/info log-state
-                                                     ::input-reducer
-                                                     "Possibly Rotating")]
+                 ::rotate (let [log-state (log/info log-state
+                                                    ::input-reducer
+                                                    "Possibly Rotating")]
                             (state/handle-key-rotation this))
                  ::drained (do
-                             (log2/flush-logs! logger
-                                               (log2/debug log-state
-                                                           ::input-reducer
-                                                           "Source drained"))
+                             (log/flush-logs! logger
+                                              (log/debug log-state
+                                                         ::input-reducer
+                                                         "Source drained"))
                              (reduced ::drained))
                  ;; Default is "Keep going"
                  (try
                    ;; Q: Do I want unhandled exceptions to be fatal errors?
-                   (let [{log-state ::log2/state
+                   (let [{log-state ::log/state
                           :as modified-state} (do-handle-incoming (assoc this
-                                                                         ::log2/state log-state)
+                                                                         ::log/state log-state)
                                                                   msg)
-                         log-state (log2/info log-state
-                                              ::input-reducer
-                                              "Updated state based on incoming msg"
-                                              (helpers/hide-long-arrays (dissoc modified-state ::log2/state)))]
+                         log-state (log/info log-state
+                                             ::input-reducer
+                                             "Updated state based on incoming msg"
+                                             (helpers/hide-long-arrays (dissoc modified-state ::log2/state)))]
                      (assoc modified-state
-                            ::log2/state (log2/flush-logs! logger log-state)))
+                            ::log/state (log/flush-logs! logger log-state)))
                    (catch clojure.lang.ExceptionInfo ex
                      (assoc this
-                            ::log2/state (log2/exception log-state
-                                                         ex
-                                                         ::input-reducer
-                                                         "handle-incoming! failed")))
-                   (catch RuntimeException ex
-                     (log2/flush-logs! logger
-                                       (log2/exception log-state
+                            ::log/state (log/exception log-state
                                                        ex
-                                                       "Unhandled low-level exception escaped handler"))
+                                                       ::input-reducer
+                                                       "handle-incoming! failed")))
+                   (catch RuntimeException ex
+                     (log/flush-logs! logger
+                                      (log/exception log-state
+                                                     ex
+                                                     "Unhandled low-level exception escaped handler"))
                      (reduced nil))
                    (catch Exception ex
-                     (log2/flush-logs! logger
-                                       (log2/exception log-state
-                                                       ex
-                                                       "Major problem escaped handler"))
+                     (log/flush-logs! logger
+                                      (log/exception log-state
+                                                     ex
+                                                     "Major problem escaped handler"))
                      (reduced nil))))]
-    (if-let [log-state (::log2/state result)]
-      (assoc result ::log2/state (log2/flush-logs! logger log-state))
+    (if-let [log-state (::log/state result)]
+      (assoc result ::log/state (log/flush-logs! logger log-state))
       result)))
 
 (s/fdef build-event-loop-stopper
@@ -371,12 +371,12 @@
          :ret ::state/state)
 (defn start!
   "Start the server"
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::state/client-read-chan
            ::state/client-write-chan
            ::shared/extension
            ::shared/my-keys]
-    log-state ::log2/state
+    log-state ::log/state
     :as this}]
   {:pre [client-read-chan
          (::state/chan client-read-chan)
@@ -390,9 +390,9 @@
          ;; a 16-byte array
          (= (count extension) K/extension-length)
          log-state]}
-  (let [log-state (log2/warn log-state
-                             ::start!
-                             "CurveCP Server: Starting the server state")]
+  (let [log-state (log/warn log-state
+                            ::start!
+                            "CurveCP Server: Starting the server state")]
 
     ;; Reference implementation starts by allocating the active client structs.
     ;; This is one area where updating in place simply cannot be worth it.
@@ -405,88 +405,88 @@
           this (assoc-in this [::shared/my-keys ::shared/long-pair] long-pair)
           almost (assoc this
                         ::state/cookie-cutter (state/randomized-cookie-cutter))
-          log-state (log2/info log-state
-                               ::start!
-                               "Kicking off event loop.")
+          log-state (log/info log-state
+                              ::start!
+                              "Kicking off event loop.")
           ;; Q: What are the odds that the next two piece needs to do logging?
           ;; A: They're small and straight-forward enough that it doesn't really seem useful
           result (assoc almost
                         ::state/event-loop-stopper! (build-event-loop-stopper almost))
-          flushed-logs (log2/flush-logs! logger log-state)]
+          flushed-logs (log/flush-logs! logger log-state)]
       ;; Q: Why did I fork these logs?
-      (begin! (assoc result ::log2/state (log2/clean-fork flushed-logs ::input-reducer)))
-      (assoc result ::log2/state flushed-logs))))
+      (begin! (assoc result ::log/state (log/clean-fork flushed-logs ::input-reducer)))
+      (assoc result ::log/state flushed-logs))))
 
 (s/fdef stop!
         :args (s/cat :this ::state/state)
         :ret ::post-state-options)
 (defn stop!
   "Stop the ioloop (but not the read/write channels: we don't own them)"
-  [{:keys [::log2/logger
+  [{:keys [::log/logger
            ::state/event-loop-stopper!]
-    log-state ::log2/state
+    log-state ::log/state
     :as this}]
-  (let [log-state (log2/do-sync-clock log-state)
-        log-state (log2/warn log-state
-                             ::stop!
-                             "Stopping server state")]
+  (let [log-state (log/do-sync-clock log-state)
+        log-state (log/warn log-state
+                            ::stop!
+                            "Stopping server state")]
     (try
       (let [log-state
             (if event-loop-stopper!
               (try
-                (let [log-state (log2/flush-logs! logger (log2/info log-state
-                                                                    ::stop!
-                                                                    "Sending stop signal to event loop"))
+                (let [log-state (log/flush-logs! logger (log/info log-state
+                                                                  ::stop!
+                                                                  "Sending stop signal to event loop"))
                       ;; The caller needs to close the client-read-chan,
                       ;; which will effectively stop the ioloop by draining
                       ;; the reduce's source.
                       ;; This will signal it to stop directly.
                       ;; It's probably redudant, but feels safer.
                       stopped (event-loop-stopper!)]
-                  (log2/debug log-state
-                              ::stop!
-                              "stopped"
-                              {::side-effect-returned stopped}))
+                  (log/debug log-state
+                             ::stop!
+                             "stopped"
+                             {::side-effect-returned stopped}))
                 (catch Exception ex
-                  (log2/exception log-state
-                                  ex
-                                  ::stop!))
+                  (log/exception log-state
+                                 ex
+                                 ::stop!))
                 (catch Throwable ex
-                  (log2/exception log-state
-                                  ex
-                                  ::stop!
-                                  "This was bad")
+                  (log/exception log-state
+                                 ex
+                                 ::stop!
+                                 "This was bad")
                   (throw ex)))
-              (log2/debug log-state
-                          ::stop!
-                          "No stop method"))
-            log-state (log2/flush-logs! logger (log2/warn log-state
-                                                          ::stop!
-                                                          "Clearing secrets"))
+              (log/debug log-state
+                         ::stop!
+                         "No stop method"))
+            log-state (log/flush-logs! logger (log/warn log-state
+                                                        ::stop!
+                                                        "Clearing secrets"))
             outcome (-> (try
                              (state/hide-secrets! this)
                              (catch Exception ex
                                ;; Very tempting to split RuntimeException
                                ;; away from Exception. And then make Exception
                                ;; fatal
-                               (update this ::log2/state
-                                       #(log2/exception %
-                                                        ex
-                                                        ::stop!))))
+                               (update this ::log/state
+                                       #(log/exception %
+                                                       ex
+                                                       ::stop!))))
                         (dissoc ::state/event-loop-stopper!
                                 ;; This doesn't make any sense here anyway.
                                 ;; But it's actually breaking my spec
                                 ;; check.
                                 ;; Somehow.
                                 ::state/current-client))
-            log-state (log2/warn log-state
-                                 ::stop!
-                                 "Secrets hidden")]
-        (assoc outcome ::log2/state log-state))
+            log-state (log/warn log-state
+                                ::stop!
+                                "Secrets hidden")]
+        (assoc outcome ::log/state log-state))
       (catch Exception ex
-        (log2/exception log-state
-                        ex
-                        ::stop!)))))
+        (log/exception log-state
+                       ex
+                       ::stop!)))))
 
 (s/fdef ctor
         :args (s/cat :cfg ::pre-state-options)
@@ -494,7 +494,7 @@
 (defn ctor
   "Just like in the Component lifecycle, this is about setting up a value that's ready to start"
   [{:keys [::state/max-active-clients]
-    log-state ::log2/state
+    log-state ::log/state
     :or {max-active-clients default-max-clients}
     :as cfg}]
   ;; Note that this is going to call the child state spawner.
@@ -507,7 +507,7 @@
                                                                  ::state/child-spawner!))]
     (throw (ex-info "Invalid state construction attempt" problem)))
 
-  (let [log-state (log2/clean-fork log-state ::server)]
+  (let [log-state (log/clean-fork log-state ::server)]
     (-> cfg
         (assoc ::state/active-clients {}
                ::state/max-active-clients max-active-clients))))
