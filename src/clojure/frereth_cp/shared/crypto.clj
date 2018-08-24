@@ -695,14 +695,14 @@
 
 (s/fdef open-box
         :args (s/cat :log-state ::log2/state
-                     :prefix-bytes (s/and bytes?
+                     :nonce-prefix (s/and bytes?
                                           #(let [n (count %)]
                                              (or (= specs/client-nonce-prefix-length n)
                                                  (= specs/server-nonce-prefix-length n))))
-                     :suffix-buffer (s/and bytes?
-                                           #(let [n (count %)]
-                                              (or (= specs/client-nonce-suffix-length n)
-                                                  (= specs/server-nonce-suffix-length n))))
+                     :nonce-suffix (s/and bytes?
+                                          #(let [n (count %)]
+                                             (or (= specs/client-nonce-suffix-length n)
+                                                 (= specs/server-nonce-suffix-length n))))
                      :crypto-buffer bytes?
                      :shared-key ::specs/crypto-key)
         ;; This doesn't match the return spec for open-after.
@@ -716,15 +716,17 @@
                      :opt [::unboxed]))
 (defn open-box
   "Generally, this is probably the least painful method [so far] to open a crypto box"
-  [log-state prefix-bytes ^bytes suffix-bytes ^bytes crypto-box shared-key]
-  (let [nonce (byte-array K/nonce-length)
+  [log-state nonce-prefix nonce-suffix crypto-box shared-key]
+  (let [nonce-suffix (bytes nonce-suffix)
+        crypto-box (bytes crypto-box)
+        nonce (byte-array K/nonce-length)
         crypto-length (count crypto-box)]
-    (b-t/byte-copy! nonce prefix-bytes)
-    (let [prefix-length (count prefix-bytes)]
+    (b-t/byte-copy! nonce nonce-prefix)
+    (let [prefix-length (count nonce-prefix)]
       (b-t/byte-copy! nonce
                       prefix-length
                       ^Long (- K/nonce-length prefix-length)
-                      suffix-bytes))
+                      nonce-suffix))
     (try
       (open-after log-state crypto-box 0 crypto-length nonce shared-key)
       (catch ExceptionInfo ex
@@ -733,6 +735,22 @@
                                       ::open-box
                                       (str "Failed to open box\n")
                                       (.getData ex))}))))
+
+(defn decompose-box
+  "Open a crypto box and decompose its bytes"
+  [log-state tmplt nonce-prefix nonce-suffix crypto-box shared-key]
+  (let [{log-state ::log2/state
+         :keys [::unboxed]
+         :as opened} (open-box log-state
+                               nonce-prefix
+                               nonce-suffix
+                               crypto-box
+                               shared-key)]
+    (if unboxed
+      (let [result (serial/decompose-array tmplt unboxed)]
+        {::log2/state log-state
+         ::serial/decomposed result})
+      opened)))
 
 (s/fdef random-array
   :args (s/cat :n integer?)

@@ -78,7 +78,7 @@
 ;; hard-codes the magic.
 (s/def ::prefix ::specs/prefix)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Hello packets
 
 (def hello-packet-length 224)
@@ -149,7 +149,7 @@
 (s/def ::srvr-nonce-suffix ::specs/server-nonce-suffix)
 (s/def ::cookie-packet (partial specs/counted-bytes cookie-packet-length))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Vouch/Initiate Packets
 
 ;; Header, cookie, server name, extensions, keys, nonces
@@ -183,24 +183,11 @@
                         #(<= max-vouch-message-length (count %))
                         #(<= (count %))))
 (s/def ::outer-i-nonce ::client-nonce-suffix)
+(s/def ::srvr-name ::specs/srvr-name)
 
 (def vouch-nonce-prefix (.getBytes "CurveCPV"))
 (def initiate-nonce-prefix (.getBytes "CurveCP-client-I"))
 (def initiate-header (.getBytes (str client-header-prefix-string "I")))
-
-(comment
-  client-header-prefix
-  (String. client-header-prefix)
-  (str vouch-nonce-prefix)
-  (String. vouch-nonce-prefix)
-  (-> initiate-header
-      vec
-      (subvec 0 (dec header-length))
-      byte-array
-      String.)
-  (String. initiate-header)
-  (str initiate-header)
-  )
 
 (def vouch-length specs/vouch-length)
 
@@ -242,6 +229,8 @@
   (let [n (count bs)]
     (and (< n max-vouch-message-length)
          (= 0 (rem n 16)))))
+
+;;; FIXME: Move the rest of these into templates
 
 (def vouch-wrapper
   "Template for composing the inner part of an Initiate Packet's Vouch that holds everything interesting"
@@ -298,28 +287,8 @@
                                             ::outer-i-nonce
                                             ::vouch-wrapper]))
 
-(def initiate-client-vouch-wrapper
-  "This is the actual body (368+M) of the Initiate packet
-
-TODO: Rename this to something like initiate-client-vouch-message"
-  (array-map ::long-term-public-key {::type ::bytes
-                                     ::length client-key-length}
-             ::inner-i-nonce {::type ::bytes
-                            ::length specs/server-nonce-suffix-length}
-             ::hidden-client-short-pk {::type ::bytes
-                                       ::length (+ client-key-length box-zero-bytes)}
-             ::srvr-name {::type ::bytes
-                          ::length specs/server-name-length}
-             ::message {::type ::bytes
-                        ::length '*}))
-(s/def ::initiate-client-vouch-wrapper
-  (s/keys :req [::long-term-public-key
-                ::inner-i-nonce
-                ::hidden-client-short-pk
-                ;; FIXME: I don't think mixing namespaces like this will fly
-                ;; If it doesn't, just add an alias and hope for the best.
-                ::specs/srvr-name
-                ::message]))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Utility helpers
 
 (defn zero-bytes
   [n]

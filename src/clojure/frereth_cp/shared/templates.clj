@@ -68,3 +68,29 @@
                                     ;; So trust the experts on this one.
                                     ::client-nonce-suffix
                                     ::cookie]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Initiate packets
+
+(def initiate-client-vouch-wrapper
+  "This is the actual body (368+M) of the Initiate packet
+
+TODO: Rename this to something like initiate-client-vouch-message"
+  (array-map ::K/long-term-public-key {::K/type ::K/bytes
+                                       ::K/length K/client-key-length}
+             ::K/inner-i-nonce {::K/type ::K/bytes
+                                ::K/length specs/server-nonce-suffix-length}
+             ::K/hidden-client-short-pk {::K/type ::K/bytes
+                                         ::K/length (+ K/client-key-length
+                                                       K/box-zero-bytes)}
+             ::K/srvr-name {::K/type ::K/bytes
+                            ::K/length specs/server-name-length}
+             ::K/message {::K/type ::K/bytes
+                          ::K/length '*}))
+
+(s/def ::initiate-client-vouch-wrapper
+  (s/keys :req [::K/long-term-public-key
+                ::K/inner-i-nonce
+                ::K/hidden-client-short-pk
+                ::K/srvr-name
+                ::K/message]))

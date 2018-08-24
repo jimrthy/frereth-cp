@@ -272,18 +272,14 @@
      ::received-nonce received-nonce}))
 
 (s/fdef alter-client-state
-        :args (s/cat :state ::state
-                     :altered-client ::client-state)
-        :ret ::state)
+        :args (s/cat :altered-client ::client-state)
+        :ret ::delta)
 (defn alter-client-state
-  [state altered-client]
+  [altered-client]
   ;; Skip incrementing the numactiveclients count.
   ;; We get that for free from the data structure
   (let [client-key (get-in altered-client [::client-security ::shared/short-pk])]
-    (assoc-in state
-              [::active-clients (vec client-key)]
-              ;; Q: Worth surgically applying a delta?
-              altered-client)))
+    {::active-clients {(vec client-key) altered-client}}))
 
 (s/fdef find-client
         :args (s/cat :state ::state
