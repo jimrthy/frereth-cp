@@ -173,9 +173,6 @@
                                     ;; with the spec check just hanging
                                     ::event-loop-stopper!)
                          ;; This doesn't particularly belong here
-                         ;; (Or, for that matter, make much sense
-                         ;; as anything except a reference. And
-                         ;; even that seems questionable)
                          :opt [::current-client]))
   ;; Honestly, this is really just for documentation.
   ;; If you want to validate a ::state, be sure to dissoc

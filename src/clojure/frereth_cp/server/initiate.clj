@@ -38,7 +38,7 @@ This is the part that possibly establishes a 'connection'"
 ;; Annoyingly enough, it seems like these probably make
 ;; more sense in shared.specs
 (s/def ::handled? boolean?)
-(s/def ::matched? boolean?)
+(s/def ::matched? (s/nilable boolean?))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal implementation
@@ -91,8 +91,9 @@ This is the part that possibly establishes a 'connection'"
 
   To be fair, this ns *is* pretty special."
   [{log-state ::log/state
-    packet-nonce-bytes ::specs/nonce
-    :as state} initiate]
+    :as state}
+   {packet-nonce-bytes ::specs/nonce
+    :as initiate}]
   ;; In the reference implementation, this basically corresponds to
   ;; lines 341-358.
   ;; Find the matching client (if any).
@@ -439,21 +440,27 @@ This is the part that possibly establishes a 'connection'"
                      :opt [::matched?]))
 (defn validate-server-name
   [{log-state ::log/state
-    :as state} inner-client-box]
-  (let [rcvd-name (::specs/srvr-name inner-client-box)
-        rcvd-name (bytes rcvd-name)
-        my-name (get-in state [::shared/my-keys ::specs/srvr-name])
-        match (b-t/bytes= rcvd-name my-name)
-        base-result {::log/state (if match
+    :keys [::shared/my-keys]
+    :as state}
+   {rcvd-name ::K/srvr-name
+    :as inner-client-box}]
+  (when-not rcvd-name
+    (throw (ex-info "Missing srvr-name"
+                    {::K/initiate-client-vouch-wrapper inner-client-box
+                     ::inner-box-keys (keys inner-client-box)})))
+  (let [rcvd-name (bytes rcvd-name)
+        my-name (::specs/srvr-name my-keys)
+        match? (b-t/bytes= rcvd-name my-name)
+        base-result {::log/state (if match?
                                     log-state
                                     (log/warn log-state
                                               ::validate-server-name
                                               "Message was intended for another server"
                                               {::specs/srvr-name (b-t/->string rcvd-name)
                                                ::my-name (b-t/->string my-name)
-                                               ::shared/my-keys (::shared/my-keys state)}))}]
-    (if match
-      (assoc base-result ::matched? match)
+                                               ::shared/my-keys my-keys}))}]
+    (if match?
+      (assoc base-result ::matched? match?)
       base-result)))
 
 (s/fdef verify-client-public-key-triad
@@ -464,7 +471,7 @@ This is the part that possibly establishes a 'connection'"
                      ;; Note that it's already been decomposed to include
                      ;; the long-term-pk
                      ::client-message-box any?)
-        :ret (s/nilable boolean?))
+        :ret (s/keys :req [::log/state] :opt [::matched?]))
 (defn verify-client-public-key-triad
   "We unwrapped the our original cookie, using the minute-key.
 
@@ -509,14 +516,18 @@ Note that that includes TODOs re:
       ;; And write a unit test to verify this.
       ;; Even though it's an implementation detail deep in the guts, this
       ;; seems worth covering.
-      (when-let [^ByteBuf inner-pk-buf (crypto/open-box
-                                        K/vouch-nonce-prefix
-                                        (::K/inner-i-nonce client-message-box)
-                                        (::K/hidden-client-short-pk client-message-box)
-                                        shared-secret)]
-        (let [inner-pk (byte-array K/key-length)]
-          (.getBytes inner-pk-buf 0 inner-pk)
-          (b-t/bytes= short-pk inner-pk))))))
+      (let [{log-state ::log/state
+             :keys [::crypto/unboxed]} (crypto/open-box log-state
+                                                        K/vouch-nonce-prefix
+                                                        (::K/inner-i-nonce client-message-box)
+                                                        (::K/hidden-client-short-pk client-message-box)
+                                                        shared-secret)]
+        {::log/state log-state
+         ::matched? (when unboxed
+                      (let [inner-pk-buf ^ByteBuf unboxed
+                            inner-pk (byte-array K/key-length)]
+                        (.getBytes inner-pk-buf 0 inner-pk)
+                        (b-t/bytes= short-pk inner-pk)))}))))
 
 (s/fdef do-fork-child!
   :args (s/cat :state ::state/state
@@ -561,8 +572,7 @@ Note that that includes TODOs re:
 ;;; very similar in client.
 (s/fdef forward-message-portion!
   :args (s/cat :state ::state/state
-               ;; FIXME: Have a mismatch right here.
-               :child ::state/child-state
+               :active-client ::state/client-state
                :initiate ::K/initiate-packet-spec)
   :ret ::log/state)
 (defn forward-message-portion!
@@ -570,21 +580,23 @@ Note that that includes TODOs re:
   [{:keys [::log/logger]
     log-state ::log/state
     :as state}
-   {writer ::state/write->child
-    :as child}
-   initiate]
-  (throw (RuntimeException. "Type mismatch: distinguish between client and child"))
-  (let [vouch (:K/vouch initiate)
-        shared-key (::state/client-short<->server-short child)
+   {shared-key ::state/client-short<->server-short
+    :keys [::state/child-interaction]
+    :as client}
+   {packet-nonce-bytes ::specs/nonce
+    :keys [::K/vouch]
+    :as initiate}]
+  (let [writer (::state/write->child child-interaction)
         {log-state ::log/state
          client-message-box ::serial/decomposed} (decrypt-initiate-box shared-key
                                                                        packet-nonce-bytes
-                                                                       vouch)]
+                                                                       vouch)
+        log-label ::forward-message-portion!]
     (if client-message-box
       ;; Line 351 (if this is a new connection)
-      (let [client (assoc client
+      (let [packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
+            client (assoc client
                           ::state/received-nonce packet-nonce)
-            log-label ::forward-message-portion
             log-state (log/debug log-state
                                  log-label
                                  "Trying to send child-message from "
@@ -605,7 +617,7 @@ Note that that includes TODOs re:
                                     (log/error forked-logs
                                                log-label
                                                "Timed out trying to send message"
-                                               {::destination child}))]
+                                               {::destination client}))]
                               (log/flush-logs! logger log-state)))
                           (fn [x]
                             (log/flush-logs! logger
@@ -690,16 +702,21 @@ Note that that includes TODOs re:
                          log-state ::log/state} (validate-server-name state client-message-box)]
                     (if matched?
                       ;; This takes us down to line 381
-                      (if (verify-client-public-key-triad state client-short-pk client-message-box)
-                        active-client
-                        {::log/state (log/warn log-state
-                                               ::build-new-client
-                                               "Mismatched public keys"
-                                               {::FIXME "Show the extracted versions"
-                                                ::state/state state
-                                                ::client-short-pk client-short-pk
-                                                ::shared/message client-message-box})})
-                      log-state))
+                      (let [{log-state ::log/state
+                             matched? ::matched?} (verify-client-public-key-triad state
+                                                                                  client-short-pk
+                                                                                  client-message-box)]
+                        (if matched?
+                          {::log/state log-state
+                           ::state/current-client active-client}
+                          {::log/state (log/warn log-state
+                                                 ::build-new-client
+                                                 "Mismatched public keys"
+                                                 {::FIXME "Show the extracted versions"
+                                                  ::state/state state
+                                                  ::client-short-pk client-short-pk
+                                                  ::shared/message client-message-box})}))
+                      {::log/state log-state}))
                   (catch ExceptionInfo ex
                     {::log/state (log/exception log-state
                                                 ex
@@ -791,10 +808,10 @@ Note that that includes TODOs re:
                        log-state ::log-state} (if client-state
                                                 re-inited
                                                 (let [{log-state ::log/state
-                                                       active-client ::state/client-state} (build-new-client (assoc state
-                                                                                                                    ::log/state log-state)
-                                                                                                             packet
-                                                                                                             initiate)]
+                                                       active-client ::state/current-client} (build-new-client (assoc state
+                                                                                                                      ::log/state log-state)
+                                                                                                               packet
+                                                                                                               initiate)]
                                                   (reset! log-state-atom log-state)
                                                   (when-not active-client
                                                     (throw (RuntimeException. "Unable to build a new client.")))
