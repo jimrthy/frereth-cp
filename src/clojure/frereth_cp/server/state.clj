@@ -117,7 +117,8 @@
 (s/def ::active-clients (s/map-of ::public-key-vec ::client-state))
 (s/def ::max-active-clients nat-int?)
 
-;; TODO: Make this go away. Switch to the version in message.specs
+;; TODO: Make this go away. Switch to the version in
+;; frereth-cp.message.specs
 (s/def ::child-spawner! (s/fspec :args (s/cat)
                                  :ret ::child-interaction))
 

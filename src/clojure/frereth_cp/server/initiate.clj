@@ -4,6 +4,7 @@
 This is the part that possibly establishes a 'connection'"
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.server
+             ;; FIXME: Don't want to depend on this
              [message :as message]
              [state :as state]]
             [frereth-cp.shared :as shared]
@@ -37,8 +38,12 @@ This is the part that possibly establishes a 'connection'"
 
 ;; Annoyingly enough, it seems like these probably make
 ;; more sense in shared.specs
+;; FIXME: Move them there
 (s/def ::handled? boolean?)
 (s/def ::matched? (s/nilable boolean?))
+
+(s/def ::child-fork-prereqs (s/keys :req [::log/state
+                                          ::state/child-spawner!]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal implementation
@@ -530,11 +535,8 @@ Note that that includes TODOs re:
                         (b-t/bytes= short-pk inner-pk)))}))))
 
 (s/fdef do-fork-child!
-  :args (s/cat :state ::state/state
-               :active-client ::state/client-state
-               :host ::shared/host
-               :port ::shared/port
-               :initiate ::serial/decomposed)
+  :args (s/cat :prereqs ::child-fork-prereqs
+               :active-client ::state/client-state)
   :ret (s/keys :req [::log/state ::state/client-state]))
 (defn do-fork-child!
   [{log-state ::log/state
@@ -547,9 +549,14 @@ Note that that includes TODOs re:
         ;; the client?
         ;; A: If not, then update that code to make it sensible.
         child (spawner writer)
+        ;; FIXME: Really don't want to know anything about the
+        ;; state.message ns in here. Worst-case scenario: have
+        ;; state inject this dependency before it calls do-handle.
+        ;; Or just pass it as a parameter to that.
+        listener-stream (message/add-listener! child)
         client-with-child (assoc active-client
                                  ::state/child-interaction (assoc child
-                                                                  ::state/reader-consumed (message/add-listener! state child))
+                                                                  ::state/reader-consumed listener-stream)
                                  ;; Q: What is this for?
                                  ;; It doesn't seem to match anything useful.
                                  ;; I *think* it's for tracking the length of the current message
@@ -816,12 +823,11 @@ Note that that includes TODOs re:
                                                   (when-not active-client
                                                     (throw (RuntimeException. "Unable to build a new client.")))
                                                   ;; TODO: Limit the state parameter and return value to what's actually needed
-                                                  (do-fork-child! (assoc state
-                                                                         ::log/state log-state)
-                                                                  active-client
-                                                                  host
-                                                                  port
-                                                                  initiate)
+                                                  (do-fork-child! (-> state
+                                                                      (assoc ::log/state log-state)
+                                                                      (select-keys [::log/state
+                                                                                    ::state/child-spawner!]))
+                                                                  active-client)
                                                   {::state/client-state active-client
                                                    ::log-state log-state}))
                       delta (state/alter-client-state client-state)

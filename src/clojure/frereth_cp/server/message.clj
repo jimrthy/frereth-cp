@@ -33,12 +33,10 @@
 ;;; Public
 
 (s/fdef add-listener!
-        :args (s/cat :state ::state/state
-                     :child ::state/child-interaction)
+        :args (s/cat :child ::state/child-interaction)
         :ret strm/stream?)
 (defn add-listener!
-  [state
-   {:keys [::state/client-ip
+  [{:keys [::state/client-ip
            ::state/client-port
            ::state/read<-child]
     :as child}]
