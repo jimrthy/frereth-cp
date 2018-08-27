@@ -87,7 +87,6 @@
                                       ::client-short<->server-short
                                       ::client-long<->server-long]))
 
-(s/def ::message-len int?)
 (s/def ::received-nonce int?)
 (s/def ::client-state (s/keys :req [;; The names for the next 2 seem silly, at best
                                     ;; ::host and ::port seem like better options
@@ -196,28 +195,6 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
-
-(s/fdef alloc-client
-        :args (s/cat)
-        :ret ::client-state)
-(defn alloc-client
-  []
-  ;; Q: What's the point?
-  ;; I think I was trying to remain faithful to the
-  ;; reference implementation.
-  ;; But, seriously?
-  ;; This is awful..
-  (throw (RuntimeException. "This was a terrible idea."))
-  (let [interact {::child-id -1}
-        sec {::shared/long-pk (crypto/random-key)
-             ::shared/short-pk (crypto/random-key)}]
-    {::child-interaction interact
-     ::client-security sec
-     ::shared/extension (crypto/random-bytes! (byte-array 16))
-     ::message (crypto/random-bytes! (byte-array K/message-len))
-     ::message-len 0
-     ::received-nonce 0
-     ::sent-nonce (crypto/random-nonce)}))
 
 (s/fdef configure-shared-secrets
         :args (s/cat :client ::client-state

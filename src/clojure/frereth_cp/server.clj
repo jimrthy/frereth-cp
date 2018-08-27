@@ -82,8 +82,6 @@
 
   (s/def ::post-state-options (s/keys :req (conj common-state-option-keys ::state/max-active-clients))))
 
-(s/def ::okay? boolean?)
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal
 
@@ -91,7 +89,7 @@
   :args (s/cat :log-state ::log/state
                :packet bytes?)
   :ret (s/keys :req [::log/state
-                     ::okay?]))
+                     ::specs/okay?]))
 (defn check-packet-length
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
   [log-state packet]
@@ -110,7 +108,7 @@
         log-state (log/info log-state
                             ::check-packet-length
                             (str "Incoming packet contains " r " somethings"))]
-    {::okay? (and (<= 80 r 1184)
+    {::specs/okay? (and (<= 80 r 1184)
                   ;; i.e. (= (rem r 16) 0)
                   ;; TODO: Keep an eye out for potential benchmarks
                   ;; The compiler really should be smart enough so the
@@ -128,7 +126,7 @@
                      ;; (I kind-of suspect that shared.constants
                      ;; has to do with a serialization template)
                      :server-extension bytes?)
-        :ret (s/keys :req [::okay?
+        :ret (s/keys :req [::specs/okay?
                            ::log/state]))
 (defn verify-my-packet
   "Was this packet really intended for this server?"
@@ -162,7 +160,7 @@
                       (b-t/bytes= extension
                                   rcvd-xtn))]
 
-    {::okay? verified
+    {::specs/okay? verified
      ::log/state (if-not verified
                    (log/warn log-state
                              ::verify-my-packet
@@ -199,10 +197,11 @@
            :port]
     message :message
     :as packet}]
-  (let [log-state (log/do-sync-clock log-state)
-        log-state (log/debug log-state
-                             ::do-handle-incoming
-                             "Server incoming <---------------")
+  (let [log-state (-> log-state
+                      log/do-sync-clock
+                      (log/debug log-state
+                                 ::do-handle-incoming
+                                 "Server incoming <---------------"))
         ;; Q: How much performance do we really lose if we
         ;; set up the socket to send a B] rather than a ByteBuf?
         message (bytes message)]
@@ -210,7 +209,7 @@
       (throw (ex-info "Missing message in incoming packet"
                       {::problem packet})))
     (let [{log-state ::log/state
-           :keys [::okay?]} (check-packet-length log-state message)]
+           :keys [::specs/okay?]} (check-packet-length log-state message)]
       (if okay?
         (let [header (byte-array K/header-length)
               server-extension (byte-array K/extension-length)]
@@ -257,7 +256,7 @@
                ::log/state (log/debug log-state
                                       ::do-handle-incoming
                                       "Ignoring packet of illegal length"
-                                      {::message-length (count message)
+                                      {::state/message-length (count message)
                                        ::shared/network-packet packet
                                        ::pretty (b-t/->string message)}))))))
 

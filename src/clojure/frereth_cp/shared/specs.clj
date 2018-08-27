@@ -183,3 +183,7 @@ This really seems like a bad road to go down."
 ;; key.
 (s/def ::vouch (s/and ::crypto-box
                       #(= (count %) vouch-length)))
+
+(s/def ::handled? boolean?)
+(s/def ::matched? (s/nilable boolean?))
+(s/def ::okay? boolean?)

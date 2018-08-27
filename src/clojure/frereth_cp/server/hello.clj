@@ -192,9 +192,9 @@
                                          ::srvr-specs/clear-text clear-text}
          ::K/hello-spec fields
          ::log/state log-state})
-      {::log/state (log2/warn log-state
-                              ::do-handle
-                              "Unable to open the HELLO crypto-box: dropping")})))
+      {::log/state (log/warn log-state
+                             ::do-handle
+                             "Unable to open the HELLO crypto-box: dropping")})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
