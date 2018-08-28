@@ -109,12 +109,16 @@
                             ::check-packet-length
                             (str "Incoming packet contains " r " somethings"))]
     {::specs/okay? (and (<= 80 r 1184)
-                  ;; i.e. (= (rem r 16) 0)
-                  ;; TODO: Keep an eye out for potential benchmarks
-                  ;; The compiler really should be smart enough so the
-                  ;; two are equivalent.
-                  (= (bit-and r 0xf) 0))
+                        ;; TODO: Keep an eye out for potential benchmarks
+                        ;; The compiler really should be smart enough so these next
+                        ;; two are equivalent.
+                        #_(= (bit-and r 0xf) 0)
+                        (= (rem r 16) 0))
      ::log/state log-state}))
+(comment
+  (let [r #_80 #_800 #_640 6400]
+    [(= (bit-and r 0xf) 0)
+     (= (rem r 16) 0)]))
 
 (s/fdef verify-my-packet
         :args (s/cat :this ::state
@@ -224,12 +228,11 @@
                                       ::do-handle-incoming
                                       ""
                                       {::packet-type-id packet-type-id})
-                  this (assoc this ::log/state (log2/debug log-state
-                                                           ::do-handle-incoming
-                                                           "Packet for me"
-                                                           (dissoc this ::log/state)))
+                  this (assoc this ::log/state (log/debug log-state
+                                                          ::do-handle-incoming
+                                                          "Packet for me"
+                                                          (dissoc this ::log/state)))
                   delta (try
-                          (.flush System/out)
                           (case packet-type-id
                             \H (hello/do-handle this
                                                 cookie/do-build-response packet)
@@ -305,7 +308,7 @@
                          log-state (log/info log-state
                                              ::input-reducer
                                              "Updated state based on incoming msg"
-                                             (helpers/hide-long-arrays (dissoc modified-state ::log2/state)))]
+                                             (helpers/hide-long-arrays (dissoc modified-state ::log/state)))]
                      (assoc modified-state
                             ::log/state (log/flush-logs! logger log-state)))
                    (catch clojure.lang.ExceptionInfo ex

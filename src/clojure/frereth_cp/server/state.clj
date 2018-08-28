@@ -15,7 +15,7 @@
   (:import [io.netty.buffer ByteBuf]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;; Specs
 
 ;; For maintaining a secret symmetric pair of encryption
 ;; keys for the cookies.
@@ -91,9 +91,9 @@
 (s/def ::client-state (s/keys :req [;; The names for the next 2 seem silly, at best
                                     ;; ::host and ::port seem like better options
                                     ;; But this matches the reference implementation
-                                    ;; and should reduce confusion
+                                    ;; and will hopefully reduce confusion.
                                     ;; Plus the alternatives I'd prefer seem to just
-                                    ;; be begging for issues with collisions
+                                    ;; be begging for issues with collisions.
                                     ::client-ip
                                     ::client-port
                                     ::client-security
@@ -191,10 +191,11 @@
 (s/def ::delta ::state)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal Implementation
+;;;; Internal Implementation
+;;;; Q: Really? Nothing?
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
 
 (s/fdef configure-shared-secrets
         :args (s/cat :client ::client-state
@@ -236,6 +237,7 @@
     :as cookie}
    {:keys [::K/clnt-xtn]
     :as initiate}]
+  (throw (RuntimeException. "FIXME: Return spec is a lie"))
   (let [raw-rcvd-nonce (::K/outer-i-nonce initiate)
         received-nonce-array (bytes raw-rcvd-nonce)
         received-nonce (b-t/uint64-unpack received-nonce-array)]

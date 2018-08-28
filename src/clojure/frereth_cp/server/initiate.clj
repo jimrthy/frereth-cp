@@ -4,7 +4,8 @@
 This is the part that possibly establishes a 'connection'"
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.server
-             ;; FIXME: Don't want to depend on this
+             ;; FIXME: Don't want these siblings to have any
+             ;; dependencies on each other.
              [message :as message]
              [state :as state]]
             [frereth-cp.shared :as shared]
@@ -76,17 +77,27 @@ This is the part that possibly establishes a 'connection'"
 (defn possibly-re-initiate-existing-client-connection
   "Client can send as many Initiate packets as it likes.
 
-  If this matches a connection we've already seen, append the Message
-  portion to the child-handler's queue.
+  If this matches a connection we've already seen, caller
+  can/should skip client initialization and just append the
+  Message portion to the child-handler's queue.
 
-  returns (handled?):
-    true:  Handled here
-    false: Not handled. Propagate the event
+  returns:
+    handled?
+      true: client has already seen this message. Discard it.
+      false: Need to forward this message along
+    clint-state
+      truthy: forward message to this existing client
+      falsey: have to allocate/configure a new client
 
   This seems like it ought to be part of a bigger, more comprehensive
   event handling system.
 
   To be fair, this ns *is* pretty special."
+  ;; Note that the return value pair of
+  ;; #_{::specs/handled? true ::state/client-state nil}
+  ;; would be/is utter nonsense.
+  ;; There's no way for a non-existent client to have already seen
+  ;; a packet.
   [{log-state ::log/state
     :as state}
    {packet-nonce-bytes ::specs/nonce
@@ -130,16 +141,20 @@ This is the part that possibly establishes a 'connection'"
           ;; actual message bytes start.
           ;; But the message writing code is the same whether this
           ;; is a new connection or another Initiate to an existing
-          ;; client. So don't duplicate that code.
+          ;; client. Don't duplicate that code.
+          ;; That's the entire point to the handled? == false case
           {::specs/handled? false
            ::state/client-state client
            ::log/state log-state}
+          ;; Existing client has already seen this packet.
+          ;; Throw it out.
           {::log/state (log/debug log-state
                                   log-label
                                   "Discarding already-written nonce"
                                   {::shared/packet-nonce packet-nonce
                                    ::last-packet-nonce last-packet-nonce})
            ::specs/handled? true}))
+      ;; Need to forward along to a new client.
       {::log/state (log/debug log-state
                               log-label
                               "Not an existing client")
@@ -442,15 +457,19 @@ Note that that includes TODOs re:
 * for known clients, retrieve shared secret from cache
 "
   [log-state
-   my-keys
+   {:keys [::shared/long-pair]
+    :as my-keys}
    short-pk
-   client-message-box]
-  (let [client-long-key (bytes (::K/long-term-public-key client-message-box))
+   {:keys [::K/hidden-client-short-pk
+           ::K/inner-i-nonce
+           ::K/long-term-public-key]
+    :as client-message-box}]
+  (let [client-long-key (bytes long-term-public-key)
         ^TweetNaclFast$Box$KeyPair long-pair (::shared/long-pair my-keys)
         my-long-secret (.getSecretKey long-pair)
         shared-secret (crypto/box-prepare client-long-key
                                           my-long-secret)
-        ^TweetNaclFast$Box$KeyPair long-pair (::shared/long-pair my-keys)
+        ^TweetNaclFast$Box$KeyPair long-pair long-pair
         log-state (log/info log-state
                               ::verify-client-public-key-triad
                               (str "Getting ready to decrypt the inner-most hidden public key\n"
@@ -460,13 +479,13 @@ Note that that includes TODOs re:
                                ::my-long-pk (b-t/->string (.getPublicKey long-pair))
                                ::shared-long-secret (b-t/->string shared-secret)})
         {log-state ::log/state
-         ;; It seems use decompose-box here.
+         ;; It seems tempting to use decompose-box here.
          ;; That would be pointless: the clear text is just the client's
          ;; short-term public key.
          :keys [::crypto/unboxed]} (crypto/open-box log-state
                                                     K/vouch-nonce-prefix
-                                                    (::K/inner-i-nonce client-message-box)
-                                                    (::K/hidden-client-short-pk client-message-box)
+                                                    inner-i-nonce
+                                                    long-term-public-key
                                                     shared-secret)]
     {::log/state log-state
      ::specs/matched? (when unboxed
@@ -485,12 +504,13 @@ Note that that includes TODOs re:
     :as state}
    active-client]
   (throw (RuntimeException. "Integrate this with the approach used by Client"))
-  (let [;; Note that this is a pretty vital piece of the puzzle
+  (let [;; Note that the writer is a pretty vital piece of the puzzle
         writer (strm/stream)
         ;; Q: Does it make sense to share the child-spawing code with
         ;; the client?
         ;; A: If not, then update that code to make it sensible.
-        child (spawner writer)
+        {child-reader ::state/write->child
+         :as child} (spawner writer)
         ;; FIXME: Really don't want to know anything about the
         ;; state.message ns in here. Worst-case scenario: have
         ;; state inject this dependency before it calls do-handle.
@@ -500,7 +520,6 @@ Note that that includes TODOs re:
         client-with-child (assoc active-client
                                  ::state/child-interaction (assoc child
                                                                   ::state/reader-consumed listener-stream))
-        child-reader (::state/write->child child)
         ;; This doesn't actually matter. That field should probably be
         ;; considered a private black-box member from our perspective.
         ;; But it seems helpful for keeping which is what straight
@@ -575,55 +594,69 @@ Note that that includes TODOs re:
                 log-label
                 "Unable to decrypt incoming vouch"))))
 
+(s/fdef build-and-configure-client-basics
+  :args (s/cat)
+  :ret (s/keys :req [::log/state]
+               :opt [::state/client-state]))
+(defn build-and-configure-client-basics
+  [log-state
+   packet
+   {:keys [::templates/srvr-short-sk]
+    :as cookie}
+   initiate]
+  (let [log-state (log/info log-state
+                            ::build-and-configure-client-basics
+                            "Succssfully extracted cookie")
+        {{client-short-pk ::shared/short-pk} ::state/client-security
+         :as active-client} (state/new-client packet
+                                              cookie
+                                              initiate)
+        client-short-pk (bytes client-short-pk)
+        server-short-sk (bytes srvr-short-sk)
+        active-client (state/configure-shared-secrets active-client
+                                                      client-short-pk
+                                                      server-short-sk)]
+    {::log/state log-state
+     ::state/client-state active-client}))
+
 (s/fdef build-new-client
-  :args (s/cat :state ::state/state
+  :args (s/cat :state (s/keys :req [::state/cookie-cutter
+                                    ::shared/my-keys
+                                    ::log/state])
                :packet ::shared/network-packet
                :initiate ::K/initiate-packet-spec)
   :ret (s/keys :req [::log/state]
                :opt [::state/client-state]))
-;; FIXME: Refactor chunks of this into their own functions
-;; FIXME: Trim back the state parameter
 (defn build-new-client
   [{log-state ::log/state
     :keys [::state/cookie-cutter state
-           ::shared/my-keys]
-    :as state}
+           ::shared/my-keys]}
    {:keys [:host :port]
     :as packet}
    {:keys [::K/clnt-short-pk]
     :as initiate}]
-  (let [{{:keys [::templates/clnt-short-pk
-                 ::templates/srvr-short-sk]
-          :as cookie} ::templates/cookie-spec
+  (let [{cookie ::templates/cookie-spec
          log-state ::log/state
          :as cookie-extraction} (extract-cookie log-state
                                                 cookie-cutter
                                                 initiate)]
     (if cookie
-      (let [log-state (log/info log-state
-                                ::build-new-client
-                                "Succssfully extracted cookie")
-            client-short-pk (bytes clnt-short-pk)
-            {{client-short-pk ::shared/short-pk} ::state/client-security
-             :as active-client} (state/new-client packet
-                                                  cookie
-                                                  initiate)
-            server-short-sk (bytes srvr-short-sk)
-            active-client (state/configure-shared-secrets active-client
-                                                          clnt-short-pk
-                                                          srvr-short-sk)
-            client-short<->server-short (get-in active-client
-                                                [::state/shared-secrets
-                                                 ::state/client-short<->server-short])]
-        ;; It included a secret cookie that we generated sometime within the
-        ;; past couple of minutes.
-        ;; Now we're ready to tackle handling the main message body cryptobox.
-        ;; This corresponds to line 373 in the reference implementation.
+      ;; It included a secret cookie that we generated sometime within the
+      ;; past couple of minutes.
+      ;; Now we're ready to tackle handling the main message body cryptobox.
+      ;; This corresponds to line 373 in the reference implementation.
+      (let [{log-state ::log/state
+             {{:keys [::state/client-short<->server-short]} ::state/shared-secrets
+              client-short-pk ::shared/short-pk
+              :as active-client} ::state/client-state} (build-and-configure-client-basics log-state
+                                                                                    packet
+                                                                                    cookie
+                                                                                    initiate)]
+        (when-not client-short<->server-short
+          (throw (ex-info "Failed to set up short key"
+                          {::state/active-client active-client
+                           ::log/state log-state})))
         (try
-          (when-not client-short<->server-short
-            (throw (ex-info "Missing shared short key"
-                            {::state/active-client active-client
-                             ::log/state log-state})))
           (let [{log-state ::log/state
                  {client-long-pk ::K/long-term-public-key
                   :as client-message-box} ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
@@ -649,7 +682,7 @@ Note that that includes TODOs re:
                       ;; This takes us down to line 381
                       (let [{log-state ::log/state
                              matched? ::specs/matched?} (verify-client-public-key-triad log-state
-                                                                                        (::shared/my-keys state)
+                                                                                        my-keys
                                                                                         client-short-pk
                                                                                         client-message-box)]
                         (if matched?
@@ -752,27 +785,25 @@ Note that that includes TODOs re:
                      log-state ::log/state} (if client-state
                                               re-inited
                                               (let [{log-state ::log/state
-                                                     active-client ::state/current-client} (build-new-client (assoc state
+                                                     active-client ::state/current-client} (build-new-client (assoc (select-keys state [::state/cookie-cutter
+                                                                                                                                        ::shared/my-keys])
                                                                                                                     ::log/state log-state)
                                                                                                              packet
                                                                                                              initiate)]
                                                 (reset! log-state-atom log-state)
                                                 (when-not active-client
                                                   (throw (RuntimeException. "Unable to build a new client.")))
-                                                ;; STARTED: Limit the state parameter and return value to what's actually needed
                                                 (do-fork-child! (-> state
-                                                                    (assoc ::log/state log-state)
-                                                                    (select-keys [::log/state
-                                                                                  ::state/child-spawner!]))
+                                                                    (select-keys [::state/child-spawner!])
+                                                                    (assoc ::log/state log-state))
                                                                 active-client)
                                                 {::state/client-state active-client
                                                  ::log-state log-state}))
-                    delta (state/alter-client-state client-state)
-                    log-state (forward-message-portion! (into state delta)
-                                                        client-state
-                                                        initiate)]
+                    delta (state/alter-client-state client-state)]
                 (assoc delta
-                       ::log/state log-state))
+                       ::log/state (forward-message-portion! (into state delta)
+                                                             client-state
+                                                             initiate)))
               (throw (RuntimeException. "TODO: Handle additional Initiate packets from " (-> initiate
                                                                                              ::K/clnt-short-pk
                                                                                              bytes
