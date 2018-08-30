@@ -38,8 +38,8 @@
 ;; level.
 ;; Which means sending the long-pk to said child.
 (s/def ::client-security (s/keys :opt [::shared-specs/public-long
-                                       ::shared-specs/public-short
-                                       ::server-short-sk]))
+                                       ::shared-specs/public-short]
+                                 :req [::server-short-sk]))
 
 ;; Yes, this seems silly. And will probably cause plenty of
 ;; trouble/confusion. I'm not sure about alternatives for specing
@@ -88,21 +88,25 @@
                                       ::client-long<->server-long]))
 
 (s/def ::received-nonce int?)
-(s/def ::client-state (s/keys :req [;; The names for the next 2 seem silly, at best
-                                    ;; ::host and ::port seem like better options
-                                    ;; But this matches the reference implementation
-                                    ;; and will hopefully reduce confusion.
-                                    ;; Plus the alternatives I'd prefer seem to just
-                                    ;; be begging for issues with collisions.
-                                    ::client-ip
-                                    ::client-port
-                                    ::client-security
-                                    ::shared/extension
-                                    ::received-nonce
-                                    ;; TODO: Needs spec
-                                    ::sent-nonce
-                                    ::shared-secrets]
-                              :opt [::child-interaction]))
+
+(s/def ::initial-client-state (s/keys :req [;; The names for the next 2 seem silly, at best
+                                            ;; ::host and ::port seem like better options
+                                            ;; But this matches the reference implementation
+                                            ;; and will hopefully reduce confusion.
+                                            ;; Plus the alternatives I'd prefer seem to just
+                                            ;; be begging for issues with collisions.
+                                            ::client-ip
+                                            ::client-port
+                                            ::client-security
+                                            ::shared/extension
+                                            ::received-nonce]))
+
+(s/def ::sent-nonce int?)
+
+(s/def ::client-state (s/merge ::initial-client-state
+                               (s/keys :req [::sent-nonce
+                                             ::shared-secrets]
+                                       :opt [::child-interaction])))
 (s/def ::current-client ::client-state)
 
 ;; We're using the client's short-term public key as the key into the
@@ -193,6 +197,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Implementation
 ;;;; Q: Really? Nothing?
+;;;; A: Yep. It's tough to believe.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -225,10 +230,7 @@
   :args (s/cat :packet ::shared/network-packet
                :cookie ::templates/srvr-cookie
                :initiate ::K/initiate-packet-spec)
-  ;; This doesn't *really* return a full-fledged client-state.
-  ;; There are several missing keys.
-  ;; TODO: create a subset spec to cover these pieces.
-  :ret ::client-state)
+  :ret ::initial-client-state)
 (defn new-client
   [{:keys [:host :port]
     :as packet}

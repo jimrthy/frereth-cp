@@ -229,7 +229,7 @@ Needing to declare these things twice is annoying."
 
   Destructive in the sense that it updates the readIndex in src"
   [dscr src]
-  (let [^Long len (calculate-length dscr)
+  (let [len (long (calculate-length dscr))
         dst (byte-array len)]
     (.readBytes src dst)
     dst))
