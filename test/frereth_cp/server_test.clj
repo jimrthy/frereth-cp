@@ -280,7 +280,7 @@
                     (if (not (or (= hello ::drained)
                                  (= hello ::timeout)))
                       (let [->srvr (get-in started [::srvr-state/client-read-chan ::srvr-state/chan])
-                            ;; Currently, this arrives as a ByteBuf.
+                            ;; Currently, this arrives as a byte-array
                             ;; Anything that can be converted to a direct ByteBuf is legal.
                             ;; So this part is painfully implementation-dependent.
                             ;; Q: Is it worth generalizing?
@@ -291,6 +291,11 @@
                                       ->srvr
                                       " a "
                                       (class ->srvr)))
+                        ;; The timing on this test is extremely susceptible to variations in
+                        ;; system performance.
+                        ;; I don't want to let it run forever, but it would be nice to be able
+                        ;; to set up some sort of system load check to get ideas about how
+                        ;; long we expect things to take for any given test run.
                         (let [put-success (strm/try-put! ->srvr
                                                          (assoc hello
                                                                 :message hello-packet)
