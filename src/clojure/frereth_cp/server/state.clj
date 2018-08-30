@@ -239,7 +239,6 @@
     :as cookie}
    {:keys [::K/clnt-xtn]
     :as initiate}]
-  (throw (RuntimeException. "FIXME: Return spec is a lie"))
   (let [raw-rcvd-nonce (::K/outer-i-nonce initiate)
         received-nonce-array (bytes raw-rcvd-nonce)
         received-nonce (b-t/uint64-unpack received-nonce-array)]

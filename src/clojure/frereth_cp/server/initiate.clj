@@ -40,6 +40,10 @@ This is the part that possibly establishes a 'connection'"
 (s/def ::child-fork-prereqs (s/keys :req [::log/state
                                           ::state/child-spawner!]))
 
+(s/def ::client-builder (s/keys :req [::state/cookie-cutter
+                                      ::shared/my-keys
+                                      ::log/state]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal implementation
 
@@ -168,38 +172,20 @@ This is the part that possibly establishes a 'connection'"
                :opt [::crypto/unboxed]))
 (defn decrypt-cookie
   "Open the cookie we sent the client"
-  [log-state cookie-cutter hello-cookie]
-  (throw (RuntimeException. "Revisit the approaches here."))
-  (comment
-    ;; This approach seems much cleaner.
-    ;; Or possibly more succint.
-    ;; TODO: Consider.
-    (try
-      (let [opener #(crypto/open-box %1 K/initiate-nonce-prefix nonce-suffix box %2)
-            {log-state ::log/state
-             clear-text ::crypto/unboxed} (opener log-state minute-key)
-            ;; It seems like there must be a more elegant way to handle this
-            {log-state ::log/state
-             clear-text ::crypto/unboxed} (if-not clear-text
-                                            (opener log-state last-minute-key)
-                                            {::log/state log-state
-                                             ::crypto/unboxed clear-text})]
-        ;; This is another area where it really seems like I should just
-        ;; skip the conversion to a ByteBuf
-        {::log/state log-state
-         ::crypto/unboxed clear-text})
-      (catch Exception ex
-        {::log/state (log/exception log-state ex ::decrypt-initiate-vouch)})))
+  [log-state
+   {:keys [::state/minute-key
+           ::state/last-minute-key]
+    :as cookie-cutter}
+   hello-cookie]
   (let [log-state (log/debug log-state
-                             ::decrypt-inner-vouch
+                             ::decrypt-cookie
                              "Trying to extract cookie based on current minute-key")
-        src (byte-array K/hello-crypto-box-length)
+        crypto-text (byte-array K/hello-crypto-box-length)
         ;; Q: How much faster/more efficient is it to have a
         ;; io.netty.buffer.PooledByteBufAllocator around that
         ;; I could use for either .heapBuffer or .directBuffer?
         ;; (as opposed to creating my own local in the let above)
         nonce-suffix (byte-array specs/server-nonce-suffix-length)]
-    ;; the 80 bytes of
     ;; We're trying to decrypt  the 80 bytes of crypto text from the
     ;; initial cookie.
     ;; Note that this part is tricky:
@@ -212,33 +198,34 @@ This is the part that possibly establishes a 'connection'"
     ;; But then the "crypto black box" that just round-tripped
     ;; through the client includes 16 bytes of the nonce, taking
     ;; it back up to 96 bytes.
-    (b-t/byte-copy! src
-                    0
-                    K/hello-crypto-box-length
-                    hello-cookie
-                    specs/server-nonce-suffix-length)
+
+    ;; Start with the first 16 bytes, which is the nonce suffix
     (b-t/byte-copy! nonce-suffix
                     0
                     specs/server-nonce-suffix-length
                     hello-cookie)
+    ;; The remaining 80 bytes should get decrypted
+    (b-t/byte-copy! crypto-text
+                    0
+                    K/hello-crypto-box-length
+                    hello-cookie
+                    specs/server-nonce-suffix-length)
     (try
-      (println "FIXME: Switch to decompose-box")
       (let [opener #(crypto/open-box %1
                                      K/cookie-nonce-minute-prefix
                                      nonce-suffix
-                                     src
+                                     crypto-text
                                      %2)
             {log-state ::log/state
              unboxed ::crypto/unboxed
              :as opened} (opener log-state
-                                 (::state/minute-key cookie-cutter))]
+                                 minute-key)]
         (if-not unboxed
           ;; Try again with the previous minute-key
-          (let [log-state (log/debug log-state
-                                     ::decrypt-inner-vouch
-                                     "Couldn't decrypt w/ current minute-key")]
-            (opener log-state
-                    (::state/last-minute-key cookie-cutter)))
+          (opener (log/debug log-state
+                             ::decrypt-inner-vouch
+                             "Couldn't decrypt w/ current minute-key")
+                  last-minute-key)
           opened)))))
 
 (s/fdef client-short-pk-matches-cookie?
@@ -485,7 +472,7 @@ Note that that includes TODOs re:
          :keys [::crypto/unboxed]} (crypto/open-box log-state
                                                     K/vouch-nonce-prefix
                                                     inner-i-nonce
-                                                    long-term-public-key
+                                                    hidden-client-short-pk
                                                     shared-secret)]
     {::log/state log-state
      ::specs/matched? (when unboxed
@@ -620,9 +607,7 @@ Note that that includes TODOs re:
      ::state/client-state active-client}))
 
 (s/fdef build-new-client
-  :args (s/cat :state (s/keys :req [::state/cookie-cutter
-                                    ::shared/my-keys
-                                    ::log/state])
+  :args (s/cat :state ::client-builder
                :packet ::shared/network-packet
                :initiate ::K/initiate-packet-spec)
   :ret (s/keys :req [::log/state]
@@ -785,14 +770,22 @@ Note that that includes TODOs re:
                      log-state ::log/state} (if client-state
                                               re-inited
                                               (let [{log-state ::log/state
-                                                     active-client ::state/current-client} (build-new-client (assoc (select-keys state [::state/cookie-cutter
-                                                                                                                                        ::shared/my-keys])
-                                                                                                                    ::log/state log-state)
-                                                                                                             packet
-                                                                                                             initiate)]
+                                                     active-client ::state/current-client
+                                                     :as built} (build-new-client (assoc (select-keys state [::state/cookie-cutter
+                                                                                                             ::shared/my-keys])
+                                                                                         ::log/state log-state)
+                                                                                  packet
+                                                                                  initiate)]
                                                 (reset! log-state-atom log-state)
                                                 (when-not active-client
-                                                  (throw (RuntimeException. "Unable to build a new client.")))
+                                                  (throw (ex-info "Unable to build a new client"
+                                                                  ;; FIXME: Find the standard ns for each of these keys
+                                                                  {::shared/network-packet packet
+                                                                   ::K/initiate-packet-spec initiate
+                                                                   ::client-builder (select-keys state [::state/cookie-cutter
+                                                                                                        ::shared/my-keys])
+                                                                   ::built (dissoc built ::log/state)
+                                                                   ::built-keys (keys built)})))
                                                 (do-fork-child! (-> state
                                                                     (select-keys [::state/child-spawner!])
                                                                     (assoc ::log/state log-state))
