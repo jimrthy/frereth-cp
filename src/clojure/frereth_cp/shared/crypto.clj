@@ -420,6 +420,7 @@
                                          :client ::specs/client-nonce-suffix))
         ;; The length of :ret can be determined by :template.
         ;; But that gets into troublesome details about serialization
+        ;; FIXME: Refactor this to also return ::log/state
         :ret bytes?)
 (defn build-box
   "Compose a map into bytes and encrypt it
@@ -632,66 +633,63 @@
   [log-state
    ;; TODO: Check the clojure docs re: optimizing primitives.
    ;; This seems like it's totally wrong.
-   ^bytes box
+   box
    box-offset
    box-length
    nonce
    shared-key]
-  ;; The failure I'm getting here doesn't seem to make any sense.
-  (assert (bytes? shared-key) (str "Expected shared-key to be a byte-array.\nInstead got: '"
-                                   shared-key
-                                   "', a '"
-                                   (class shared-key)
-                                   "'"))
-  (if (and (not (nil? box))
-           (>= (count box) (+ box-offset box-length))
-           (>= box-length K/box-zero-bytes))
-    (let [log-state (log2/debug log-state
-                                ::open-after
-                                "Box is large enough")]
-      (let [n (+ box-length K/box-zero-bytes)
-            cipher-text (byte-array n)
-            plain-text (byte-array n)]
-        ;; Q: Is this worth being smarter about the array copies?
-        (doseq [i (range box-length)]
-          (aset-byte cipher-text
-                     (+ K/box-zero-bytes i)
-                     (aget box (+ i box-offset))))
-        ;; Q: Where does shared-key come from?
-        ;; A: crypto_box_beforenm
-        (let [success
-              (TweetNaclFast/crypto_box_open_afternm plain-text cipher-text
-                                                     n nonce
-                                                     shared-key)]
-          (when (not= 0 success)
-            (throw (ex-info "Opening box failed" {::box (b-t/->string box)
-                                                  ::offset box-offset
-                                                  ::length box-length
-                                                  ::nonce (b-t/->string nonce)
-                                                  ::shared-key (b-t/->string shared-key)})))
-          ;; TODO: Compare the speed of these approaches with allocating a new
-          ;; byte array without the 0-prefix padding and copying it back over
-          ;; Keep in mind that we're limited to 1088 bytes per message.
-          (comment (-> plain-text
-                       vec
-                       (subvec K/decrypt-box-zero-bytes)))
-          {::log2/state log-state
-           ;; Q: Why am I wrapping this in a ByteBuf?
-           ;; That seems like I'm probably jumping through extra hoops
-           ;; for the sake of hoop-jumping.
-           ;; Odds are, the next step, in general, is to decompose
-           ;; what just got unwrapped. So this seems like a premature
-           ;; convenience that would make more sense as an extra
-           ;; wrapper elsewhere.
-           ;; TODO: Look into that, too.
-           ::unboxed (Unpooled/wrappedBuffer plain-text
-                                             K/decrypt-box-zero-bytes
-                                             ^Long (- box-length K/box-zero-bytes))})))
-    (throw (ex-info "Box too small" {::box box
-                                     ::offset box-offset
-                                     ::length box-length
-                                     ::nonce nonce
-                                     ::shared-key shared-key}))))
+  {:pre [shared-key
+         (bytes? shared-key)]}
+  (let [box (bytes box)]
+    (if (and box
+             (>= (count box) (+ box-offset box-length))
+             (>= box-length K/box-zero-bytes))
+      (let [log-state (log2/debug log-state
+                                  ::open-after
+                                  "Box is large enough")]
+        (let [n (+ box-length K/box-zero-bytes)
+              cipher-text (byte-array n)
+              plain-text (byte-array n)]
+          ;; Q: Is this worth being smarter about the array copies?
+          (doseq [i (range box-length)]
+            (aset-byte cipher-text
+                       (+ K/box-zero-bytes i)
+                       (aget box (+ i box-offset))))
+          ;; Q: Where does shared-key come from?
+          ;; A: crypto_box_beforenm
+          (let [success
+                (TweetNaclFast/crypto_box_open_afternm plain-text cipher-text
+                                                       n nonce
+                                                       shared-key)]
+            (when (not= 0 success)
+              (throw (ex-info "Opening box failed" {::box (b-t/->string box)
+                                                    ::offset box-offset
+                                                    ::length box-length
+                                                    ::nonce (b-t/->string nonce)
+                                                    ::shared-key (b-t/->string shared-key)})))
+            ;; TODO: Compare the speed of these approaches with allocating a new
+            ;; byte array without the 0-prefix padding and copying it back over
+            ;; Keep in mind that we're limited to 1088 bytes per message.
+            (comment (-> plain-text
+                         vec
+                         (subvec K/decrypt-box-zero-bytes)))
+            {::log2/state log-state
+             ;; Q: Why am I wrapping this in a ByteBuf?
+             ;; That seems like I'm probably jumping through extra hoops
+             ;; for the sake of hoop-jumping.
+             ;; Odds are, the next step, in general, is to decompose
+             ;; what just got unwrapped. So this seems like a premature
+             ;; convenience that would make more sense as an extra
+             ;; wrapper elsewhere.
+             ;; TODO: Look into that, too.
+             ::unboxed (Unpooled/wrappedBuffer plain-text
+                                               K/decrypt-box-zero-bytes
+                                               ^Long (- box-length K/box-zero-bytes))})))
+      (throw (ex-info "Box too small" {::box box
+                                       ::offset box-offset
+                                       ::length box-length
+                                       ::nonce nonce
+                                       ::shared-key shared-key})))))
 
 (s/fdef open-box
         :args (s/cat :log-state ::log2/state

@@ -699,6 +699,39 @@ Note that that includes TODOs re:
                               ::build-new-client
                               "FIXME: More logs! cookie extraction failed")})))
 
+(s/fdef do-create-forked-child!
+  :args (s/cat :log-state-atom ::log/state-atom
+               :state (s/keys :req [::state/cookie-cutter
+                                    ::shared/my-keys])
+               :packet ::shared/network-packet
+               :initiate ::K/initiate-packet-spec)
+  :ret (s/keys :req [::log/state]
+               :opt [::state/client-state]))
+(defn do-create-forked-child!
+  [log-state-atom
+   {:keys [::state/cookie-cutter
+           ::shared/my-keys]
+    :as state}
+   packet
+   initiate]
+  (let [{log-state ::log/state
+         active-client ::state/current-client
+         :as built} (build-new-client {::state/cookie-cutter cookie-cutter
+                                       ::shared/my-keys my-keys
+                                       ::log/state @log-state-atom}
+                                      packet
+                                      initiate)]
+    (reset! log-state-atom log-state)
+    (if active-client
+      (do
+        (do-fork-child! (-> state
+                            (select-keys [::state/child-spawner!])
+                            (assoc ::log/state log-state))
+                        active-client)
+        {::state/client-state active-client
+         ::log/state log-state})
+      {::log/state log-state})))
+
 (s/fdef decompose-initiate-packet
   :args (s/cat :packet-length nat-int?
                :message-packet ::shared/message)
@@ -765,38 +798,35 @@ Note that that includes TODOs re:
                                                                                         ::log/state @log-state-atom)
                                                                                  initiate)]
             (reset! log-state-atom log-state)
+            ;; Careful. This next part gets clever.
+            ;; handled? in this sense really means "swallowed" because
+            ;; it's a packet from the stream that we've already seen.
+            ;; Based upon the nonce.
+            ;; Which isn't something that's actually part of the spec.
             (if-not handled?
               (let [{:keys [::state/client-state]
-                     log-state ::log/state} (if client-state
-                                              re-inited
-                                              (let [{log-state ::log/state
-                                                     active-client ::state/current-client
-                                                     :as built} (build-new-client (assoc (select-keys state [::state/cookie-cutter
-                                                                                                             ::shared/my-keys])
-                                                                                         ::log/state log-state)
-                                                                                  packet
-                                                                                  initiate)]
-                                                (reset! log-state-atom log-state)
-                                                (when-not active-client
-                                                  (throw (ex-info "Unable to build a new client"
-                                                                  ;; FIXME: Find the standard ns for each of these keys
-                                                                  {::shared/network-packet packet
-                                                                   ::K/initiate-packet-spec initiate
-                                                                   ::client-builder (select-keys state [::state/cookie-cutter
-                                                                                                        ::shared/my-keys])
-                                                                   ::built (dissoc built ::log/state)
-                                                                   ::built-keys (keys built)})))
-                                                (do-fork-child! (-> state
-                                                                    (select-keys [::state/child-spawner!])
-                                                                    (assoc ::log/state log-state))
-                                                                active-client)
-                                                {::state/client-state active-client
-                                                 ::log-state log-state}))
-                    delta (state/alter-client-state client-state)]
-                (assoc delta
-                       ::log/state (forward-message-portion! (into state delta)
-                                                             client-state
-                                                             initiate)))
+                     log-state ::log/state
+                     :as built} (if client-state
+                                  re-inited
+                                  (do-create-forked-child! log-state-atom
+                                                           (select-keys state [::state/cookie-cutter
+                                                                               ::shared/my-keys])
+                                                           packet
+                                                           initiate))]
+                (if client-state
+                  (let [delta (state/alter-client-state client-state)]
+                    (assoc delta
+                           ::log/state (forward-message-portion! (into state delta)
+                                                                 client-state
+                                                                 initiate)))
+                  (throw (ex-info "Unable to build a new client"
+                                  ;; FIXME: Find the standard ns for each of these keys
+                                  {::shared/network-packet packet
+                                   ::K/initiate-packet-spec initiate
+                                   ::client-builder (select-keys state [::state/cookie-cutter
+                                                                        ::shared/my-keys])
+                                   ::built (dissoc built ::log/state)
+                                   ::built-keys (keys built)}))))
               (throw (RuntimeException. "TODO: Handle additional Initiate packets from " (-> initiate
                                                                                              ::K/clnt-short-pk
                                                                                              bytes
