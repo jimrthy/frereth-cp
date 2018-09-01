@@ -417,53 +417,60 @@ This is the part that possibly establishes a 'connection'"
       (assoc base-result ::specs/matched? match?)
       base-result)))
 
-(s/fdef verify-client-public-key-triad
+(s/fdef unbox-innermost-key
   :args (s/cat :log-state ::log/state
                :my-keys ::shared/my-keys
-               :supplied-client-short-key ::shared/short-pk
-               ::client-message-box ::templates/initiate-client-vouch-wrapper)
-  :ret (s/keys :req [::log/state] :opt [::specs/matched?]))
-(defn verify-client-public-key-triad
+               :client-message-box ::templates/initiate-client-vouch-wrapper)
+  :ret (s/keys :req [::log/state]
+               :opt [::specs/public-short]))
+(defn unbox-innermost-key
   "We unwrapped the our original cookie, using the minute-key.
 
-And the actual message box using the client's short-term public key.
-That box included the client's long-term public key.
+  And the actual message box using the client's short-term public key.
+  That box included the client's long-term public key.
 
-Now there's a final box nested that contains the short-term key again,
-encrypted with the long-term key.
+  Now there's a final box nested that contains the short-term key again,
+  encrypted with the long-term key.
 
-This step verifies that the client really does have access to that key.
+  This step verifies that the client really does have access to that long-term
+  key.
 
-It's flagged as \"optional\" in the reference implementation, but that seems
-a bit silly.
+  It's flagged as \"optional\" in the reference implementation, but that seems
+  a bit silly.
 
-This corresponds, roughly, to lines 382-391 in the reference implementation.
+  This corresponds, roughly, to lines 382-391 in the reference implementation.
 
-Note that that includes TODOs re:
-* impose policy limitations on clients: known, maxconn
-* for known clients, retrieve shared secret from cache
-"
+  Note that that includes TODOs re:
+  * impose policy limitations on clients: known, maxconn
+  * for known clients, retrieve shared secret from cache"
   [log-state
-   {:keys [::shared/long-pair]
-    :as my-keys}
-   short-pk
+   {:keys [::shared/long-pair] :as my-keys}
    {:keys [::K/hidden-client-short-pk
            ::K/inner-i-nonce
            ::K/long-term-public-key]
     :as client-message-box}]
+  ;; Throwing exceptions is convenient, but it really hoses up logging.
+  ;; This causes a NPE from logging when it's wrong
+  ;; FIXME: Restore it after fixing the current "real" problem,
+  ;; then reintroduce that problem to make sure this gets fixed
+  #_{:pre [long-term-public-key]}
+  ;; Actually, that problem shows up even without these. So
+  ;; neither is the culprit.
+  (when-not long-term-public-key
+    (throw (ex-info "Missing long-term-pk among"
+                    {::message-box-keys (keys client-message-box)
+                     ::templates/initiate-client-vouch-wrapper client-message-box})))
   (let [client-long-key (bytes long-term-public-key)
-        ^TweetNaclFast$Box$KeyPair long-pair (::shared/long-pair my-keys)
+        ^TweetNaclFast$Box$KeyPair long-pair long-pair
         my-long-secret (.getSecretKey long-pair)
         shared-secret (crypto/box-prepare client-long-key
                                           my-long-secret)
-        ^TweetNaclFast$Box$KeyPair long-pair long-pair
         log-state (log/info log-state
-                              ::verify-client-public-key-triad
+                            ::unbox-innermost-key
                               (str "Getting ready to decrypt the inner-most hidden public key\n"
                                    "FIXME: Don't log any secret keys")
                               {::client-long-pk (b-t/->string client-long-key)
                                ::my-long-sk (b-t/->string my-long-secret)
-                               ::my-long-pk (b-t/->string (.getPublicKey long-pair))
                                ::shared-long-secret (b-t/->string shared-secret)})
         {log-state ::log/state
          ;; It seems tempting to use decompose-box here.
@@ -474,12 +481,51 @@ Note that that includes TODOs re:
                                                     inner-i-nonce
                                                     hidden-client-short-pk
                                                     shared-secret)]
-    {::log/state log-state
-     ::specs/matched? (when unboxed
-                        (let [inner-pk-buf ^ByteBuf unboxed
-                              inner-pk (byte-array K/key-length)]
-                          (.getBytes inner-pk-buf 0 inner-pk)
-                          (b-t/bytes= short-pk inner-pk)))}))
+    (if unboxed
+      (let [inner-pk-buf ^ByteBuf unboxed
+            inner-pk (byte-array K/key-length)]
+        (.getBytes inner-pk-buf 0 inner-pk)
+        {::log/state log-state
+         ::specs/public-short inner-pk}))
+    {::log/state (log/warn log-state
+                           ::unbox-innermost-key
+                           "Unboxing innermost key failed"
+                           {::long-client-pk (b-t/->string client-long-key)
+                            ;; FIXME: Don't log secrets!!
+                            ::long-server-sk (b-t/->string my-long-secret)
+                            ::shared-secret (b-t/->string shared-secret)})}))
+
+(s/fdef client-public-key-triad-matches?
+  :args (s/cat :log-state ::log/state
+               :my-keys ::shared/my-keys
+               ;; This arrived in the public part of the Initiate
+               :supplied-client-short-key ::shared/short-pk
+               :client-message-box ::templates/initiate-client-vouch-wrapper)
+  :ret (s/keys :req [::log/state] :opt [::specs/matched?]))
+(defn client-public-key-triad-matches?
+  [log-state
+   {:keys [::shared/long-pair]
+    :as my-keys}
+   client-short-pk
+   client-message-box]
+  {:pre [client-short-pk]}
+  (let [{log-state ::log/state
+         inner-pk ::specs/public-short} (unbox-innermost-key log-state
+                                                             my-keys
+                                                             client-message-box)]
+    (if inner-pk
+      (let [matched? (b-t/bytes= client-short-pk inner-pk)]
+        {::log/state (if matched?
+                       log-state
+                       (log/warn log-state
+                                 ::client-public-key-triad-matches?
+                                 "Inner pk doesn't match outer"
+                                 {::outer (b-t/->string client-short-pk)
+                                  ::inner (b-t/->string inner-pk)}))
+         ::specs/matched? matched?}
+        {::log/state (log/warn log-state
+                               ::client-public-key-triad-matches?
+                               "Unable to open inner cryptobox")}))))
 
 (s/fdef do-fork-child!
   :args (s/cat :prereqs ::child-fork-prereqs
@@ -632,11 +678,15 @@ Note that that includes TODOs re:
       ;; This corresponds to line 373 in the reference implementation.
       (let [{log-state ::log/state
              {{:keys [::state/client-short<->server-short]} ::state/shared-secrets
-              client-short-pk ::shared/short-pk
+              {client-short-pk ::shared/short-pk} ::state/client-security
               :as active-client} ::state/client-state} (build-and-configure-client-basics log-state
                                                                                     packet
                                                                                     cookie
                                                                                     initiate)]
+        (when-not client-short-pk
+          (throw (ex-info "Missing the short-pk"
+                          {::state/client-state active-client
+                           ::state-keys (keys active-client)})))
         (when-not client-short<->server-short
           (throw (ex-info "Failed to set up short key"
                           {::state/active-client active-client
@@ -666,20 +716,13 @@ Note that that includes TODOs re:
                     (if matched?
                       ;; This takes us down to line 381
                       (let [{log-state ::log/state
-                             matched? ::specs/matched?} (verify-client-public-key-triad log-state
-                                                                                        my-keys
-                                                                                        client-short-pk
-                                                                                        client-message-box)]
-                        (if matched?
-                          {::log/state log-state
-                           ::state/current-client active-client}
-                          {::log/state (log/warn log-state
-                                                 ::build-new-client
-                                                 "Mismatched public keys"
-                                                 {::FIXME "Show the extracted versions"
-                                                  ::state/state state
-                                                  ::client-short-pk client-short-pk
-                                                  ::shared/message client-message-box})}))
+                             :keys [matched?]} (client-public-key-triad-matches? log-state
+                                                                                 my-keys
+                                                                                 client-short-pk
+                                                                                 client-message-box)]
+                        {::log/state log-state
+                         ::state/current-client (when matched?
+                                                  active-client)})
                       {::log/state log-state}))
                   (catch ExceptionInfo ex
                     {::log/state (log/exception log-state
@@ -797,6 +840,7 @@ Note that that includes TODOs re:
                  :as re-inited} (possibly-re-initiate-existing-client-connection (assoc state
                                                                                         ::log/state @log-state-atom)
                                                                                  initiate)]
+            (assert log-state)
             (reset! log-state-atom log-state)
             ;; Careful. This next part gets clever.
             ;; handled? in this sense really means "swallowed" because
@@ -835,6 +879,12 @@ Note that that includes TODOs re:
                                  ::do-handle
                                  (str "Truncated initiate packet. Only received " n " bytes"))}))
       (catch Exception ex
-        {::log/state (log/exception @log-state-atom
-                                    ex
-                                    ::do-handle)}))))
+        (let [log-state-acc @log-state-atom
+              log-state (or log-state-acc log-state)]
+          {::log/state (log/exception (if log-state-acc
+                                        log-state
+                                        (log/error log-state
+                                                   ::do-handle
+                                                   "nil log-state-atom"))
+                                      ex
+                                      ::do-handle)})))))
