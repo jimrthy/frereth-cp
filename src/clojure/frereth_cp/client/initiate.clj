@@ -72,7 +72,8 @@
         _ (assert (< 0 msg-length))
         tmplt (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)]
     (if srvr-name
-      (let [src {::K/client-long-term-key (.getPublicKey long-pair)
+      (let [my-long-pk (.getPublicKey long-pair)
+            src {::K/client-long-term-key my-long-pk
                  ;; FIXME: Need to verify that the inner vouch portions
                  ;; are OK to resend and don't compromise anything.
                  ;; (soon)
@@ -89,21 +90,23 @@
                                   shared-secrets
                                   "'\nin\n"
                                   this))
+            crypto-box (crypto/build-box tmplt
+                                         src
+                                         secret
+                                         K/initiate-nonce-prefix
+                                         outer-nonce-suffix)
             log-state (log/info log-state
                                 ::build-initiate-interior
                                 "Encrypting\nFIXME: Do not log the shared secret!"
-                                {::source src
-                                 ::inner-nonce-suffix (if inner-nonce-suffix
-                                                        (b-t/->string inner-nonce-suffix)
-                                                        (assoc this
-                                                               ::problem
-                                                               "Missing"))
-                                 ::shared-secret (b-t/->string secret)})]
-        {::specs/crypto-box (crypto/build-box tmplt
-                                              src
-                                              secret
-                                              K/initiate-nonce-prefix
-                                              outer-nonce-suffix)
+                                {::my-long-pk (b-t/->string my-long-pk)
+                                 ::K/inner-i-nonce (if inner-nonce-suffix
+                                                     (b-t/->string inner-nonce-suffix)
+                                                     (assoc this
+                                                            ::problem
+                                                            "Missing"))
+                                 ::shared-secret (b-t/->string secret)
+                                 ::specs/crypto-box (b-t/->string crypto-box)})]
+        {::specs/crypto-box crypto-box
          ::log/state log-state})
       {::log/state (log/warn log-state
                              ::build-initiate-interior
@@ -237,10 +240,10 @@
                     nonce-suffix)
     (let [vouch (crypto/box-after shared-secret
                                   clear-text
-                                  K/key-length
+                                  K/key-length  ; looks weird, but we're encrypting a key
                                   nonce)
           log-state (log/info log-state
-                              ::build-vouch
+                              ::encrypt-inner-vouch
                               (str "Just encrypted the inner-most portion of the Initiate's Vouch\n"
                                    "(FIXME: Don't log the shared secret)")
                               {::shared/safe-nonce (b-t/->string nonce)
