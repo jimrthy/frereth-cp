@@ -464,14 +464,6 @@ This is the part that possibly establishes a 'connection'"
                              ::shared-long-secret (b-t/->string shared-secret)
                              ::K/inner-i-nonce (b-t/->string inner-i-nonce)
                              ::specs/crypto-text (b-t/->string hidden-client-short-pk)})
-        ;; This next line is failing.
-        ;; Q: Could it possibly be a subtle difference between box-after and whatever
-        ;; open-box does?
-        ;; I have verified that the nonces, crypto-text, and shared secrets are
-        ;; the same.
-        ;; FIXME: Take those values and write up a unit test that calls
-        ;; client.initiate/encrypt-inner-vouch and then this to verify
-        ;; the round trip
         {log-state ::log/state
          ;; It seems tempting to use decompose-box here.
          ;; That would be pointless: the clear text is just the client's
@@ -877,7 +869,6 @@ This is the part that possibly establishes a 'connection'"
                   {::log/state (log/warn log-state
                                          ::do-handle
                                          "Unable to build a new client"
-                                         ;; FIXME: Find the standard ns for each of these keys
                                          {::shared/network-packet packet
                                           ::K/initiate-packet-spec initiate
                                           ::client-builder (select-keys state [::state/cookie-cutter
