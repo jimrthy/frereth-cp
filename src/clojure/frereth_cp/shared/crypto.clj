@@ -512,6 +512,7 @@
         :ret (s/or :long ::specs/my-long-keys
                    :short ::specs/my-short-keys))
 (defn random-keys
+  "Sticks a new random key pair into a map"
   [which]
   (let [pair (random-key-pair)
         namespace "frereth-cp.shared.specs"
@@ -713,7 +714,7 @@
         :ret (s/keys :req [::log2/state]
                      :opt [::unboxed]))
 (defn open-box
-  "Generally, this is probably the least painful method [so far] to open a crypto box"
+  "Builds a nonce and open a crypto box"
   [log-state nonce-prefix nonce-suffix crypto-box shared-key]
   (let [nonce-suffix (bytes nonce-suffix)
         crypto-box (bytes crypto-box)

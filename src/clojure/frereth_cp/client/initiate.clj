@@ -32,16 +32,16 @@
 (s/def ::vouch-building-params (s/keys :req [::log/logger
                                              ::shared/my-keys
                                              ::state/shared-secrets]))
-(s/def ::vouch-built (s/keys :req [::specs/inner-i-nonce
-                                   ::log/state
-                                   ::specs/vouch]))
+
+(s/def ::vouch-encryption-response (s/keys :req [::log/state
+                                                 ::specs/vouch]))
+(s/def ::vouch-built (s/merge ::vouch-encryption-respons
+                              (s/keys :req [::specs/inner-i-nonce])))
 
 ;;; These pieces are about the main message payload
-(s/def ::message-building-params (s/keys :req [::log/state
-                                               ::specs/inner-i-nonce
-                                               ::shared/my-keys
-                                               ::specs/vouch
-                                               ::state/shared-secrets]))
+(s/def ::message-building-params (s/merge ::vouch-built
+                                          (s/keys :req [::shared/my-keys
+                                                        ::state/shared-secrets])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
@@ -223,7 +223,8 @@
         :args (s/cat :log-state ::log/state
                      :shared-secret ::shared/shared-secret
                      :nonce-suffix ::specs/server-nonce-suffix
-                     :clear-text ::shared/text))
+                     :clear-text ::shared/text)
+        :ret ::vouch-encryption-response)
 (defn encrypt-inner-vouch
   "Encrypt the inner-most crypto box"
   [log-state shared-secret nonce-suffix clear-text]

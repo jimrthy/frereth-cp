@@ -3,10 +3,13 @@
             [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as test]
             [clojure.test :refer (are deftest is testing)]
-            [clojure.test.check.clojure-test :as c-t]
-            [clojure.test.check.generators :as lo-gen]
-            [clojure.test.check.properties :as props]
-            [frereth-cp.shared.bit-twiddling :as b-t])
+            [clojure.test.check
+             [clojure-test :as c-t]
+             [generators :as lo-gen]
+             [properties :as props]]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]])
   (:import clojure.lang.BigInt
            [io.netty.buffer ByteBuf Unpooled]))
 
@@ -50,6 +53,23 @@ Since it really isn't secure, that might be a terrible idea"
         ;; Really, the fact that it works without throwing an exception
         ;; is a victory.
         (is s)))))
+
+(deftest basic-byte-copy
+  (let [dst (byte-array (take 32 (repeat 0)))]
+    (b-t/byte-copy! dst K/hello-nonce-prefix)
+    (is (= (subs (String. dst) 0 (count K/hello-nonce-prefix))
+           (String. K/hello-nonce-prefix)))))
+
+(deftest check-byte=
+  (let [lhs (byte-array (take 256 (repeat 0)))
+        rhs (byte-array (take 255 (repeat 0)))]
+    (is (not (b-t/bytes= lhs rhs)))
+    (let [rhs (byte-array (take 256 (repeat 0)))]
+      (is (b-t/bytes= lhs rhs)))
+    (let [rhs (byte-array (take 256 (repeat 1)))]
+      (is (not (b-t/bytes= lhs rhs))))
+    (let [rhs (byte-array (assoc (vec (take 256 (repeat 0))) 255 3))]
+      (is (not (b-t/bytes= lhs rhs))))))
 
 (deftest complement-2s
   (are [x expected] (= expected (b-t/possibly-2s-complement-8 x))

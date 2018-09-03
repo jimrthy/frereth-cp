@@ -1,5 +1,4 @@
 (ns frereth-cp.interaction-test
-  ;; FIXME: Rename
   "This is really about message interactions"
   (:require [aleph.netty :as netty]
             [aleph.udp :as udp]
@@ -7,21 +6,30 @@
             [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
+            ;; FIXME: Make this go away
             [clojure.tools.logging :as log]
             [frereth-cp.client :as clnt]
-            [frereth-cp.client.state :as clnt-state]
+            [frereth-cp.client
+             [initiate :as clnt-init]
+             [state :as clnt-state]]
             [frereth-cp.server :as srvr]
-            [frereth-cp.server.state :as srvr-state]
+            [frereth-cp.server
+             [initiate :as srvr-init]
+             [state :as srvr-state]]
             [frereth-cp.server-test :as server-test]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.specs :as specs]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log2]
+             [specs :as specs]]
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box
+           com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            io.netty.buffer.Unpooled))
 
 (deftest basic-sanity
@@ -527,6 +535,7 @@
                                              ::K/server-name server-name}}}))
 
 (deftest handshake
+  "Q: How does this compare with server-test/handshake?"
   (log/info "**********************************\nNew Hand-Shake test")
   ;; Shouldn't be trying to re-use buffers produced at client side on the server.
   ;; And vice-versa.
@@ -702,3 +711,45 @@
               (strm/close! client2-socket))))
         (finally
           (strm/close! client1-socket))))))
+
+(deftest innermost-initiate-round-trip
+  (let [{:keys [::specs/my-client-long-public
+                ::specs/my-client-long-secret]
+         :as client-long-key-pair} (crypto/random-keys "client-long")
+
+        ^TweetNaclFast$Box$KeyPair server-long-key-pair (crypto/random-key-pair)
+        my-server-long-public (.getPublicKey server-long-key-pair)
+        my-server-long-secret (.getSecretKey server-long-key-pair)
+
+        client-shared (crypto/box-prepare my-server-long-public
+                                          my-client-long-secret)
+
+        server-shared (crypto/box-prepare my-client-long-public
+                                          my-server-long-secret)]
+    (is (b-t/bytes= client-shared server-shared))
+    (let [log-state (log2/init ::innermost-initiate-round-trip)
+          raw-nonce-suffix [0x19 0x91 0x98 0xE6 0x6E 0xA9 0x0D 0x68
+                            0xC7 0xFE 0x1F 0x34 0x6C 0x44 0x5D 0xDF]
+          nonce-suffix (byte-array raw-nonce-suffix)
+          {client-short-pk ::specs/my-test-public
+           :as key-pair} (crypto/random-keys "test")
+          {log-state ::log2/state
+           vouch ::specs/vouch} (clnt-init/encrypt-inner-vouch log-state
+                                                               client-shared
+                                                               nonce-suffix
+                                                               client-short-pk)]
+      (is vouch)
+      (is log-state)
+      (let [my-keys {::shared/long-pair server-long-key-pair}
+            client-message-box {::K/hidden-client-short-pk vouch
+                                ::K/inner-i-nonce nonce-suffix
+                                ::K/long-term-public-key my-client-long-public}
+            {log-state ::log2/state
+             :keys [::specs/public-short]} (srvr-init/unbox-innermost-key log-state
+                                                                          my-keys
+                                                                          client-message-box)]
+        (is public-short)
+        (when-not public-short
+          (let [logger (log2/std-out-log-factory)]
+            (log2/flush-logs! logger log-state)))
+        (is (b-t/bytes= client-short-pk public-short))))))
