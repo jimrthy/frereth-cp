@@ -487,14 +487,14 @@ This is the part that possibly establishes a 'connection'"
             inner-pk (byte-array K/key-length)]
         (.getBytes inner-pk-buf 0 inner-pk)
         {::log/state log-state
-         ::specs/public-short inner-pk}))
-    {::log/state (log/warn log-state
-                           ::unbox-innermost-key
-                           "Unboxing innermost key failed"
-                           {::long-client-pk (b-t/->string client-long-key)
-                            ;; FIXME: Don't log secrets!!
-                            ::long-server-sk (b-t/->string my-long-secret)
-                            ::shared-secret (b-t/->string shared-secret)})}))
+         ::specs/public-short inner-pk})
+      {::log/state (log/warn log-state
+                             ::unbox-innermost-key
+                             "Unboxing innermost key failed"
+                             {::long-client-pk (b-t/->string client-long-key)
+                              ;; FIXME: Don't log secrets!!
+                              ::long-server-sk (b-t/->string my-long-secret)
+                              ::shared-secret (b-t/->string shared-secret)})})))
 
 (s/fdef client-public-key-triad-matches?
   :args (s/cat :log-state ::log/state

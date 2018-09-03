@@ -725,10 +725,14 @@
                                           my-client-long-secret)
 
         server-shared (crypto/box-prepare my-client-long-public
-                                          my-server-long-secret)]
+                                          my-server-long-secret)
+        log-state (log2/debug (log2/init ::innermost-initiate-round-trip)
+                              ::innermost-initiate-round-trip
+                              "Shared keys"
+                              {::client (b-t/->string client-shared)
+                               ::server (b-t/->string server-shared)})]
     (is (b-t/bytes= client-shared server-shared))
-    (let [log-state (log2/init ::innermost-initiate-round-trip)
-          raw-nonce-suffix [0x19 0x91 0x98 0xE6 0x6E 0xA9 0x0D 0x68
+    (let [raw-nonce-suffix [0x19 0x91 0x98 0xE6 0x6E 0xA9 0x0D 0x68
                             0xC7 0xFE 0x1F 0x34 0x6C 0x44 0x5D 0xDF]
           nonce-suffix (byte-array raw-nonce-suffix)
           {client-short-pk ::specs/my-test-public

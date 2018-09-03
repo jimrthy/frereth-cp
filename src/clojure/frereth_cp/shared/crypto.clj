@@ -663,7 +663,8 @@
                                                        n nonce
                                                        shared-key)]
             (when (not= 0 success)
-              (throw (ex-info "Opening box failed" {::box (b-t/->string box)
+              (throw (ex-info "Opening box failed" {::error-code success
+                                                    ::box (b-t/->string box)
                                                     ::offset box-offset
                                                     ::length box-length
                                                     ::nonce (b-t/->string nonce)
@@ -674,7 +675,9 @@
             (comment (-> plain-text
                          vec
                          (subvec K/decrypt-box-zero-bytes)))
-            {::log2/state log-state
+            {::log2/state (log2/debug log-state
+                                      ::open-after
+                                      "Box Opened")
              ;; Q: Why am I wrapping this in a ByteBuf?
              ;; That seems like I'm probably jumping through extra hoops
              ;; for the sake of hoop-jumping.
@@ -728,12 +731,11 @@
                       nonce-suffix))
     (try
       (open-after log-state crypto-box 0 crypto-length nonce shared-key)
-      (catch ExceptionInfo ex
+      (catch Exception ex
         {::log2/state (log2/exception log-state
                                       ex
                                       ::open-box
-                                      (str "Failed to open box\n")
-                                      (.getData ex))}))))
+                                      "Failed to open box")}))))
 
 (defn decompose-box
   "Open a crypto box and decompose its bytes"
