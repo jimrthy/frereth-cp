@@ -299,7 +299,6 @@ This is the part that possibly establishes a 'connection'"
          ^ByteBuf inner-vouch-buffer ::crypto/unboxed} (decrypt-cookie log-state
                                                                        cookie-cutter
                                                                        hello-cookie)]
-    (println "decrypt-cookie returned:" inner-vouch-buffer)
     (if inner-vouch-buffer
       ;; Yet again: Converting this to a ByteBuf was a mistake
       (let [inner-vouch-bytes (byte-array (.readableBytes inner-vouch-buffer))]
@@ -514,14 +513,12 @@ This is the part that possibly establishes a 'connection'"
          inner-pk ::specs/public-short} (unbox-innermost-key log-state
                                                              my-keys
                                                              client-message-box)]
-    (println "Mark J. inner-pk:"
-             inner-pk
-             "log-state:"
-             (dissoc log-state ::log/entries))
     (if inner-pk
       (let [matched? (b-t/bytes= client-short-pk inner-pk)]
         {::log/state (if matched?
-                       log-state
+                       (log/debug log-state
+                                  ::client-public-key-triad-matches?
+                                  "Matched.")
                        (log/warn log-state
                                  ::client-public-key-triad-matches?
                                  "Inner pk doesn't match outer"
@@ -676,7 +673,6 @@ This is the part that possibly establishes a 'connection'"
          :as cookie-extraction} (extract-cookie log-state
                                                 cookie-cutter
                                                 initiate)]
-    (println "Mark C. cookie:" cookie)
     (if cookie
       ;; It included a secret cookie that we generated sometime within the
       ;; past couple of minutes.
@@ -689,10 +685,6 @@ This is the part that possibly establishes a 'connection'"
                                                                                           packet
                                                                                           cookie
                                                                                           initiate)]
-        (println "Mark D. client-short-pk:"
-                 client-short-pk
-                 "\nclient-short<->server-short:"
-                 client-short<->server-short)
         (if client-short-pk
           (if client-short<->server-short
             (try
@@ -701,7 +693,6 @@ This is the part that possibly establishes a 'connection'"
                       :as client-message-box} ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
                                                                                                          initiate
                                                                                                          client-short<->server-short)]
-                (println "Mark E. client-message-box:" client-message-box)
                 (if client-message-box
                   (let [client-long-pk (bytes client-long-pk)
                         active-client (assoc-in active-client
@@ -713,21 +704,18 @@ This is the part that possibly establishes a 'connection'"
                                             ;; try to extract the inner hidden key
                                             {::message-box-keys (keys client-message-box)
                                              ::client-public-long-key (b-t/->string client-long-pk)})]
-                    (println "Mark F. client-long-pk" client-long-pk)
                     (try
                       (let [{:keys [::specs/matched?]
                              log-state ::log/state} (validate-server-name log-state
                                                                           my-keys
                                                                           client-message-box)]
-                        (println "Mark I. log-state:" (dissoc log-state ::log/entries))
                         (if matched?
                           ;; This takes us down to line 381
                           (let [{log-state ::log/state
-                                 :keys [::matched?]} (client-public-key-triad-matches? log-state
-                                                                                       my-keys
-                                                                                       client-short-pk
-                                                                                       client-message-box)]
-                            (println "Mark G. matched?" matched?)
+                                 :keys [::specs/matched?]} (client-public-key-triad-matches? log-state
+                                                                                             my-keys
+                                                                                             client-short-pk
+                                                                                             client-message-box)]
                             {::log/state log-state
                              ::state/current-client (when matched?
                                                       active-client)})
@@ -774,7 +762,6 @@ This is the part that possibly establishes a 'connection'"
     :as state}
    packet
    initiate]
-  (println "Mark A")
   (let [{log-state-2 ::log/state
          active-client ::state/current-client
          :as built} (build-new-client {::state/cookie-cutter cookie-cutter
@@ -789,7 +776,6 @@ This is the part that possibly establishes a 'connection'"
                               (str "Log state disappeared"
                                    "  trying to build-new-client")
                               {::built built}))]
-    (println "Mark B. active-client: " active-client)
     (if active-client
       (do-fork-child! (-> state
                           (select-keys [::state/child-spawner!])
