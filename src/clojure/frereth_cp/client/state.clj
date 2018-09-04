@@ -11,6 +11,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
              [bit-twiddling :as b-t]
+             [child :as child-manager]
              [constants :as K]
              [crypto :as crypto]
              [logging :as log]
@@ -187,16 +188,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                 ;; But it's absolutely vital for
                                                 ;; for building the Initiate Packet.
                                                 ::specs/inner-i-nonce]))
+
 (s/def ::child-send-state (s/merge ::initiate-building-params
                                    (s/keys :req [::chan->server])))
 
 ;; Refactored from hello so it can be used by ::cookie/success-callback
 (s/def ::cookie-response
-  ;; This started out as
-  #_(s/keys :req [::log/state]
-          :opt [::security
-                ::shared-secrets
-                ::shared/network-packet])
   ;; But that didn't cut it
   (fn [{:keys [::log/state
                ::security
@@ -220,16 +217,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (s/def ::valid-outgoing-binary (s/or :bytes bytes?
                                      :byte-buf ::specs/byte-buf
                                      :byte-buffer ::specs/nio-byte-buffer))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Globals
-
-(defonce io-loop-registry (atom (registry/ctor)))
-(comment
-  @io-loop-registry
-  (-> io-loop-registry deref keys)
-  (swap! io-loop-registry registry/de-register "client-hand-shaker")
-  )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal Implementation
@@ -458,17 +445,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                       ::server-extension
                       ::server-security]))
 
-(s/fdef update-callback!
-        :args (s/cat :io-handle ::msg-specs/io-handle
-                     :time-out ::specs/time
-                     :new-callback ::msg-specs/->parent))
-(defn update-callback!
-  [io-handle time-out new-callback]
-  (message/swap-parent-callback! io-handle
-                                 time-out
-                                 ::child
-                                 new-callback))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
 
@@ -570,8 +546,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;; Which is a strong argument for refactoring specs like
 ;;; that into their own namespace.
 (s/fdef child->
-        :args (s/cat :state ::child-send-state
-                     :message bytes?)
+  :args (s/cat :state ::child-send-state
+               :timeout number?
+               :message bytes?)
         ;; Q: What does this return?
         ;; Note that it's called from the child.
         ;; So we really can't count on anything safe happening
@@ -766,7 +743,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef fork!
         :args (s/cat :state ::state)
-        :ret ::state)
+        :ret (s/keys :req [::child
+                           ::log/state]))
+;; It's tempting to try to deprecate this and just have
+;; callers call the version in shared.child instead.
+;; That would be a mistake.
+;; This serves as an important bridge for helping the
+;; coupling between the implementations loose.
 (defn fork!
   "Create a new Child to do all the interesting work."
   [{:keys [::log/logger
@@ -780,40 +763,26 @@ The fact that this is so big says a lot about needing to re-think my approach"
     (throw (ex-info (str "Missing log state among "
                          (keys this))
                     this)))
-  (let [log-state (log/info log-state ::fork! "Spawning child!!")
-        child-name (str (gensym "child-"))
-        startable (message/initial-state message-loop-name
-                                         false
-                                         {::log/state (log/clean-fork log-state child-name)}
-                                         logger)
-        child-send-state (extract-child-send-state this)
-        _ (assert (::specs/inner-i-nonce child-send-state) (str "Missing inner-i-nonce in child-send-state\n"
-                                                              (keys child-send-state)
-                                                              "\namong\n"
-                                                              child-send-state
-                                                              "\nbuilt from\n"
-                                                              (keys this)
-                                                              "\namong\n"
-                                                              this))
-        {:keys [::msg-specs/io-handle]
-         log-state ::log/state} (message/do-start startable
-                                                  logger
-                                                  (partial child->
-                                                           child-send-state
-                                                           (current-timeout this))
-                                                  ->child)
-        log-state (log/debug log-state
-                             ::fork!
-                             "Child message loop initialized"
-                             {::this (dissoc this ::log/state)
-                              ::child (dissoc io-handle ::log/state)})]
-    (swap! io-loop-registry
-           #(registry/register % io-handle))
-    (child-spawner! io-handle)
-    (assoc this
-           ::child io-handle
-           ::log/state (log/flush-logs! logger log-state)
-           ::msg-specs/io-handle io-handle)))
+  (let [child-send-state (extract-child-send-state this)
+        _ (assert (::specs/inner-i-nonce child-send-state)
+                  (str "Missing inner-i-nonce in child-send-state\n"
+                       (keys child-send-state)
+                       "\namong\n"
+                       child-send-state
+                       "\nbuilt from\n"
+                       (keys this)
+                       "\namong\n"
+                       this))
+        build-params (select-keys this [::log/logger
+                                        ::log/state
+                                        ::msg-specs/->child
+                                        ::msg-specs/child-spawner!
+                                        ::msg-specs/message-loop-name])
+        child-> (partial child->
+                         child-send-state
+                         (current-timeout this))]
+    (into this (child-manager/fork! build-params
+                                    child->))))
 
 (s/fdef stop!
         :args (s/cat :this ::state)
@@ -823,32 +792,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
     log-state ::log/state
     :as this}]
   (if child
-    (let [log-state (log/warn log-state
-                              ::do-stop
-                              "Halting child's message io-loop")
-          message-loop-name (::specs/message-loop-name child)]
-      (message/halt! child)
-      ;; In theory, I should be able to just manually call halt!
-      ;; on entries in this registry that don't get stopped when
-      ;; things hit a bug.
-      ;; In practice, the problems probably go deeper:
-      ;; Either from-child or to-parent (more likely) keeps
-      ;; feeding un-ackd messages into the queue.
-      ;; So I need a way to manually halt that also.
-
-      ;; There are some interrupt functions in the top-level
-      ;; frereth-cp.message ns that seem to do the trick.
-      ;; It's tempting to expose them.
-      ;; Then again, they're a sledge hammer that just stops
-      ;; all the message loops.
-      ;; Running multiple clients and server connections
-      ;; requires a scalpel.
-      ;; TODO: Revisit this.
-      (swap! io-loop-registry
-             #(registry/de-register % message-loop-name))
-      (log/warn log-state
-                ::do-stop
-                "Child's message io-loop halted"))
+    (child-manager/do-halt! log-state child)
     (log/warn log-state
               ::do-stop
               "No child message io-loop to stop")))
