@@ -11,7 +11,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
              [bit-twiddling :as b-t]
-             [child :as child-manager]
+             [child :as child]
              [constants :as K]
              [crypto :as crypto]
              [logging :as log]
@@ -88,8 +88,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                  :ret (s/keys :req [::log/state]
                                               :opt [::shared/packet])))
 
-(s/def ::child ::msg-specs/io-handle)
-
 ;; This is for really extreme conditions where sanity has flown
 ;; out the window.
 ;; In a standard synchronous application, this is where an assert
@@ -98,6 +96,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; in an async callback and it will just get swallowed.
 ;; There's never a valid reason for fulfilling this successfully.
 (s/def ::terminated ::specs/deferrable)
+
+;;;; FIXME: Move at least the state-related specs into a shared ns
+;;;; to give me the opportunity to split this one up a bit
 
 ;; The parts that change really need to be stored in a mutable
 ;; data structure.
@@ -125,7 +126,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; The only thing mutable about this is that I don't have it all in beginning
                                      ::shared-secrets
                                      ::terminated]
-                               :opt [::child
+                               :opt [::child/state
                                      ::specs/io-handle
                                      ;; Q: Why am I tempted to store this at all?
                                      ;; A: Well...I might need to resend it if it
@@ -590,9 +591,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ::server-security]
     :as state}
    timeout
-   ^bytes message-block]
+   message-block]
   {:pre [packet-builder]}
-  (let [{:keys [::server-cookie
+  (let [message-block (bytes message-block)
+        {:keys [::server-cookie
                 ::specs/srvr-name
                 ::specs/srvr-port]} server-security
         log-state (log/flush-logs! logger (log/trace log-state
@@ -641,13 +643,14 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
     ;; This is the point behind ->message-exchange-mode.
     (let [{log-state ::log/state
-           message-packet ::shared/packet} (packet-builder (assoc state ::log/state log-state) message-block)
+           message-packet ::shared/packet} (packet-builder (assoc state ::log/state log-state)
+                                                           message-block)
           raw-message-packet (if message-packet
                                (b-s/convert message-packet specs/byte-array-type)
                                (byte-array 0))
           log-state (log/debug log-state
                                ::child->
-                               "Client sending a message packet from child->serve"
+                               "Client sending a message packet from child->server"
                                {::shared/message (if message-packet
                                                    (b-t/->string raw-message-packet)
                                                    "No message packet built")
@@ -743,7 +746,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef fork!
         :args (s/cat :state ::state)
-        :ret (s/keys :req [::child
+        :ret (s/keys :req [::child/state
                            ::log/state]))
 ;; It's tempting to try to deprecate this and just have
 ;; callers call the version in shared.child instead.
@@ -763,6 +766,16 @@ The fact that this is so big says a lot about needing to re-think my approach"
     (throw (ex-info (str "Missing log state among "
                          (keys this))
                     this)))
+  ;; child-send-state is very similar to the idea of immutable
+  ;; properties from react.js
+  ;; It's tempting to adjust this to that kind of model:
+  ;; whatever calls child-> will call it with parameters
+  ;; for the immutable properties, along with some kind of
+  ;; mutable state that it pulls from a data store.
+  ;; Or even dig into the Om Next approach and supply
+  ;; query parameters.
+  ;; That's really a very different problem domain, but
+  ;; it's tempting to consider.
   (let [child-send-state (extract-child-send-state this)
         _ (assert (::specs/inner-i-nonce child-send-state)
                   (str "Missing inner-i-nonce in child-send-state\n"
@@ -781,18 +794,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
         child-> (partial child->
                          child-send-state
                          (current-timeout this))]
-    (into this (child-manager/fork! build-params
+    (into this (child/fork! build-params
                                     child->))))
 
 (s/fdef stop!
         :args (s/cat :this ::state)
         :ret ::log/state)
 (defn do-stop
-  [{:keys [::child]
+  [{child-state ::child/state
     log-state ::log/state
     :as this}]
-  (if child
-    (child-manager/do-halt! log-state child)
+  (if child-state
+    (child/do-halt! log-state child-state)
     (log/warn log-state
               ::do-stop
               "No child message io-loop to stop")))

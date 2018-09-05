@@ -21,7 +21,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(s/def ::child ::msg-specs/io-handle)
+(s/def ::state ::msg-specs/io-handle)
 
 (s/def ::child-builder (s/keys :req [::log/logger
                                      ::log/state
@@ -49,7 +49,7 @@
 (s/fdef fork!
   :args (s/cat :builder ::child-builder
                :child-> ::msg-specs/->parent)
-  :ret (s/keys :req [::child
+  :ret (s/keys :req [::state
                      ::log/state]))
 (defn fork!
   "Create a new Child to do all the interesting work"
@@ -61,10 +61,12 @@
     :as builder}
    child->]
   {:pre [message-loop-name]}
+  (println "Mark C")
   (when-not log-state
     (throw (ex-info (str "Missing log state among "
                          (keys builder))
                     builder)))
+  (println "Mark D")
   (let [log-state (log/info log-state ::fork! "Spawning child!!")
         child-name (str (gensym "child-"))
         ;; Q: Refactor implementation from message into here?
@@ -82,16 +84,19 @@
                              ::fork!
                              "Child message loop initialized"
                              {::child-builder (dissoc builder ::log/state)
-                              ::child (dissoc io-handle ::log/state)})]
+                              ::state (dissoc io-handle ::log/state)})]
+    (println "Mark E")
     (swap! io-loop-registry
            #(registry/register % io-handle))
+    (println "Mark F")
     (child-spawner! io-handle)
-    {::child io-handle
+    (println "Mark G")
+    {::state io-handle
      ::log/state (log/flush-logs! logger log-state)}))
 
 (s/fdef do-halt!
   :args (s/cat :log-state ::log/state
-               :child ::child)
+               :child ::state)
   :ret ::log/state)
 (defn do-halt!
   [log-state child]
@@ -136,5 +141,5 @@
   ;; FIXME: Refactor the implementation from message into here
   (message/swap-parent-callback! io-handle
                                  time-out
-                                 ::child
+                                 ::state
                                  new-callback))
