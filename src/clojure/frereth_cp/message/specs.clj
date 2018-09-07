@@ -470,8 +470,6 @@
 ;;; The main restriction around these is that they're all
 ;;; about side-effects. So you probably don't want to try
 ;;; to validate this.
-;;; TODO: add an optional callback for updating (querying?)
-;;; the actual status.
 (s/def ::io-handle (s/keys :req [::->child  ;; callbacks here
                                  ::->parent
                                  ;; PipedIn/OutputStream pairs
@@ -531,8 +529,9 @@
 ;; That actually seems to have worked out fairly well, so
 ;; this particular debate seems to be settled.
 
-;; However, it might be nice for this to return a ::log/state.
-;; The down-side to that idea is that this calls client
-;; code, and keeping that isolated seems like a really good idea.
+;; It would be nice for this to return a ::log/state.
+;; The down-side to that idea is that this is a callback
+;; supplied by the client, and that should be totally
+;; independent of our logging.
 (s/def ::child-spawner! (s/fspec :args (s/cat :io-handle ::io-handle)
                                  :ret any?))

@@ -49,7 +49,7 @@
                     ::K/crypto-box crypto-box}]
     (serial/compose K/hello-packet-dscr hello-dscr)))
 
-(defn handshake->client-child
+(defn handshake->child
   "Client-child callback for bytes arriving on the message stream"
   [ch
    ks-or-bs]
@@ -142,7 +142,10 @@
   (testing "That we can start and stop successfully"
     (let [logger (log/std-out-log-factory)
           log-state (log/init ::verify-start-stop)
-          inited (factory/build-server logger log-state)
+          ;; FIXME: This is broken now.
+          inited (factory/build-server logger
+                                       log-state
+                                       nil)
           started (factory/start-server inited)]
       (is started)
       (is (factory/stop-server started)))))
@@ -158,10 +161,8 @@
     (let [base-options {::log/logger (log/std-out-log-factory)
                         ::log/state (log/init ::verify-ctor-spec)
                         ::shared/extension factory/server-extension
-                        ::srvr-state/child-spawner! (fn []
-                                                      {::srvr-state/child-id 8
-                                                       ::srvr-state/read<-child (strm/stream)
-                                                       ::srvr-state/write->child (strm/stream)})
+                        ::msg-specs/child-spawner! (fn [io-handle]
+                                                     (println "Server child-spawner! called for side-effects"))
                         ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
                         ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}}]
       ;; Honestly, this is just testing the clause that chooses between these two possibilities.
@@ -197,7 +198,7 @@
                 (println "Server started. Looks like:  <------------")
                 (pprint (dissoc state ::log/state))
                 (is (not (s/explain-data ::srvr-state/checkable-state (dissoc state
-                                                                              ::srvr-state/child-spawner
+                                                                              ::msg-specs/child-spawner
                                                                               ::srvr-state/event-loop-stopper!))))
                 ;; Sending a SIGINT kills a thread that's blocking execution and
                 ;; allows this line to print.
@@ -225,7 +226,10 @@
         ;; TODO: Rewrite this entire thing as a pair of dfrd/chains.
         (let [srvr-logger (log/file-writer-factory "/tmp/shake-hands.server.log.edn")
               srvr-log-state (log/init ::shake-hands.server)
-              initial-server (factory/build-server srvr-logger srvr-log-state)
+              srvr->child (strm/stream)
+              initial-server (factory/build-server srvr-logger
+                                                   srvr-log-state
+                                                   (partial handshake->child srvr->child))
               started (factory/start-server initial-server)
               srvr-log-state (log/flush-logs! srvr-logger (log/info srvr-log-state
                                                                     ::shake-hands
@@ -251,7 +255,7 @@
                                              server-ip
                                              server-port
                                              srvr-pk-long
-                                             (partial handshake->client-child internal-client-chan)
+                                             (partial handshake->child internal-client-chan)
                                              (partial handshake-client-child-spawner! internal-client-chan))]
               (println (str "shake-hands: Client State start triggered. Pulling HELLO from "
                             client
@@ -284,7 +288,7 @@
                             ;; Anything that can be converted to a direct ByteBuf is legal.
                             ;; So this part is painfully implementation-dependent.
                             ;; Q: Is it worth generalizing?
-                            ^bytes hello-packet (:message hello)]
+                            hello-packet (bytes (:message hello))]
                         (println (str "shake-hands: Trying to put hello packet\n"
                                       (b-t/->string hello-packet)
                                       "\nonto server channel "
@@ -307,8 +311,7 @@
                           (println "shake-hands: Result of putting hello onto server channel:" success)
                           (if (and (not= ::timed-out success)
                                    (not= ::deref-try-put!-timed-out success))
-                            (let [srvr-> (get-in started [::srvr-state/client-write-chan ::srvr-state/chan])
-                                  ;; From the aleph docs:
+                            (let [;; From the aleph docs:
                                   ;; "The stream will accept any messages which can be coerced into
                                   ;; a binary representation."
                                   ;; It's perfectly legit for the Server to send either B] or
@@ -321,8 +324,13 @@
                                   ;; minimize copying for writes (this may or may not mean
                                   ;; rewriting compose to return B] instead)
                                   ;; Note that I didn't need to do this for the Hello packet.
-                                  packet-take (strm/try-take! srvr-> ::drained 1000 ::timeout)
-                                  packet (deref packet-take 1000 ::take-timeout)]
+                                  packet-take (strm/try-take! srvr->child
+                                                              ::drained
+                                                              1000
+                                                              ::timeout)
+                                  packet (deref packet-take
+                                                1000
+                                                ::take-timeout)]
                               (println "server-test/shake-hands: Server response to hello:"
                                        packet)
                               (if (and (not= ::drained packet)
@@ -375,10 +383,13 @@
                                                                     (is (= server-port port))
                                                                     (is false (str "UDP packet missing port in initiate\n" initiate)))
                                                                   (println "Trying to send that initiate (?) packet to the server")
-                                                                  (let [put (strm/try-put! ->srvr initiate 1000 ::timeout)]
+                                                                  (let [put (strm/try-put! ->srvr
+                                                                                           initiate
+                                                                                           1000
+                                                                                           ::timeout)]
                                                                     (println "Initiate packet sent to the server:" put)
                                                                     (if (not= ::timeout @put)
-                                                                      (let [first-srvr-message @(strm/try-take! srvr-> ::drained 1000 ::timeout)]
+                                                                      (let [first-srvr-message @(strm/try-take! srvr->child ::drained 1000 ::timeout)]
                                                                         (println "First message pulled back from server:" first-srvr-message)
                                                                         (if-not (or (= first-srvr-message ::drained)
                                                                                     (= first-srvr-message ::timeout))

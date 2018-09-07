@@ -1,6 +1,7 @@
 (ns frereth-cp.server.state
   "Managing CurveCP server state"
   (:require [clojure.spec.alpha :as s]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server.helpers :as helpers]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
@@ -51,15 +52,13 @@
 ;; However:
 ;; I remember thinking I had a good reason for the indirection
 ;; that leaves each pointing to another map.
+;; (Most likely bet: I thought they would be more involved).
 ;; FIXME: Revisit that reason and decide whether it's still
 ;; valid.
 (s/def ::chan #(= % ::chan))
-;; These definitions seem dubious.
-;; Originally, I expected them to be core.async channels.
-;; They should probably be manifold streams, in which
-;; case read-chan seems like it should be a source?
-;; and write-chan seems like it should be a sink?
+;; Message bytes from the client arrive here
 (s/def ::client-read-chan (s/map-of ::chan strm/sourceable?))
+;; Send message bytes to the client
 (s/def ::client-write-chan (s/map-of ::chan strm/sinkable?))
 
 ;;; Note that this has really changed drastically.
@@ -74,6 +73,7 @@
 ;; What, exactly, do we need to do here?
 (s/def ::read<-child strm/sourceable?)
 (s/def ::write->child strm/sinkable?)
+;; FIXME: This needs to go away
 (s/def ::child-interaction (s/keys :req [::read<-child
                                          ::write->child]))
 
@@ -120,11 +120,6 @@
 (s/def ::active-clients (s/map-of ::public-key-vec ::client-state))
 (s/def ::max-active-clients nat-int?)
 
-;; TODO: Make this go away. Switch to the version in
-;; frereth-cp.message.specs
-(s/def ::child-spawner! (s/fspec :args (s/cat)
-                                 :ret ::child-interaction))
-
 (s/def ::event-loop-stopper! (s/fspec :args (s/cat)
                                      :ret any?))
 
@@ -169,7 +164,7 @@
   ;; This is really just for documentation.
   ;; If you try to validate this, it will make you very sad.
   (s/def ::state (s/keys :req (conj fields-safe-to-validate
-                                    ::child-spawner!
+                                    ::msg-specs/child-spawner!
                                     ;; Checking the spec on this means calling
                                     ;; it. Which really hoses the entire system
                                     ;; if it happens more than once.

@@ -538,7 +538,7 @@ This is the part that possibly establishes a 'connection'"
   (throw (RuntimeException. "So, what should this do?")))
 
 (s/fdef do-fork-child!
-  :args (s/cat :prereqs ::child-fork-prereqs
+  :args (s/cat :builder-params ::child-fork-prereqs
                :active-client ::state/client-state)
   :ret (s/keys :req [::log/state ::state/client-state]))
 (defn do-fork-child!
@@ -547,6 +547,9 @@ This is the part that possibly establishes a 'connection'"
   (println "Mark A")
   ;; This is drastically oversimplified.
   ;; But it's a start.
+  ;; Actually, if there's no more to it than this, then it
+  ;; seems pretty pointless.
+  ;; Just call child/fork! directly and be done with it.
   (let [{child-state ::child/state
          log-state ::log/state} (child/fork! builder-params child->)]
     (println "Mark B")
@@ -740,9 +743,8 @@ This is the part that possibly establishes a 'connection'"
 
 (s/fdef create-child
   :args (s/cat :log-state ::log/state
-               :state (s/merge (s/keys :req [::state/cookie-cutter
-                                             ::shared/my-keys])
-                               ::child-fork-prereqs)
+               :state (s/keys :req [::state/cookie-cutter
+                                    ::shared/my-keys])
                :packet ::shared/network-packet
                :initiate ::K/initiate-packet-spec)
   :ret (s/keys :req [::log/state]
@@ -750,8 +752,7 @@ This is the part that possibly establishes a 'connection'"
 (defn create-child
   [log-state
    {:keys [::state/cookie-cutter
-           ::shared/my-keys]
-    :as state}
+           ::shared/my-keys]}
    packet
    initiate]
   (let [{log-state-2 ::log/state
@@ -844,39 +845,32 @@ This is the part that possibly establishes a 'connection'"
             ;; Based upon the nonce.
             ;; Which isn't something that's actually part of the spec.
             (if-not handled?
-              (let [child-creation-params (select-keys state [::state/cookie-cutter
-                                                              ::shared/my-keys])
-                    {:keys [::state/client-state]
+              (let [{:keys [::state/client-state]
                      log-state ::log/state
                      :as built} (if client-state
                                   re-inited
-                                  (create-child log-state
-                                                child-creation-params
-                                                packet
-                                                initiate))]
+                                  (let [child-creation-params (select-keys state [::shared/my-keys
+                                                                                  ::state/cookie-cutter])]
+                                    (create-child log-state
+                                                  child-creation-params
+                                                  packet
+                                                  initiate)))]
                 (reset! log-state-atom log-state)
-                ;; These msg-specs pieces, at least, have not been set
-                ;; up correctly.
-                ;; child-spawner! in particular is likely to cause issues
+                ;; Still need a message-loop-name
                 (throw (RuntimeException. "Start back here"))
                 (if client-state
-                  (let [fork-prereqs (select-keys state [::log/logger
-                                                         ::log/state
-                                                         ::msg-specs/->child
-                                                         ::msg-specs/child-spawner!
-                                                         ::msg-specs/message-loop-name])]
-                    (as-> client-state x
-                      (do-fork-child! (select-keys state [::log/logger
-                                                          ::log/state
-                                                          ::msg-specs/->child
-                                                          ::msg-specs/child-spawner!
-                                                          ::msg-specs/message-loop-name])
-                                      x)
-                      (state/alter-client-state x)
-                      (assoc x ::log-state log-state)
-                      (assoc x ::log/state (forward-message-portion! (into state x)
-                                                                     client-state
-                                                                     initiate))))
+                  (as-> client-state x
+                    (do-fork-child! (select-keys state [::log/logger
+                                                        ::log/state
+                                                        ::msg-specs/->child
+                                                        ::msg-specs/child-spawner!
+                                                        ::msg-specs/message-loop-name])
+                                    x)
+                    (state/alter-client-state x)
+                    (assoc x ::log-state log-state)
+                    (assoc x ::log/state (forward-message-portion! (into state x)
+                                                                   client-state
+                                                                   initiate)))
                   {::log/state (log/warn log-state
                                          ::do-handle
                                          "Unable to build a new client"

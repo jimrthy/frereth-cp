@@ -195,7 +195,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 ;; Refactored from hello so it can be used by ::cookie/success-callback
 (s/def ::cookie-response
-  ;; But that didn't cut it
   (fn [{:keys [::log/state
                ::security
                ::shared-secrets
@@ -752,7 +751,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; callers call the version in shared.child instead.
 ;; That would be a mistake.
 ;; This serves as an important bridge for helping the
-;; coupling between the implementations loose.
+;; coupling between the implementations remain loose.
 (defn fork!
   "Create a new Child to do all the interesting work."
   [{:keys [::log/logger

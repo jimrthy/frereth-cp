@@ -2,6 +2,7 @@
   "Implement the server half of the CurveCP protocol"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server
              [cookie :as cookie]
              [hello :as hello]
@@ -38,8 +39,8 @@
 
 ;; Note that this really only exists as an intermediate step for the
 ;; sake of producing a ::state/state.
-(s/def ::pre-state (s/keys :req [::state/active-clients
-                                 ::state/child-spawner!
+(s/def ::pre-state (s/keys :req [::msg-specs/child-spawner!
+                                 ::state/active-clients
                                  ::state/client-read-chan
                                  ::state/client-write-chan
                                  ::state/max-active-clients
@@ -78,7 +79,7 @@
                                                 ;; Can't include the child-spawner! spec,
                                                 ;; or checking it will spawn several children that we don't
                                                 ;; really want.
-                                                #_::state/child-spawner!)))
+                                                #_::msg-specs/child-spawner!)))
 
   (s/def ::post-state-options (s/keys :req (conj common-state-option-keys ::state/max-active-clients))))
 
@@ -506,7 +507,7 @@
   ;; until after I'm happy with the way the client approach
   ;; works.
   (when-let [problem (s/explain-data ::pre-state-options (dissoc cfg
-                                                                 ::state/child-spawner!))]
+                                                                 ::msg-specs/child-spawner!))]
     (throw (ex-info "Invalid state construction attempt" problem)))
 
   (let [log-state (log/clean-fork log-state ::server)]

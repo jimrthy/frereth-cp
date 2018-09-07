@@ -12,6 +12,7 @@
             [frereth-cp.client
              [initiate :as clnt-init]
              [state :as clnt-state]]
+            [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server :as srvr]
             [frereth-cp.server
              [initiate :as srvr-init]
@@ -328,12 +329,13 @@
       (is succeeded)
       (is (not= succeeded ::timedout)))))
 
+(s/fdef client-child-spawner
+  :args (s/cat :io-handle ::msg-specs/io-handle)
+  :ret any?)
 (defn client-child-spawner
-  [client-agent]
+  [io-handle]
+  ;; This is going to fail pretty brutally
   (log/info "Top of client-child-spawner")
-  ;; TODO: Other variants
-  ;; 1. Start by writing 0 bytes
-  ;; 2. Write, say, 480 bytes, send notification, then 320 more
   (let [write-notifier (strm/stream)
         ;; Real implementations really must use a
         ;; PooledByteBufAllocator.
@@ -346,6 +348,9 @@
         buffer (Unpooled/buffer 2048)
         release-notifier (strm/stream)
         read-notifier (strm/stream)
+        ;; TODO: Other variants
+        ;; 1. Start by writing 0 bytes
+        ;; 2. Write, say, 480 bytes, send notification, then 320 more
         child (future (client-child buffer
                                     write-notifier
                                     release-notifier
@@ -360,42 +365,11 @@
      ::hidden-child hidden}))
 
 (s/fdef server-child-spawner
-        :args (s/cat :write-stream strm/stream?)
-        :ret ::srvr-state/child-interaction)
+  :args (s/cat :io-handle ::msg-specs/io-handle)
+  :ret any?)
 (defn server-child-spawner
-  [read-stream]
-  (log/info "Spawning a server child")
-  (let [write-stream (strm/stream)
-        echoer (strm/consume (fn [buffer]
-                               (log/info "Incoming:" buffer)
-                               (assert buffer)
-                               ;; Realistically, this needs to read the bytes
-                               ;; from the buffer we just received, .release
-                               ;; it, then do something with them.
-                               ;; I don't much care about realism
-                               (let [responded (strm/try-put! write-stream buffer 250 ::time-out)]
-                                 (dfrd/on-realized responded
-                                                   (fn [success]
-                                                     (is success "Did the parent side close its channel?")
-                                                     (is (not= success ::time-out) "Parent too busy"))
-                                                   (fn [failure]
-                                                     (throw (ex-info "Shouldn't be possible"
-                                                                     {::problem failure}))))))
-                             read-stream)]
-    (when (not echoer)
-      (throw (ex-info "strm/consume returned falsey"
-                      {::problem echoer
-                       ::details "Docstring claims it returns a deferred"})))
-    (dfrd/on-realized echoer
-                      (fn [success]
-                        (is success "Per docstring: consume yields true on channel close"))
-                      (fn [failure]
-                        (throw (ex-info "Could this happen if consume throws an exception?"
-                                        {:problem failure}))))
-    #:frereth-cp.server.state {:child-id (gensym)
-                               :read<-child write-stream
-                               :write->child read-stream
-                               ::hidden echoer}))
+  [io-handle]
+  (println "Spawning a server child"))
 
 (defn double-check-long-term-shared-secrets
   [client server]
@@ -505,12 +479,12 @@
     {::server #::shared{:extension server-extension
                         :my-keys #::shared{::K/server-name server-name
                                            :keydir "curve-test"}
-                        ::srvr-state/child-spawner! server-child-spawner}
+                        ::msg-specs/child-spawner! server-child-spawner}
      ::client {::shared/extension (byte-array [0x10 0x0f 0x0e 0x0d
                                                0x0c 0x0b 0x0a 0x09
                                                0x08 0x07 0x06 0x05
                                                0x04 0x03 0x02 0x01])
-               ::specs/child-spawner! client-child-spawner
+               ::msg-specs/child-spawner! client-child-spawner
                ;; Based on this, the client should be setting up
                ;; a random key pair every time.
                ;; Maybe I'm screwing something up royally and

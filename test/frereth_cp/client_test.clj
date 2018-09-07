@@ -82,7 +82,6 @@
           srvr-long-pair (crypto/do-load-keypair keydir)
           srvr-pk-long (.getPublicKey srvr-long-pair)
           log-state (log/init ::step-1)
-          child-spawner step-1-fork!
           client (factory/raw-client "step-1"
                                      log/std-out-log-factory
                                      log-state
@@ -90,7 +89,7 @@
                                      64921
                                      srvr-pk-long
                                      child-cb
-                                     child-spawner)
+                                     step-1-fork!)
           {:keys [::log/logger
                   ::state/chan<-server
                   ::state/chan->server]} client]

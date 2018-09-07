@@ -8,12 +8,14 @@
             [frereth-cp.server :as server]
             [frereth-cp.server.state :as srvr-state]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.shared.specs :as shared-specs]
-            [manifold.executor :as exec]
-            [manifold.stream :as strm])
+            [frereth-cp.shared
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [specs :as shared-specs]]
+            [manifold
+             [executor :as exec]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            java.net.InetAddress))
 
@@ -30,44 +32,51 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Helpers
 
+;; FIXME: Return spec
+(s/fdef server-options
+  :args (s/cat :logger ::log/logger
+               :log-state ::log/state
+               :->child ::msg-specs/->child))
 (defn server-options
-  [logger log-state]
+  [logger log-state ->child]
   (let [client-write-chan (strm/stream)
         client-read-chan (strm/stream)
         child-id-atom (atom 0)
         executor (exec/fixed-thread-executor 4)]
     {::cp-server {::log/logger logger
                   ::log/state log-state
+                  ::msg-specs/->child ->child
+                  ::msg-specs/child-spawner! (fn [io-handle]
+                                               (log/flush-logs! logger
+                                                                (log/debug (log/clean-fork log-state ::child-spawner!)
+                                                                           ::top)))
+                  ;; Honestly, this isn't something that belongs in here.
+                  ;; It's really the specific to each child.
+                  ;; This approach made sense for the client, which we only expect to
+                  ;; have a single child...
+                  ;; except that that isn't true.
+                  ::msg-specs/message-loop-name message-loop-name
                   ::shared/extension server-extension
                   ::shared/my-keys #::shared{::shared-specs/srvr-name server-name
                                              :keydir "curve-test"}
                   ::srvr-state/client-read-chan {::srvr-state/chan client-read-chan}
-                  ::srvr-state/client-write-chan {::srvr-state/chan client-write-chan}
-                  ::srvr-state/child-spawner! (fn [writer]
-                                                (log/flush-logs! logger
-                                                                 (log/debug (log/clean-fork log-state ::child-spawner!)
-                                                                            ::top))
-                                                ;; This needs to do something.
-                                                ;; Then again, that "something" very much depends
-                                                ;; on the changes I'm currently making to the client
-                                                ;; child fork mechanism.
-                                                ;; FIXME: Get back to this once that is done.
-                                                {::srvr-state/child-id (swap! child-id-atom inc)
-                                                 ::srvr-state/read<-child (strm/stream 2 nil executor)
-                                                 ::srvr-state/write->child writer})}}))
+                  ::srvr-state/client-write-chan {::srvr-state/chan client-write-chan}}}))
 
+(s/fdef build-server
+  :args (s/cat :logger ::log/logger
+               :log-state ::log/state
+               :child-> ::msg-specs/->child))
 (defn build-server
-  [logger log-state]
+  [logger log-state ->child]
   (try
-    (let [server (server/ctor (::cp-server (server-options logger log-state)))]
+    (let [server (server/ctor (::cp-server (server-options logger log-state ->child)))]
       {::cp-server server
        ::srvr-state/client-read-chan (::srvr-state/client-read-chan server)
        ::srvr-state/client-write-chan (::srvr-state/client-write-chan server)})
     (catch ExceptionInfo ex
       (log/flush-logs! logger (log/exception log-state
                                              ex
-                                             ::build-server
-                                             ""))
+                                             ::build-server))
       (throw ex))))
 
 (defn start-server
