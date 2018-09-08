@@ -61,12 +61,10 @@
     :as builder}
    child->]
   {:pre [message-loop-name]}
-  (println "Mark C")
   (when-not log-state
     (throw (ex-info (str "Missing log state among "
                          (keys builder))
                     builder)))
-  (println "Mark D")
   (let [log-state (log/info log-state ::fork! "Spawning child!!")
         child-name (str (gensym "child-"))
         ;; Q: Refactor implementation from message into here?
@@ -85,12 +83,9 @@
                              "Child message loop initialized"
                              {::child-builder (dissoc builder ::log/state)
                               ::state (dissoc io-handle ::log/state)})]
-    (println "Mark E")
     (swap! io-loop-registry
            #(registry/register % io-handle))
-    (println "Mark F")
     (child-spawner! io-handle)
-    (println "Mark G")
     {::state io-handle
      ::log/state (log/flush-logs! logger log-state)}))
 

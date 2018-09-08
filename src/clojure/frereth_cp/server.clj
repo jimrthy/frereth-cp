@@ -79,7 +79,9 @@
                                                 ;; Can't include the child-spawner! spec,
                                                 ;; or checking it will spawn several children that we don't
                                                 ;; really want.
-                                                #_::msg-specs/child-spawner!)))
+                                                #_::msg-specs/child-spawner!
+                                                ;; ditto
+                                                #_::msg-specs/->child)))
 
   (s/def ::post-state-options (s/keys :req (conj common-state-option-keys ::state/max-active-clients))))
 
@@ -507,7 +509,8 @@
   ;; until after I'm happy with the way the client approach
   ;; works.
   (when-let [problem (s/explain-data ::pre-state-options (dissoc cfg
-                                                                 ::msg-specs/child-spawner!))]
+                                                                 ::msg-specs/child-spawner!
+                                                                 ::msg-specs/->child))]
     (throw (ex-info "Invalid state construction attempt" problem)))
 
   (let [log-state (log/clean-fork log-state ::server)]

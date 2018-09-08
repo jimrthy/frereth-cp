@@ -30,13 +30,19 @@
 (def server-name (shared/encode-server-name "test.frereth.com"))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Specs
+
+(s/def ::cp-server ::server/pre-state-options)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Helpers
 
-;; FIXME: Return spec
 (s/fdef server-options
   :args (s/cat :logger ::log/logger
                :log-state ::log/state
-               :->child ::msg-specs/->child))
+               :message-loop-name ::msg-specs/message-loop-name
+               :->child ::msg-specs/->child)
+  :ret (s/keys :req [::cp-server]))
 (defn server-options
   [logger log-state ->child]
   (let [client-write-chan (strm/stream)
@@ -50,12 +56,6 @@
                                                (log/flush-logs! logger
                                                                 (log/debug (log/clean-fork log-state ::child-spawner!)
                                                                            ::top)))
-                  ;; Honestly, this isn't something that belongs in here.
-                  ;; It's really the specific to each child.
-                  ;; This approach made sense for the client, which we only expect to
-                  ;; have a single child...
-                  ;; except that that isn't true.
-                  ::msg-specs/message-loop-name message-loop-name
                   ::shared/extension server-extension
                   ::shared/my-keys #::shared{::shared-specs/srvr-name server-name
                                              :keydir "curve-test"}
@@ -69,7 +69,9 @@
 (defn build-server
   [logger log-state ->child]
   (try
-    (let [server (server/ctor (::cp-server (server-options logger log-state ->child)))]
+    (let [server (server/ctor (::cp-server (server-options logger
+                                                           log-state
+                                                           ->child)))]
       {::cp-server server
        ::srvr-state/client-read-chan (::srvr-state/client-read-chan server)
        ::srvr-state/client-write-chan (::srvr-state/client-write-chan server)})
@@ -95,25 +97,31 @@
    ::srvr-state/client-write-chan {::srvr-state/chan nil}})
 
 (s/fdef raw-client
-        :args (s/or :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
-                                     :logger-init (s/fspec :args nil :ret ::log/logger)
-                                     :log-state ::log/state
-                                     :server-ip (s/tuple int? int? int? int?)
-                                     :srvr-port ::shared-specs/port
-                                     :srvr-pk-long ::shared-specs/public-long
-                                     :->child ::msg-specs/->child
-                                     :child-spawner! ::msg-specs/child-spawner!)
-                    :with-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
-                                     :logger-init (s/fspec :args nil :ret ::log/logger)
-                                     :log-state ::log/state
-                                     :server-ip (s/tuple int? int? int? int?)
-                                     :srvr-port ::shared-specs/port
-                                     :srvr-pk-long ::shared-specs/public-long
-                                     :srvr-xtn-vec (s/and vector?
-                                                          #(= (count %) K/extension-length))
-                                     :->child ::msg-specs/->child
-                                     :child-spawner! ::msg-specs/child-spawner!))
-        :ret ::client-state/state)
+  ;; Honestly, message-loop-name doesn't belongs in here.
+  ;; It's really the specific to each child.
+  ;; Or maybe each connection should be its own
+  ;; client to keep things simpler and isolated.
+  ;; That part of the design is still up in the air, really.
+  ::msg-specs/message-loop-name message-loop-name
+  :args (s/or :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
+                               :logger-init (s/fspec :args nil :ret ::log/logger)
+                               :log-state ::log/state
+                               :server-ip (s/tuple int? int? int? int?)
+                               :srvr-port ::shared-specs/port
+                               :srvr-pk-long ::shared-specs/public-long
+                               :->child ::msg-specs/->child
+                               :child-spawner! ::msg-specs/child-spawner!)
+              :with-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
+                               :logger-init (s/fspec :args nil :ret ::log/logger)
+                               :log-state ::log/state
+                               :server-ip (s/tuple int? int? int? int?)
+                               :srvr-port ::shared-specs/port
+                               :srvr-pk-long ::shared-specs/public-long
+                               :srvr-xtn-vec (s/and vector?
+                                                    #(= (count %) K/extension-length))
+                               :->child ::msg-specs/->child
+                               :child-spawner! ::msg-specs/child-spawner!))
+  :ret ::client-state/state)
 (defn raw-client
   ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long ->child child-spawner!]
    (raw-client message-loop-name

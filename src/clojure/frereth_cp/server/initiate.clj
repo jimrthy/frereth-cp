@@ -540,9 +540,11 @@ This is the part that possibly establishes a 'connection'"
 (s/fdef do-fork-child!
   :args (s/cat :builder-params ::child-fork-prereqs
                :active-client ::state/client-state)
-  :ret (s/keys :req [::log/state ::state/client-state]))
+  :ret (s/keys :req [::log/state]
+               :opt [::state/client-state]))
 (defn do-fork-child!
-  [builder-params
+  [{log-state ::log/state
+    :as builder-params}
    active-client]
   (println "Mark A")
   ;; This is drastically oversimplified.
@@ -550,12 +552,24 @@ This is the part that possibly establishes a 'connection'"
   ;; Actually, if there's no more to it than this, then it
   ;; seems pretty pointless.
   ;; Just call child/fork! directly and be done with it.
-  (let [{child-state ::child/state
-         log-state ::log/state} (child/fork! builder-params child->)]
-    (println "Mark B")
-    {::log/state log-state
-     ::state/client-state (assoc active-client
-                                 ::child/state child-state)}))
+  (try
+    (let [{child-state ::child/state
+           log-state ::log/state} (child/fork! builder-params child->)]
+      (println "Mark B")
+      (try
+        {::log/state log-state
+         ::state/client-state (assoc active-client
+                                     ::child/state child-state)}
+        (catch Exception ex
+          {::log/state (log/exception log-state
+                                      ex
+                                      ::do-fork-child!
+                                      "Trying to assoc new child with client")})))
+    (catch Exception ex
+      {::log/state (log/exception log-state
+                                  ex
+                                  ::do-fork-child!
+                                  "Trying to fork!")}))
 
 ;;; FIXME: This belongs under shared.
 ;;; It's pretty much universal to client/server
@@ -563,11 +577,11 @@ This is the part that possibly establishes a 'connection'"
 ;;; already has an implementation there.
 ;;; It seems highly likely there's also something
 ;;; very similar in client.
-(s/fdef forward-message-portion!
-  :args (s/cat :state ::state/state
-               :active-client ::state/client-state
-               :initiate ::K/initiate-packet-spec)
-  :ret ::log/state)
+  (s/fdef forward-message-portion!
+    :args (s/cat :state ::state/state
+                 :active-client ::state/client-state
+                 :initiate ::K/initiate-packet-spec)
+    :ret ::log/state))
 (defn forward-message-portion!
   "Forward the message to our new(?) child"
   [{:keys [::log/logger]
@@ -856,21 +870,25 @@ This is the part that possibly establishes a 'connection'"
                                                   packet
                                                   initiate)))]
                 (reset! log-state-atom log-state)
-                ;; Still need a message-loop-name
-                (throw (RuntimeException. "Start back here"))
+                (println "Mark C")
                 (if client-state
-                  (as-> client-state x
-                    (do-fork-child! (select-keys state [::log/logger
-                                                        ::log/state
-                                                        ::msg-specs/->child
-                                                        ::msg-specs/child-spawner!
-                                                        ::msg-specs/message-loop-name])
-                                    x)
-                    (state/alter-client-state x)
-                    (assoc x ::log-state log-state)
-                    (assoc x ::log/state (forward-message-portion! (into state x)
-                                                                   client-state
-                                                                   initiate)))
+                  (try
+                    (as-> client-state x
+                      (do-fork-child! (select-keys state [::log/logger
+                                                          ::log/state
+                                                          ::msg-specs/->child
+                                                          ::msg-specs/child-spawner!
+                                                          ::msg-specs/message-loop-name])
+                                      x)
+                      (state/alter-client-state (::state/client-state x))
+                      (assoc x ::log-state log-state)
+                      (assoc x ::log/state (forward-message-portion! (into state x)
+                                                                     client-state
+                                                                     initiate)))
+                    (catch Exception ex
+                      {::log/state (log/exception log-state
+                                                  ex
+                                                  ::do-handle)}))
                   {::log/state (log/warn log-state
                                          ::do-handle
                                          "Unable to build a new client"
