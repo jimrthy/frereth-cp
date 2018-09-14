@@ -1,4 +1,4 @@
-#! /usr/bin/env bash
+#! /bin/bash
 
 if [ -f .boot-jvm-options ]; then
     OPTS=`cat .boot-jvm-options`
