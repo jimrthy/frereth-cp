@@ -2,8 +2,6 @@
   "Pieces refactored from frereth.common.util
 
   Because I haven't really decided what to do with them yet"
-  ;; TODO: Try to require fipp and use it instead of
-  ;; pprint
   ;; TODO: Move into frereth-cp.shared.util
   (:require [clojure.pprint :as pprint]
             [clojure.spec.alpha :as s]
@@ -27,11 +25,15 @@
   (let [^Runtime rt (Runtime/getRuntime)]
     (.availableProcessors rt)))
 
+(s/fdef get-current-thread
+        :args (s/cat)
+        :ret string?)
 (defn get-current-thread
   []
   (.getName (Thread/currentThread)))
 
 (defn pre-log
+  "This is really just a leftover from trying to make 'normal' logging frameworks work"
   [human-name]
   (pprint/cl-format nil
                     "~a (~a):\n"
@@ -51,7 +53,8 @@
   [ss]
   (* ss 1000000000))
 
-;;; TODO: Verify that this works
+;;; This seems to work
+;;; TODO: Verify that it's actually getting used.
 (def pprint-proxy
   (try (require '[fipp.edn :refer (pprint) :rename {pprint fipp}])
        (resolve 'fipp.edn/pprint)
