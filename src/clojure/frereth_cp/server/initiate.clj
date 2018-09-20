@@ -553,6 +553,7 @@ This is the part that possibly establishes a 'connection'"
   ;; seems pretty pointless.
   ;; Just call child/fork! directly and be done with it.
   (try
+    ;; This next function call is throwing a RuntimeException:
     (let [{child-state ::child/state
            log-state ::log/state} (child/fork! builder-params child->)]
       (println "Mark B")
@@ -565,11 +566,17 @@ This is the part that possibly establishes a 'connection'"
                                       ex
                                       ::do-fork-child!
                                       "Trying to assoc new child with client")})))
+    ;; Q: Why isn't this catching the RuntimeException from child/fork! ?
     (catch Exception ex
       {::log/state (log/exception log-state
                                   ex
                                   ::do-fork-child!
-                                  "Trying to fork!")}))
+                                  "Trying to fork!")})
+    (catch Throwable ex
+      {::log/state (log/exception log-state
+                                  ex
+                                  ::do-fork-child!
+                                  "Trying to fork! failed badly")}))
 
 ;;; FIXME: This belongs under shared.
 ;;; It's pretty much universal to client/server
@@ -873,6 +880,7 @@ This is the part that possibly establishes a 'connection'"
                 (println "Mark C")
                 (if client-state
                   (try
+                    (throw (RuntimeException. "Start back here"))
                     (as-> client-state x
                       (do-fork-child! (select-keys state [::log/logger
                                                           ::log/state
@@ -880,6 +888,7 @@ This is the part that possibly establishes a 'connection'"
                                                           ::msg-specs/child-spawner!
                                                           ::msg-specs/message-loop-name])
                                       x)
+                      ;; FIXME: This silently discards the logs from do-fork-child!
                       (state/alter-client-state (::state/client-state x))
                       (assoc x ::log-state log-state)
                       (assoc x ::log/state (forward-message-portion! (into state x)
