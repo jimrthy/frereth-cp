@@ -38,8 +38,8 @@
 ;; Honestly, that's something to decide at the individual child
 ;; level.
 ;; Which means sending the long-pk to said child.
-(s/def ::client-security (s/keys :opt [::shared-specs/public-long
-                                       ::shared-specs/public-short]
+(s/def ::client-security (s/keys :opt [::shared-specs/long-pk
+                                       ::shared-specs/short-pk]
                                  :req [::server-short-sk]))
 
 ;; Yes, this seems silly. And will probably cause plenty of
@@ -145,6 +145,7 @@
                                ::max-active-clients
                                ::log/logger
                                ::log/state
+                               ::msg-specs/message-loop-name-base
                                ::shared/extension
                                ;; Q: Does this make any sense here?
                                ;; A: Definitely not.
@@ -218,7 +219,7 @@
       ;; Q: Is there a client-security entry already present? Could we just overwrite
       ;; the map directly rather than calling assoc-in twice?
       ;; Q: Would the risk be worth the extra clarity?
-      (assoc-in [::client-security ::short-pk] client-short-pk)
+      (assoc-in [::client-security ::shared/short-pk] client-short-pk)
       (assoc-in [::client-security ::server-short-sk] server-short-sk)))
 
 (s/fdef new-client
@@ -245,14 +246,17 @@
      ::received-nonce received-nonce}))
 
 (s/fdef alter-client-state
-        :args (s/cat :altered-client ::client-state)
-        :ret ::delta)
+  :args (s/cat :state ::state
+               :altered-client ::client-state)
+  :ret ::delta)
 (defn alter-client-state
-  [altered-client]
+  [state altered-client]
   ;; Skip incrementing the numactiveclients count.
   ;; We get that for free from the data structure
   (let [client-key (get-in altered-client [::client-security ::shared/short-pk])]
-    {::active-clients {(vec client-key) altered-client}}))
+    (assoc (::active-clients state)
+           (vec client-key)
+           altered-client)))
 
 (s/fdef find-client
         :args (s/cat :state ::state

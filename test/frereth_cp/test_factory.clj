@@ -40,7 +40,6 @@
 (s/fdef server-options
   :args (s/cat :logger ::log/logger
                :log-state ::log/state
-               :message-loop-name ::msg-specs/message-loop-name
                :->child ::msg-specs/->child)
   :ret (s/keys :req [::cp-server]))
 (defn server-options
@@ -82,7 +81,9 @@
       (throw ex))))
 
 (defn start-server
+  "Trigger side effects to make the server start serving"
   [inited]
+  (println "test-factory/start-server based on keys" (keys inited))
   (update inited ::cp-server server/start!))
 
 (defn stop-server

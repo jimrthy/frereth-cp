@@ -234,12 +234,14 @@
               initial-server (factory/build-server srvr-logger
                                                    srvr-log-state
                                                    (partial handshake->child srvr->child))
-              named-server (assoc initial-server
-                                  ::msg-specs/message-loop-name (gensym "server-hand-shaker-"))
+              named-server (assoc-in initial-server
+                                     [::factory/cp-server ::msg-specs/message-loop-name-base]
+                                     "server-hand-shaker")
               started (factory/start-server named-server)
               srvr-log-state (log/flush-logs! srvr-logger (log/info srvr-log-state
                                                                     ::shake-hands
                                                                     "Server should be started now"))]
+          (is started)
           (try
             ;; Time to start the client
             (let [client-host "cp-client.nowhere.org"
@@ -249,7 +251,8 @@
                   ;; Then again, the extra 2 bytes of memory involved here really
                   ;; shouldn't matter.
                   client-port 48816
-                  srvr-pk-long (.getPublicKey (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair]))
+                  long-server-pair (get-in started [::factory/cp-server ::shared/my-keys ::shared/long-pair])
+                  srvr-pk-long (.getPublicKey long-server-pair)
                   server-ip [127 0 0 1]
                   server-port 65000
                   clnt-log-state (log/init ::shake-hands.client)

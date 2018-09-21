@@ -42,6 +42,9 @@
 ;;; messages go where during intertwined tests.
 ;;; Though it certainly isn't a bad idea in general
 (s/def ::message-loop-name string?)
+;; Used for building the message-loop-name when the
+;; server is ready to spawn a new child
+(s/def ::message-loop-name-base string?)
 
 ;;; Used for sending requests to the message-buffering
 ;;; Actor

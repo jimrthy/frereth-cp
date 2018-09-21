@@ -247,6 +247,7 @@
                                                         ::do-handle-incoming
                                                         "Failed handling packet"
                                                         {::packet-type-id packet-type-id})}))]
+              (println "Result of server handling packet:" (dissoc delta ::log/state))
               (as-> this x
                 (into x delta)
                 (assoc x
@@ -358,6 +359,7 @@
   "Start the event loop"
   [{:keys [::state/client-read-chan]
     :as this}]
+  (println "Starting server consumer. message-loop-name-base:" (::msg-specs/message-loop-name-base this))
   (let [in-chan (::state/chan client-read-chan)
         ;; The part that handles input from the client
         finalized (strm/reduce input-reducer this in-chan)
@@ -375,7 +377,7 @@
          :args (s/cat :this ::pre-state)
          :ret ::state/state)
 (defn start!
-  "Start the server"
+  "Start a server"
   [{:keys [::log/logger
            ::state/client-read-chan
            ::state/client-write-chan
@@ -395,32 +397,33 @@
          ;; a 16-byte array
          (= (count extension) K/extension-length)
          log-state]}
+
+  (println "Starting a new server. State keys:\n"
+           (keys this))
+  ;; Reference implementation starts by allocating the active client structs.
+  ;; This is one area where updating in place simply cannot be worth it.
+  ;; Q: Can it?
+  ;; A: Skip it, for now
   (let [log-state (log/warn log-state
                             ::start!
-                            "CurveCP Server: Starting the server state")]
-
-    ;; Reference implementation starts by allocating the active client structs.
-    ;; This is one area where updating in place simply cannot be worth it.
-    ;; Q: Can it?
-    ;; A: Skip it, for now
-
-    ;; So we're starting by loading up the long-term keys
-    (let [keydir (::shared/keydir my-keys)
-          long-pair (crypto/do-load-keypair keydir)
-          this (assoc-in this [::shared/my-keys ::shared/long-pair] long-pair)
-          almost (assoc this
-                        ::state/cookie-cutter (state/randomized-cookie-cutter))
-          log-state (log/info log-state
-                              ::start!
-                              "Kicking off event loop.")
-          ;; Q: What are the odds that the next two piece needs to do logging?
-          ;; A: They're small and straight-forward enough that it doesn't really seem useful
-          result (assoc almost
-                        ::state/event-loop-stopper! (build-event-loop-stopper almost))
-          flushed-logs (log/flush-logs! logger log-state)]
-      ;; Q: Why did I fork these logs?
-      (begin! (assoc result ::log/state (log/clean-fork flushed-logs ::input-reducer)))
-      (assoc result ::log/state flushed-logs))))
+                            "CurveCP Server: Starting the server state")
+        ;; So we're starting by loading up the long-term keys
+        keydir (::shared/keydir my-keys)
+        long-pair (crypto/do-load-keypair keydir)
+        this (assoc-in this [::shared/my-keys ::shared/long-pair] long-pair)
+        almost (assoc this
+                      ::state/cookie-cutter (state/randomized-cookie-cutter))
+        log-state (log/info log-state
+                            ::start!
+                            "Kicking off event loop.")
+        ;; Q: What are the odds that the next two piece needs to do logging?
+        ;; A: They're small and straight-forward enough that it doesn't really seem useful
+        base-result (assoc almost
+                           ::state/event-loop-stopper! (build-event-loop-stopper almost))
+        flushed-logs (log/flush-logs! logger log-state)
+        result (assoc base-result ::log/state flushed-logs)]
+    (begin! result)
+    result))
 
 (s/fdef stop!
         :args (s/cat :this ::state/state)

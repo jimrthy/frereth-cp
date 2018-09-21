@@ -547,14 +547,8 @@ This is the part that possibly establishes a 'connection'"
     :as builder-params}
    active-client]
   (println "Mark A")
-  ;; This is drastically oversimplified.
-  ;; But it's a start.
-  ;; Actually, if there's no more to it than this, then it
-  ;; seems pretty pointless.
-  ;; Just call child/fork! directly and be done with it.
   (try
-    ;; This next function call is throwing a RuntimeException:
-    (let [{child-state ::child/state
+      (let [{child-state ::child/state
            log-state ::log/state} (child/fork! builder-params child->)]
       (println "Mark B")
       (try
@@ -568,15 +562,22 @@ This is the part that possibly establishes a 'connection'"
                                       "Trying to assoc new child with client")})))
     ;; Q: Why isn't this catching the RuntimeException from child/fork! ?
     (catch Exception ex
+      (println "Fork child oops:" ex)
       {::log/state (log/exception log-state
                                   ex
                                   ::do-fork-child!
                                   "Trying to fork!")})
     (catch Throwable ex
-      {::log/state (log/exception log-state
-                                  ex
-                                  ::do-fork-child!
-                                  "Trying to fork! failed badly")}))
+      ;; Root cause of current failure: an assert failure because we're
+      ;; missing the message-loop-name
+      (println "Fork child serious oops:" ex)
+      (let [result
+            {::log/state (log/exception log-state
+                                        ex
+                                        ::do-fork-child!
+                                        "Trying to fork! failed badly")}]
+        (println "Returning" result)
+        result))))
 
 ;;; FIXME: This belongs under shared.
 ;;; It's pretty much universal to client/server
@@ -584,11 +585,11 @@ This is the part that possibly establishes a 'connection'"
 ;;; already has an implementation there.
 ;;; It seems highly likely there's also something
 ;;; very similar in client.
-  (s/fdef forward-message-portion!
-    :args (s/cat :state ::state/state
-                 :active-client ::state/client-state
-                 :initiate ::K/initiate-packet-spec)
-    :ret ::log/state))
+(s/fdef forward-message-portion!
+  :args (s/cat :state ::state/state
+               :active-client ::state/client-state
+               :initiate ::K/initiate-packet-spec)
+  :ret ::log/state)
 (defn forward-message-portion!
   "Forward the message to our new(?) child"
   [{:keys [::log/logger]
@@ -864,7 +865,12 @@ This is the part that possibly establishes a 'connection'"
             ;; handled? in this sense really means "swallowed" because
             ;; it's a packet from the stream that we've already seen.
             ;; Based upon the nonce.
-            ;; Which isn't something that's actually part of the spec.
+            ;; This detail is hidden in the Nonces page of the spec.
+            ;; The client must generate nonces in increasing order.
+            ;; The server is free to discard any packets with a
+            ;; smaller nonce than the last one it's seen (though
+            ;; it's also legal to track the last few that were
+            ;; received to handle network reordering).
             (if-not handled?
               (let [{:keys [::state/client-state]
                      log-state ::log/state
@@ -877,23 +883,45 @@ This is the part that possibly establishes a 'connection'"
                                                   packet
                                                   initiate)))]
                 (reset! log-state-atom log-state)
-                (println "Mark C")
+                (println "Mark C. message-loop-name-base:" (::msg-specs/message-loop-name-base state)
+                         "\namong\n" (keys state))
                 (if client-state
                   (try
-                    (throw (RuntimeException. "Start back here"))
-                    (as-> client-state x
-                      (do-fork-child! (select-keys state [::log/logger
-                                                          ::log/state
-                                                          ::msg-specs/->child
-                                                          ::msg-specs/child-spawner!
-                                                          ::msg-specs/message-loop-name])
-                                      x)
-                      ;; FIXME: This silently discards the logs from do-fork-child!
-                      (state/alter-client-state (::state/client-state x))
-                      (assoc x ::log-state log-state)
-                      (assoc x ::log/state (forward-message-portion! (into state x)
-                                                                     client-state
-                                                                     initiate)))
+                    (let [base-builder-params (select-keys state [::log/logger
+                                                                  ::log/state
+                                                                  ::msg-specs/->child
+                                                                  ::msg-specs/child-spawner!])
+                          loop-name-base (str (get state
+                                                   ::msg-specs/message-loop-name-base
+                                                   "child")
+                                              "-")
+                          client-pk-short (get-in client-state [::state/client-security
+                                                                ::shared/short-pk])
+                          ;; FIXME: There has to be a prettier way to identify the actual
+                          ;; client. Maybe convert the pk to a BigInt?
+                          message-loop-name (str (gensym loop-name-base)
+                                                 "/"
+                                                 (vec client-pk-short))
+                          builder-params (assoc base-builder-params ::msg-specs/message-loop-name message-loop-name)
+                          {log-state ::log/state
+                           client-state ::state/client-state
+                           :as delta} (do-fork-child! builder-params
+                                                       client-state)]
+                      (println "Mark C1" delta
+                               "\nMark C2 client-security:" (::state/client-security client-state))
+                      (if client-state
+                        (let [delta' (state/alter-client-state state
+                                                               (::state/client-state client-state))
+                              state (into state (assoc delta' ::log/state log-state))]
+                          (assoc delta' ::log-state (forward-message-portion! state
+                                                                              client-state
+                                                                              initiate)))
+                        (do
+                          (println "Problem with forking from"
+                                   (keys state)
+                                   "\namong\n"
+                                   state)
+                          delta)))
                     (catch Exception ex
                       {::log/state (log/exception log-state
                                                   ex
