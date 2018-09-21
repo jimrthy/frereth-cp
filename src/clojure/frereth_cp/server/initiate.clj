@@ -546,11 +546,9 @@ This is the part that possibly establishes a 'connection'"
   [{log-state ::log/state
     :as builder-params}
    active-client]
-  (println "Mark A")
   (try
       (let [{child-state ::child/state
            log-state ::log/state} (child/fork! builder-params child->)]
-      (println "Mark B")
       (try
         {::log/state log-state
          ::state/client-state (assoc active-client
@@ -562,22 +560,15 @@ This is the part that possibly establishes a 'connection'"
                                       "Trying to assoc new child with client")})))
     ;; Q: Why isn't this catching the RuntimeException from child/fork! ?
     (catch Exception ex
-      (println "Fork child oops:" ex)
       {::log/state (log/exception log-state
                                   ex
                                   ::do-fork-child!
                                   "Trying to fork!")})
     (catch Throwable ex
-      ;; Root cause of current failure: an assert failure because we're
-      ;; missing the message-loop-name
-      (println "Fork child serious oops:" ex)
-      (let [result
-            {::log/state (log/exception log-state
-                                        ex
-                                        ::do-fork-child!
-                                        "Trying to fork! failed badly")}]
-        (println "Returning" result)
-        result))))
+      {::log/state (log/exception log-state
+                                  ex
+                                  ::do-fork-child!
+                                  "Trying to fork! failed badly")})))
 
 ;;; FIXME: This belongs under shared.
 ;;; It's pretty much universal to client/server
@@ -883,8 +874,6 @@ This is the part that possibly establishes a 'connection'"
                                                   packet
                                                   initiate)))]
                 (reset! log-state-atom log-state)
-                (println "Mark C. message-loop-name-base:" (::msg-specs/message-loop-name-base state)
-                         "\namong\n" (keys state))
                 (if client-state
                   (try
                     (let [base-builder-params (select-keys state [::log/logger
@@ -897,18 +886,14 @@ This is the part that possibly establishes a 'connection'"
                                               "-")
                           client-pk-short (get-in client-state [::state/client-security
                                                                 ::shared/short-pk])
-                          ;; FIXME: There has to be a prettier way to identify the actual
-                          ;; client. Maybe convert the pk to a BigInt?
-                          message-loop-name (str (gensym loop-name-base)
-                                                 "/"
-                                                 (vec client-pk-short))
+                          message-loop-name (format "%s/%x"
+                                                    (gensym loop-name-base)
+                                                    (biginteger client-pk-short))
                           builder-params (assoc base-builder-params ::msg-specs/message-loop-name message-loop-name)
                           {log-state ::log/state
                            client-state ::state/client-state
                            :as delta} (do-fork-child! builder-params
                                                        client-state)]
-                      (println "Mark C1" delta
-                               "\nMark C2 client-security:" (::state/client-security client-state))
                       (if client-state
                         (let [delta' (state/alter-client-state state
                                                                (::state/client-state client-state))
@@ -916,12 +901,7 @@ This is the part that possibly establishes a 'connection'"
                           (assoc delta' ::log-state (forward-message-portion! state
                                                                               client-state
                                                                               initiate)))
-                        (do
-                          (println "Problem with forking from"
-                                   (keys state)
-                                   "\namong\n"
-                                   state)
-                          delta)))
+                        delta))
                     (catch Exception ex
                       {::log/state (log/exception log-state
                                                   ex

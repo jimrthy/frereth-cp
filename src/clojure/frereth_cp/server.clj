@@ -247,7 +247,6 @@
                                                         ::do-handle-incoming
                                                         "Failed handling packet"
                                                         {::packet-type-id packet-type-id})}))]
-              (println "Result of server handling packet:" (dissoc delta ::log/state))
               (as-> this x
                 (into x delta)
                 (assoc x
@@ -352,15 +351,19 @@
     (fn []
       @(strm/put! in-chan ::stop))))
 
-(s/fdef begin!
+(s/fdef do-begin
         :args (s/cat :this ::state/state)
-        :ret any?)
-(defn begin!
+        :ret ::log/state)
+(defn do-begin
   "Start the event loop"
   [{:keys [::state/client-read-chan]
+    log-state ::log/state
     :as this}]
-  (println "Starting server consumer. message-loop-name-base:" (::msg-specs/message-loop-name-base this))
-  (let [in-chan (::state/chan client-read-chan)
+  (let [log-state (log/info log-state
+                            ::do-begin
+                            "Starting server consumer"
+                            (select-keys this [::msg-specs/message-loop-name-base]))
+        in-chan (::state/chan client-read-chan)
         ;; The part that handles input from the client
         finalized (strm/reduce input-reducer this in-chan)
         ;; Once a minute, signal rotation of the hidden symmetric key that handles cookie
@@ -368,7 +371,8 @@
         key-rotator (strm/periodically (helpers/one-minute)
                                        (constantly ::rotate))]
     (strm/connect key-rotator in-chan {:upstream? true
-                                       :description "Periodically trigger cookie key rotation"})))
+                                       :description "Periodically trigger cookie key rotation"})
+    log-state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
@@ -398,8 +402,6 @@
          (= (count extension) K/extension-length)
          log-state]}
 
-  (println "Starting a new server. State keys:\n"
-           (keys this))
   ;; Reference implementation starts by allocating the active client structs.
   ;; This is one area where updating in place simply cannot be worth it.
   ;; Q: Can it?
@@ -422,8 +424,9 @@
                            ::state/event-loop-stopper! (build-event-loop-stopper almost))
         flushed-logs (log/flush-logs! logger log-state)
         result (assoc base-result ::log/state flushed-logs)]
-    (begin! result)
-    result))
+    (let [log-state (do-begin result)]
+      (assoc result
+             ::log/state log-state))))
 
 (s/fdef stop!
         :args (s/cat :this ::state/state)
