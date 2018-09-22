@@ -6,6 +6,7 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
              [bit-twiddling :as b-t]
+             [child :as child]
              [constants :as K]
              [crypto :as crypto]
              [logging :as log]
@@ -61,22 +62,6 @@
 ;; Send message bytes to the client
 (s/def ::client-write-chan (s/map-of ::chan strm/sinkable?))
 
-;;; Note that this has really changed drastically.
-;;; These are now really side-effecting functions
-;;; that accept byte-arrays to pass back and forth.
-;;; But I haven't had a chance to even start refactoring
-;;; the server side of this.
-;;; Right now, I'm still hip-deep in the client side.
-;;; I'm very hopeful that I'll be able to refactor that
-;;; implementation to avoid duplication.
-;; OK, now life starts getting interesting.
-;; What, exactly, do we need to do here?
-(s/def ::read<-child strm/sourceable?)
-(s/def ::write->child strm/sinkable?)
-;; FIXME: This needs to go away
-(s/def ::child-interaction (s/keys :req [::read<-child
-                                         ::write->child]))
-
 ;; These are defined both here and client.state.
 ;; FIXME: Move them into shared
 (s/def ::client-short<->server-long ::shared/shared-secret)
@@ -106,7 +91,7 @@
 (s/def ::client-state (s/merge ::initial-client-state
                                (s/keys :req [::sent-nonce
                                              ::shared-secrets]
-                                       :opt [::child-interaction])))
+                                       :opt [::child/state])))
 (s/def ::current-client ::client-state)
 
 ;; We're using the client's short-term public key as the key into the

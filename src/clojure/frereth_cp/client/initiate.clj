@@ -320,4 +320,4 @@
       (update this ::log/state #(log/flush-logs! logger
                                                  (log/exception %
                                                                 failure
-                                                                ::set-up-server-polling!))))))
+                                                                ::initial-packet-sent))))))

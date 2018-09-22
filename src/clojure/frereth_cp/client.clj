@@ -41,6 +41,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
+(s/def ::ctor-options (s/keys :req [::msg-specs/->child
+                                    ::state/chan->server
+                                    ::specs/message-loop-name
+                                    ::shared/my-keys
+                                    ::state/server-security]))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
@@ -70,7 +76,7 @@
   (throw (ex-info "child exited" this)))
 
 (defn child->server
-  "Child sent us (as an agent) a signal to add bytes to the stream to the server"
+  "Child sent us a signal to add bytes to the stream to the server"
   [this msg]
   (throw (RuntimeException. "Not translated")))
 
@@ -259,11 +265,7 @@
            ::log/state (log/init ::ended-during-stop!))))
 
 (s/fdef ctor
-        :args (s/cat :opts (s/keys :req [::msg-specs/->child
-                                         ::state/chan->server
-                                         ::specs/message-loop-name
-                                         ::shared/my-keys
-                                         ::state/server-security])
+        :args (s/cat :opts ::ctor-options
                      :log-initializer (s/fspec :args nil
                                                :ret ::log/logger))
         :ret ::state/state)
@@ -272,14 +274,7 @@
   (let [result
         (-> opts
             (state/initialize-immutable-values logger-initializer)
-            ;; Assigning this really belongs in
-            ;; state/initialize-immutable-values
-            ;; (or maybe its mutable counterpart)
-            ;; But that would create circular imports.
-            ;; This is a red flag.
-            ;; FIXME: Come up with a better place for it to live.
-            (assoc ::state/packet-builder initiate/build-initiate-packet)
-            state/initialize-mutable-state!)]
+            (state/initialize-mutable-state! initiate/build-initiate-packet))]
     (dfrd/on-realized (::state/terminated result)
                       (partial unexpectedly-terminated-successfully result)
                       (partial unexpectedly-terminated-unsuccessfully result))

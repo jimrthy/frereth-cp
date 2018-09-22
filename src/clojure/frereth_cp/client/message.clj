@@ -37,7 +37,6 @@
                               ::filter-initial-message-bytes
                               ""
                               {::shared/packet initiate-packet
-                               ::incoming-class (class initiate-packet)
                                ::incoming-length packet-size})
           result {::log/state log-state}]
       (if (<= packet-size K/max-initiate-packet-size)

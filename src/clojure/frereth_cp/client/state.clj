@@ -33,6 +33,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (def default-timeout 2500)
 
+(def cpu-utilization-target 0.5)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
@@ -106,7 +108,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; FSM. And others are really just temporary members.
 ;; The distinction from the immutable-state portions makes a lot less sense
 ;; now that I've eliminated any actual usage of the agent.
-(s/def ::mutable-state (s/keys :req [::client-extension-load-time  ; not really mutable
+(s/def ::mutable-state (s/keys :req [::msg-specs/->child
+                                     ::client-extension-load-time  ; not really mutable
                                      ::specs/executor
                                      ;; This isn't mutable
                                      ;; Q: Is it?
@@ -132,8 +135,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; A: Well...I might need to resend it if it
                                      ;; gets dropped initially.
                                      ::vouch]))
-(s/def ::immutable-value (s/keys :req [::msg-specs/->child
-                                       ::shared/my-keys
+(s/def ::immutable-value (s/keys :req [::shared/my-keys
                                        ::msg-specs/message-loop-name
                                        ;; UDP packets arrive over this
                                        ::chan<-server
@@ -239,88 +241,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                              ::shared/long-pair long-pair
                              ::shared/short-pair short-pair)
      ::log/state log-state}))
-
-(s/fdef initialize-immutable-values
-        :args (s/cat :this ::immutable-value
-                     :log-initializer (s/fspec :args (s/cat)
-                                               :ret ::log/logger))
-        :ret ::immutable-value)
-(defn initialize-immutable-values
-  "Sets up the immutable value that will be used in tandem with the mutable state later"
-  [{:keys [::msg-specs/message-loop-name
-           ::chan<-server
-           ::server-extension
-           ::server-ips
-           ::specs/executor]
-    log-state ::log/state
-    ;; TODO: Play with the numbers here to come up with something reasonable
-    :or {executor (exec/utilization-executor 0.5)}
-    :as this}
-   log-initializer]
-  {:pre [message-loop-name
-         server-extension
-         server-ips]}
-  (when-not chan<-server
-    (throw (ex-info "Missing channel from server"
-                    {::keys (keys this)
-                     ::big-picture this})))
-  (let [logger (log-initializer)]
-    (-> this
-        (assoc ::log/logger logger
-               ::chan->server (strm/stream)
-               ::specs/executor executor)
-        ;; Can't do this: it involves a circular import
-        #_(assoc ::packet-builder initiate/build-initiate-packet!)
-        (into (load-keys log-state (::shared/my-keys this))))))
-
-(s/fdef initialize-mutable-state!
-        :args (s/cat :this ::mutable-state)
-        :ret ::mutable-state)
-(defn initialize-mutable-state!
-  [{:keys [::shared/my-keys
-           ::server-security
-           ::log/logger
-           ::msg-specs/message-loop-name]
-    :as this}]
-  (let [log-state (log/init message-loop-name)
-        server-long-term-pk (::specs/public-long server-security)]
-    (when-not server-long-term-pk
-      (throw (ex-info (str "Missing ::specs/public-long among"
-                           (keys server-security))
-                      {::have server-security})))
-    (let [^TweetNaclFast$Box$KeyPair long-pair (::shared/long-pair my-keys)
-          ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)
-          long-shared  (crypto/box-prepare
-                        server-long-term-pk
-                        (.getSecretKey long-pair))
-          log-state (log/info log-state
-                               ::initialize-mutable-state!
-                               "Combined keys"
-                               {::srvr-long-pk (b-t/->string server-long-term-pk)
-                                ::my-long-pk (b-t/->string (.getPublicKey long-pair))
-                                ;; FIXME: Don't log this
-                                ::shared-key (b-t/->string long-shared)})
-          terminated (dfrd/deferred)]
-      (into this
-            {::child-packets []
-             ::client-extension-load-time 0
-             ::msg-specs/recent (System/nanoTime)
-             ;; This seems like something that we should be able to set here.
-             ;; djb's docs say that it's a security matter, like connecting
-             ;; from a random port.
-             ;; Hopefully, someday, operating systems will have some mechanism
-             ;; for rotating these automatically
-             ;; Q: Is nil really better than just picking something random
-             ;; here?
-             ;; A: Who am I to argue with one of the experts?
-             ::shared/extension nil
-             ::shared-secrets {::client-long<->server-long long-shared
-                               ::client-short<->server-long (crypto/box-prepare
-                                                             server-long-term-pk
-                                                             (.getSecretKey short-pair))}
-             ::server-security server-security
-             ::log/state log-state
-             ::terminated terminated}))))
 
 (s/fdef ->message-exchange-mode
         :args (s/cat :this ::state
@@ -445,18 +365,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                       ::server-extension
                       ::server-security]))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;; Public
-
-(s/fdef current-timeout
-        :args (s/cat :state ::state)
-        :ret ::specs/time)
-(defn current-timeout
-  "How long should next step wait before giving up?"
-  [this]
-  (or (::timeout this)
-      default-timeout))
-
 (s/fdef put-packet
         :args (s/cat :chan->server ::chan->server
                      :srvr-ip ::server-ips
@@ -536,6 +444,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
      ::specs/deferrable (dfrd/on-realized d
                                           on-success
                                           on-failure)}))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Public
+
+(s/fdef current-timeout
+        :args (s/cat :state ::state)
+        :ret ::specs/time)
+(defn current-timeout
+  "How long should next step wait before giving up?"
+  [this]
+  (or (::timeout this)
+      default-timeout))
 
 ;;; This namespace is too big, and I hate to add this next
 ;;; function to it.
@@ -742,6 +662,89 @@ The fact that this is so big says a lot about needing to re-think my approach"
       {::client-extension-load-time client-extension-load-time
        ::log/state log-state
        ::shared/extension extension})))
+
+(s/fdef initialize-immutable-values
+        :args (s/cat :this ::immutable-value
+                     :log-initializer (s/fspec :args (s/cat)
+                                               :ret ::log/logger))
+        :ret ::immutable-value)
+(defn initialize-immutable-values
+  "Sets up the immutable value that will be used in tandem with the mutable state later"
+  [{:keys [::msg-specs/message-loop-name
+           ::chan<-server
+           ::server-extension
+           ::server-ips
+           ::specs/executor]
+    log-state ::log/state
+    ;; TODO: Play with the numbers here to come up with something reasonable
+    :or {executor (exec/utilization-executor cpu-utilization-target)}
+    :as this}
+   log-initializer]
+  {:pre [message-loop-name
+         server-extension
+         server-ips]}
+  (when-not chan<-server
+    (throw (ex-info "Missing channel from server"
+                    {::keys (keys this)
+                     ::big-picture this})))
+  (let [logger (log-initializer)]
+    (-> this
+        (assoc ::log/logger logger
+               ::chan->server (strm/stream)
+               ::specs/executor executor)
+        (into (load-keys log-state (::shared/my-keys this))))))
+
+(s/fdef initialize-mutable-state!
+  :args (s/cat :this ::mutable-state
+               :packet-builder ::packet-builder)
+  :ret ::mutable-state)
+(defn initialize-mutable-state!
+  [{:keys [::shared/my-keys
+           ::server-security
+           ::log/logger
+           ::msg-specs/message-loop-name]
+    :as this}
+   packet-builder]
+  (let [log-state (log/init message-loop-name)
+        server-long-term-pk (::specs/public-long server-security)]
+    (when-not server-long-term-pk
+      (throw (ex-info (str "Missing ::specs/public-long among"
+                           (keys server-security))
+                      {::have server-security})))
+    (let [^TweetNaclFast$Box$KeyPair long-pair (::shared/long-pair my-keys)
+          ^TweetNaclFast$Box$KeyPair short-pair (::shared/short-pair my-keys)
+          long-shared  (crypto/box-prepare
+                        server-long-term-pk
+                        (.getSecretKey long-pair))
+          log-state (log/info log-state
+                               ::initialize-mutable-state!
+                               "Combined keys"
+                               {::srvr-long-pk (b-t/->string server-long-term-pk)
+                                ::my-long-pk (b-t/->string (.getPublicKey long-pair))
+                                ;; FIXME: Don't log this
+                                ::shared-key (b-t/->string long-shared)})
+          terminated (dfrd/deferred)]
+      (into this
+            {::child-packets []
+             ::client-extension-load-time 0
+             ::msg-specs/recent (System/nanoTime)
+             ::packet-builder packet-builder
+             ;; This seems like something that we should be able to set here.
+             ;; djb's docs say that it's a security matter, like connecting
+             ;; from a random port.
+             ;; Hopefully, someday, operating systems will have some mechanism
+             ;; for rotating these automatically
+             ;; Q: Is nil really better than just picking something random
+             ;; here?
+             ;; A: Who am I to argue with one of the experts?
+             ::shared/extension nil
+             ::shared-secrets {::client-long<->server-long long-shared
+                               ::client-short<->server-long (crypto/box-prepare
+                                                             server-long-term-pk
+                                                             (.getSecretKey short-pair))}
+             ::server-security server-security
+             ::log/state log-state
+             ::terminated terminated}))))
 
 (s/fdef fork!
         :args (s/cat :state ::state)
