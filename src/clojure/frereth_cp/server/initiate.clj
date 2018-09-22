@@ -3,13 +3,16 @@
 
 This is the part that possibly establishes a 'connection'"
   (:require [clojure.spec.alpha :as s]
+            [clojure.string :as str]
             [frereth-cp.message.specs :as msg-specs]
             [frereth-cp.server
              ;; FIXME: Don't want these siblings to have any
              ;; dependencies on each other.
              [message :as message]
              [state :as state]]
-            [frereth-cp.shared :as shared]
+            [frereth-cp
+             [message :as root-message]
+             [shared :as shared]]
             [frereth-cp.shared
              [bit-twiddling :as b-t]
              [child :as child]
@@ -586,56 +589,62 @@ This is the part that possibly establishes a 'connection'"
   [{:keys [::log/logger]
     log-state ::log/state
     :as state}
-   {shared-key ::state/client-short<->server-short
-    :keys [::state/child-interaction]
+   {:keys [::state/client-security]
+    child-state ::child/state
     :as client}
    {packet-nonce-bytes ::specs/nonce
-    :keys [::K/vouch]
+    :keys [::K/vouch-wrapper]
     :as initiate}]
-  (throw (RuntimeException. "This does not belong here"))
-  (let [writer (::state/write->child child-interaction)
-        {log-state ::log/state
-         client-message-box ::serial/decomposed} (decrypt-initiate-box shared-key
-                                                                       packet-nonce-bytes
-                                                                       vouch)
-        log-label ::forward-message-portion!]
-    (if client-message-box
-      ;; Line 351 (if this is a new connection)
-      (let [packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
-            client (assoc client
-                          ::state/received-nonce packet-nonce)
-            log-state (log/debug log-state
-                                 log-label
-                                 "Trying to send child-message from "
-                                 {::message-box-keys (keys client-message-box)})
-            sent (strm/try-put! writer
-                                (::K/message client-message-box)
-                                K/send-child-message-timeout
-                                ::timeout)
-            forked-logs (log/clean-fork log-state ::initiate-forwarded)]
-        (dfrd/on-realized sent
-                          (fn [x]
-                            (let [log-state
-                                  (if (not= x ::timeout)
-                                    (log/info forked-logs
-                                              log-label
-                                              "Message forwarded to new child"
-                                              {::success x})
-                                    (log/error forked-logs
-                                               log-label
-                                               "Timed out trying to send message"
-                                               {::destination client}))]
-                              (log/flush-logs! logger log-state)))
-                          (fn [x]
-                            (log/flush-logs! logger
-                                             (log/info forked-logs
-                                                       log-label
-                                                       "Forwarding message to new child failed"
-                                                       {::problem x}))))
-        log-state)
-      (log/warn log-state
-                log-label
-                "Unable to decrypt incoming vouch"))))
+  (let [{shared-key ::state/client-short<->server-short} client-security]
+    (println "Mark decrypt-initiate-box\n"
+             (str/join ", " [log-state shared-key packet-nonce-bytes vouch-wrapper]))
+    (println "Client keys (where I expect to find the client-short<->server-short) shared-key:" (keys client-security))
+    (println "Initiate keys (where I expect to find packet-nonce-bytes under ::specs/nonce and the vouch under ::K/vouch-wrapper"
+             (keys initiate))
+    (throw (ex-info "Mark decrypt-initiate-box\n"
+                    {::state/client-state client
+                     ::K/initiate-packet-spec initiate}))
+    (let [{log-state ::log/state
+           client-message-box ::serial/decomposed} (decrypt-initiate-box log-state
+                                                                         shared-key
+                                                                         packet-nonce-bytes
+                                                                         vouch-wrapper)
+          log-label ::forward-message-portion!]
+      (if client-message-box
+        ;; Line 351 (if this is a new connection)
+        (let [packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
+              client (assoc client
+                            ::state/received-nonce packet-nonce)
+              log-state (log/debug log-state
+                                   log-label
+                                   "Trying to send child-message from "
+                                   {::message-box-keys (keys client-message-box)})
+              sent (root-message/parent->! child-state
+                                           (::K/message client-message-box))
+              forked-logs (log/clean-fork log-state ::initiate-forwarded)]
+          (dfrd/on-realized sent
+                            (fn [x]
+                              (let [log-state
+                                    (if (not= x ::root-message/timeout)
+                                      (log/info forked-logs
+                                                log-label
+                                                "Message forwarded to new child"
+                                                {::success x})
+                                      (log/error forked-logs
+                                                 log-label
+                                                 "Timed out trying to send message"
+                                                 {::destination client}))]
+                                (log/flush-logs! logger log-state)))
+                            (fn [x]
+                              (log/flush-logs! logger
+                                               (log/info forked-logs
+                                                         log-label
+                                                         "Forwarding message to new child failed"
+                                                         {::problem x}))))
+          log-state)
+        (log/warn log-state
+                  log-label
+                  "Unable to decrypt incoming vouch")))))
 
 (s/fdef build-and-configure-client-basics
   :args (s/cat)

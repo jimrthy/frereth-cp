@@ -1755,9 +1755,12 @@
       result)))
 
 (s/fdef parent->!
-        :args (s/cat :io-handle ::specs/io-handle
-                     :buf bytes?)
-        :ret any?)
+  :args (s/or :default-timeout (s/cat :io-handle ::specs/io-handle
+                                      :buf bytes?)
+              :with-timeout (s/cat :io-handle ::specs/io-handle
+                                   :buf bytes?
+                                   :timeout number?))
+  :ret dfrd/deferred?)
 (defn parent->!
   "Receive a byte array from parent
 
@@ -1770,63 +1773,79 @@
   It's replacing one of the polling triggers that
   set off the main() event loop. Need to account for
   that fundamental strategic change"
-  [{:keys [::log/logger
-           ::specs/message-loop-name
-           ::specs/stream]
-    log-state-atom ::log/state-atom
-    :as io-handle}
-   ^bytes array-o-bytes]
-  ;; Note that it doesn't make sense to use the
-  ;; same kind of interface as child->.
-  ;; It's already coping with distinct individual
-  ;; message packets from the parent.
-  ;; It should eventually combine them into a PipedStream
-  ;; to forward along to the child, but a lot of processing
-  ;; needs to happen first.
-  (let [prelog (utils/pre-log message-loop-name)]
-    (swap! log-state-atom
-           #(log/info %
-                      ::parent->
-                      "Top"
-                      {::specs/message-loop-name message-loop-name}))
-    (try
-      (let [success (strm/put! stream [::parent-> array-o-bytes])]
-        (swap! log-state-atom
-               #(log/debug %
-                           ::parent->
-                           "Parent put!. Setting up on-realized handler"
-                           {::specs/message-loop-name message-loop-name}))
-        (dfrd/on-realized success
-                          (fn [x]
-                            (swap! log-state-atom
-                                   #(log/flush-logs! logger (log/debug %
-                                                                       ::parent->
-                                                                       "Buffered bytes from parent"
-                                                                       ;; Note that this probably should run on a
-                                                                       ;; totally different thread than the outer function
-                                                                       {::triggered-from prelog
-                                                                        ::specs/message-loop-name message-loop-name}))))
-                          (fn [x]
-                            (swap! log-state-atom
-                                   #(log/flush-logs! logger (log/warn %
-                                                                      ::parent->
-                                                                      "Failed to buffer bytes from parent"
-                                                                      {::triggered-from prelog
-                                                                       ::specs/message-loop-name message-loop-name})))))
-        (swap! log-state-atom
-               #(log/debug %
-                           ::parent->
-                           "bottom"
-                           {::specs/message-loop-name message-loop-name}))
-        nil)
-      (catch Exception ex
-        (swap! log-state-atom
-               #(log/flush-logs! logger
-                                 (log/exception %
-                                                ex
-                                                ::parent->
-                                                "Sending message to parent failed"
-                                                {::specs/message-loop-name message-loop-name})))))))
+  ([{:keys [::log/logger
+             ::specs/message-loop-name
+             ::specs/stream]
+      log-state-atom ::log/state-atom
+      :as io-handle}
+    array-o-bytes
+    timeout]
+   ;; Note that it doesn't make sense to use the
+   ;; same kind of interface as child->.
+   ;; It's already coping with distinct individual
+   ;; message packets from the parent.
+   ;; It should eventually combine them into a PipedStream
+   ;; to forward along to the child, but a lot of processing
+   ;; needs to happen first.
+   (let [array-o-bytes (bytes array-o-bytes)
+         prelog (utils/pre-log message-loop-name)]
+     (swap! log-state-atom
+            #(log/info %
+                       ::parent->
+                       "Top"
+                       {::specs/message-loop-name message-loop-name}))
+     (try
+       (let [success (strm/try-put! stream [::parent-> array-o-bytes] timeout ::timed-out)]
+         (swap! log-state-atom
+                #(log/debug %
+                            ::parent->
+                            "Parent put!. Setting up on-realized handler"
+                            {::specs/message-loop-name message-loop-name}))
+         ;; Note that any problems here violate the currently unwritten contract with the
+         ;; child. That is responsible for pulling bytes off this channel as fast as
+         ;; possible.
+         ;; If they get discarded, resending the packet is the other side's responsibility.
+         (dfrd/on-realized success
+                           (fn [x]
+                             ;; Note that this really should run on a
+                             ;; totally different thread than the outer function
+                             (swap! log-state-atom
+                                    #(log/flush-logs! logger
+                                                      (if (not= x ::timed-out)
+                                                        (log/debug %
+                                                                   ::parent->
+                                                                   "Buffered bytes from parent"
+                                                                   {::triggered-from prelog
+                                                                    ::specs/message-loop-name message-loop-name
+                                                                    ::success x})
+                                                        (log/error %
+                                                                   ::parent->
+                                                                   "Timed out trying to buffer bytes from parent"
+                                                                   {::triggered-from prelog
+                                                                    ::specs/message-loop-name message-loop-name})))))
+                           (fn [x]
+                             (swap! log-state-atom
+                                    #(log/flush-logs! logger (log/error %
+                                                                        ::parent->
+                                                                        "Failed to buffer bytes from parent"
+                                                                        {::triggered-from prelog
+                                                                         ::specs/message-loop-name message-loop-name})))))
+         (swap! log-state-atom
+                #(log/debug %
+                            ::parent->
+                            "bottom"
+                            {::specs/message-loop-name message-loop-name}))
+         success)
+       (catch Exception ex
+         (swap! log-state-atom
+                #(log/flush-logs! logger
+                                  (log/exception %
+                                                 ex
+                                                 ::parent->
+                                                 "Sending message to parent failed"
+                                                 {::specs/message-loop-name message-loop-name})))))))
+  ([io-handle array-o-bytes]
+   (parent->! io-handle array-o-bytes child-buffer-timeout)))
 
 (s/fdef child-close!
         :args (s/cat :io-handle ::io-handle)
