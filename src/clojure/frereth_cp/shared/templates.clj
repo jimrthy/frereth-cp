@@ -73,9 +73,7 @@
 ;;; Initiate packets
 
 (def initiate-client-vouch-wrapper
-  "This is the actual body (368+M) of the Initiate packet
-
-TODO: Rename this to something like initiate-client-vouch-message"
+  "This is the actual body (368+M) of the Initiate packet"
   (array-map ::K/long-term-public-key {::K/type ::K/bytes
                                        ::K/length K/client-key-length}
              ::K/inner-i-nonce {::K/type ::K/bytes

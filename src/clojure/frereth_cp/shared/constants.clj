@@ -232,6 +232,9 @@
 
 ;;; FIXME: Move the rest of these into templates
 
+;; This has been obsoleted by
+;; initiate-client-vouch-wrapper in templates.
+;; FIXME: Make this version go away.
 (def vouch-wrapper
   "Template for composing the inner part of an Initiate Packet's Vouch that holds everything interesting"
   {::client-long-term-key {::type ::bytes
@@ -239,7 +242,8 @@
    ::inner-i-nonce {::type ::bytes ::length specs/server-nonce-suffix-length}
    ::inner-vouch {::type ::bytes ::length vouch-length}
    ::srvr-name {::type ::bytes ::length specs/server-name-length}
-   ;; Q: Do I want to allow compose to accept parameters for things like this?
+   ;; Q: Do I want to allow compose to accept parameters for things like
+   ;; the length?
    ::child-message {::type ::bytes ::length '?child-message-length}})
 
 (def initiate-packet-dscr
@@ -272,9 +276,9 @@
 
 ;; Note that this is really the wrapper for the vouch received from the client
 (s/def ::vouch-wrapper (s/and bytes?
-                              ;; FIXME: The max size is wrong.
                               #(<= minimum-vouch-length
                                    (count %)
+                                   ;; This max size looks wrong, but it adds up.
                                    (+ minimum-vouch-length max-vouch-message-length))
                               ;; Evenly divisible by 16
                               #(= 0 (mod (count %) 16))))

@@ -582,7 +582,7 @@ This is the part that possibly establishes a 'connection'"
 (s/fdef forward-message-portion!
   :args (s/cat :state ::state/state
                :active-client ::state/client-state
-               :initiate ::K/initiate-packet-spec)
+               :client-message-box ::templates/initiate-client-vouch-wrapper)
   :ret ::log/state)
 (defn forward-message-portion!
   "Forward the message to our new(?) child"
@@ -592,62 +592,50 @@ This is the part that possibly establishes a 'connection'"
    {:keys [::state/client-security]
     child-state ::child/state
     :as client}
-   {packet-nonce-bytes ::specs/nonce
-    :keys [::K/vouch-wrapper]
-    :as initiate}]
-  (let [{shared-key ::state/client-short<->server-short} client-security]
-    (println "Mark decrypt-initiate-box\n"
-             (str/join ", " [log-state shared-key packet-nonce-bytes vouch-wrapper]))
-    (println "Client keys (where I expect to find the client-short<->server-short) shared-key:" (keys client-security))
-    (println "Initiate keys (where I expect to find packet-nonce-bytes under ::specs/nonce and the vouch under ::K/vouch-wrapper"
-             (keys initiate))
-    (throw (ex-info "Mark decrypt-initiate-box\n"
-                    {::state/client-state client
-                     ::K/initiate-packet-spec initiate}))
-    (let [{log-state ::log/state
-           client-message-box ::serial/decomposed} (decrypt-initiate-box log-state
-                                                                         shared-key
-                                                                         packet-nonce-bytes
-                                                                         vouch-wrapper)
-          log-label ::forward-message-portion!]
-      (if client-message-box
+   {child-message ::K/message
+    :as client-message-box}]
+  (println "Mark decrypt-initiate-box" client-message-box)
+  (let [log-label ::forward-message-portion!
         ;; Line 351 (if this is a new connection)
-        (let [packet-nonce (b-t/uint64-unpack packet-nonce-bytes)
-              client (assoc client
-                            ::state/received-nonce packet-nonce)
-              log-state (log/debug log-state
-                                   log-label
-                                   "Trying to send child-message from "
-                                   {::message-box-keys (keys client-message-box)})
-              sent (root-message/parent->! child-state
-                                           (::K/message client-message-box))
-              forked-logs (log/clean-fork log-state ::initiate-forwarded)]
-          (dfrd/on-realized sent
-                            (fn [x]
-                              (let [log-state
-                                    (if (not= x ::root-message/timeout)
-                                      (log/info forked-logs
-                                                log-label
-                                                "Message forwarded to new child"
-                                                {::success x})
-                                      (log/error forked-logs
-                                                 log-label
-                                                 "Timed out trying to send message"
-                                                 {::destination client}))]
-                                (log/flush-logs! logger log-state)))
-                            (fn [x]
-                              (log/flush-logs! logger
-                                               (log/info forked-logs
-                                                         log-label
-                                                         "Forwarding message to new child failed"
-                                                         {::problem x}))))
-          log-state)
-        (log/warn log-state
-                  log-label
-                  "Unable to decrypt incoming vouch")))))
+        log-state (log/debug log-state
+                             log-label
+                             "Trying to send child-message from "
+                             {::client-message-box-keys (keys client-message-box)})
+        sent (root-message/parent->! child-state
+                                     child-message)
+        forked-logs (log/clean-fork log-state ::initiate-forwarded)]
+    (dfrd/on-realized sent
+                      (fn [x]
+                        (let [log-state
+                              (if (not= x ::root-message/timeout)
+                                (log/info forked-logs
+                                          log-label
+                                          "Message forwarded to new child"
+                                          {::success x})
+                                (log/error forked-logs
+                                           log-label
+                                           "Timed out trying to send message"
+                                           {::destination client}))]
+                          (log/flush-logs! logger log-state)))
+                      (fn [x]
+                        (log/flush-logs! logger
+                                         (log/info forked-logs
+                                                   log-label
+                                                   "Forwarding message to new child failed"
+                                                   {::problem x}))))
+    log-state))
 
 (s/fdef build-and-configure-client-basics
-  :args (s/cat)
+  :args (s/cat :log-state ::log/state
+               ;; There have been a couple of times
+               ;; when I've been skeptical about the
+               ;; utility of the packet parameter
+               ;; here.
+               ;; But it's vital.
+               ;; This is how the server knows where to
+               ;; send its own Messages.
+               :packet ::shared/network-packet
+               :initiate ::K/initiate-packet-spec)
   :ret (s/keys :req [::log/state]
                :opt [::state/client-state]))
 (defn build-and-configure-client-basics
@@ -676,13 +664,13 @@ This is the part that possibly establishes a 'connection'"
                :packet ::shared/network-packet
                :initiate ::K/initiate-packet-spec)
   :ret (s/keys :req [::log/state]
-               :opt [::state/client-state]))
+               :opt [::state/client-state
+                     ::templates/initiate-client-vouch-wrapper]))
 (defn build-new-client
   [{log-state ::log/state
     :keys [::state/cookie-cutter state
            ::shared/my-keys]}
-   {:keys [:host :port]
-    :as packet}
+   packet
    {:keys [::K/clnt-short-pk]
     :as initiate}]
   (let [{cookie ::templates/cookie-spec
@@ -734,6 +722,7 @@ This is the part that possibly establishes a 'connection'"
                                                                                              client-short-pk
                                                                                              client-message-box)]
                             {::log/state log-state
+                             ::templates/initiate-client-vouch-wrapper client-message-box
                              ::state/current-client (when matched?
                                                       active-client)})
                           {::log/state log-state}))
@@ -770,7 +759,8 @@ This is the part that possibly establishes a 'connection'"
                :packet ::shared/network-packet
                :initiate ::K/initiate-packet-spec)
   :ret (s/keys :req [::log/state]
-               :opt [::state/client-state]))
+               :opt [::state/client-state
+                     ::templates/initiate-client-vouch-wrapper]))
 (defn create-child
   [log-state
    {:keys [::state/cookie-cutter
@@ -778,7 +768,6 @@ This is the part that possibly establishes a 'connection'"
    packet
    initiate]
   (let [{log-state-2 ::log/state
-         active-client ::state/current-client
          :as built} (build-new-client {::state/cookie-cutter cookie-cutter
                                        ::shared/my-keys my-keys
                                        ::log/state log-state}
@@ -791,14 +780,14 @@ This is the part that possibly establishes a 'connection'"
                               (str "Log state disappeared"
                                    "  trying to build-new-client")
                               {::built built}))]
-    {::log/state log-state
-     ::state/client-state active-client}))
+    (assoc built ::log/state log-state)))
 
 (s/fdef decompose-initiate-packet
   :args (s/cat :packet-length nat-int?
                :message-packet ::shared/message)
   :ret ::K/initiate-packet-spec)
 (defn decompose-initiate-packet
+  "Extract the raw outer portions of a Client Initiate Packet"
   [packet-length
    message-packet]
   ;; Note the extra 16 bytes
@@ -842,20 +831,6 @@ This is the part that possibly establishes a 'connection'"
                 {:keys [::specs/handled?
                         ::state/client-state]
                  log-state ::log/state
-                 ;; Q: Do we have to extract this during re-initiate?
-                 ;; A: No. Definitely not.
-                 ;; We have to decrypt it, no matter what, *if*
-                 ;; the cookie's valid.
-                 ;; Actually, if we've already established a "connection,"
-                 ;; the cookie doesn't matter. It's something that could
-                 ;; have been encrypted years ago, and its minute key is
-                 ;; long dead-and-buried.
-                 ;; It seems as thought it would be nice for the server
-                 ;; to have a way to request a new key exchange handshake
-                 ;; from the client under those sort of circumstances,
-                 ;; short of terminating the "connection" (which, really,
-                 ;; is outside the scope of this layer).
-                 client-message-box ::templates/initiate-client-vouch-wrapper
                  :as re-inited} (possibly-re-initiate-existing-client-connection (assoc state
                                                                                         ::log/state @log-state-atom)
                                                                                  initiate)]
@@ -871,9 +846,22 @@ This is the part that possibly establishes a 'connection'"
             ;; smaller nonce than the last one it's seen (though
             ;; it's also legal to track the last few that were
             ;; received to handle network reordering).
+
+            ;; And the boolean for client-state is a member of re-inited
+
+            ;; Actually, given modern technology, it probably isn't
+            ;; clever enough.
+            ;; A major reason to resend an Initiate packet is an IP
+            ;; address change.
+            ;; Assuming mobile clients can even detect such a thing.
+            ;; It would be awesome to make this sort of transition
+            ;; seamless.
+            ;; TODO: Yet again, check with an expert to see whether
+            ;; that's a terrible idea.
             (if-not handled?
               (let [{:keys [::state/client-state]
                      log-state ::log/state
+                     client-message-box ::templates/initiate-client-vouch-wrapper
                      :as built} (if client-state
                                   re-inited
                                   (let [child-creation-params (select-keys state [::shared/my-keys
@@ -883,6 +871,8 @@ This is the part that possibly establishes a 'connection'"
                                                   packet
                                                   initiate)))]
                 (reset! log-state-atom log-state)
+                ;; Note that client-state shifted around in that let just above.
+                ;; More unfortunate cleverness.
                 (if client-state
                   (try
                     (let [base-builder-params (select-keys state [::log/logger
@@ -898,7 +888,8 @@ This is the part that possibly establishes a 'connection'"
                           message-loop-name (format "%s/%x"
                                                     (gensym loop-name-base)
                                                     (biginteger client-pk-short))
-                          builder-params (assoc base-builder-params ::msg-specs/message-loop-name message-loop-name)
+                          builder-params (assoc base-builder-params
+                                                ::msg-specs/message-loop-name message-loop-name)
                           {log-state ::log/state
                            client-state ::state/client-state
                            :as delta} (do-fork-child! builder-params
@@ -909,7 +900,7 @@ This is the part that possibly establishes a 'connection'"
                               state (into state (assoc delta' ::log/state log-state))]
                           (assoc delta' ::log-state (forward-message-portion! state
                                                                               client-state
-                                                                              initiate)))
+                                                                              client-message-box)))
                         delta))
                     (catch Exception ex
                       {::log/state (log/exception log-state
