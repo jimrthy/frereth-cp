@@ -723,8 +723,8 @@ This is the part that possibly establishes a 'connection'"
                                                                                              client-message-box)]
                             {::log/state log-state
                              ::templates/initiate-client-vouch-wrapper client-message-box
-                             ::state/current-client (when matched?
-                                                      active-client)})
+                             ::state/client-state (when matched?
+                                                    active-client)})
                           {::log/state log-state}))
                       (catch ExceptionInfo ex
                         {::log/state (log/exception log-state
