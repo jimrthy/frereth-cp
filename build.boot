@@ -19,8 +19,8 @@
                           ;; users
                           [org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
                           [org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
-                          [org.clojure/clojure "1.9.0"]
-                          [org.clojure/spec.alpha "0.1.143"]
+                          [org.clojure/clojure "1.9.0" :exclusions [org.clojure/spec.alpha]]
+                          [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
                           [org.clojure/test.check "0.10.0-alpha2" :scope "test" :exclusions [org.clojure/clojure]]
@@ -96,17 +96,18 @@
 
 (deftask cider-repl
   "Set up a REPL for connecting from CIDER"
-  []
+  [p port PORT int]
   ;; Just because I'm prone to forget one of the vital helper steps
   ;; Note that this would probably make more sense under profile.boot.
   ;; Except that doesn't have access to the defined in here, such
   ;; as...well, almost any of what it actually uses.
   ;; Q: Should they move to there also?
-  (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl)))
+  (let [port (or port 32767)]
+    (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl :port port :bind "0.0.0.0"))))
 
 (deftask run
   "Run the project."
-  [f file FILENAME #{str} "the arguments for the application."]
+  [f file FILENAME #{str} "Application arguments passed to main."]
   ;; This is a leftover template from another project that I
   ;; really just copy/pasted over.
   ;; Q: Does it make any sense to keep it around?

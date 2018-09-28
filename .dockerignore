@@ -3,8 +3,8 @@
 /checkouts
 pom.xml
 pom.xml.asc
-*.jar
-*.class
+**.jar
+**.class
 .lein-deps-sum
 .lein-repl-history
 .lein-plugins/
@@ -13,3 +13,4 @@ pom.xml.asc
 /.nrepl-history
 /.nrepl-port
 **~
+.gitignore
