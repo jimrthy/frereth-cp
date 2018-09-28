@@ -30,11 +30,13 @@ COPY build.boot .
 # These still leave out several dependencies, like the various nrepl
 # tools.
 # Q: How do I get them downloaded/cached?
-RUN boot dev testing cider javac check-conflicts
+RUN boot dev testing javac check-conflicts
 
 COPY . .
 
 RUN chmod u+x boot.sh
+
+RUN ./boot.sh cider repl -s
 
 # Want to run local boot.sh to pick up local overrides.
 # So override base image entrypoint to nothing.
