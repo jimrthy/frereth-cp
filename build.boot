@@ -1,6 +1,8 @@
 (def project 'frereth-cp)
 (def version "0.0.1-SNAPSHOT")
 
+;; TODO: Add a dependency on weald and refactor away the local copy
+;; of shared.logging.
 (set-env! :resource-paths #{"src/clojure"}
           :dependencies '[[adzerk/boot-test "RELEASE" :scope "test"]
                           ;; Default uses a version of netty that's about 6 months
