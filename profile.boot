@@ -14,8 +14,14 @@
   ;; dependencies at all.
   ;; Stick with this version for now.
   (swap! @(resolve 'boot.repl/*default-dependencies*)
-         concat '[[org.clojure/tools.nrepl "0.2.12"]
-                  [cider/cider-nrepl "0.18.0"]
+         concat '[[cider/cider-nrepl "0.18.0"]
+                  ;; This is completely backwards-compatible with
+                  ;; [org.clojure/tools.nrepl "0.2.13"]
+                  ;; They changed namespaces with 0.4.0.
+                  ;; Note that they've moved forward with bug fixes
+                  ;; and merge requests. Now they're up to 0.4.5.
+                  ;; TODO: Experiment with those.
+                  [nrepl "0.3.1"]
                   [refactor-nrepl "2.4.0"]])
 
   (swap! @(resolve 'boot.repl/*default-middleware*)
