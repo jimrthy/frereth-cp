@@ -14,7 +14,24 @@
 ;;; FIXME: Refactor specs back into the specs ns. Or at least constants.
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Cookie packets
+;;; Magic constants
+
+(def extension {::K/type ::K/bytes
+                ::K/length K/extension-length})
+
+;; Header is only a "string" in the ASCII sense
+(def header {::K/type ::K/bytes
+             ::K/length K/header-length})
+
+(def message-box {::K/type ::K/bytes
+                  ::K/length '*})
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Specs
+;;;; FIXME: Lots need to move into here
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Cookie Packets
 
 ;; server line 315 - tie into the 0 padding that's part of the buffer
 ;; getting created here.
@@ -38,13 +55,9 @@
 
 (def cookie-frame
   "The boiler plate around a cookie"
-  ;; Header is only a "string" in the ASCII sense
-  (array-map ::header {::K/type ::K/bytes
-                       ::K/length K/header-length}
-             ::client-extension {::K/type ::K/bytes
-                                 ::K/length K/extension-length}
-             ::server-extension {::K/type ::K/bytes
-                                 ::K/length K/extension-length}
+  (array-map ::header header
+             ::client-extension extension
+             ::server-extension extension
              ;; Implicitly prefixed with "CurveCPK"
              ::client-nonce-suffix {::K/type ::K/bytes
                                     ::K/length specs/server-nonce-suffix-length}
@@ -70,7 +83,7 @@
                                     ::cookie]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Initiate packets
+;;; Initiate Packets
 
 (def initiate-client-vouch-wrapper
   "This is the actual body (368+M) of the Initiate packet"
@@ -83,8 +96,7 @@
                                                        K/box-zero-bytes)}
              ::K/srvr-name {::K/type ::K/bytes
                             ::K/length specs/server-name-length}
-             ::K/message {::K/type ::K/bytes
-                          ::K/length '*}))
+             ::K/message message-box))
 
 (s/def ::initiate-client-vouch-wrapper
   (s/keys :req [::K/long-term-public-key
@@ -92,3 +104,45 @@
                 ::K/hidden-client-short-pk
                 ::K/srvr-name
                 ::K/message]))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Message Packets
+
+;;; Server
+
+(def server-message-header (.getBytes "RL3aNMXM"))
+(def server-message-nonce-prefix (.getBytes "CurveCP-server-M"))
+
+(def server-message
+  (array-map ::header header
+             ::client-extension extension
+             ::server-extension extension
+             ::nonce specs/client-nonce-suffix-length
+             ::message message-box))
+
+(s/def ::server-message (s/keys :req [::header
+                                      ::client-extension
+                                      ::server-extension
+                                      ::nonce
+                                      ::message]))
+
+;;; Client
+
+(def client-message-header (.getBytes "QvnQ5XlM"))
+(def client-message-nonce-prefix (.getBytes "CurveCP-client-M"))
+
+(def client-message
+  (array-map ::header header
+             ::server-extension extension
+             ::client-extension extension
+             ::client-short-pk {::K/type ::K/bytes
+                                ::K/length K/client-key-length}
+             ::nonce specs/server-nonce-suffix-length
+             ::message message-box))
+
+(s/def ::client-message (s/keys :req [::header
+                                      ::server-extension
+                                      ::client-extension
+                                      ::client-short-pk
+                                      ::nonce
+                                      ::message]))

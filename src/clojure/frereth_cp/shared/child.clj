@@ -4,32 +4,53 @@
   ;; But there's already far too much going on in there.
   "Manage child ioloops"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message :as message]
+            [frereth-cp
+             [message :as message]
+             [shared :as shared]]
             [frereth-cp.message
              [registry :as registry]
              [specs :as msg-specs]]
-            [frereth-cp.shared :as shared]
             [frereth-cp.shared
-             [specs :as specs]]
+             [constants :as K]
+             [crypto :as crypto]
+             [logging :as log]
+             [specs :as specs]
+             [templates :as templates]]
             [frereth.weald
              [logging :as log]
-             [specs :as weald]]))
+             [specs :as weald]]
+            [manifold
+             [deferred :as deferred]
+             [stream :as stream]]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants
 
 (set! *warn-on-reflection* true)
 
+(def send-timeout
+  "How many ms do we wait before giving up on a send?"
+  ;; This is probably far too long. Need to play with
+  ;; it though.
+  ;; Since it's UDP, 25 or even 10 seems much more
+  ;; reasonable.
+  500)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
-
-(s/def ::state ::msg-specs/io-handle)
 
 (s/def ::child-builder (s/keys :req [::weald/logger
                                      ::weald/state
                                      ::msg-specs/->child
                                      ::msg-specs/child-spawner!
                                      ::msg-specs/message-loop-name]))
+
+(s/def ::sending-details (s/keys :req [::log/state-atom
+                                       ::msg-specs/stream
+                                       ::specs/crypto-key]))
+
+;; Q: Does this serve any meaningful purpose?
+(s/def ::state ::msg-specs/io-handle)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Globals
@@ -47,6 +68,97 @@
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
+
+(s/fdef child->
+  :args (s/cat :details ::sending-details
+               :nonce-prefix ::specs/client-nonce-prefix
+               :template map?  ; FIXME: spec
+               :structure map?  ; FIXME: spec
+               :message-bytes bytes?)
+  :ret any?)
+;;; Trying to consolidate server's implementation with the way the
+;;; client handles its packets.
+;;; That seems needlessly complex due to the way the client has to flip
+;;; state in the middle.
+;;; Which, honestly, means that I've implemented that part incorrectly.
+;;; (I have, of course).
+
+;;; FIXME: This is useless without a destination stream
+(defn child->
+  "Callback for handling message packets from the child"
+  [{:keys [::log/logger
+           ::log/state-atom
+           ::msg-specs/stream
+           ::specs/crypto-key]
+    :as details}
+   nonce-prefix
+   template
+   structure
+   message-bytes]
+  ;; This is trying to handle
+  ;; both lines 453-484 of curvecpserver.c
+  ;; and  lines 426-442 of curvecpclient.c
+  ;; There are several ways to trigger a (close).
+  ;; TODO: Cope with those scenarios. (Note that they
+  ;; probably don't match the reference any longer)
+  (let [log-state @state-atom
+        message-bytes (bytes message-bytes)
+        n (count message-bytes)
+        template (assoc-in template
+                           [::templates/message ::K/length]
+                           (+ K/box-zero-bytes n))
+        ;; In the reference implementation:
+        ;; For the client, nonce is set by calling
+        ;; clientshorttermnonce_update()
+        ;; Right after calling clientextension_init()
+        ;; That seems wrong.
+        ;; The intent definitely seems to be for the
+        ;; client extension to rotate periodically
+        ;; (it looks like every 5 minutes, but I haven't
+        ;; counted the zeroes) over the course of the
+        ;; session.
+        ;; But it doesn't do anything with that.
+        ;; So it just zeroes them out.
+        ;; I'm going to run with the "this was half-
+        ;; baked" assumption on this one.
+        ;; (lines 423-424 in curvecpclient.c)
+        ;; The server is easier: it just associates a
+        ;; nonce counter with each client.
+        nonce-suffix "hmm"
+        structure (assoc structure
+                         ::templates/message message-bytes
+                         ::templates/nonce nonce-suffix)
+        box (crypto/build-box template
+                              structure
+                              crypto-key
+                              nonce-prefix
+                              nonce-suffix)
+        log-state (log/debug log-state
+                             ::child->
+                             "Trying to put"
+                             ::templates/nonce nonce-suffix)
+        success (stream/try-put! stream box send-timeout ::timed-out)]
+    (deferred/on-realized success
+      (fn [succeeded]
+        (swap! state-atom
+               #(log/flush-logs! logger
+                                 (if (not= succeeded ::timed-out)
+                                   (log/debug log-state
+                                              ::child->
+                                              "Succeeded")
+                                   (log/warn log-state
+                                             ::child->
+                                             "Timed out")))))
+      (fn [failed]
+        (swap! state-atom
+               #(log/flush-logs! logger
+                                 ;; Q: What are the odds that failed
+                                 ;; is a Throwable?
+                                 (log/error log-state
+                                            ::child->
+                                            "Failed"
+                                            {::problem failed})))))
+    (throw (RuntimeException. "So, what should this do?"))))
 
 (s/fdef fork!
   :args (s/cat :builder ::child-builder
