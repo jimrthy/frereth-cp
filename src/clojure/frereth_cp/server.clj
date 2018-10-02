@@ -20,15 +20,16 @@
             [frereth.weald
              [logging :as log]
              [specs :as weald]]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            io.netty.buffer.ByteBuf))
 
 (set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Magic Constants
+;;;; Magic Constants
 
 (def default-max-clients 100)
 
@@ -37,7 +38,7 @@
 (def minimum-message-packet-length 112)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Specs
+;;;; Specs
 
 ;; Note that this really only exists as an intermediate step for the
 ;; sake of producing a ::state/state.
@@ -88,7 +89,7 @@
   (s/def ::post-state-options (s/keys :req (conj common-state-option-keys ::state/max-active-clients))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Internal
+;;;; Internal
 
 (s/fdef check-packet-length
   :args (s/cat :log-state ::weald/state
@@ -377,7 +378,7 @@
     log-state))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Public
+;;;; Public
 
 (s/fdef start!
          :args (s/cat :this ::pre-state)

@@ -530,12 +530,12 @@ Line 608"
   [{:keys [::weald/logger
            ::specs/->parent]
     :as io-handle}
-   ^bytes send-buf
+   send-buf
    log-state]
   {:pre [logger
          log-state]}
   (if send-buf
-    (do
+    (let [send-buf (bytes send-buf)]
       (when-not ->parent
         (throw (ex-info "Missing ->parent callback"
                         {::callbacks (::specs/callbacks io-handle)

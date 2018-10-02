@@ -49,9 +49,8 @@
 (s/def ::message-loop-name-base string?)
 
 ;;; Used for sending requests to the message-buffering
-;;; Actor
-(s/def ::stream (s/and strm/sink?
-                       strm/source?))
+;;; Actor (Q: is that still a thing?)
+(s/def ::stream strm/stream?)
 ;; TODO: Need better names
 ;; This is the pipe that the child writes to for sending data
 (s/def ::from-child #(instance? OutputStream %))

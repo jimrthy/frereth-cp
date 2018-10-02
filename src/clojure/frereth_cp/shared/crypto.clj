@@ -424,13 +424,13 @@
                                          :client ::specs/client-nonce-suffix))
         ;; The length of :ret can be determined by :template.
         ;; But that gets into troublesome details about serialization
-        ;; FIXME: Refactor this to also return ::weald/state
+        ;; FIXME: Refactor this to accept/return ::weald/state
         :ret bytes?)
 (defn build-box
   "Compose a map into bytes and encrypt it
 
   Note that tmplt should *not* include the requisite 32 bytes of 0 padding"
-  [tmplt src key-pair nonce-prefix nonce-suffix]
+  [tmplt src shared-key nonce-prefix nonce-suffix]
   (let [^ByteBuf buffer (serial/compose tmplt src)]
     (let [n (.readableBytes buffer)
           nonce (byte-array K/nonce-length)
@@ -450,7 +450,7 @@
                       nonce-prefix-length
                       nonce-suffix-length
                       nonce-suffix)
-      (box-after key-pair dst n nonce))))
+      (box-after shared-key dst n nonce))))
 
 (defn encrypt-block
   "Block-encrypt a byte-array"
@@ -461,11 +461,12 @@
   ;; this choice. Rather than translating what it's doing, I'm
   ;; just going to use the built-in AES encryption
   [^SecretKey secret-key
-   ^bytes clear-text]
+   clear-text]
   (when-not secret-key
     (throw (RuntimeException. "FIXME: What's wrong with the secret-key ?")))
   ;; Q: Which cipher mode is appropriate here?
-  (let [cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
+  (let [clear-text (bytes clear-text)
+        cipher (Cipher/getInstance "AES/CBC/PKCS5Padding")
         ;; FIXME: Read https://www.synopsys.com/blogs/software-security/proper-use-of-javas-securerandom/
         ;; This is still almost definitely wrong.
         rng (SecureRandom.)
