@@ -46,7 +46,11 @@ This is the part that possibly establishes a 'connection'"
                                           ::log/state
                                           ::msg-specs/->child
                                           ::msg-specs/child-spawner!
-                                          ::msg-specs/message-loop-name]))
+                                          ::msg-specs/message-loop-name
+                                          ::shared/network-packet
+                                          ::specs/clnt-xtn
+                                          ::specs/crypto-key
+                                          ::specs/srvr-xtn]))
 
 (s/def ::client-builder (s/keys :req [::state/cookie-cutter
                                       ::shared/my-keys
@@ -529,17 +533,6 @@ This is the part that possibly establishes a 'connection'"
                              ::client-public-key-triad-matches?
                              "Unable to open inner cryptobox")})))
 
-;;; It's tempting to try to consolidate this with the way the
-;;; client handles these packets.
-;;; That seems really complex due to the way it has to flip
-;;; state in the middle.
-;;; Which, honestly, means that I've implemented it incorrectly.
-;;; FIXME: This needs a spec
-(defn child->
-  "Callback for handling message packets from the child"
-  [message-bytes]
-  (throw (RuntimeException. "So, what should this do?")))
-
 (s/fdef do-fork-child!
   :args (s/cat :builder-params ::child-fork-prereqs
                :active-client ::state/client-state)
@@ -547,11 +540,25 @@ This is the part that possibly establishes a 'connection'"
                :opt [::state/client-state]))
 (defn do-fork-child!
   [{log-state ::log/state
+    :keys [::shared/network-packet
+           ::specs/clnt-xtn
+           ::specs/srvr-xtn
+           ::specs/crypto-key]
     :as builder-params}
    active-client]
   (try
-      (let [{child-state ::child/state
-           log-state ::log/state} (child/fork! builder-params child->)]
+    (let [{:keys [:host :port]} network-packet
+          {child-state ::child/state
+           log-state ::log/state} (child/fork! builder-params
+                                               (partial child/child->
+                                                        {::specs/crypto-key crypto-key}
+                                                        templates/server-message-nonce-prefix
+                                                        templates/server-message
+                                                        {::templates/header templates/server-message-header
+                                                         ::templates/client-extension clnt-xtn
+                                                         ::templates/server-extension srvr-xtn
+                                                         ::templates/nonce nil
+                                                         ::templates/message nil}))]
       (try
         {::log/state log-state
          ::state/client-state (assoc active-client
@@ -561,12 +568,12 @@ This is the part that possibly establishes a 'connection'"
                                       ex
                                       ::do-fork-child!
                                       "Trying to assoc new child with client")})))
-    ;; Q: Why isn't this catching the RuntimeException from child/fork! ?
     (catch Exception ex
       {::log/state (log/exception log-state
                                   ex
                                   ::do-fork-child!
                                   "Trying to fork!")})
+    ;; This next clause was catching a failing assert
     (catch Throwable ex
       {::log/state (log/exception log-state
                                   ex
@@ -827,7 +834,9 @@ This is the part that possibly establishes a 'connection'"
     (try
       (let [n (count message)]
         (if (>= n (+ K/box-zero-bytes packet-header-length))
-          (let [initiate (decompose-initiate-packet n message)
+          (let [{:keys [::specs/clnt-xtn
+                        ::specs/srvr-xtn]
+                 :as initiate} (decompose-initiate-packet n message)
                 {:keys [::specs/handled?
                         ::state/client-state]
                  log-state ::log/state
@@ -875,7 +884,8 @@ This is the part that possibly establishes a 'connection'"
                 ;; More unfortunate cleverness.
                 (if client-state
                   (try
-                    (let [base-builder-params (select-keys state [::log/logger
+                    (let [{{:keys [::state/client-short<->server-short]} ::state/shared-secrets} client-state
+                          base-builder-params (select-keys state [::log/logger
                                                                   ::log/state
                                                                   ::msg-specs/->child
                                                                   ::msg-specs/child-spawner!])
@@ -889,7 +899,11 @@ This is the part that possibly establishes a 'connection'"
                                                     (gensym loop-name-base)
                                                     (biginteger client-pk-short))
                           builder-params (assoc base-builder-params
-                                                ::msg-specs/message-loop-name message-loop-name)
+                                                ::msg-specs/message-loop-name message-loop-name
+                                                ::shared/network-packet packet
+                                                ::specs/clnt-xtn clnt-xtn
+                                                ::specs/srvr-xtn srvr-xtn
+                                                ::specs/crypto-key client-short<->server-short)
                           {log-state ::log/state
                            client-state ::state/client-state
                            :as delta} (do-fork-child! builder-params
