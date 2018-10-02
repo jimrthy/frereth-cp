@@ -4,10 +4,11 @@
             [clojure.spec.alpha :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs])
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [serialization :as serial]
+             [specs :as specs]])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            [io.netty.buffer ByteBuf Unpooled]))
