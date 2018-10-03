@@ -45,7 +45,14 @@
                                      ::msg-specs/child-spawner!
                                      ::msg-specs/message-loop-name]))
 
-(s/def ::sending-details (s/keys :req [::log/state-atom
+;; Parameter is the map that was used to build the previous Message Packet.
+;; Returns a modified version that will be used to build the next.
+(s/def ::structure-updater
+  (s/fspec :args (s/cat :structure map?)
+           :ret map?))
+
+(s/def ::sending-details (s/keys :req [::structure-updater
+                                       ::log/state-atom
                                        ::msg-specs/stream
                                        ::specs/crypto-key]))
 
@@ -73,7 +80,11 @@
   :args (s/cat :details ::sending-details
                :nonce-prefix ::specs/client-nonce-prefix
                :template map?  ; FIXME: spec
-               :structure map?  ; FIXME: spec
+               :structure-atom (s/and #(instance? (class (atom nil)) %)
+                                      ;; Q: spec the fields?
+                                      ;; Or at least that it's a map
+                                      ;; of keywords to primitives?
+                                      map?)
                :message-bytes bytes?)
   :ret any?)
 ;;; Trying to consolidate server's implementation with the way the
@@ -86,14 +97,15 @@
 ;;; FIXME: This is useless without a destination stream
 (defn child->
   "Callback for handling message packets from the child"
-  [{:keys [::log/logger
+  [{:keys [::structure-updater
+           ::log/logger
            ::log/state-atom
            ::msg-specs/stream
            ::specs/crypto-key]
     :as details}
    nonce-prefix
    template
-   structure
+   structure-atom
    message-bytes]
   ;; This is trying to handle
   ;; both lines 453-484 of curvecpserver.c
@@ -124,10 +136,10 @@
         ;; (lines 423-424 in curvecpclient.c)
         ;; The server is easier: it just associates a
         ;; nonce counter with each client.
-        nonce-suffix "hmm"
-        structure (assoc structure
-                         ::templates/message message-bytes
-                         ::templates/nonce nonce-suffix)
+        structure (assoc (swap! structure-atom
+                                structure-updater)
+                         ::templates/message message-bytes)
+        nonce-suffix (::templates/nonce structure)
         box (crypto/build-box template
                               structure
                               crypto-key

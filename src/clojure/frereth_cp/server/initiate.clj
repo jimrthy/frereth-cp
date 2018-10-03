@@ -37,6 +37,9 @@ This is the part that possibly establishes a 'connection'"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Named Constants
 
+;; This is (pow 2 48). No idea why DJB chose it.
+(def nonce-modulo 281474976710656N)
+
 ;; This number is based on the basic Client Initiate packet details spec:
 ;; (+ 8 96 32 16 16 8 368)
 (def packet-header-length 544)
@@ -542,25 +545,31 @@ This is the part that possibly establishes a 'connection'"
                :opt [::state/client-state]))
 (defn do-fork-child!
   [{log-state ::weald/state
-    :keys [::shared/network-packet
+    :keys [::weald/logger
+           ::shared/network-packet
            ::specs/clnt-xtn
            ::specs/srvr-xtn
            ::specs/crypto-key]
     :as builder-params}
    active-client]
   (try
-    (let [{:keys [:host :port]} network-packet
+    (let [nonce-updater (fn [structure]
+                          (update structure ::templates/nonce inc))
+          {:keys [:host :port]} network-packet
           {child-state ::child/state
            log-state ::weald/state} (child/fork! builder-params
                                                  (partial child/child->
-                                                          {::specs/crypto-key crypto-key}
+                                                          {::child/structure-updater nonce-updater
+                                                           ::weald/logger logger
+                                                           ::weald/state-atom (atom (log/clean-fork log-state ::child/->))
+                                                           ::specs/crypto-key crypto-key}
                                                           templates/server-message-nonce-prefix
                                                           templates/server-message
-                                                          {::templates/header templates/server-message-header
-                                                           ::templates/client-extension clnt-xtn
-                                                           ::templates/server-extension srvr-xtn
-                                                           ::templates/nonce nil
-                                                           ::templates/message nil}))]
+                                                          (atom {::templates/header templates/server-message-header
+                                                                 ::templates/client-extension clnt-xtn
+                                                                 ::templates/server-extension srvr-xtn
+                                                                 ::templates/nonce (crypto/random-mod nonce-modulo)
+                                                                 ::templates/message nil})))]
       (try
         {::weald/state log-state
          ::state/client-state (assoc active-client
