@@ -20,8 +20,8 @@
                 ::K/length K/extension-length})
 
 ;; Header is only a "string" in the ASCII sense
-(def header {::K/type ::K/bytes
-             ::K/length K/header-length})
+(def header {::K/type ::K/const
+             ::K/contents (.getBytes "override")})
 
 (def message-box {::K/type ::K/bytes
                   ::K/length '*})
@@ -110,11 +110,11 @@
 
 ;;; Server
 
-(def server-message-header (.getBytes "RL3aNMXM"))
 (def server-message-nonce-prefix (.getBytes "CurveCP-server-M"))
 
 (def server-message
-  (array-map ::header header
+  (array-map ::header (assoc header
+                             ::K/contents (.getBytes "RL3aNMXM"))
              ::client-extension extension
              ::server-extension extension
              ::nonce specs/client-nonce-suffix-length
@@ -128,11 +128,11 @@
 
 ;;; Client
 
-(def client-message-header (.getBytes "QvnQ5XlM"))
 (def client-message-nonce-prefix (.getBytes "CurveCP-client-M"))
 
 (def client-message
-  (array-map ::header header
+  (array-map ::header (assoc header
+                             ::K/contents (.getBytes "QvnQ5XlM"))
              ::server-extension extension
              ::client-extension extension
              ::client-short-pk {::K/type ::K/bytes
