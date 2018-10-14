@@ -13,7 +13,7 @@
                           #_[aleph "0.4.4" :exclusions [io.netty/netty-all
                                                       org.clojure/tools.logging]]
                           ;; Alt: Try this instead
-                          [aleph "0.4.5-alpha6"]
+                          [aleph "0.4.7-alpha2"]
                           ;; Note that 5.0.0 is up to alpha2
                           [io.netty/netty-all "4.1.20.Final"]
                           ;; TODO: Eliminate these logging dependencies.
@@ -21,7 +21,7 @@
                           ;; users
                           [org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
                           [org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
-                          [org.clojure/clojure "1.9.0" :exclusions [org.clojure/spec.alpha]]
+                          [org.clojure/clojure "1.10.0-beta3" :exclusions [org.clojure/spec.alpha]]
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
@@ -62,7 +62,7 @@
   ;; to -main, as opposed to what happens with `boot run`
   ;; TODO: Eliminate this discrepancy
   (let [dir (if (seq dir) dir #{"target"})]
-    (comp (javac) (aot) (pom) (uber) (jar) (target :dir dir))))
+    (comp (javac) (aot) (pom) (jar) (target :dir dir))))
 
 (deftask check-conflicts
   "Verify there are no dependency conflicts."

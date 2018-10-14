@@ -128,7 +128,10 @@
   "If an unsigned byte is greater than 127, it needs to be negated to fit into a signed byte.
 
 Thanks, java, for having a crippled numeric stack."
-  ;; It seems ridiculous to need to do this
+  ;; It seems ridiculous to need to do this.
+  ;; Actually, Byte/byteValue would handle this for us, but it would
+  ;; involve boxing.
+
   ;; Q: Is this approach valid? It seems overly simplistic.
   ;; According to wikipedia, I really need to do
   ;; (let [mask (pow 2 (dec Byte/SIZE))]
