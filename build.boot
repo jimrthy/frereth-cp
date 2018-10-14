@@ -49,10 +49,10 @@
  jar {:main        'frereth-cp.server
       :file        (str "frereth-cp-" version ".jar")})
 
-(require '[samestep.boot-refresh :refer [refresh]])
-(require '[tolitius.boot-check :as check])
-(require '[adzerk.boot-test :refer [test]])
-(require '[boot.pod :as pod])
+(require '[adzerk.boot-test :refer [test]]
+         '[boot.pod :as pod]
+         '[samestep.boot-refresh :refer [refresh]]
+         '[tolitius.boot-check :as check])
 
 (deftask build
   "Build the project locally as a JAR."
