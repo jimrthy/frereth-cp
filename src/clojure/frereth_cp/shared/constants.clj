@@ -33,6 +33,7 @@
 (def shared-key-length key-length)
 
 (def client-header-prefix-string "QvnQ5Xl")
+(def server-header-prefix-string "RL3aNMX")
 ;; Using an ordinary ^bytes type-hint here caused an
 ;; IllegalArgumentException at compile-time elsewhere
 ;; with the message "Unable to resolve classname: clojure.core$bytes@4efdc044"
@@ -139,7 +140,8 @@
 ;;; Cookie packets
 
 (def ^Integer ^:const cookie-frame-length 144)
-(def cookie-header (.getBytes "RL3aNMXK"))
+(def cookie-header-string (str server-header-prefix-string "K"))
+(def cookie-header (.getBytes cookie-header-string))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))
 (def ^Integer server-cookie-length 96)

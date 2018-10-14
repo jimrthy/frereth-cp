@@ -207,8 +207,7 @@
    nonce-suffix
    crypto-cookie]
   (let [nonce-suffix (bytes nonce-suffix)]
-    (let [fillers {::templates/header K/cookie-header
-                   ::templates/client-extension client-extension
+    (let [fillers {::templates/client-extension client-extension
                    ::templates/server-extension server-extension
                    ::templates/client-nonce-suffix nonce-suffix
                    ::templates/cookie crypto-cookie}
