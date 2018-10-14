@@ -60,7 +60,7 @@
   ;; to -main, as opposed to what happens with `boot run`
   ;; TODO: Eliminate this discrepancy
   (let [dir (if (seq dir) dir #{"target"})]
-    (comp (javac) (aot) (pom) (uber) (jar) (target :dir dir))))
+    (comp (javac) (aot) (pom) (jar) (target :dir dir))))
 
 (deftask check-conflicts
   "Verify there are no dependency conflicts."
