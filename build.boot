@@ -21,7 +21,7 @@
                           ;; users
                           [org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
                           [org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
-                          [org.clojure/clojure "1.10.0-beta3" :exclusions [org.clojure/spec.alpha]]
+                          [org.clojure/clojure "1.10.0-beta3" :exclusions [org.clojure/specs.alpha]]
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
@@ -51,10 +51,10 @@
  jar {:main        'frereth-cp.server
       :file        (str "frereth-cp-" version ".jar")})
 
-(require '[samestep.boot-refresh :refer [refresh]])
-(require '[tolitius.boot-check :as check])
-(require '[adzerk.boot-test :refer [test]])
-(require '[boot.pod :as pod])
+(require '[adzerk.boot-test :refer [test]]
+         '[boot.pod :as pod]
+         '[samestep.boot-refresh :refer [refresh]]
+         '[tolitius.boot-check :as check])
 
 (deftask build
   "Build the project locally as a JAR."
