@@ -25,14 +25,15 @@
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
-                          [org.clojure/test.check "0.10.0-alpha2" :scope "test" :exclusions [org.clojure/clojure]]
+                          [org.clojure/test.check "0.10.0-alpha3" :scope "test" :exclusions [org.clojure/clojure]]
                           ;; TODO: Eliminate this dependency. It's another one
                           ;; that I really don't have any business imposing on anyone else
-                          [org.clojure/tools.logging "0.4.0" :exclusions [org.clojure/clojure]]
+                          ;; Then again, we inherit it from aleph no matter what.
+                          [org.clojure/tools.logging "0.4.1" :exclusions [org.clojure/clojure]]
                           ;; TODO: Move this into the dev task
                           ;; (sadly, it isn't a straight copy/paste)
                           [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]
-                          [tolitius/boot-check "0.1.9" :scope "test" :exclusions [org.clojure/clojure]]]
+                          [tolitius/boot-check "0.1.11" :scope "test" :exclusions [org.clojure/clojure]]]
           :source-paths   #{"src/java"})
 
 (task-options!
@@ -48,7 +49,7 @@
       :license     {"Eclipse Public License"
                     "http://www.eclipse.org/legal/epl-v10.html"}}
  jar {:main        'frereth-cp.server
-      :file        (str "frereth-cp-server-" version "-standalone.jar")})
+      :file        (str "frereth-cp-" version ".jar")})
 
 (require '[samestep.boot-refresh :refer [refresh]])
 (require '[tolitius.boot-check :as check])
@@ -60,7 +61,8 @@
   [d dir PATH #{str} "the set of directories to write to (target)."]
   ;; Note that this approach passes the raw command-line parameters
   ;; to -main, as opposed to what happens with `boot run`
-  ;; TODO: Eliminate this discrepancy
+  ;; TODO: Eliminate this discrepancy (not that it matters for
+  ;; a library)
   (let [dir (if (seq dir) dir #{"target"})]
     (comp (javac) (aot) (pom) (jar) (target :dir dir))))
 

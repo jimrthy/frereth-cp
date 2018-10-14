@@ -35,6 +35,8 @@ RUN boot dev testing javac check-conflicts
 
 COPY . .
 
+RUN boot build install
+
 RUN chmod u+x boot.sh
 
 RUN ./boot.sh cider repl -s

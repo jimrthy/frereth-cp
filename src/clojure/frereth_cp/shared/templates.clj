@@ -111,17 +111,18 @@
 
 ;;; Server
 
+(def server-message-header (.getBytes (str K/server-header-prefix-string "M")))
 (def server-message-nonce-prefix (.getBytes "CurveCP-server-M"))
 
 (def server-message
   (array-map ::header (assoc header
-                             ::K/contents (.getBytes "RL3aNMXM"))
+                             ::K/contents server-message-header)
              ::client-extension extension
              ::server-extension extension
              ::nonce specs/client-nonce-suffix-length
              ::message message-box))
 
-(s/def ::server-message (s/keys :req [::header
+(s/def ::server-message (s/keys :req [::header server-message-header
                                       ::client-extension
                                       ::server-extension
                                       ::nonce
@@ -133,7 +134,7 @@
 
 (def client-message
   (array-map ::header (assoc header
-                             ::K/contents (.getBytes "QvnQ5XlM"))
+                             ::K/contents (.getBytes (str K/client-header-prefix-string "M")))
              ::server-extension extension
              ::client-extension extension
              ::client-short-pk {::K/type ::K/bytes
