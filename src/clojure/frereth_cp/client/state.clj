@@ -49,9 +49,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; Q: Why?
 ;; A: Has to do with randomizing and security, like sending from a random
 ;; UDP port. This will pull in updates when and if some mechanism is
-;; added to implement that sort of thing.
+;; added to implement that sort of thing at the Operating System level.
 ;; Actually doing anything useful with this seems like it's probably
-;; an exercise that's been left for later
+;; an exercise that's been left for later.
 ;; This seems to have been an aspiration, when DJB hoped the entire idea
 ;; would get pulled into the Linux kernel.
 ;; It's just that the idea didn't seem to gain any traction.
@@ -621,7 +621,17 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ::shared/extension]
     log-state ::log/state
     :as this}]
-  {:pre [(and client-extension-load-time recent)]}
+  #_{:pre [(and client-extension-load-time recent)]}
+  (when-not (and client-extension-load-time recent)
+    (when-not client-extension-load-time
+      ;; It looks like the key is here, but the value is nil.
+      (let [message
+            (if (contains? this ::client-extension-load-time)
+              "Missing client-extension-load-time"
+              "nil-client-extension-load-time")]
+        (throw (ex-info message
+                        {::problem (keys this)}))))
+    (assert recent))
   (let [reload? (>= recent client-extension-load-time)
         log-state (log/debug log-state
                              ::clientextension-init

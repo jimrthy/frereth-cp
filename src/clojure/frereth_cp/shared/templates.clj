@@ -55,7 +55,8 @@
 
 (def cookie-frame
   "The boiler plate around a cookie"
-  (array-map ::header header
+  (array-map ::header (assoc header
+                             ::K/content K/cookie-header)
              ::client-extension extension
              ::server-extension extension
              ;; Implicitly prefixed with "CurveCPK"
