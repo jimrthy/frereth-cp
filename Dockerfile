@@ -16,16 +16,13 @@ RUN mkdir -p src/clojure && \
     mkdir dev-resources && \
     mkdir test
 
-COPY .boot-jvm-options boot.properties profile.boot ./
+# It seems like it would be good to do this now. And it would,
+# if we were using another image as our base. As it stands, the
+# image comes with the pieces this would include already
+# downloaded.
+# RUN boot help
 
-# Get the fundamental dependencies cached
-RUN boot help
-
-# It's tempting to just do one COPY command. But build.boot
-# is going to change more often than the others. So might
-# as well try to minimize the overlap, since downloading its
-# dependencies takes a while.
-COPY build.boot .
+COPY .boot-jvm-options boot.properties profile.boot build.boot ./
 
 # Pull in extras that go with day-to-day dev work.
 # These still leave out several dependencies, like the various nrepl
@@ -35,11 +32,9 @@ RUN boot dev testing javac check-conflicts
 
 COPY . .
 
-RUN boot build install
-
-RUN chmod u+x boot.sh
-
-RUN ./boot.sh cider repl -s
+RUN boot build install && \
+    boot cider repl -s && \
+    chmod u+x boot.sh
 
 # Want to run local boot.sh to pick up local overrides.
 # So override base image entrypoint to nothing.
