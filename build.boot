@@ -5,18 +5,10 @@
 ;; of shared.logging.
 (set-env! :resource-paths #{"src/clojure"}
           :dependencies '[[adzerk/boot-test "RELEASE" :scope "test"]
-                          ;; Default uses a version of netty that's about 6 months
-                          ;; old.
-                          ;; That might not be a huge deal...but there have been
-                          ;; 6 bug fix releases since then.
-                          ;; STARTED: Switch to newer version and see how it works.
-                          #_[aleph "0.4.4" :exclusions [io.netty/netty-all
-                                                      org.clojure/tools.logging]]
-                          ;; Alt: Try this instead
+                          ;; Stick with whichever version of netty this inherits.
+                          ;; That library isn't shy about breaking backwards compatibility
+                          ;; between build versions.
                           [aleph "0.4.7-alpha2"]
-                          ;; Note that 5.0.0 is up to alpha2
-                          ;; But stick with whatever we inherit from aleph
-                          #_[io.netty/netty-all "4.1.20.Final"]
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
                           ;; users
