@@ -15,7 +15,8 @@
                           ;; Alt: Try this instead
                           [aleph "0.4.7-alpha2"]
                           ;; Note that 5.0.0 is up to alpha2
-                          [io.netty/netty-all "4.1.20.Final"]
+                          ;; But stick with whatever we inherit from aleph
+                          #_[io.netty/netty-all "4.1.20.Final"]
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
                           ;; users
