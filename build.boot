@@ -7,7 +7,7 @@
           :dependencies '[[adzerk/bootlaces "0.1.13" :scope "test"]
                           [adzerk/boot-test "RELEASE" :scope "test"]
                           ;; Stick with whichever version of netty this inherits.
-                          ;; That library isn't shy about breaking backwards compatibility
+                          ;; netty isn't shy about breaking backwards compatibility
                           ;; between build versions.
                           [aleph "0.4.7-alpha3"]
                           [frereth/weald "0.0.3-SNAPSHOT"]
