@@ -792,6 +792,9 @@
   (.clear dst)
   (.setBytes dst 0 (random-array (.capacity dst))))
 
+(s/fdef random-key
+  :args (s/cat)
+  :ret ::specs/crypto-key)
 (defn random-key
   "Returns a byte array suitable for use as a random key"
   []
