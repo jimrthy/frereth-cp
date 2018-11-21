@@ -3,34 +3,28 @@
 
 (set-env! :resource-paths #{"src/clojure"}
           :dependencies '[[adzerk/boot-test "RELEASE" :scope "test"]
-                          ;; Default uses a version of netty that's about 6 months
-                          ;; old.
-                          ;; That might not be a huge deal...but there have been
-                          ;; 6 bug fix releases since then.
-                          ;; STARTED: Switch to newer version and see how it works.
-                          #_[aleph "0.4.4" :exclusions [io.netty/netty-all
-                                                      org.clojure/tools.logging]]
-                          ;; Alt: Try this instead
-                          [aleph "0.4.5-alpha6"]
-                          ;; Note that 5.0.0 is up to alpha2
-                          [io.netty/netty-all "4.1.20.Final"]
+                          ;; Stick with whichever version of netty this inherits.
+                          ;; That library isn't shy about breaking backwards compatibility
+                          ;; between build versions.
+                          [aleph "0.4.7-alpha3"]
+                          [com.frereth.weald "0.0.1"]
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
                           ;; users
                           [org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
                           [org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
-                          [org.clojure/clojure "1.9.0" :exclusions [org.clojure/spec.alpha]]
+                          [org.clojure/clojure "1.9.0" :exclusions [org.clojure/spec.alpha] :scope "provided"]
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
-                          [org.clojure/test.check "0.10.0-alpha2" :scope "test" :exclusions [org.clojure/clojure]]
+                          [org.clojure/test.check "0.10.0-alpha3" :scope "test" :exclusions [org.clojure/clojure]]
                           ;; TODO: Eliminate this dependency. It's another one
                           ;; that I really don't have any business imposing on anyone else
                           [org.clojure/tools.logging "0.4.0" :exclusions [org.clojure/clojure]]
                           ;; TODO: Move this into the dev task
                           ;; (sadly, it isn't a straight copy/paste)
                           [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]
-                          [tolitius/boot-check "0.1.9" :scope "test" :exclusions [org.clojure/clojure]]]
+                          [tolitius/boot-check "0.1.11" :scope "test" :exclusions [org.clojure/clojure]]]
           :source-paths   #{"src/java"})
 
 (task-options!
