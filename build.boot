@@ -1,13 +1,14 @@
-(def project 'frereth-cp)
+(def project 'frereth/cp)
 (def version "0.0.1-SNAPSHOT")
 
 (set-env! :resource-paths #{"src/clojure"}
-          :dependencies '[[adzerk/boot-test "RELEASE" :scope "test"]
+          :dependencies '[[adzerk/bootlaces "0.1.13" :scope "test"]
+                          [adzerk/boot-test "RELEASE" :scope "test"]
                           ;; Stick with whichever version of netty this inherits.
                           ;; That library isn't shy about breaking backwards compatibility
                           ;; between build versions.
                           [aleph "0.4.7-alpha3"]
-                          [com.frereth.weald "0.0.1"]
+                          [frereth/weald "0.0.3-SNAPSHOT"]
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
                           ;; users
@@ -20,7 +21,7 @@
                           [org.clojure/test.check "0.10.0-alpha3" :scope "test" :exclusions [org.clojure/clojure]]
                           ;; TODO: Eliminate this dependency. It's another one
                           ;; that I really don't have any business imposing on anyone else
-                          [org.clojure/tools.logging "0.4.0" :exclusions [org.clojure/clojure]]
+                          [org.clojure/tools.logging "0.4.1" :exclusions [org.clojure/clojure]]
                           ;; TODO: Move this into the dev task
                           ;; (sadly, it isn't a straight copy/paste)
                           [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]
