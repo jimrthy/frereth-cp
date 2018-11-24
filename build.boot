@@ -22,6 +22,9 @@
                           ;; TODO: Eliminate this dependency. It's another one
                           ;; that I really don't have any business imposing on anyone else
                           [org.clojure/tools.logging "0.4.1" :exclusions [org.clojure/clojure]]
+                          ;; Q: Why do we need this?
+                          ;; A: clojure.tools.analyzer.jvm uses it.
+                          [org.clojure/tools.reader "1.3.2" :exclusions [org.clojure/clojure]]
                           ;; TODO: Move this into the dev task
                           ;; (sadly, it isn't a straight copy/paste)
                           [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]

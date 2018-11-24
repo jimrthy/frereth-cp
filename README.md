@@ -29,7 +29,7 @@ on, above and beyond the bit twiddling.
 
 ## Usage
 
-boot install
+    boot install
 
 Although you probably don't want to actually use it.
 

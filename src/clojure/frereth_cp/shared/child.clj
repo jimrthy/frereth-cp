@@ -4,13 +4,14 @@
   ;; But there's already far too much going on in there.
   "Manage child ioloops"
   (:require [clojure.spec.alpha :as s]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [frereth-cp.message :as message]
             [frereth-cp.message
              [registry :as registry]
              [specs :as msg-specs]]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
-             [logging :as log]
              [specs :as specs]]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -23,8 +24,8 @@
 
 (s/def ::state ::msg-specs/io-handle)
 
-(s/def ::child-builder (s/keys :req [::log/logger
-                                     ::log/state
+(s/def ::child-builder (s/keys :req [::weald/logger
+                                     ::weald/state
                                      ::msg-specs/->child
                                      ::msg-specs/child-spawner!
                                      ::msg-specs/message-loop-name]))
@@ -50,14 +51,14 @@
   :args (s/cat :builder ::child-builder
                :child-> ::msg-specs/->parent)
   :ret (s/keys :req [::state
-                     ::log/state]))
+                     ::weald/state]))
 (defn fork!
   "Create a new Child to do all the interesting work"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::msg-specs/->child
            ::msg-specs/child-spawner!
            ::msg-specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as builder}
    child->]
   {:pre [message-loop-name]}
@@ -70,29 +71,29 @@
         ;; Q: Refactor implementation from message into here?
         startable (message/initial-state message-loop-name
                                          false
-                                         {::log/state (log/clean-fork log-state
-                                                                      child-name)}
+                                         {::weald/state (log/clean-fork log-state
+                                                                        child-name)}
                                          logger)
         {:keys [::msg-specs/io-handle]
-         log-state ::log/state} (message/do-start startable
-                                                  logger
-                                                  child->
-                                                  ->child)
+         log-state ::weald/state} (message/do-start startable
+                                                    logger
+                                                    child->
+                                                    ->child)
         log-state (log/debug log-state
                              ::fork!
                              "Child message loop initialized"
-                             {::child-builder (dissoc builder ::log/state)
-                              ::state (dissoc io-handle ::log/state)})]
+                             {::child-builder (dissoc builder ::weald/state)
+                              ::state (dissoc io-handle ::weald/state)})]
     (swap! io-loop-registry
            #(registry/register % io-handle))
     (child-spawner! io-handle)
     {::state io-handle
-     ::log/state (log/flush-logs! logger log-state)}))
+     ::weald/state (log/flush-logs! logger log-state)}))
 
 (s/fdef do-halt!
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :child ::state)
-  :ret ::log/state)
+  :ret ::weald/state)
 (defn do-halt!
   [log-state child]
   (let [log-state (log/warn log-state
