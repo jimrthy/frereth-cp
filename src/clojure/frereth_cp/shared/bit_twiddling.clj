@@ -2,6 +2,7 @@
   "Shared functions for fiddling with bits"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
+            ;; FIXME: Make this go away
             [clojure.tools.logging :as log]
             [frereth-cp.shared.constants :as K])
   (:import clojure.lang.BigInt

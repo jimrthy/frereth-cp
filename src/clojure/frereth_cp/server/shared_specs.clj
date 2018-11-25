@@ -2,12 +2,12 @@
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.server.state :as state]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.logging :as log]))
+            [frereth.weald :as weald]))
 
 (s/def ::clear-text bytes?)
 
 (s/def ::cookie-components (s/keys :req [::clear-text
-                                         ::log/logger
-                                         ::log/state
+                                         ::weald/logger
+                                         ::weald/state
                                          ::state/client-short<->server-long
                                          ::state/minute-key]))

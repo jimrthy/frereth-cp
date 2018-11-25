@@ -9,6 +9,8 @@
             [clojure.data :as data]
             [clojure.spec.alpha :as s]
             [clojure.pprint :refer [pprint]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [frereth-cp.client
              [cookie :as cookie]
              [hello :as hello]
@@ -21,7 +23,6 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [specs :as specs]]
             [frereth-cp.util :as util]
             [manifold
@@ -86,8 +87,8 @@
   (throw (RuntimeException. "Not translated")))
 
 (defn chan->server-closed
-  [{:keys [::log/logger
-           ::log/state]
+  [{:keys [::weald/logger
+           ::weald/state]
     :as this}]
   ;; This is moderately useless. But I want *some* record
   ;; that we got here.
@@ -149,9 +150,9 @@
   ;; happens here, up to the point of switching into message-exchange
   ;; mode.
   "Perform the side-effects to establish a connection with a server"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::state/chan->server]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
   {:pre [chan->server
          log-state
@@ -169,12 +170,12 @@
       (let [log-state (log/info log-state
                                 ::start!
                                 "client/start! Wiring side-effects through chan->server")]
-        (-> (assoc this ::log/state log-state)
+        (-> (assoc this ::weald/state log-state)
             (dfrd/chain
              (fn [this]
                (hello/set-up-server-polling! this
                                              cookie/wait-for-cookie!))
-             (fn [{log-state ::log/state
+             (fn [{log-state ::weald/state
                    :as this}]
                (println "Outcome from hello/set-up-server-polling!")
                (pprint this)
@@ -191,17 +192,17 @@
              initiate/initial-packet-sent)
             (dfrd/catch (fn [ex]
                           (assoc this
-                                 ::log/state (log/flush-logs! logger
-                                                              (log/exception @log-state-atom
-                                                                             ex
-                                                                             ::start!)))))))
+                                 ::weald/state (log/flush-logs! logger
+                                                                (log/exception @log-state-atom
+                                                                               ex
+                                                                               ::start!)))))))
       (catch Throwable ex
         (swap! log-state-atom
                #(log/exception %
                                ex
                                ::start!))
         (update this
-                ::log/state #(log/flush-logs! logger %)))
+                ::weald/state #(log/flush-logs! logger %)))
       (finally
         (log/flush-logs! logger (log/debug @log-state-atom
                                            ::start!
@@ -211,8 +212,8 @@
         :args (s/cat :state ::state/state)
         :ret any?)
 (defn stop!
-  [{log-state ::log/state
-    :keys [::log/logger
+  [{log-state ::weald/state
+    :keys [::weald/logger
            ::state/chan->server]
     :or {log-state (log/init ::stop!-missing-logs)
          logger (log/std-out-log-factory)}
@@ -222,12 +223,12 @@
                                               ::stop!
                                               "Trying to stop a client"
                                               {::wrapper-content-class (class this)
-                                               ::state/state (dissoc this ::log/state)}))
+                                               ::state/state (dissoc this ::weald/state)}))
         log-state
         (try
           (let [;; This is what signals the Child ioloop to stop
                 log-state (state/do-stop (assoc this
-                                                ::log/state log-state))
+                                                ::weald/state log-state))
                 log-state
                 (try
                   (let [log-state (log/flush-logs! logger
@@ -244,7 +245,7 @@
                       (log/warn log-state
                                 ::stop!
                                 "chan->server already nil"
-                                (dissoc this ::log/state))))
+                                (dissoc this ::weald/state))))
                   (catch Exception ex
                     (log/exception log-state
                                    ex
@@ -262,12 +263,12 @@
     (assoc this
            ::chan->server nil
            ;; Q: What should this logging context be?
-           ::log/state (log/init ::ended-during-stop!))))
+           ::weald/state (log/init ::ended-during-stop!))))
 
 (s/fdef ctor
         :args (s/cat :opts ::ctor-options
                      :log-initializer (s/fspec :args nil
-                                               :ret ::log/logger))
+                                               :ret ::weald/logger))
         :ret ::state/state)
 (defn ctor
   [opts logger-initializer]

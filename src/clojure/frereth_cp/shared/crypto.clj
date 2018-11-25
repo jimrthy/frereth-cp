@@ -3,14 +3,17 @@
   (:require [byte-streams :as b-s]
             [clojure.java.io :as io]
             [clojure.spec.alpha :as s]
+            ;; FIXME: Make this go away
             [clojure.tools.logging :as log]
             [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.logging :as log2]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.shared.specs :as specs]
-            [frereth-cp.util :as util])
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [serialization :as serial]
+             [specs :as specs]]
+            [frereth-cp.util :as util]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log2])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
@@ -100,7 +103,7 @@
         :ret ::nonce-state)
 (defn initial-nonce-agent-state
   []
-  {::log2/state (log2/init ::nonce-agent)
+  {::weald/state (log2/init ::nonce-agent)
    ;; FIXME: Needs a logger for flushing
    ;; the log-state (soon)
    ::counter-low 0
@@ -247,15 +250,15 @@
 
 (declare get-random-bytes)
 (s/fdef do-safe-nonce
-        :args (s/or :persistent (s/cat :log-state ::log2/state
+        :args (s/or :persistent (s/cat :log-state ::weald/state
                                        :dst ::safe-nonce
                                        :key-dir (s/nilable string?)
                                        :offset (complement neg-int?)
                                        :long-term? boolean?)
-                    :transient (s/cat :log-state ::log2/state
+                    :transient (s/cat :log-state ::weald/state
                                       :dst ::safe-nonce
                                       :offset (complement neg-int?)))
-        :ret ::log2/state)
+        :ret ::weald/state)
 ;; TODO: Needs a way to flush the log-state
 (let [nonce-writer (agent (initial-nonce-agent-state))
       random-portion (byte-array 8)]
@@ -420,7 +423,7 @@
                                          :client ::specs/client-nonce-suffix))
         ;; The length of :ret can be determined by :template.
         ;; But that gets into troublesome details about serialization
-        ;; FIXME: Refactor this to also return ::log/state
+        ;; FIXME: Refactor this to also return ::weald/state
         :ret bytes?)
 (defn build-box
   "Compose a map into bytes and encrypt it
@@ -472,8 +475,8 @@
     (.doFinal cipher clear-text)))
 
 (s/fdef get-safe-client-nonce-suffix
-        :args (s/cat :log-state ::log2/state)
-        :ret (s/keys :req [::log2/state
+        :args (s/cat :log-state ::weald/state)
+        :ret (s/keys :req [::weald/state
                            ::specs/client-nonce-suffix]))
 (defn get-safe-client-nonce-suffix
   "Get a new byte array containing the next client nonce suffix"
@@ -484,19 +487,19 @@
   ;; Though it does seem a bit silly.
   (let [dst (byte-array specs/client-nonce-suffix-length)
         log-state (do-safe-nonce log-state dst 0)]
-    {::log2/state log-state
+    {::weald/state log-state
      ::specs/client-nonce-suffix dst}))
 
 (s/fdef get-safe-server-nonce-suffix
-        :args (s/cat :log-state ::log2/state)
-        :ret (s/keys :req [::log2/state
+        :args (s/cat :log-state ::weald/state)
+        :ret (s/keys :req [::weald/state
                            ::safe-server-nonce]))
 (defn get-safe-server-nonce-suffix
   "Get a new byte array containing the next server nonce suffix"
   [log-state]
   (let [dst (byte-array specs/server-nonce-suffix-length)
         log-state (do-safe-nonce log-state dst 0)]
-    {::log2/state log-state
+    {::weald/state log-state
      ::specs/server-nonce-suffix dst}))
 
 (s/fdef random-key-pair
@@ -581,7 +584,7 @@
   (new-nonce-key! path))
 
 (s/fdef open-after
-        :args (s/cat :log-state ::log2/state
+        :args (s/cat :log-state ::weald/state
                      :box bytes?
                      :box-offset integer?
                      :box-length integer?
@@ -600,7 +603,7 @@
                        (- (+ (-> % :args :box-offset)
                              (-> % :args :box-length))
                           K/nonce-length)))
-        :ret (s/keys :req [::log2/state
+        :ret (s/keys :req [::weald/state
                            ::unboxed]))
 (defn open-after
   "Low-level direct crypto box opening
@@ -675,9 +678,9 @@
             (comment (-> plain-text
                          vec
                          (subvec K/decrypt-box-zero-bytes)))
-            {::log2/state (log2/debug log-state
-                                      ::open-after
-                                      "Box Opened")
+            {::weald/state (log2/debug log-state
+                                       ::open-after
+                                       "Box Opened")
              ;; Q: Why am I wrapping this in a ByteBuf?
              ;; That seems like I'm probably jumping through extra hoops
              ;; for the sake of hoop-jumping.
@@ -696,7 +699,7 @@
                                        ::shared-key shared-key})))))
 
 (s/fdef open-box
-        :args (s/cat :log-state ::log2/state
+        :args (s/cat :log-state ::weald/state
                      :nonce-prefix (s/and bytes?
                                           #(let [n (count %)]
                                              (or (= specs/client-nonce-prefix-length n)
@@ -714,7 +717,7 @@
         ;; whichever spec is wrong.
         ;; Although having both return (s/nilable bytes?) is
         ;; starting to look like the best option.
-        :ret (s/keys :req [::log2/state]
+        :ret (s/keys :req [::weald/state]
                      :opt [::unboxed]))
 (defn open-box
   "Builds a nonce and open a crypto box"
@@ -732,7 +735,7 @@
     (try
       (open-after log-state crypto-box 0 crypto-length nonce shared-key)
       (catch Exception ex
-        {::log2/state (log2/exception log-state
+        {::weald/state (log2/exception log-state
                                       ex
                                       ::open-box
                                       "Failed to open box")}))))
@@ -740,7 +743,7 @@
 (defn decompose-box
   "Open a crypto box and decompose its bytes"
   [log-state tmplt nonce-prefix nonce-suffix crypto-box shared-key]
-  (let [{log-state ::log2/state
+  (let [{log-state ::weald/state
          :keys [::unboxed]
          :as opened} (open-box log-state
                                nonce-prefix
@@ -749,7 +752,7 @@
                                shared-key)]
     (if unboxed
       (let [result (serial/decompose-array tmplt unboxed)]
-        {::log2/state log-state
+        {::weald/state log-state
          ::serial/decomposed result})
       opened)))
 

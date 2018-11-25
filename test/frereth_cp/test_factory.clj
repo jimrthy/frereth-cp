@@ -11,8 +11,9 @@
             [frereth-cp.shared
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [specs :as shared-specs]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [executor :as exec]
              [stream :as strm]])
@@ -38,8 +39,8 @@
 ;;;; Helpers
 
 (s/fdef server-options
-  :args (s/cat :logger ::log/logger
-               :log-state ::log/state
+  :args (s/cat :logger ::weald/logger
+               :log-state ::weald/state
                :->child ::msg-specs/->child)
   :ret (s/keys :req [::cp-server]))
 (defn server-options
@@ -48,8 +49,8 @@
         client-read-chan (strm/stream)
         child-id-atom (atom 0)
         executor (exec/fixed-thread-executor 4)]
-    {::cp-server {::log/logger logger
-                  ::log/state log-state
+    {::cp-server {::weald/logger logger
+                  ::weald/state log-state
                   ::msg-specs/->child ->child
                   ::msg-specs/child-spawner! (fn [io-handle]
                                                (log/flush-logs! logger
@@ -62,8 +63,8 @@
                   ::srvr-state/client-write-chan {::srvr-state/chan client-write-chan}}}))
 
 (s/fdef build-server
-  :args (s/cat :logger ::log/logger
-               :log-state ::log/state
+  :args (s/cat :logger ::weald/logger
+               :log-state ::weald/state
                :child-> ::msg-specs/->child))
 (defn build-server
   [logger log-state ->child]
@@ -105,16 +106,16 @@
   ;; That part of the design is still up in the air, really.
   ::msg-specs/message-loop-name message-loop-name
   :args (s/or :sans-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
-                               :logger-init (s/fspec :args nil :ret ::log/logger)
-                               :log-state ::log/state
+                               :logger-init (s/fspec :args nil :ret ::weald/logger)
+                               :log-state ::weald/state
                                :server-ip (s/tuple int? int? int? int?)
                                :srvr-port ::shared-specs/port
                                :srvr-pk-long ::shared-specs/public-long
                                :->child ::msg-specs/->child
                                :child-spawner! ::msg-specs/child-spawner!)
               :with-xtn (s/cat :message-loop-name ::msg-specs/message-loop-name
-                               :logger-init (s/fspec :args nil :ret ::log/logger)
-                               :log-state ::log/state
+                               :logger-init (s/fspec :args nil :ret ::weald/logger)
+                               :log-state ::weald/state
                                :server-ip (s/tuple int? int? int? int?)
                                :srvr-port ::shared-specs/port
                                :srvr-pk-long ::shared-specs/public-long
@@ -157,7 +158,7 @@
            srvr-name (shared/encode-server-name "hypothet.i.cal")
            long-pair (crypto/random-key-pair)
            result (clnt/ctor {::client-state/chan<-server (strm/stream)
-                              ::log/state log-state
+                              ::weald/state log-state
                               ::msg-specs/->child ->child
                               ::msg-specs/child-spawner! child-spawner!
                               ::msg-specs/message-loop-name message-loop-name

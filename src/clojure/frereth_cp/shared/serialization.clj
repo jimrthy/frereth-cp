@@ -8,9 +8,10 @@ in this picture.
 FIXME: Rename for better semantics before this progresses any further."
   (:require [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.specs :as specs]
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [specs :as specs]]
             [frereth-cp.util :as util])
   (:import [io.netty.buffer ByteBuf Unpooled]
            java.util.Arrays))

@@ -7,6 +7,7 @@
             [clojure.spec.alpha :as s]
             [clojure.stacktrace :as s-t]
             [clojure.string :as string]
+            ;; FIXME: Make this go away
             [clojure.tools.logging :as log])
   (:import clojure.lang.ExceptionInfo
            java.security.SecureRandom

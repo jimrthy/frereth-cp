@@ -12,10 +12,11 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [serialization :as serial]
              [specs :as specs]]
             [frereth-cp.util :as util]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as deferred]
              [stream :as stream]])
@@ -41,7 +42,7 @@
   (s/fspec
    :args (s/cat :state ::state/state
                 :recipe (s/keys :req [::srvr-specs/cookie-components ::K/hello-spec]))
-   :ret (s/keys :req [::log/state]
+   :ret (s/keys :req [::weald/state]
                 :opt [::K/cookie-packet])))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -51,14 +52,14 @@
         :args (s/cat :state ::state/state
                      :message any?
                      :crypto-box ::K/crypto-box)
-        :ret (s/keys :req [::log/state ::opened ::shared-secret]))
+        :ret (s/keys :req [::weald/state ::opened ::shared-secret]))
 (defn open-hello-crypto-box
   [{:keys [::client-short-pk
            ::state/cookie-cutter]
     ^bytes nonce-suffix ::nonce-suffix
     {^TweetNaclFast$Box$KeyPair long-keys ::shared/long-pair
      :as my-keys} ::shared/my-keys
-    log-state ::log/state
+    log-state ::weald/state
     :as state}
    message
    ^bytes crypto-box]
@@ -90,13 +91,13 @@
                              {::box-length K/hello-crypto-box-length
                               ::crypto-box (with-out-str (b-s/print-bytes crypto-box))
                               ::shared/nonce-suffix (with-out-str (b-s/print-bytes nonce-suffix))})
-        {:keys [::log/state ::crypto/unboxed]} (crypto/open-box
-                                                log-state
-                                                K/hello-nonce-prefix
-                                                nonce-suffix
-                                                crypto-box
-                                                shared-secret)]
-    {::log/state log-state
+        {:keys [::weald/state ::crypto/unboxed]} (crypto/open-box
+                                                  log-state
+                                                  K/hello-nonce-prefix
+                                                  nonce-suffix
+                                                  crypto-box
+                                                  shared-secret)]
+    {::weald/state log-state
      ::opened unboxed
      ::shared-secret shared-secret}))
 
@@ -104,13 +105,13 @@
         ;; The thing about this approach to spec is that
         ;; we also need all the pieces in ::state/state
         ;; that open-hello-crypto-box needs.
-        :args (s/cat :state (s/keys :req [::log/state
+        :args (s/cat :state (s/keys :req [::weald/state
                                           ::state/current-client])
                      :message bytes?)
-        :ret (s/keys :req [::K/hello-spec ::log/state ::opened ::shared-secret]))
+        :ret (s/keys :req [::K/hello-spec ::weald/state ::opened ::shared-secret]))
 (defn open-packet
   [{:keys [::state/current-client]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}
    message]
   (let [message (bytes message)
@@ -154,12 +155,12 @@
         :args (s/cat :state ::state/state
                      :packet ::shared/message)
         :ret (s/keys :opt [::K/hello-spec ::srvr-specs/cookie-components]
-                     :req [::log/state]))
+                     :req [::weald/state]))
 (defn internal-handler
   ;; This was originally refactored out of do-handle, back when that had
   ;; to reside in the top-level server ns
   "FIXME: Needs a better name"
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :as state}
    message]
   (let [log-state (log/debug log-state
@@ -191,8 +192,8 @@
                                          ::state/minute-key minute-key
                                          ::srvr-specs/clear-text clear-text}
          ::K/hello-spec fields
-         ::log/state log-state})
-      {::log/state (log/warn log-state
+         ::weald/state log-state})
+      {::weald/state (log/warn log-state
                              ::do-handle
                              "Unable to open the HELLO crypto-box: dropping")})))
 
@@ -205,8 +206,8 @@
                :packet ::shared/network-packet)
   :ret ::state/state)
 (defn do-handle
-  [{:keys [::log/logger]
-    log-state ::log/state
+  [{:keys [::weald/logger]
+    log-state ::weald/state
     :as state}
    cookie-response-builder
    {:keys [:message]
@@ -214,12 +215,12 @@
   (let [log-state (log/debug log-state
                              ::do-handle
                              "Top")
-        {log-state ::log/state
-         :as cookie-recipe} (internal-handler (assoc state ::log/state log-state)
+        {log-state ::weald/state
+         :as cookie-recipe} (internal-handler (assoc state ::weald/state log-state)
                                               message)]
     (if cookie-recipe
       (let [{cookie ::K/cookie-packet
-             log-state ::log/state} (cookie/do-build-response state cookie-recipe)
+             log-state ::weald/state} (cookie/do-build-response state cookie-recipe)
             log-state (log/info log-state
                                 ::handle-hello!
                                 (str "Cookie packet built. Sending it."))]
@@ -259,15 +260,15 @@
                                    (log/error forked-log-state
                                               ::handle-hello!
                                               "Sending Cookie failed:" err))))
-              {::log/state (log/flush-logs! logger log-state)})
+              {::weald/state (log/flush-logs! logger log-state)})
             (throw (ex-info "Missing destination"
                             (or (::state/client-write-chan state)
                                 {::problem "No client-write-chan"
                                  ::keys (keys state)
                                  ::actual state}))))
           (catch Exception ex
-            {::log/state (log/exception log-state
-                                        ex
-                                        ::handle-hello!
-                                        "Failed to send Cookie response")})))
-      {::log/state log-state})))
+            {::weald/state (log/exception log-state
+                                          ex
+                                          ::handle-hello!
+                                          "Failed to send Cookie response")})))
+      {::weald/state log-state})))

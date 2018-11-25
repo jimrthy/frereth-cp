@@ -5,8 +5,9 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as shared-K]
-            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.deferred :as dfrd])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
@@ -70,10 +71,10 @@
               ::specs/error K/eof-error))))
 
 (s/fdef build-message-block-description
-        :args (s/cat :log-state ::log/state
+        :args (s/cat :log-state ::weald/state
                      :block-description ::specs/block)
         :ret {::specs/bs-or-eof
-              ::log/state})
+              ::weald/state})
 (defn build-message-block-description
   [log-state
    {^Long start-pos ::specs/start-pos
@@ -184,7 +185,7 @@
         ;; Q: Should I decrement buf's refCnt
         ;; because I'm done with it?
         ;; A: Better to just eliminate it
-        {::log/state log-state
+        {::weald/state log-state
          ::specs/bs-or-eof result}))))
 
 (s/fdef mark-block-sent
@@ -205,7 +206,7 @@
     (assert block-to-move (str "Trying to move non-existent block from among\n"
                                (keys outgoing)))
     (-> state
-        (update ::log/state
+        (update ::weald/state
                 #(log/debug %
                             ::mark-block-sent
                             "Moving first un-sent block to un-ackd"
@@ -234,7 +235,7 @@
              (::specs/next-block-queue outgoing)))
   (let [result
         (-> state
-            (update ::log/state
+            (update ::weald/state
                     #(log/debug %
                                 ::mark-block-resent
                                 "Resending a block"))
@@ -255,7 +256,7 @@
             ::specs/send-buf-size]
      current-message-id ::specs/next-message-id
      :as outgoing} ::specs/outgoing
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   (let [prelog (utils/pre-log message-loop-name)
         label ::pre-calculate-state-after-send
@@ -361,8 +362,8 @@
                                {::specs/next-message-id next-message-id
                                 ::based-on updated-message})
           {buf ::specs/bs-or-eof
-           log-state ::log/state} (build-message-block-description log-state
-                                                                   updated-message)
+           log-state ::weald/state} (build-message-block-description log-state
+                                                                     updated-message)
           ;; Reference implementation waits until after the actual write before setting any of
           ;; the next pieces. But it's a single-threaded process that's going to block at the write,
           ;; and this part's purely functional anyway. So it should be safe enough to set up
@@ -392,11 +393,11 @@
                                   ::specs/send-buf buf
                                   ::specs/want-ping ::specs/false)))
           result (assoc result
-                        ::log/state
+                        ::weald/state
                         (log/debug log-state
                                    label
                                    "Next block built and control state updated to"
-                                   {::log/state (dissoc result ::log/state)}))]
+                                   {::weald/state (dissoc result ::weald/state)}))]
       (if (= ::specs/un-sent-blocks next-block-queue)
         (mark-block-sent result updated-message)
         (mark-block-resent result current-message updated-message)))))
@@ -422,7 +423,7 @@
     {:keys [::specs/last-edge
             ::specs/n-sec-per-block
             ::specs/rtt-timeout]} ::specs/flow-control
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   {:pre [(< 0 n-sec-per-block)
          recent
@@ -475,13 +476,13 @@
            ;; We haven't had another timeout since the last-panic.
            ;; Don't adjust those dials.
            state')
-         ::log/state log-state))
+         ::weald/state log-state))
       ;; Honestly, it makes more sense to consolidate the
       ;; gap-buffer with any ACKs in this message before
       ;; looking for messages to resend.
       ;; TODO: That instead.
       (update state
-              ::log/state
+              ::weald/state
               #(log/debug %
                           label
                           "Conditions wrong for resending any of our previously sent un-ack'd blocks"
@@ -494,7 +495,7 @@
 (declare send-eof-buffered?)
 (s/fdef ok-to-send-new?
         :args (s/cat :state ::specs/state)
-        :ret (s/keys :req [::ok-send? ::log/state]))
+        :ret (s/keys :req [::ok-send? ::weald/state]))
 (defn ok-to-send-new?
   [{:keys [::specs/message-loop-name
            ::specs/recent]
@@ -506,7 +507,7 @@
             ::specs/want-ping]
      :as outgoing} ::specs/outgoing
     {:keys [::specs/n-sec-per-block]} ::specs/flow-control
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   (when-not strm-hwm
     (throw (ex-info "Missing strm-hwm"
@@ -548,7 +549,7 @@
                    ;; the message packet that it's going to send.
                    (not send-eof-processed))))]
     {::ok-send? result
-     ::log/state
+     ::weald/state
      (if result
        log-state
        (log/debug log-state
@@ -583,13 +584,13 @@
         block-count (count un-sent-blocks)
         prelog (utils/pre-log message-loop-name)
         state (update state
-                      ::log/state
+                      ::weald/state
                       #(log/debug %
                                   label
                                   "Does it make sense to try to send any of our unsent blocks?"
                                   {::un-sent-count block-count}))
         {:keys [::ok-send?]
-         log-state ::log/state} (ok-to-send-new? state)]
+         log-state ::weald/state} (ok-to-send-new? state)]
     ;; This is one of those places where I'm getting confused
     ;; by mixing the new blocks with the ones that have already
     ;; been sent at least once.
@@ -612,7 +613,7 @@
                   send-eof
                   false)]
         (-> state
-            (update ::log/state
+            (update ::weald/state
                     #(log/debug %
                                 label
                                 "Conditions ripe for sending a new outgoing message"))
@@ -636,11 +637,11 @@
       (check-for-new-block-to-send found?))))
 
 (s/fdef block->parent!
-        :args (s/cat :logger ::log/logger
-                     :log-state ::log/state
+        :args (s/cat :logger ::weald/logger
+                     :log-state ::weald/state
                      :->parent ::specs/->parent
                      :send-buf ::specs/buf)
-        :ret ::log/state)
+        :ret ::weald/state)
 (defn block->parent!
   "Actually send the message block to the parent"
   ;; Corresponds to line 404 under the sendblock: label
@@ -711,11 +712,11 @@
         :ret ::specs/state)
 (defn maybe-send-block!
   "Possibly send a block from child to parent"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/->parent]
     :as io-handle}
    {:keys [::specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   {:pre [log-state]}
   (let [label ::maybe-send-block!
@@ -732,13 +733,13 @@
     (try
       (let [{{:keys [::specs/next-block-queue]} ::specs/outgoing
              :as state'} (pick-next-block-to-send (assoc state
-                                                         ::log/state
+                                                         ::weald/state
                                                          log-state))]
-        (assert (::log/state state'))
+        (assert (::weald/state state'))
         (if next-block-queue
           (let [{{:keys [::specs/send-buf
                          ::specs/un-ackd-blocks]} ::specs/outgoing
-                 log-state ::log/state
+                 log-state ::weald/state
                  :as state''} (pre-calculate-state-after-send state')
                 ;; Actually, calling count here tells the entire
                 ;; story: I have either a byte-array or vector
@@ -782,9 +783,9 @@
                                                                              [::specs/outgoing ::specs/un-sent-blocks]))
                                         ::specs/message-loop-name message-loop-name}))
                 {:keys [::specs/earliest-time]
-                 log-state ::log/state} (help/earliest-block-time message-loop-name log-state un-ackd-blocks)]
+                 log-state ::weald/state} (help/earliest-block-time message-loop-name log-state un-ackd-blocks)]
 ;;;      408: earliestblocktime_compute()
-            (-> (assoc state'' ::log/state log-state)
+            (-> (assoc state'' ::weald/state log-state)
                 (assoc-in [::specs/outgoing ::specs/earliest-time] earliest-time)
                 (update ::specs/outgoing dissoc ::specs/next-block-queue)))
           ;; To make traffic analysis more difficult for bad guys, should intermittently
@@ -792,14 +793,14 @@
           ;; TODO: Lots of research to make sure I do this correctly.
           ;; (The obvious downside is increased bandwidth)
           (update state
-                  ::log/state
+                  ::weald/state
                   #(log/debug %
                               label
                               "Nothing to send"
-                              (dissoc  state ::log/state)))))
+                              (dissoc  state ::weald/state)))))
       (catch Exception ex
         (update state
-                ::log/state
+                ::weald/state
                 #(log/exception %
                                 ex
                                 label

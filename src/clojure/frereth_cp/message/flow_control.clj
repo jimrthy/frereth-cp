@@ -4,8 +4,9 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.util :as utils]))
+            [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers
@@ -271,7 +272,7 @@
   ;; Which is just wasteful duplication.
   (try
     (let [state (update state
-                        ::log/state
+                        ::weald/state
                         #(log/debug %
                                     ::update-statistics
                                     "Updating flow-control stats"
@@ -279,7 +280,7 @@
                                      ::specs/message-loop-name message-loop-name}))
           state (calculate-base-rtt-averages state acked-time)
           state (update state
-                        ::log/state
+                        ::weald/state
                         #(log/debug %
                                      ::update-statistics
                                      "Recalculating retransmission timeout"
@@ -287,9 +288,9 @@
       (jacobson's-retransmission-timeout state acked-block))
     (catch RuntimeException ex
       (update state
-              ::log/state
+              ::weald/state
               #(log/exception %
                               ex
                               ::update-statistics
                               "Updating statistics failed"
-                              (dissoc state ::log/state))))))
+                              (dissoc state ::weald/state))))))

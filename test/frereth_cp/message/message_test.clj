@@ -14,8 +14,9 @@
             [frereth-cp.message.to-child :as to-child]
             [frereth-cp.message.to-parent :as to-parent]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import [clojure.lang
@@ -101,12 +102,12 @@
     (is (= msg-len K/k-1))
     (.writeBytes src message-body)
     (let [{incoming ::specs/bs-or-eof
-           log-state ::log/state} (to-parent/build-message-block-description @log-atom
-                                                                             {::specs/buf src
-                                                                              ::specs/length msg-len
-                                                                              ::specs/message-id message-id
-                                                                              ::specs/send-eof ::specs/false
-                                                                              ::specs/start-pos 0})]
+           log-state ::weald/state} (to-parent/build-message-block-description @log-atom
+                                                                               {::specs/buf src
+                                                                                ::specs/length msg-len
+                                                                                ::specs/message-id message-id
+                                                                                ::specs/send-eof ::specs/false
+                                                                                ::specs/start-pos 0})]
       (reset! log-atom log-state)
       (is (= K/max-msg-len (count incoming)))
       (let [response (dfrd/deferred)
@@ -255,7 +256,7 @@
             ;; message quickly, but the behavior seems suspicious.
             initialized (message/initial-state loop-name
                                                true
-                                               {::log/state log-state}
+                                               {::weald/state log-state}
                                                logger)
             {:keys [::specs/io-handle]} (message/do-start initialized logger parent-cb child-cb)]
         (dfrd/on-realized child-finished
@@ -275,7 +276,7 @@
               (reset! io-handle-atom io-handle)
               (let [problem (s/explain-data ::specs/state state)]
                 (when problem
-                  (let [log-ctx (get-in state [::log/state ::log/context])]
+                  (let [log-ctx (get-in state [::weald/state ::weald/context])]
                     (is (not problem) (str "Latest breakage is due to "
                                            log-ctx
                                            " a "
@@ -319,7 +320,7 @@
                 ;; Note that state is fine here, but we're about to overwrite it
                 (is (not (s/explain-data ::specs/state state)))
                 (let [state (message/get-state io-handle 500 ::time-out)
-                      ;; FIXME: Need to merge this into state's ::log/state
+                      ;; FIXME: Need to merge this into state's ::weald/state
                       ;; key.
                       ;; But not before a bigger FIXME:
                       ;; How/where did the state logs get messed up?
@@ -329,8 +330,8 @@
                   (is (not= state ::timeout))
                   (when (not= state ::timeout)
                     (is (not
-                         ;; This fails because ::log/state is a map that only
-                         ;; contains a ::log/entries key.
+                         ;; This fails because ::weald/state is a map that only
+                         ;; contains a ::weald/entries key.
                          ;; The value for that key looks like the actual expected log-state
                          (s/explain-data ::specs/state state)))
                     (let [logs (log/info logs
@@ -418,16 +419,16 @@
         chzbrgr-lngth 182
         chzbrgr (byte-array (range chzbrgr-lngth))
         {consumer ::from-child/callback
-         log-state ::log/state} (from-child/build-byte-consumer message-loop-name log-state chzbrgr)
+         log-state ::weald/state} (from-child/build-byte-consumer message-loop-name log-state chzbrgr)
         log-state (log/info log-state
                             ::wrap-chzbrgr
                             "Reading chzbrgr from child")
         ;; This is much slower than I'd like
         {:keys [::specs/outgoing
                 ::specs/recent]
-         log-state ::log/state
+         log-state ::weald/state
          :as state'} (time (consumer (assoc start-state
-                                            ::log/state log-state)))]
+                                            ::weald/state log-state)))]
     (is (= 1 (count (::specs/un-sent-blocks outgoing))))
     (is (= chzbrgr-lngth (::specs/strm-hwm outgoing)))
     (let [current-message  (-> outgoing
@@ -446,8 +447,8 @@
                                 ::wrap-chzbrgr
                                 "Building message block to send to parent")
             {buf ::specs/bs-or-eof
-             log-state ::log/state} (time (to-parent/build-message-block-description log-state
-                                                                                     updated-message))]
+             log-state ::weald/state} (time (to-parent/build-message-block-description log-state
+                                                                                       updated-message))]
         ;;; Start with the very basics
         ;; Q: Did that return what we expected?
         (is (s/valid? bytes? buf))
@@ -475,7 +476,7 @@
                          ::specs/buf
                          ::specs/message-id
                          ::specs/size-and-flags]} ::specs/packet
-                 log-state ::log/state
+                 log-state ::weald/state
                  :as packet} (time (from-parent/deserialize log-state buf))]
             (comment (is (not packet)))
             (is (= chzbrgr-lngth size-and-flags))
@@ -507,7 +508,7 @@
   ;; buffer/send, we need a way to signal back-pressure.
   (let [log-state (log/init ::overflow-from-child 0)
         opts {::specs/outgoing {::specs/pipe-from-child-size K/k-1}
-              ::log/state log-state}
+              ::weald/state log-state}
         logger (log/std-out-log-factory)
         start-state (message/initial-state "Overflowing Test" true opts logger)
         parent-cb (fn [out]
@@ -670,7 +671,7 @@
                                   (message/child-close! @srvr-io-atom)))))
           srvr-initialized (message/initial-state (str "(test " test-run ") Server w/ Big Inbound")
                                                   true
-                                                  {::log/state @log-atom}
+                                                  {::weald/state @log-atom}
                                                   logger)
           {srvr-io-handle ::specs/io-handle} (message/do-start srvr-initialized logger server-parent-cb server-child-cb)
 
@@ -711,7 +712,7 @@
                      (is (s/valid? ::specs/eof-flag eof) "This should only get called for EOF"))
           client-initialized (message/initial-state (str "(test " test-run ") Client w/ Big Outbound")
                                                     false
-                                                    {::log/state @log-atom}
+                                                    {::weald/state @log-atom}
                                                     logger)
           {client-io-handle ::specs/io-handle} (message/do-start client-initialized logger parent-cb child-cb)]
       (reset! srvr-io-atom srvr-io-handle)

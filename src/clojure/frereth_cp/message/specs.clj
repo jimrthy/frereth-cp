@@ -4,9 +4,10 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.shared
              [constants :as K-shared]
-             [logging :as log]
              [specs :as shared-specs]]
             [frereth-cp.util :as util]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -459,7 +460,7 @@
                              ::incoming
                              ::outgoing
 
-                             ::log/state
+                             ::weald/state
                              ::message-loop-name
 
                              ;; Q: Does this make more sense anywhere else?
@@ -484,7 +485,7 @@
                                  ::from-parent-trigger
 
                                  ::executor
-                                 ::log/logger
+                                 ::weald/logger
                                  ;; This really doesn't belong in here,
                                  ;; but there are at least a couple of places
                                  ;; where I don't have a choice: I need to
@@ -498,7 +499,7 @@
                                  ;; that's exactly what the io-handle is
                                  ;; supposed to be for.
                                  ;; Just use with extreme caution.
-                                 ::log/state-atom
+                                 ::weald/state-atom
 
                                  ;; This seems redundant.
                                  ;; Q: How often will I have an io-handle
@@ -532,7 +533,7 @@
 ;; That actually seems to have worked out fairly well, so
 ;; this particular debate seems to be settled.
 
-;; It would be nice for this to return a ::log/state.
+;; It would be nice for this to return a ::weald/state.
 ;; The down-side to that idea is that this is a callback
 ;; supplied by the client, and that should be totally
 ;; independent of our logging.

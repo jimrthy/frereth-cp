@@ -7,9 +7,10 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.util :as utils])
+            [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log])
   (:import [io.netty.buffer ByteBuf Unpooled]
            java.nio.ByteOrder))
 
@@ -35,9 +36,9 @@
 ;;; Internal Implementation
 
 (s/fdef deserialize
-        :args (s/cat :log-state ::log/state
+        :args (s/cat :log-state ::weald/state
                      :buf bytes?)
-        :ret (s/keys :req [::specs/packet ::log/state]))
+        :ret (s/keys :req [::specs/packet ::weald/state]))
 (defn deserialize
   "Convert a raw message block into a message structure"
   ;; Important: there may still be overlap with previously read bytes!
@@ -111,18 +112,18 @@
 
     ;; Going with easiest approach to option 2 for now
     {::specs/packet (assoc header ::specs/buf buf)
-     ::log/state log-state}))
+     ::weald/state log-state}))
 
 (s/fdef calculate-start-stop-bytes
         :args (s/cat :state ::specs/state
                      :packet ::specs/packet)
-        :ret [(s/nilable ::start-stop-details) ::log/state])
+        :ret [(s/nilable ::start-stop-details) ::weald/state])
 (defn calculate-start-stop-bytes
   "Extract start/stop ACK addresses (lines 562-574)"
   [{{:keys [::specs/receive-written]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}
    {^ByteBuf incoming-buf ::specs/buf
     D ::specs/size-and-flags
@@ -294,7 +295,7 @@
         (if (not= 0 message-id)
           (let [current-eof (get-in state [::specs/incoming ::specs/receive-eof])
                 eof-changed? (not= current-eof receive-eof)]
-            (update (assoc state ::log/state log-state)
+            (update (assoc state ::weald/state log-state)
                     ::specs/incoming
                     (fn [cur]
                       (cond-> cur
@@ -349,11 +350,11 @@
           ;; arriving messages that might have been dropped/misordered
           ;; due to UDP issues.
           (update state
-                  ::log/state
+                  ::weald/state
                   #(log/debug %
                               ::extract-message!
                               "Pure ACK never updates received gap-buffer"))))
-      (assoc state ::log/state log-state))))
+      (assoc state ::weald/state log-state))))
 
 (s/fdef flag-ackd-others!
         :args (s/cat :state ::specs/state
@@ -364,7 +365,7 @@
 
   Lines 544-560"
   [{:keys [::specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}
    {:keys [::specs/message-id]
     :as packet}]
@@ -395,7 +396,7 @@
                                 ::specs/state state})]
       (->
        (reduce (fn [{:keys [::stop-byte]
-                     log-state ::log/state
+                     log-state ::weald/state
                      :as state}
                     [start stop :as gap-key]]
                  (let [log-state
@@ -414,7 +415,7 @@
                    ;; It actually fits perfectly, but it isn't as obvious as
                    ;; I'd like.
                    (assoc (help/mark-ackd-by-addr (assoc state
-                                                         ::log/state
+                                                         ::weald/state
                                                          log-state)
                                                   start-byte
                                                   stop-byte)
@@ -429,7 +430,7 @@
         :args (s/cat :state ::state
                      :msg-id (s/and int?
                                     pos?))
-        :ret (s/keys :req [::log/state
+        :ret (s/keys :req [::weald/state
                            (s/nilable ::specs/ack-body)]))
 (defn prep-send-ack
   "Build a byte array to ACK the message we just received"
@@ -440,7 +441,7 @@
             ::specs/receive-written
             ::specs/strm-hwm]} ::specs/incoming
     :keys [::specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}
    message-id]
   {:pre [contiguous-stream-count
@@ -503,11 +504,11 @@
         ;; messages that aren't part of that contiguous stream.
         ;; TODO: Go ahead and add that functionality.
 
-      {::log/state log-state
+      {::weald/state log-state
        ::specs/ack-body response})
-    {::log/state (log/debug log-state
-                            ::prep-send-ack
-                            "Never ACK a pure ACK")
+    {::weald/state (log/debug log-state
+                              ::prep-send-ack
+                              "Never ACK a pure ACK")
      ::specs/ack-body nil}))
 
 (s/fdef send-ack!
@@ -519,13 +520,13 @@
                      ;; For the much-improved approach of triggering
                      ;; side-effects after all the logic is done.
                      :send-buf bytes?
-                     :log-state ::log/state)
-        :ret ::log/state)
+                     :log-state ::weald/state)
+        :ret ::weald/state)
 (defn send-ack!
   "Write ACK buffer back to parent
 
 Line 608"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/->parent]
     :as io-handle}
    ^bytes send-buf
@@ -580,7 +581,7 @@ Line 608"
             ;; The block should get cleared (and ackd-addr
             ;; updated) in mark-acknowledged!
             (-> state
-                (update ::log/state
+                (update ::weald/state
                         #(log/debug % ::flag-blocks-ackd-by-id
                                     "Marking as ACK'd, due to its ID"
                                     ackd))
@@ -599,7 +600,7 @@ Line 608"
             ::specs/un-sent-blocks]} ::specs/outgoing
     :keys [::specs/message-loop-name]
     :as state}]
-  (let [state (update state ::log/state
+  (let [state (update state ::weald/state
                       #(log/debug %
                                   ::cope-with-child-eof
                                   "Q: Has other side ACKd the child's EOF message?"
@@ -629,9 +630,9 @@ Line 608"
     :as initial-state}
    {:keys [::specs/acked-message]
     :as packet}]
-  (let [{log-state ::log/state
+  (let [{log-state ::weald/state
          :as initial-state} (update initial-state
-                                    ::log/state
+                                    ::weald/state
                                     #(log/debug %
                                                 ::handle-incoming-ack
                                                 "looking for un-ackd blocks by message ID"
@@ -688,7 +689,7 @@ Line 608"
      :as outgoing} ::specs/outgoing
     :keys [::specs/flow-control
            ::specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   ;; Keep in mind that parent->buffer is an array of bytes that has
   ;; just been pulled off the wire
@@ -723,7 +724,7 @@ Line 608"
               ;; So it has remained mostly faithful to the original
               {{msg-id ::specs/message-id
                 :as packet} ::specs/packet
-               log-state ::log/state} (deserialize log-state parent->buffer)
+               log-state ::weald/state} (deserialize log-state parent->buffer)
               ;; Discard the raw incoming byte array
               state (update state
                             ::specs/incoming
@@ -741,7 +742,7 @@ Line 608"
                              "Missing the incoming message-id"))
               _ (assert log-state)
               state (handle-incoming-ack (assoc state
-                                                ::log/state log-state)
+                                                ::weald/state log-state)
                                          packet)
               starting-hwm (get-in state [::specs/incoming ::specs/strm-hwm])
               {:keys [::specs/flow-control
@@ -749,7 +750,7 @@ Line 608"
                {:keys [::specs/receive-eof
                        ::specs/strm-hwm]
                 :as incoming} ::specs/incoming
-               log-state ::log/state
+               log-state ::weald/state
                :as extracted} (extract-message! state packet)
               log-state (log/debug log-state
                                    ::possibly-ack!
@@ -760,7 +761,7 @@ Line 608"
                                     ::specs/outgoing outgoing
                                     ::fields (keys extracted)
                                     ::specs/message-id msg-id})
-              log-state (let [{log-state ::log/state
+              log-state (let [{log-state ::weald/state
                                ack-msg ::specs/ack-body} (prep-send-ack extracted msg-id)]
                           (if ack-msg
                             (as-> (log/debug log-state
@@ -782,10 +783,10 @@ Line 608"
                            dissoc
                            ::specs/packet)
                    state)
-                 ::log/state log-state)))
+                 ::weald/state log-state)))
       ;; Illegal message arrived.
       (update state
-              ::log/state
+              ::weald/state
               (fn [cur]
                 (if (< 0 len)
                   (log/warn cur
@@ -812,7 +813,7 @@ Line 608"
             ::specs/receive-written
             ::specs/strm-hwm]} ::specs/incoming
     :keys [::specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   (let [child-buffer-count (count ->child-buffer)
         log-state (log/debug log-state
@@ -855,10 +856,10 @@ Line 608"
         ;; It seems as though this should forward the incoming message
         ;; along to the child. But it's really just setting up the
         ;; state to do that.
-        (possibly-ack! io-handle (assoc state' ::log/state log-state)))
+        (possibly-ack! io-handle (assoc state' ::weald/state log-state)))
       ;; Nothing to do.
       (update state
-              ::log/state
+              ::weald/state
               #(log/debug
                 %
                 ::try-processing-message!

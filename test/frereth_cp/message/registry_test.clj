@@ -3,7 +3,8 @@
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.message.registry :as reg]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.logging :as log]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.executor :as exec]
             [manifold.stream :as strm]))
 
@@ -33,9 +34,9 @@
      ::specs/to-child-done? to-child-done?
      ::specs/from-parent-trigger from-parent-trigger
      ::specs/executor executor
-     ::log/logger logger
+     ::weald/logger logger
      ::specs/message-loop-name message-loop-name
-     ::log/state-atom (atom log-state)}))
+     ::weald/state-atom (atom log-state)}))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Tests

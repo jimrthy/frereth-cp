@@ -16,8 +16,9 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [specs :as specs]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
@@ -44,8 +45,8 @@
                                  ::state/client-read-chan
                                  ::state/client-write-chan
                                  ::state/max-active-clients
-                                 ::log/logger
-                                 ::log/state
+                                 ::weald/logger
+                                 ::weald/state
                                  ::shared/extension
                                  ;; Note that this really only makes sense
                                  ;; in terms of loading up my-keys.
@@ -62,8 +63,8 @@
                                  ::state/event-loop-stopper!
                                  ::shared/my-keys]))
 
-(let [common-state-option-keys [::log/logger
-                                ::log/state
+(let [common-state-option-keys [::weald/logger
+                                ::weald/state
                                 ::shared/extension
                                 ;; Honestly, this should be an xor.
                                 ;; It makes sense for the caller to
@@ -89,9 +90,9 @@
 ;;; Internal
 
 (s/fdef check-packet-length
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :packet bytes?)
-  :ret (s/keys :req [::log/state
+  :ret (s/keys :req [::weald/state
                      ::specs/okay?]))
 (defn check-packet-length
   "Could this packet possibly be a valid CurveCP packet, based on its size?"
@@ -117,7 +118,7 @@
                         ;; two are equivalent.
                         #_(= (bit-and r 0xf) 0)
                         (= (rem r 16) 0))
-     ::log/state log-state}))
+     ::weald/state log-state}))
 (comment
   (let [r #_80 #_800 #_640 6400]
     [(= (bit-and r 0xf) 0)
@@ -134,11 +135,11 @@
                      ;; has to do with a serialization template)
                      :server-extension bytes?)
         :ret (s/keys :req [::specs/okay?
-                           ::log/state]))
+                           ::weald/state]))
 (defn verify-my-packet
   "Was this packet really intended for this server?"
   [{:keys [::shared/extension]
-    log-state ::log/state}
+    log-state ::weald/state}
    header
    rcvd-xtn]
   (let [rcvd-prefix (-> header
@@ -168,19 +169,19 @@
                                   rcvd-xtn))]
 
     {::specs/okay? verified
-     ::log/state (if-not verified
-                   (log/warn log-state
-                             ::verify-my-packet
-                             "Dropping packet intended for someone else."
-                             {::K/client-header-prefix (String. K/client-header-prefix)
-                              ::K/client-header-prefix-class (class K/client-header-prefix)
-                              ::K/client-header-prefix-vec (vec K/client-header-prefix)
-                              ::shared/extension (vec extension)
-                              ::received-prefix (String. rcvd-prefix)
-                              ::received-prefix-class (class rcvd-prefix)
-                              ::received-prefix-vec (vec rcvd-prefix)
-                              ::received-extension (vec rcvd-xtn)})
-                   log-state)}))
+     ::weald/state (if-not verified
+                     (log/warn log-state
+                               ::verify-my-packet
+                               "Dropping packet intended for someone else."
+                               {::K/client-header-prefix (String. K/client-header-prefix)
+                                ::K/client-header-prefix-class (class K/client-header-prefix)
+                                ::K/client-header-prefix-vec (vec K/client-header-prefix)
+                                ::shared/extension (vec extension)
+                                ::received-prefix (String. rcvd-prefix)
+                                ::received-prefix-class (class rcvd-prefix)
+                                ::received-prefix-vec (vec rcvd-prefix)
+                                ::received-extension (vec rcvd-xtn)})
+                     log-state)}))
 
 (s/fdef do-handle-message
   :args (s/cat :state ::state/state
@@ -198,7 +199,7 @@
         :ret ::state/state)
 (defn do-handle-incoming
   "Packet arrived from client. Do something with it."
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :as this}
    {:keys [:host
            :port]
@@ -215,7 +216,7 @@
     (when-not message
       (throw (ex-info "Missing message in incoming packet"
                       {::problem packet})))
-    (let [{log-state ::log/state
+    (let [{log-state ::weald/state
            :keys [::specs/okay?]} (check-packet-length log-state message)]
       (if okay?
         (let [header (byte-array K/header-length)
@@ -231,10 +232,10 @@
                                       ::do-handle-incoming
                                       ""
                                       {::packet-type-id packet-type-id})
-                  this (assoc this ::log/state (log/debug log-state
-                                                          ::do-handle-incoming
-                                                          "Packet for me"
-                                                          (dissoc this ::log/state)))
+                  this (assoc this ::weald/state (log/debug log-state
+                                                            ::do-handle-incoming
+                                                            "Packet for me"
+                                                            (dissoc this ::weald/state)))
                   delta (try
                           (case packet-type-id
                             \H (hello/do-handle this
@@ -242,29 +243,29 @@
                             \I (initiate/do-handle this packet)
                             \M (do-handle-message this packet))
                           (catch Exception ex
-                            {::log/state (log/exception log-state
-                                                        ex
-                                                        ::do-handle-incoming
-                                                        "Failed handling packet"
-                                                        {::packet-type-id packet-type-id})}))]
+                            {::weald/state (log/exception log-state
+                                                          ex
+                                                          ::do-handle-incoming
+                                                          "Failed handling packet"
+                                                          {::packet-type-id packet-type-id})}))]
               (as-> this x
                 (into x delta)
                 (assoc x
-                       ::log/state
-                       (log/debug (::log/state x)
+                       ::weald/state
+                       (log/debug (::weald/state x)
                                   ::do-handle-incoming
                                   "Handled"))))
             (assoc this
-                   ::log/state (log/info log-state
-                                         ::do-handle-incoming
-                                         "Ignoring packet intended for someone else"))))
+                   ::weald/state (log/info log-state
+                                           ::do-handle-incoming
+                                           "Ignoring packet intended for someone else"))))
         (assoc this
-               ::log/state (log/debug log-state
-                                      ::do-handle-incoming
-                                      "Ignoring packet of illegal length"
-                                      {::state/message-length (count message)
-                                       ::shared/network-packet packet
-                                       ::pretty (b-t/->string message)}))))))
+               ::weald/state (log/debug log-state
+                                        ::do-handle-incoming
+                                        "Ignoring packet of illegal length"
+                                        {::state/message-length (count message)
+                                         ::shared/network-packet packet
+                                         ::pretty (b-t/->string message)}))))))
 
 (s/fdef input-reducer
         :args (s/cat :this ::state/state
@@ -276,8 +277,8 @@
 (defn input-reducer
   "Convert input into the next state"
   [{:keys [::state/client-read-chan
-           ::log/logger]
-    log-state ::log/state
+           ::weald/logger]
+    log-state ::weald/state
     :as this}
    msg]
   (let [log-state (log/info log-state
@@ -304,22 +305,22 @@
                  ;; Default is "Keep going"
                  (try
                    ;; Q: Do I want unhandled exceptions to be fatal errors?
-                   (let [{log-state ::log/state
+                   (let [{log-state ::weald/state
                           :as modified-state} (do-handle-incoming (assoc this
-                                                                         ::log/state log-state)
+                                                                         ::weald/state log-state)
                                                                   msg)
                          log-state (log/info log-state
                                              ::input-reducer
                                              "Updated state based on incoming msg"
-                                             (helpers/hide-long-arrays (dissoc modified-state ::log/state)))]
+                                             (helpers/hide-long-arrays (dissoc modified-state ::weald/state)))]
                      (assoc modified-state
-                            ::log/state (log/flush-logs! logger log-state)))
+                            ::weald/state (log/flush-logs! logger log-state)))
                    (catch clojure.lang.ExceptionInfo ex
                      (assoc this
-                            ::log/state (log/exception log-state
-                                                       ex
-                                                       ::input-reducer
-                                                       "handle-incoming! failed")))
+                            ::weald/state (log/exception log-state
+                                                         ex
+                                                         ::input-reducer
+                                                         "handle-incoming! failed")))
                    (catch RuntimeException ex
                      (log/flush-logs! logger
                                       (log/exception log-state
@@ -332,8 +333,8 @@
                                                      ex
                                                      "Major problem escaped handler"))
                      (reduced nil))))]
-    (if-let [log-state (::log/state result)]
-      (assoc result ::log/state (log/flush-logs! logger log-state))
+    (if-let [log-state (::weald/state result)]
+      (assoc result ::weald/state (log/flush-logs! logger log-state))
       result)))
 
 (s/fdef build-event-loop-stopper
@@ -353,11 +354,11 @@
 
 (s/fdef do-begin
         :args (s/cat :this ::state/state)
-        :ret ::log/state)
+        :ret ::weald/state)
 (defn do-begin
   "Start the event loop"
   [{:keys [::state/client-read-chan]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
   (let [log-state (log/info log-state
                             ::do-begin
@@ -382,12 +383,12 @@
          :ret ::state/state)
 (defn start!
   "Start a server"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::state/client-read-chan
            ::state/client-write-chan
            ::shared/extension
            ::shared/my-keys]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
   {:pre [client-read-chan
          (::state/chan client-read-chan)
@@ -423,19 +424,19 @@
         base-result (assoc almost
                            ::state/event-loop-stopper! (build-event-loop-stopper almost))
         flushed-logs (log/flush-logs! logger log-state)
-        result (assoc base-result ::log/state flushed-logs)]
+        result (assoc base-result ::weald/state flushed-logs)]
     (let [log-state (do-begin result)]
       (assoc result
-             ::log/state log-state))))
+             ::weald/state log-state))))
 
 (s/fdef stop!
         :args (s/cat :this ::state/state)
         :ret ::post-state-options)
 (defn stop!
   "Stop the ioloop (but not the read/write channels: we don't own them)"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::state/event-loop-stopper!]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
   (let [log-state (log/do-sync-clock log-state)
         log-state (log/warn log-state
@@ -480,7 +481,7 @@
                                ;; Very tempting to split RuntimeException
                                ;; away from Exception. And then make Exception
                                ;; fatal
-                               (update this ::log/state
+                               (update this ::weald/state
                                        #(log/exception %
                                                        ex
                                                        ::stop!))))
@@ -493,7 +494,7 @@
             log-state (log/warn log-state
                                 ::stop!
                                 "Secrets hidden")]
-        (assoc outcome ::log/state log-state))
+        (assoc outcome ::weald/state log-state))
       (catch Exception ex
         (log/exception log-state
                        ex
@@ -505,7 +506,7 @@
 (defn ctor
   "Just like in the Component lifecycle, this is about setting up a value that's ready to start"
   [{:keys [::state/max-active-clients]
-    log-state ::log/state
+    log-state ::weald/state
     :or {max-active-clients default-max-clients}
     :as cfg}]
   ;; Note that this is going to call the child state spawner.

@@ -24,9 +24,10 @@
             [frereth-cp.shared :as shared]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.logging :as log]
             [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
             [manifold.stream :as strm])
@@ -84,12 +85,12 @@
 ;;; Internal API
 
 (s/fdef build-un-ackd-blocks
-        :args (s/cat :log-state ::log/state
-                     :logger ::log/logger)
+        :args (s/cat :log-state ::weald/state
+                     :logger ::weald/logger)
         :ret ::specs/un-ackd-blocks)
 (defn build-un-ackd-blocks
-  [{:keys [::log/logger]
-    log-state ::log/state}]
+  [{:keys [::weald/logger]
+    log-state ::weald/state}]
   (sorted-set-by (fn [x y]
                    (try
                      (let [x-time (::specs/time x)
@@ -179,7 +180,7 @@
     :keys [::specs/message-loop-name]
     :as state}]
   (let [state (update state
-                      ::log/state
+                      ::weald/state
                       #(log/debug %
                                   ::trigger-output
                                   "Possibly sending message to parent"
@@ -260,7 +261,7 @@
     :as state}]
   {:pre [callback]}
   (let [state (update state
-                      ::log/state
+                      ::weald/state
                       #(log/info %
                                  ::trigger-from-child
                                  "Sent stream address"
@@ -285,13 +286,13 @@
   ;; The only reason I haven't already moved the whole thing
   ;; is that we need to use to-parent to send the ACK, and I'd
   ;; really rather not introduce dependencies between those namespaces
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/message-loop-name]
     :as io-handle}
    ^bytes message
    {{:keys [::specs/->child-buffer]} ::specs/incoming
     {:keys [::specs/client-waiting-on-response]} ::specs/flow-control
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   (let [log-state (log/debug log-state
                              ::trigger-from-parent
@@ -332,8 +333,8 @@
       ;; that's really a vector that we can just conj onto.
       (when-not state
         ;; Q: Why aren't I just using log-state?
-        (let [logs (log/warn (log/init (::log/context log-state)
-                                       (::log/lamport log-state))
+        (let [logs (log/warn (log/init (::weald/context log-state)
+                                       (::weald/lamport log-state))
                               ::trigger-from-parent
                               ;; They're about to get worse
                               "nil state. Things went sideways recently")]
@@ -380,7 +381,7 @@
                                       ::trigger-from-parent
                                       "Message is small enough. Look back here")
                  state (-> state
-                           (assoc ::log/state log-state)
+                           (assoc ::weald/state log-state)
                            (assoc-in [::specs/incoming ::specs/parent->buffer]
                                      message))]
               ;; This is basically an iteration of the top-level
@@ -422,11 +423,11 @@
                                                  ::trigger-from-parent
                                                  "Forwarding failed"
                                                  (.getData ex))]
-                    (assoc state ::log/state log-state)))
+                    (assoc state ::weald/state log-state)))
                 (catch RuntimeException ex
                   (let [msg "Trying to cope with a message arriving from parent"]
                     (update state
-                            ::log/state
+                            ::weald/state
                             #(log/exception %
                                             ex
                                             ::trigger-from-parent
@@ -437,7 +438,7 @@
             ;; Actually, should probably add an optional client-supplied
             ;; error handler for situations like this
             (assoc state
-                   ::log/state
+                   ::weald/state
                    (log/warn log-state
                              ::trigger-from-parent
                              "Incoming message too large"
@@ -446,7 +447,7 @@
         ;; TODO: Need a way to apply back-pressure
         ;; to child
         (assoc state
-               ::log/state
+               ::weald/state
                (log/warn log-state
                          ::trigger-from-parent
                          "Child buffer overflow\nWait!"
@@ -466,7 +467,7 @@
   ;; the child, but the main point to this logic branch is
   ;; to resend an outbound block that hasn't been ACK'd yet.
   (trigger-output io-handle (update state
-                                    ::log/state
+                                    ::weald/state
                                     #(log/debug %
                                                 ::trigger-from-timer
                                                 "I/O triggered by timer"
@@ -477,7 +478,7 @@
                      :state ::specs/state
                      :to-child-done? ::specs/to-child-done?)
         :ret (s/keys :req [::next-action-time
-                           ::log/state]))
+                           ::weald/state]))
 (defn condensed-choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
             ::specs/rtt-timeout]} ::specs/flow-control
@@ -493,7 +494,7 @@
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name
            ::specs/recent]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}
    to-child-done?]
   ;;; This amounts to lines 286-305
@@ -579,14 +580,14 @@
                (not (realized? to-child-done?))) 0)]
     ;; Lines 302-305
     {::next-action-time (max recent next-time)
-     ::log/state log-state}))
+     ::weald/state log-state}))
 
 (s/fdef choose-next-scheduled-time
         :args (s/cat :outgoing ::specs/outgoing
                      :state ::specs/state
                      :to-child-done? ::specs/to-child-done?)
         :ret (s/keys :req [::next-action-time
-                           ::log/state]))
+                           ::weald/state]))
 (defn choose-next-scheduled-time
   [{{:keys [::specs/n-sec-per-block
             ::specs/rtt-timeout]
@@ -602,7 +603,7 @@
      :as outgoing} ::specs/outgoing
     :keys [::specs/message-loop-name
            ::specs/recent]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}
    to-child-done?]
   {:pre [state
@@ -747,7 +748,7 @@
                              (str "Scheduling considerations\n"
                                   log-message))]
     {::next-action-time actual-next
-     ::log/state log-state}))
+     ::weald/state log-state}))
 
 (declare schedule-next-timeout!)
 ;; FIXME: This seems like it really should be debug only
@@ -877,7 +878,7 @@
                     ;; Q: Is this worth switching to something like core.match or a multimethod?
                     ::specs/child-> (let [[_ callback ack] next-action]
                                       (partial trigger-from-child io-handle callback ack))
-                    ::drained (fn [{log-state ::log/state
+                    ::drained (fn [{log-state ::weald/state
                                     :as state}]
                                 ;; Actually, this seems like a strong argument for
                                 ;; having a pair of 1-way streams (as opposed to
@@ -890,7 +891,7 @@
                                 ;; TODO: Another piece to revisit once the basics
                                 ;; work.
                                 (update state
-                                        ::log/state
+                                        ::weald/state
                                         #(log/warn %
                                                    ::action-trigger!
                                                    "Stream closed. Surely there's more to do"
@@ -921,7 +922,7 @@
                                         (deliver dst state)
                                         state)
                                       (update state
-                                              ::log/state
+                                              ::weald/state
                                               #(log/warn %
                                                          ::action-trigger!
                                                          "state-query request missing required deferred"
@@ -929,7 +930,7 @@
                                                           ::specs/message-loop-name message-loop-name}))))
                     ::reset-parent-callback (fn [state]
                                               (-> state
-                                                  (update ::log/state
+                                                  (update ::weald/state
                                                           #(log/warn %
                                                                      ::action-trigger!
                                                                      "Changing parent-callback"))
@@ -937,14 +938,14 @@
                     ::timed-out (fn [state]
                                   (trigger-from-timer io-handle
                                                       (update state
-                                                              ::log/state
+                                                              ::weald/state
                                                               #(log/debug %
                                                                           "Re-triggering Output due to timeout"
                                                                           (assoc timing-details
                                                                                  ::trigger-details prelog
                                                                                  ::specs/message-loop-name message-loop-name))))))
           state (assoc state
-                       ::log/state
+                       ::weald/state
                        (log/debug log-state
                                   ::action-trigger!
                                   "Processing event"
@@ -991,7 +992,7 @@
           ;; one for bytes travelling the other direction)
 
           state (update state
-                        ::log/state
+                        ::weald/state
                         #(log/warn %
                                    ::action-trigger!
                                    "Trying to run updater because of"
@@ -1000,7 +1001,7 @@
           state (try (updater state)
                      (catch ExceptionInfo ex
                        (update state
-                               ::log/state
+                               ::weald/state
                                #(log/exception %
                                                ex
                                                ::action-trigger!
@@ -1022,27 +1023,27 @@
                        ;; at this level.
                        ;; Then again, they totally might be.
                        (update state
-                               ::log/state
+                               ::weald/state
                                #(log/exception %
                                                ex
                                                ::action-trigger!
                                                "Running updater: low-level failure"
                                                {::specs/message-loop-name message-loop-name}))))
           state (update state
-                        ::log/state
+                        ::weald/state
                         #(log/warn %
                                    ::action-trigger!
                                    "Updater returned"
-                                   (dissoc state ::log/state)))
+                                   (dissoc state ::weald/state)))
           _ (assert (::specs/outgoing state) (str "After updating for " tag))
-          my-logs (::log/state state)
+          my-logs (::weald/state state)
           forked-logs (log/fork my-logs)
           mid (System/currentTimeMillis)]
       (if (not (interrupted?))
         ;; This is taking a ludicrous amount of time.
         ;; Q: How much should I blame on logging?
         (schedule-next-timeout! io-handle (assoc state
-                                                 ::log/state
+                                                 ::weald/state
                                                  forked-logs))
         (println "FIXME: Debug only: message/action-trigger interrupted"))
       (let [end (System/currentTimeMillis)
@@ -1054,7 +1055,7 @@
                                  ::rescheduling-ms (- end mid)
                                  ::specs/message-loop-name message-loop-name})])
       (reset! log-state-atom
-              (log/flush-logs! (::log/logger io-handle)
+              (log/flush-logs! (::weald/logger io-handle)
                                my-logs)))
     nil))
 
@@ -1079,20 +1080,20 @@
 (def fast-spins (atom 0))
 (s/fdef pick-next-action
         :args (s/cat :this ::specs/state
-               :dict (s/keys :req [::log/state
+               :dict (s/keys :req [::weald/state
                                          ::specs/recent
                                          ::next-action-time
                                          ::now]))
         :ret (s/keys :req [::delta_f
                            ::next-action
-                           ::log/state]))
+                           ::weald/state]))
 (defn pick-next-action
   [this
    {:keys [::now
            ::specs/recent
            ::specs/stream]
     actual-next ::next-action-time
-    log-state ::log/state}]
+    log-state ::weald/state}]
   (if actual-next
     ;; TODO: add an optional debugging step that stores state and the
     ;; calculated time so I can just look at exactly what I have
@@ -1132,17 +1133,17 @@
             ;; Q: Does this ever happen if nothing's broken?
             (println "FIXME: Exiting due to fast-spin loop. Debug only")
             (throw (ex-info "Exiting to avoid fast-spin loop"
-                            (dissoc this ::log/state)))))
+                            (dissoc this ::weald/state)))))
         (reset! fast-spins 0))
       {::delta_f delta_f
        ::next-action (strm/try-take! stream [::drained] delta_f [::timed-out])
-       ::log/state log-state})
+       ::weald/state log-state})
     ;; The i/o portion of this loop is finished.
     ;; But we still need to wait on the caller to close the underlying stream.
     ;; If nothing else, it may still want/need to query state.
     {::delta_f ##Inf
      ::next-action (strm/take! stream [::drained])
-     ::log/state log-state}))
+     ::weald/state log-state}))
 
 ;;; I really want to move schedule-next-timeout! to flow-control.
 ;;; But it has a circular dependency with trigger-from-timer.
@@ -1172,7 +1173,7 @@
 ;;; it takes me back to Square One in terms of
 ;;; handling the timer. But it's tempting.
 (defn schedule-next-timeout!
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/->parent
            ::specs/child-output-loop
            ::specs/child-input-loop
@@ -1190,7 +1191,7 @@
             ::specs/receive-written]} ::specs/incoming
     {:keys [::specs/send-eof-acked]
      :as outgoing} ::specs/outgoing
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   {:pre [recent
          outgoing]}
@@ -1205,7 +1206,7 @@
                              {::now now})]
     (if (not (strm/closed? stream))
       (let [{actual-next ::next-action-time
-             log-state ::log/state
+             log-state ::weald/state
              :as original-scheduled}
             ;; TODO: Reframe this logic around
             ;; whether child-input-loop and
@@ -1220,16 +1221,16 @@
                ;; After all, unit tests want/need to
                ;; examine the final system state (which
                ;; means calling into this loop)
-               ::log/state (log/warn log-state
-                                     ::schedule-next-timeout!
-                                     "Main ioloop is done. Idling."
-                                     {::specs/message-loop-name message-loop-name
-                                      ::specs/receive-eof receive-eof
-                                      ::specs/receive-written receive-written
-                                      ::specs/receive-total-bytes receive-total-bytes
-                                      ::specs/send-eof-acked send-eof-acked})}
+               ::weald/state (log/warn log-state
+                                       ::schedule-next-timeout!
+                                       "Main ioloop is done. Idling."
+                                       {::specs/message-loop-name message-loop-name
+                                        ::specs/receive-eof receive-eof
+                                        ::specs/receive-written receive-written
+                                        ::specs/receive-total-bytes receive-total-bytes
+                                        ::specs/send-eof-acked send-eof-acked})}
               (choose-next-scheduled-time (assoc state
-                                                 ::log/state
+                                                 ::weald/state
                                                  log-state)
                                           to-child-done?))
             mid-time (System/nanoTime)
@@ -1238,9 +1239,9 @@
             ;; first pass does something that sets the CPU cache up to blaze through
             ;; the second.
             {alt-next ::next-action-time
-             alt-log-state ::log/state} (condensed-choose-next-scheduled-time (assoc state
-                                                                                     ::log/state log-state)
-                                                                              to-child-done?)
+             alt-log-state ::weald/state} (condensed-choose-next-scheduled-time (assoc state
+                                                                                       ::weald/state log-state)
+                                                                                to-child-done?)
             scheduling-finished (System/nanoTime)]
         (when (not= alt-next actual-next)
           ;; This will get duplicate garbage entries into the logs, but it really
@@ -1254,16 +1255,16 @@
                                              ::fast-alternative alt-next
                                              ::original-ns (- mid-time now)
                                              ::alt-ns (- scheduling-finished mid-time)
-                                             ::state (dissoc state ::log/state
+                                             ::state (dissoc state ::weald/state
                                                              ::to-child-done? to-child-done?)})))
         (let [{:keys [::delta_f
                       ::next-action]
-               log-state ::log/state} (pick-next-action state
-                                                        {::log/state log-state
-                                                         ::next-action-time actual-next
-                                                         ::now now
-                                                         ::specs/recent recent
-                                                         ::specs/stream stream})
+               log-state ::weald/state} (pick-next-action state
+                                                          {::weald/state log-state
+                                                           ::next-action-time actual-next
+                                                           ::now now
+                                                           ::specs/recent recent
+                                                           ::specs/stream stream})
               log-state (log/flush-logs! logger log-state)
               ;; Q: Why am I forking logs here?
               forked-logs (log/fork log-state)]
@@ -1278,7 +1279,7 @@
                                      io-handle
                                      ;; Q: Wait. Why am I setting log-state to nil in here?
                                      ;; (I vaguely remember doing this. It just seems wrong)
-                                     (assoc state ::log/state nil)
+                                     (assoc state ::weald/state nil)
                                      ;; Putting the logs into an atom here ties in to setting
                                      ;; the state's log-state to nil.
                                      ;; It seems like a very screw-ball choice.
@@ -1315,11 +1316,11 @@
 ;;; abstraction that just don't fit.
 ;;;          205-259 fork child
 (defn start-event-loops!
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/->child
            ::specs/message-loop-name]
     :as io-handle}
-   {log-state ::log/state
+   {log-state ::weald/state
     :as state}]
   ;; At its heart, the reference implementation message event
   ;; loop is driven by a poller.
@@ -1342,7 +1343,7 @@
                              ::start-event-loops!
                              "Child monitor thread should be running now. Scheduling next ioloop timeout")
         state (assoc state
-                        ::log/state
+                        ::weald/state
                         (log/flush-logs! logger log-state))]
     (schedule-next-timeout! (assoc io-handle
                                    ::specs/child-output-loop child-output-loop
@@ -1356,10 +1357,10 @@
         :args (s/or :possibly-server (s/cat :human-name ::specs/message-loop-name
                                             :server? :boolean?
                                             :opts ::specs/state
-                                            :logger ::log/logger)
+                                            :logger ::weald/logger)
                     :always-client (s/cat :human-name ::specs/message-loop-name
                                             :opts ::specs/state
-                                            :logger ::log/logger))
+                                            :logger ::weald/logger))
         :ret ::specs/state)
 (defn initial-state
   "Put together an initial state that's ready to start!"
@@ -1373,7 +1374,7 @@
       :as outgoing} ::specs/outgoing
      ;; FIXME: This is going to break all my existing code.
      ;; But it really needs to happen now.
-     log-state ::log/state
+     log-state ::weald/state
      :as opts}
     logger]
    {:pre [log-state]}
@@ -1387,7 +1388,7 @@
                               (dissoc
                                (assoc opts ::overrides {::->child-size pipe-to-child-size
                                                         ::child->size pipe-from-child-size})
-                               ::log/state))
+                               ::weald/state))
          pending-client-response (promise)]
      (when server?
        (deliver pending-client-response ::never-waited))
@@ -1454,8 +1455,8 @@
                         ::specs/strm-hwm 0
                         ::specs/total-blocks 0
                         ::specs/total-block-transmissions 0
-                        ::specs/un-ackd-blocks (build-un-ackd-blocks {::log/logger logger
-                                                                      ::log/state log-state})
+                        ::specs/un-ackd-blocks (build-un-ackd-blocks {::weald/logger logger
+                                                                      ::weald/state log-state})
                         ::specs/un-sent-blocks PersistentQueue/EMPTY
                         ::specs/want-ping (if server?
                                             ::specs/false
@@ -1466,7 +1467,7 @@
                                             ;; trying to send the next
                                             ;; message
                                             ::specs/immediate)}
-      ::log/state child-logs
+      ::weald/state child-logs
       ::specs/message-loop-name human-name
       ;; In the original, this is a local in main rather than a global
       ;; Q: Is there any difference that might matter to me, other
@@ -1482,10 +1483,10 @@
 
 (s/fdef do-start
         :args (s/cat :state ::specs/state
-                     :logger ::log/logger
+                     :logger ::weald/logger
                      :parent-callback ::specs/->parent
                      :child-callback ::specs/->child)
-        :ret (s/keys :req [::log/state
+        :ret (s/keys :req [::weald/state
                            ::specs/io-handle]))
 (defn do-start
   "Trigger side-effects to start a ::state"
@@ -1508,7 +1509,7 @@
    parent-cb
    child-cb]
   (let [state (update state
-                      ::log/state
+                      ::weald/state
                       #(log/debug %
                                   ::start!
                                   "Starting an I/O loop"
@@ -1543,7 +1544,7 @@
         ;; either in the un-ackd or un-sent queues.
         ;; Still, this is a starting point.
         child-out (PipedInputStream. from-child pipe-from-child-size)
-        [main-log-state io-log-state] (log/fork (::log/state state) ::io-handle)
+        [main-log-state io-log-state] (log/fork (::weald/state state) ::io-handle)
         io-handle {::specs/->child child-cb
                    ::specs/->parent parent-cb
                    ;; This next piece really doesn't make
@@ -1565,23 +1566,23 @@
                    ::specs/to-child-done? (dfrd/deferred)
                    ::specs/from-parent-trigger (strm/stream)
                    ::specs/executor executor
-                   ::log/logger logger
+                   ::weald/logger logger
                    ::specs/message-loop-name message-loop-name
-                   ::log/state-atom (atom io-log-state)
+                   ::weald/state-atom (atom io-log-state)
                    ::specs/stream s}
         [main-log-state child-log-state] (log/fork main-log-state message-loop-name)]
     ;; We really can't rely on what this returns.
     ;; Aside from the fact that we shouldn't, since it's called for side effects
     (start-event-loops! io-handle (assoc state
-                                         ::log/state
+                                         ::weald/state
                                          child-log-state))
     {::specs/io-handle io-handle
-     ::log/state (log/flush-logs! logger
-                                  (log/info main-log-state
-                                            ::start!
-                                            "Started an event loop"
-                                            {::specs/message-loop-name message-loop-name
-                                             ::specs/stream s}))}))
+     ::weald/state (log/flush-logs! logger
+                                    (log/info main-log-state
+                                              ::start!
+                                              "Started an event loop"
+                                              {::specs/message-loop-name message-loop-name
+                                               ::specs/stream s}))}))
 
 (s/fdef get-state
         :args (s/cat :io-handle ::specs/io-handle
@@ -1601,10 +1602,10 @@
   "Synchronous equivalent to a deref"
   ;; This really does involves side-effects
   ;; Q: Rename to get-state!
-  ([{:keys [::log/logger
+  ([{:keys [::weald/logger
             ::specs/message-loop-name
             ::specs/stream]
-     log-state-atom ::log/state-atom}
+     log-state-atom ::weald/state-atom}
     timeout
     failure-signal]
    (swap! log-state-atom
@@ -1646,13 +1647,13 @@
                          (deliver state-holder failure)))
      ;; Need to sync log-state with local-logs.
      ;; This really should be less complex, but a better approach isn't coming to mind.
-     (let [{log-state ::log/state
+     (let [{log-state ::weald/state
             :as result} (deref state-holder timeout failure-signal)
            main-log-state-atom (atom log-state)]
        (swap! log-state-atom (fn [io-log-state]
                                (let [[main-log-state io-log-state] (log/synchronize log-state io-log-state)]
                                  main-log-state)))
-       (assoc result ::log/state @main-log-state-atom))))
+       (assoc result ::weald/state @main-log-state-atom))))
   ([stream-holder]
    (get-state stream-holder 500 ::timed-out)))
 
@@ -1693,12 +1694,12 @@
   ;; the streaming.
 
 ;;;  319-336: Maybe read bytes from child
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/child-out
            ::specs/from-child
            ::specs/message-loop-name
            ::specs/pipe-from-child-size]
-    log-state-atom ::log/state-atom
+    log-state-atom ::weald/state-atom
     :as io-handle}
    array-o-bytes]
   (swap! log-state-atom
@@ -1773,10 +1774,10 @@
   It's replacing one of the polling triggers that
   set off the main() event loop. Need to account for
   that fundamental strategic change"
-  ([{:keys [::log/logger
+  ([{:keys [::weald/logger
              ::specs/message-loop-name
              ::specs/stream]
-      log-state-atom ::log/state-atom
+      log-state-atom ::weald/state-atom
       :as io-handle}
     array-o-bytes
     timeout]
@@ -1876,10 +1877,10 @@
   "Swap out the ->parent callback
 
   For switching the Client from Initiate to Message packets"
-  ([{:keys [::log/logger
+  ([{:keys [::weald/logger
              ::specs/message-loop-name
             ::specs/stream]
-     log-state-atom ::log/state-atom
+     log-state-atom ::weald/state-atom
      :as io-loop}
     time-out
     timed-out-value
@@ -1913,12 +1914,12 @@
         :ret any?)
 (defn halt!
   "This is supposed to be a hard-stop that means we're totally done."
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/message-loop-name
            ::specs/stream
            ::specs/from-child
            ::specs/child-out]
-    log-state-atom ::log/state-atom
+    log-state-atom ::weald/state-atom
     :as io-handle}]
   (swap! log-state-atom
          #(log/info %

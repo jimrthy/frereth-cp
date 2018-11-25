@@ -14,8 +14,9 @@
             [frereth-cp.message.constants :as K]
             [frereth-cp.message.helpers :as help]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
@@ -26,14 +27,14 @@
 ;;;; Specs
 
 (s/def ::callback
-  (s/fspec :args (s/cat :log-state ::log/state
+  (s/fspec :args (s/cat :log-state ::weald/state
                         :message ::specs/bs-or-eof)
-           :ret ::log/state))
+           :ret ::weald/state))
 
 (s/def ::result-writer dfrd/deferrable?)
 
 (s/def ::cb-trigger (s/keys :req [::result-writer
-                                  ::log/state
+                                  ::weald/state
                                   ::specs/bs-or-eof]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -89,7 +90,7 @@
              ::specs/contiguous-stream-count]
      :as incoming} ::specs/incoming
     :keys [::specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}
    k-v-pair]
   (let [prelog (utils/pre-log message-loop-name)
@@ -148,7 +149,7 @@
                             ;; Microbenchmarks and common sense indicate that
                             ;; assoc is significantly faster than update
                             (assoc ::specs/contiguous-stream-count stop))))
-              (assoc ::log/state log-state)))
+              (assoc ::weald/state log-state)))
         (let [log-state
               (log/debug log-state
                          ::consolidate-message-block
@@ -166,7 +167,7 @@
                           log-state)]
           (-> state
               (update-in [::specs/incoming ::specs/gap-buffer] pop-map-first)
-              (assoc ::log/state log-state))))
+              (assoc ::weald/state log-state))))
       ;; Gap starts past the end of the stream.
       (do
         (reduced state)))))
@@ -212,19 +213,19 @@
         :args (s/cat :io-handle ::specs/io-handle
                      :buffer bytes?
                      :cb ::callback
-                     :my-logs ::log/entries
-                     :trigger (s/keys :req [::log/lamport]))
+                     :my-logs ::weald/entries
+                     :trigger (s/keys :req [::weald/lamport]))
         :ret any?)
 (defn trigger-from-parent!
   "Stream handler for coping with bytes sent by parent"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/message-loop-name]
     :as io-handle}
    buffer
    cb
    {:keys [::result-writer
            ::specs/bs-or-eof]
-    my-logs ::log/state
+    my-logs ::weald/state
     :as trigger}]
   (let [my-logs
         (try
@@ -308,7 +309,7 @@
 (defn write-bytes-to-child-stream!
   "Forward the byte-array inside the buffer"
   [parent-trigger
-   {log-state ::log/state
+   {log-state ::weald/state
     :as state}
    ^ByteBuf buf]
   ;; This was really just refactored out of the middle of a reduce call,
@@ -322,7 +323,7 @@
     (let [bs (byte-array (.readableBytes buf))
           n (count bs)]
       (.readBytes buf bs)
-      (let [{:keys [::log/lamport]
+      (let [{:keys [::weald/lamport]
              :as log-state} (log/info log-state
                                       ::write-bytes-to-child-stream!
                                       (str "Signalling child's input loop with "
@@ -352,7 +353,7 @@
                       ;; (and how tough to reach one?)
                       triggered @(strm/put! parent-trigger
                                             {::result-writer succeeded
-                                             ::log/state log-state
+                                             ::weald/state log-state
                                              ::specs/bs-or-eof bs})
                       log-state @succeeded
                       end-time (System/currentTimeMillis)
@@ -396,7 +397,7 @@
             ;; That gets quite a bit more finicky.
             ;; TODO: Consider my options.
             (update-in [::specs/incoming ::specs/receive-written] + n)
-            (assoc ::log/state log-state))))
+            (assoc ::weald/state log-state))))
     (catch RuntimeException ex
       ;; Reference implementation specifically copes with
       ;; EINTR, EWOULDBLOCK, and EAGAIN.
@@ -411,7 +412,7 @@
       ;; single vector of bytes, but the performance implications
       ;; of that don't seem worth imposing.
       (reduced (update state
-                       ::log/state
+                       ::weald/state
                        log/exception
                        ex
                        ::write-bytes-to-child-stream!
@@ -427,7 +428,7 @@
 (s/fdef possibly-close-stream!
         :args (s/cat :io-handle ::specs/io-handle
                      :state ::specs/state
-                     :log-state ::log/state)
+                     :log-state ::weald/state)
         :ret ::specs/state)
 (defn possibly-close-stream!
   "Maybe signal child that it won't receive anything else"
@@ -438,7 +439,7 @@
             ::specs/receive-total-bytes
             ::specs/receive-written]
      :as incoming} ::specs/incoming
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   (let [log-state
         (log/debug log-state
@@ -475,7 +476,7 @@
                                                 ::specs/receive-total-bytes
                                                 ::specs/receive-written]))]
           (assoc state
-                 ::log/state log-state)))
+                 ::weald/state log-state)))
       state)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -489,7 +490,7 @@
 
 (s/fdef start-parent-monitor!
         :args (s/cat :io-handle ::specs/io-handler
-                     :parent-log ::log/state
+                     :parent-log ::weald/state
                      :callback ::callback)
         :ret ::specs/child-input-loop)
 (defn start-parent-monitor!
@@ -498,7 +499,7 @@
   ;; Maybe I should add an optional parameter during startup:
   ;; if you don't provide
   ;; that, it will default to calling this.
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/child-in
            ::specs/message-loop-name]
     trigger-stream ::specs/from-parent-trigger
@@ -525,7 +526,7 @@
                           "Starting the loop watching for bytes the parent has sent toward the child")
         my-logs (log/flush-logs! logger my-logs)
         result (strm/consume (partial trigger-from-parent!
-                                      (assoc io-handle ::log/state my-logs)
+                                      (assoc io-handle ::weald/state my-logs)
                                       buffer
                                       cb)
                              trigger-stream)
@@ -544,7 +545,7 @@
                                               buffer
                                               cb
                                               {::result-writer finished
-                                               ::log/state my-logs
+                                               ::weald/state my-logs
                                                ::specs/bs-or-eof ::specs/normal})))
                     (fn [_]
                       ;; This is really just waiting for logs from
@@ -580,7 +581,7 @@
     :as io-handle}
    {:keys [::specs/message-loop-name]
     original-incoming ::specs/incoming
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   {:pre [log-state]}
   (let [log-state (log/debug log-state
@@ -588,8 +589,8 @@
                              "Top of forward!")
         {{:keys [::specs/receive-eof]
           :as consolidated-incoming} ::specs/incoming
-         log-state ::log/state
-         :as consolidated} (consolidate-gap-buffer (assoc state ::log/state log-state))
+         log-state ::weald/state
+         :as consolidated} (consolidate-gap-buffer (assoc state ::weald/state log-state))
         ->child-buffer (::specs/->child-buffer consolidated-incoming)
         block-count (count ->child-buffer)
         log-state (try (log/debug log-state
@@ -604,7 +605,7 @@
                                   "\nTrying to log to\n"
                                   log-state)
                          log-state))
-        consolidated (assoc consolidated ::log/state log-state)]
+        consolidated (assoc consolidated ::weald/state log-state)]
     (if (< 0 block-count)
       (let [preliminary (reduce (partial write-bytes-to-child-stream!
                                          parent-trigger)
@@ -612,7 +613,7 @@
                                 ->child-buffer)]
         (possibly-close-stream! io-handle preliminary))
       (let [result (update consolidated
-                           ::log/state
+                           ::weald/state
                            log/warn
                            ::forward!
                            "0 bytes to forward to child")]

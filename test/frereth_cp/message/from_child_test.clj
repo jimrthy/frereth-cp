@@ -1,5 +1,6 @@
 (ns frereth-cp.message.from-child-test
   (:require [clojure.test :refer (deftest is testing)]
+            ;; FIXME: Make this go away
             [clojure.tools.logging :as log]
             [frereth-cp.message :as msg]
             [frereth-cp.message.constants :as K]

@@ -9,6 +9,8 @@
   (:import clojure.lang.ExceptionInfo
            [java.io BufferedWriter FileWriter OutputStream OutputStreamWriter]))
 
+(println "Warning: shared.logging has been Deprecated!\nUse weald instead.")
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 

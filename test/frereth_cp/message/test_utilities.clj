@@ -4,11 +4,12 @@
             [frereth-cp.message :as msg]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.logging :as log])
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (s/fdef build-flag-ack-start-state
-        :args (s/cat :logger ::log/logger)
+        :args (s/cat :logger ::weald/logger)
         :ret ::specs/state)
 (defn build-flag-ack-start-state
   [logger]
@@ -77,8 +78,8 @@
         log-state (log/init ::build-flag-ack-start-state 0)
         start-blocks (reduce (fn [acc block]
                                (conj acc block))
-                             (msg/build-un-ackd-blocks {::log/logger logger
-                                                        ::log/state log-state})
+                             (msg/build-un-ackd-blocks {::weald/logger logger
+                                                        ::weald/state log-state})
                              unsorted-start-blocks)]
     ;; This was built for a test where I send back an ACK.
     ;; It's tempting to make it more generally applicable,
@@ -89,7 +90,7 @@
     ;; After all, this starts out as more-than-complicated enough.
     ;; OTOH...it wasn't a lot of fun to put this together once.
     {::specs/message-loop-name "Unit Testing"
-     ::log/state log-state
+     ::weald/state log-state
      ::specs/outgoing {::specs/ackd-addr 0
                        ::specs/contiguous-stream-count 0
                        ::specs/earliest-time 0

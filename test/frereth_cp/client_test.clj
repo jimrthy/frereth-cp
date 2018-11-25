@@ -19,8 +19,9 @@
             [frereth-cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
-             [crypto :as crypto]
-             [logging :as log]]
+             [crypto :as crypto]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -90,7 +91,7 @@
                                      srvr-pk-long
                                      child-cb
                                      step-1-fork!)
-          {:keys [::log/logger
+          {:keys [::weald/logger
                   ::state/chan<-server
                   ::state/chan->server]} client]
       (when-not chan<-server

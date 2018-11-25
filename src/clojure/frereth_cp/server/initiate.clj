@@ -18,11 +18,12 @@ This is the part that possibly establishes a 'connection'"
              [child :as child]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [serialization :as serial]
              [specs :as specs]
              [templates :as templates]]
             [frereth-cp.util :as util]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -42,26 +43,26 @@ This is the part that possibly establishes a 'connection'"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(s/def ::child-fork-prereqs (s/keys :req [::log/logger
-                                          ::log/state
+(s/def ::child-fork-prereqs (s/keys :req [::weald/logger
+                                          ::weald/state
                                           ::msg-specs/->child
                                           ::msg-specs/child-spawner!
                                           ::msg-specs/message-loop-name]))
 
 (s/def ::client-builder (s/keys :req [::state/cookie-cutter
                                       ::shared/my-keys
-                                      ::log/state]))
+                                      ::weald/state]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal implementation
 
 (s/fdef decrypt-initiate-box
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :shared-key ::specs/crypto-key
                :nonce-suffix :shared/client-nonce
                :box (s/and bytes?
                            #(< (count %) K/minimum-vouch-length)))
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::K/initiate-client-vouch-wrapper]))
 ;; TODO: Write server-test/vouch-extraction to gain confidence that
 ;; this works
@@ -83,7 +84,7 @@ This is the part that possibly establishes a 'connection'"
 (s/fdef possibly-re-initiate-existing-client-connection
         :args (s/cat :state ::state
                      :initiate-packet ::K/initiate-packet-spec)
-        :ret (s/keys :req [::log/state]
+        :ret (s/keys :req [::weald/state]
                      :opt [::specs/handled?
                            ::state/client-state]))
 (defn possibly-re-initiate-existing-client-connection
@@ -110,7 +111,7 @@ This is the part that possibly establishes a 'connection'"
   ;; would be/is utter nonsense.
   ;; There's no way for a non-existent client to have already seen
   ;; a packet.
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :as state}
    {packet-nonce-bytes ::specs/nonce
     :as initiate}]
@@ -157,26 +158,26 @@ This is the part that possibly establishes a 'connection'"
           ;; That's the entire point to the handled? == false case
           {::specs/handled? false
            ::state/client-state client
-           ::log/state log-state}
+           ::weald/state log-state}
           ;; Existing client has already seen this packet.
           ;; Throw it out.
-          {::log/state (log/debug log-state
-                                  log-label
-                                  "Discarding already-written nonce"
-                                  {::shared/packet-nonce packet-nonce
-                                   ::last-packet-nonce last-packet-nonce})
+          {::weald/state (log/debug log-state
+                                    log-label
+                                    "Discarding already-written nonce"
+                                    {::shared/packet-nonce packet-nonce
+                                     ::last-packet-nonce last-packet-nonce})
            ::specs/handled? true}))
       ;; Need to forward along to a new client.
-      {::log/state (log/debug log-state
-                              log-label
-                              "Not an existing client")
+      {::weald/state (log/debug log-state
+                                log-label
+                                "Not an existing client")
        ::specs/handled? false})))
 
 (s/fdef decrypt-cookie
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :cookie-cutter ::state/cookie-cutter
                :hello-cookie ::K/cookie)
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::crypto/unboxed]))
 (defn decrypt-cookie
   "Open the cookie we sent the client"
@@ -224,7 +225,7 @@ This is the part that possibly establishes a 'connection'"
                                      nonce-suffix
                                      crypto-text
                                      %2)
-            {log-state ::log/state
+            {log-state ::weald/state
              unboxed ::crypto/unboxed
              :as opened} (opener log-state
                                  minute-key)]
@@ -239,7 +240,7 @@ This is the part that possibly establishes a 'connection'"
 (s/fdef client-short-pk-matches-cookie?
         :args (s/cat :destructured-initiate-packet ::K/initiate-packet-spec
                      :inner-vouch-decrypted-box ::specs/crypto-key)
-        :ret (s/keys :req [::log/state]
+        :ret (s/keys :req [::weald/state]
                      :opt [::specs/matched?]))
 (defn client-short-pk-matches-cookie?
   "Does the claimed short-term public key match our cookie?
@@ -267,19 +268,19 @@ This is the part that possibly establishes a 'connection'"
         ;; further down this road until I understand what's going
         ;; on there.
         result (b-t/bytes= hidden-pk expected)]
-    {::log/state (log/debug log-state
-                            ::client-short-pk-matches-cookie?
-                            "Cookie extraction succeeded. Q: Do the contents match?"
-                            {::expected (shared/bytes->string expected)
-                             ::actual (shared/bytes->string hidden-pk)
-                             ::specs/matched? result})
+    {::weald/state (log/debug log-state
+                              ::client-short-pk-matches-cookie?
+                              "Cookie extraction succeeded. Q: Do the contents match?"
+                              {::expected (shared/bytes->string expected)
+                               ::actual (shared/bytes->string hidden-pk)
+                               ::specs/matched? result})
      ::specs/matched? result}))
 
 (s/fdef extract-cookie
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :cookie-cutter ::state/cookie-cutter
                :initiate-packet ::K/initiate-packet-spec)
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::templates/cookie-spec]))
 (defn extract-cookie
   "Verify we can open our original cookie and secrets match
@@ -303,7 +304,7 @@ This is the part that possibly establishes a 'connection'"
   ;; just silently discards the packet.
   ;; Although that approach is undeniably faster
   (let [hello-cookie (bytes (::K/cookie initiate))
-        {log-state ::log/state
+        {log-state ::weald/state
          ^ByteBuf inner-vouch-buffer ::crypto/unboxed} (decrypt-cookie log-state
                                                                        cookie-cutter
                                                                        hello-cookie)]
@@ -322,21 +323,21 @@ This is the part that possibly establishes a 'connection'"
               ;; the supplied key.
               ;; Note that the initial padding has been discarded
               key-array (byte-array (subvec full-decrypted-vouch 0 K/key-length))
-              {log-state ::log/state
+              {log-state ::weald/state
                :keys [::specs/matched?]} (client-short-pk-matches-cookie? log-state
                                                                           initiate
                                                                           key-array)]
-          {::log/state log-state
+          {::weald/state log-state
            ::templates/cookie-spec (when matched?
                                      (serial/decompose-array templates/black-box-dscr
                                                              inner-vouch-bytes))}))
-      {::log/state log-state})))
+      {::weald/state log-state})))
 
 (s/fdef open-client-crypto-box
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :initiate ::K/initiate-packet-spec
                :client-short<->server-short ::state/client-short<->server-short)
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::K/initiate-client-vouch-wrapper]))
 (defn open-client-crypto-box
   [log-state
@@ -358,8 +359,8 @@ This is the part that possibly establishes a 'connection'"
             shared-key (bytes client-short<->server-short)
             _ (when-not shared-key
                 (throw (ex-info "Missing shared key"
-                                {::log/state log-state})))
-            {log-state ::log/state
+                                {::weald/state log-state})))
+            {log-state ::weald/state
              clear-text ::crypto/unboxed
              :as unboxed} (try
                             (crypto/open-box log-state
@@ -369,37 +370,37 @@ This is the part that possibly establishes a 'connection'"
                                              shared-key)
 
                             (catch Throwable ex
-                              {::log/state (log/exception log-state
-                                                          ex
-                                                          ::open-client-crypto-box)}))]
+                              {::weald/state (log/exception log-state
+                                                            ex
+                                                            ::open-client-crypto-box)}))]
         (try
           (if clear-text
-            {::log/state (log/info log-state
-                                   ::open-client-crypto-box
-                                   "Decomposing...")
+            {::weald/state (log/info log-state
+                                     ::open-client-crypto-box
+                                     "Decomposing...")
              ::K/initiate-client-vouch-wrapper (serial/decompose (assoc-in templates/initiate-client-vouch-wrapper
                                                                            [::K/message ::K/length]
                                                                            message-length)
                                                                  clear-text)}
-            {::log/state (log/warn log-state
-                                   ::open-client-crypto-box
-                                   "Opening client crypto vouch failed")})
+            {::weald/state (log/warn log-state
+                                     ::open-client-crypto-box
+                                     "Opening client crypto vouch failed")})
           ;; Q: Does this extra layer of exception handling gain anything?
           ;; A: Well, we won't lose logs that were written before we hit
           ;; this try block
           (catch Exception ex
-            {::log/state (log/exception log-state
-                                        ex
-                                        ::open-client-crypto-box)})))
+            {::weald/state (log/exception log-state
+                                          ex
+                                          ::open-client-crypto-box)})))
       (catch Exception ex
-        {::log/state (log/exception log-state
-                                    ex
-                                    ::open-client-crypto-box)}))))
+        {::weald/state (log/exception log-state
+                                      ex
+                                      ::open-client-crypto-box)}))))
 
 (s/fdef validate-server-name
         :args (s/cat :state ::state/state
                      :inner-client-box ::templates/initiate-client-vouch-wrapper)
-        :ret (s/keys :req [::log/state]
+        :ret (s/keys :req [::weald/state]
                      :opt [::specs/matched?]))
 (defn validate-server-name
   [log-state
@@ -413,23 +414,23 @@ This is the part that possibly establishes a 'connection'"
                      ::inner-box-keys (keys inner-client-box)})))
   (let [rcvd-name (bytes rcvd-name)
         match? (b-t/bytes= rcvd-name my-name)
-        base-result {::log/state (if match?
-                                    log-state
-                                    (log/warn log-state
-                                              ::validate-server-name
-                                              "Message was intended for another server"
-                                              {::specs/srvr-name (b-t/->string rcvd-name)
-                                               ::my-name (b-t/->string my-name)
-                                               ::shared/my-keys my-keys}))}]
+        base-result {::weald/state (if match?
+                                     log-state
+                                     (log/warn log-state
+                                               ::validate-server-name
+                                               "Message was intended for another server"
+                                               {::specs/srvr-name (b-t/->string rcvd-name)
+                                                ::my-name (b-t/->string my-name)
+                                                ::shared/my-keys my-keys}))}]
     (if match?
       (assoc base-result ::specs/matched? match?)
       base-result)))
 
 (s/fdef unbox-innermost-key
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :my-keys ::shared/my-keys
                :client-message-box ::templates/initiate-client-vouch-wrapper)
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::specs/public-short]))
 (defn unbox-innermost-key
   "We unwrapped the our original cookie, using the minute-key.
@@ -472,7 +473,7 @@ This is the part that possibly establishes a 'connection'"
                              ::shared-long-secret (b-t/->string shared-secret)
                              ::K/inner-i-nonce (b-t/->string inner-i-nonce)
                              ::specs/crypto-text (b-t/->string hidden-client-short-pk)})
-        {log-state ::log/state
+        {log-state ::weald/state
          ;; It seems tempting to use decompose-box here.
          ;; That would be pointless: the clear text is just the client's
          ;; short-term public key.
@@ -485,23 +486,23 @@ This is the part that possibly establishes a 'connection'"
       (let [inner-pk-buf ^ByteBuf unboxed
             inner-pk (byte-array K/key-length)]
         (.getBytes inner-pk-buf 0 inner-pk)
-        {::log/state log-state
+        {::weald/state log-state
          ::specs/public-short inner-pk})
-      {::log/state (log/warn log-state
-                             ::unbox-innermost-key
-                             "Unboxing innermost key failed"
-                             {::long-client-pk (b-t/->string client-long-key)
-                              ;; FIXME: Don't log secrets!!
-                              ::long-server-sk (b-t/->string my-long-secret)
-                              ::shared-secret (b-t/->string shared-secret)})})))
+      {::weald/state (log/warn log-state
+                               ::unbox-innermost-key
+                               "Unboxing innermost key failed"
+                               {::long-client-pk (b-t/->string client-long-key)
+                                ;; FIXME: Don't log secrets!!
+                                ::long-server-sk (b-t/->string my-long-secret)
+                                ::shared-secret (b-t/->string shared-secret)})})))
 
 (s/fdef client-public-key-triad-matches?
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :my-keys ::shared/my-keys
                ;; This arrived in the public part of the Initiate
                :supplied-client-short-key ::shared/short-pk
                :client-message-box ::templates/initiate-client-vouch-wrapper)
-  :ret (s/keys :req [::log/state] :opt [::specs/matched?]))
+  :ret (s/keys :req [::weald/state] :opt [::specs/matched?]))
 (defn client-public-key-triad-matches?
   [log-state
    {:keys [::shared/long-pair]
@@ -509,25 +510,25 @@ This is the part that possibly establishes a 'connection'"
    client-short-pk
    client-message-box]
   {:pre [client-short-pk]}
-  (let [{log-state ::log/state
+  (let [{log-state ::weald/state
          inner-pk ::specs/public-short} (unbox-innermost-key log-state
                                                              my-keys
                                                              client-message-box)]
     (if inner-pk
       (let [matched? (b-t/bytes= client-short-pk inner-pk)]
-        {::log/state (if matched?
-                       (log/debug log-state
-                                  ::client-public-key-triad-matches?
-                                  "Matched.")
-                       (log/warn log-state
-                                 ::client-public-key-triad-matches?
-                                 "Inner pk doesn't match outer"
-                                 {::outer (b-t/->string client-short-pk)
-                                  ::inner (b-t/->string inner-pk)}))
+        {::weald/state (if matched?
+                         (log/debug log-state
+                                    ::client-public-key-triad-matches?
+                                    "Matched.")
+                         (log/warn log-state
+                                   ::client-public-key-triad-matches?
+                                   "Inner pk doesn't match outer"
+                                   {::outer (b-t/->string client-short-pk)
+                                    ::inner (b-t/->string inner-pk)}))
          ::specs/matched? matched?})
-      {::log/state (log/warn log-state
-                             ::client-public-key-triad-matches?
-                             "Unable to open inner cryptobox")})))
+      {::weald/state (log/warn log-state
+                               ::client-public-key-triad-matches?
+                               "Unable to open inner cryptobox")})))
 
 ;;; It's tempting to try to consolidate this with the way the
 ;;; client handles these packets.
@@ -543,35 +544,35 @@ This is the part that possibly establishes a 'connection'"
 (s/fdef do-fork-child!
   :args (s/cat :builder-params ::child-fork-prereqs
                :active-client ::state/client-state)
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::state/client-state]))
 (defn do-fork-child!
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :as builder-params}
    active-client]
   (try
       (let [{child-state ::child/state
-           log-state ::log/state} (child/fork! builder-params child->)]
+           log-state ::weald/state} (child/fork! builder-params child->)]
       (try
-        {::log/state log-state
+        {::weald/state log-state
          ::state/client-state (assoc active-client
                                      ::child/state child-state)}
         (catch Exception ex
-          {::log/state (log/exception log-state
-                                      ex
-                                      ::do-fork-child!
-                                      "Trying to assoc new child with client")})))
+          {::weald/state (log/exception log-state
+                                        ex
+                                        ::do-fork-child!
+                                        "Trying to assoc new child with client")})))
     ;; Q: Why isn't this catching the RuntimeException from child/fork! ?
     (catch Exception ex
-      {::log/state (log/exception log-state
-                                  ex
-                                  ::do-fork-child!
-                                  "Trying to fork!")})
+      {::weald/state (log/exception log-state
+                                    ex
+                                    ::do-fork-child!
+                                    "Trying to fork!")})
     (catch Throwable ex
-      {::log/state (log/exception log-state
-                                  ex
-                                  ::do-fork-child!
-                                  "Trying to fork! failed badly")})))
+      {::weald/state (log/exception log-state
+                                    ex
+                                    ::do-fork-child!
+                                    "Trying to fork! failed badly")})))
 
 ;;; FIXME: This belongs under shared.
 ;;; It's pretty much universal to client/server
@@ -583,11 +584,11 @@ This is the part that possibly establishes a 'connection'"
   :args (s/cat :state ::state/state
                :active-client ::state/client-state
                :client-message-box ::templates/initiate-client-vouch-wrapper)
-  :ret ::log/state)
+  :ret ::weald/state)
 (defn forward-message-portion!
   "Forward the message to our new(?) child"
-  [{:keys [::log/logger]
-    log-state ::log/state
+  [{:keys [::weald/logger]
+    log-state ::weald/state
     :as state}
    {:keys [::state/client-security]
     child-state ::child/state
@@ -626,7 +627,7 @@ This is the part that possibly establishes a 'connection'"
     log-state))
 
 (s/fdef build-and-configure-client-basics
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                ;; There have been a couple of times
                ;; when I've been skeptical about the
                ;; utility of the packet parameter
@@ -636,7 +637,7 @@ This is the part that possibly establishes a 'connection'"
                ;; send its own Messages.
                :packet ::shared/network-packet
                :initiate ::K/initiate-packet-spec)
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::state/client-state]))
 (defn build-and-configure-client-basics
   [log-state
@@ -656,25 +657,25 @@ This is the part that possibly establishes a 'connection'"
         active-client (state/configure-shared-secrets active-client
                                                       client-short-pk
                                                       server-short-sk)]
-    {::log/state log-state
+    {::weald/state log-state
      ::state/client-state active-client}))
 
 (s/fdef build-new-client
   :args (s/cat :state ::client-builder
                :packet ::shared/network-packet
                :initiate ::K/initiate-packet-spec)
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::state/client-state
                      ::templates/initiate-client-vouch-wrapper]))
 (defn build-new-client
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :keys [::state/cookie-cutter state
            ::shared/my-keys]}
    packet
    {:keys [::K/clnt-short-pk]
     :as initiate}]
   (let [{cookie ::templates/cookie-spec
-         log-state ::log/state
+         log-state ::weald/state
          :as cookie-extraction} (extract-cookie log-state
                                                 cookie-cutter
                                                 initiate)]
@@ -683,7 +684,7 @@ This is the part that possibly establishes a 'connection'"
       ;; past couple of minutes.
       ;; Now we're ready to tackle handling the main message body cryptobox.
       ;; This corresponds to line 373 in the reference implementation.
-      (let [{log-state ::log/state
+      (let [{log-state ::weald/state
              {{:keys [::state/client-short<->server-short]} ::state/shared-secrets
               {client-short-pk ::shared/short-pk} ::state/client-security
               :as active-client} ::state/client-state} (build-and-configure-client-basics log-state
@@ -693,7 +694,7 @@ This is the part that possibly establishes a 'connection'"
         (if client-short-pk
           (if client-short<->server-short
             (try
-              (let [{log-state ::log/state
+              (let [{log-state ::weald/state
                      {client-long-pk ::K/long-term-public-key
                       :as client-message-box} ::K/initiate-client-vouch-wrapper} (open-client-crypto-box log-state
                                                                                                          initiate
@@ -711,54 +712,54 @@ This is the part that possibly establishes a 'connection'"
                                              ::client-public-long-key (b-t/->string client-long-pk)})]
                     (try
                       (let [{:keys [::specs/matched?]
-                             log-state ::log/state} (validate-server-name log-state
-                                                                          my-keys
-                                                                          client-message-box)]
+                             log-state ::weald/state} (validate-server-name log-state
+                                                                            my-keys
+                                                                            client-message-box)]
                         (if matched?
                           ;; This takes us down to line 381
-                          (let [{log-state ::log/state
+                          (let [{log-state ::weald/state
                                  :keys [::specs/matched?]} (client-public-key-triad-matches? log-state
                                                                                              my-keys
                                                                                              client-short-pk
                                                                                              client-message-box)]
-                            {::log/state log-state
+                            {::weald/state log-state
                              ::templates/initiate-client-vouch-wrapper client-message-box
                              ::state/client-state (when matched?
                                                     active-client)})
-                          {::log/state log-state}))
+                          {::weald/state log-state}))
                       (catch ExceptionInfo ex
-                        {::log/state (log/exception log-state
-                                                    ex
-                                                    ::build-new-client
-                                                    "Failure after decrypting inner client cryptobox")})))
-                  {::log/state log-state}))
+                        {::weald/state (log/exception log-state
+                                                      ex
+                                                      ::build-new-client
+                                                      "Failure after decrypting inner client cryptobox")})))
+                  {::weald/state log-state}))
               (catch Exception ex
-                {::log/state (log/exception log-state
-                                            ex
-                                            ::build-new-client
-                                            "Initiate packet looked good enough to establish client session, but failed later")}))
-            {::log/state (log/error log-state
+                {::weald/state (log/exception log-state
+                                              ex
+                                              ::build-new-client
+                                              "Initiate packet looked good enough to establish client session, but failed later")}))
+            {::weald/state (log/error log-state
+                                      ::build-new-client
+                                      "Failed to set up short key"
+                                      {::state/active-client active-client})})
+          {::weald/state (log/error log-state
                                     ::build-new-client
-                                    "Failed to set up short key"
-                                    {::state/active-client active-client})})
-          {::log/state (log/error log-state
-                                  ::build-new-client
-                                  "Missing the short-pk"
-                                  {::state/client-state active-client})}))
+                                    "Missing the short-pk"
+                                    {::state/client-state active-client})}))
       ;; Just log a quick message about the failure for now.
       ;; It seems likely that we should really gather more info, especially in terms
       ;; of identifying the source of garbage.
-      {::log/state (log/error log-state
-                              ::build-new-client
-                              "FIXME: More logs! cookie extraction failed")})))
+      {::weald/state (log/error log-state
+                                ::build-new-client
+                                "FIXME: More logs! cookie extraction failed")})))
 
 (s/fdef create-child
-  :args (s/cat :log-state ::log/state
+  :args (s/cat :log-state ::weald/state
                :state (s/keys :req [::state/cookie-cutter
                                     ::shared/my-keys])
                :packet ::shared/network-packet
                :initiate ::K/initiate-packet-spec)
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::state/client-state
                      ::templates/initiate-client-vouch-wrapper]))
 (defn create-child
@@ -767,10 +768,10 @@ This is the part that possibly establishes a 'connection'"
            ::shared/my-keys]}
    packet
    initiate]
-  (let [{log-state-2 ::log/state
+  (let [{log-state-2 ::weald/state
          :as built} (build-new-client {::state/cookie-cutter cookie-cutter
                                        ::shared/my-keys my-keys
-                                       ::log/state log-state}
+                                       ::weald/state log-state}
                                       packet
                                       initiate)
         log-state (if log-state-2
@@ -780,7 +781,7 @@ This is the part that possibly establishes a 'connection'"
                               (str "Log state disappeared"
                                    "  trying to build-new-client")
                               {::built built}))]
-    (assoc built ::log/state log-state)))
+    (assoc built ::weald/state log-state)))
 
 (s/fdef decompose-initiate-packet
   :args (s/cat :packet-length nat-int?
@@ -812,8 +813,8 @@ This is the part that possibly establishes a 'connection'"
   "Deal with an incoming initiate packet
 
   Called mostly for side-effects, but the return value matters."
-  [{log-state ::log/state
-    :keys [::log/logger]
+  [{log-state ::weald/state
+    :keys [::weald/logger]
     :as state}
    {:keys [:host
            :port
@@ -830,9 +831,9 @@ This is the part that possibly establishes a 'connection'"
           (let [initiate (decompose-initiate-packet n message)
                 {:keys [::specs/handled?
                         ::state/client-state]
-                 log-state ::log/state
+                 log-state ::weald/state
                  :as re-inited} (possibly-re-initiate-existing-client-connection (assoc state
-                                                                                        ::log/state @log-state-atom)
+                                                                                        ::weald/state @log-state-atom)
                                                                                  initiate)]
             (assert log-state)
             (reset! log-state-atom log-state)
@@ -860,7 +861,7 @@ This is the part that possibly establishes a 'connection'"
             ;; that's a terrible idea.
             (if-not handled?
               (let [{:keys [::state/client-state]
-                     log-state ::log/state
+                     log-state ::weald/state
                      client-message-box ::templates/initiate-client-vouch-wrapper
                      :as built} (if client-state
                                   re-inited
@@ -875,8 +876,8 @@ This is the part that possibly establishes a 'connection'"
                 ;; More unfortunate cleverness.
                 (if client-state
                   (try
-                    (let [base-builder-params (select-keys state [::log/logger
-                                                                  ::log/state
+                    (let [base-builder-params (select-keys state [::weald/logger
+                                                                  ::weald/state
                                                                   ::msg-specs/->child
                                                                   ::msg-specs/child-spawner!])
                           loop-name-base (str (get state
@@ -890,42 +891,42 @@ This is the part that possibly establishes a 'connection'"
                                                     (biginteger client-pk-short))
                           builder-params (assoc base-builder-params
                                                 ::msg-specs/message-loop-name message-loop-name)
-                          {log-state ::log/state
+                          {log-state ::weald/state
                            client-state ::state/client-state
                            :as delta} (do-fork-child! builder-params
                                                        client-state)]
                       (if client-state
                         (let [delta' (state/alter-client-state state
                                                                (::state/client-state client-state))
-                              state (into state (assoc delta' ::log/state log-state))]
+                              state (into state (assoc delta' ::weald/state log-state))]
                           (assoc delta' ::log-state (forward-message-portion! state
                                                                               client-state
                                                                               client-message-box)))
                         delta))
                     (catch Exception ex
-                      {::log/state (log/exception log-state
+                      {::weald/state (log/exception log-state
                                                   ex
                                                   ::do-handle)}))
-                  {::log/state (log/warn log-state
-                                         ::do-handle
-                                         "Unable to build a new client"
-                                         {::shared/network-packet packet
-                                          ::K/initiate-packet-spec initiate
-                                          ::client-builder (select-keys state [::state/cookie-cutter
-                                                                               ::shared/my-keys])
-                                          ::built (dissoc built ::log/state)
-                                          ::built-keys (keys built)})}))
+                  {::weald/state (log/warn log-state
+                                           ::do-handle
+                                           "Unable to build a new client"
+                                           {::shared/network-packet packet
+                                            ::K/initiate-packet-spec initiate
+                                            ::client-builder (select-keys state [::state/cookie-cutter
+                                                                                 ::shared/my-keys])
+                                            ::built (dissoc built ::weald/state)
+                                            ::built-keys (keys built)})}))
               (throw (RuntimeException. "TODO: Handle additional Initiate packets from " (-> initiate
                                                                                              ::K/clnt-short-pk
                                                                                              bytes
                                                                                              vec)))))
-          {::log/state (log/warn log-state
+          {::weald/state (log/warn log-state
                                  ::do-handle
                                  (str "Truncated initiate packet. Only received " n " bytes"))}))
       (catch Exception ex
         (let [log-state-acc @log-state-atom
               log-state (or log-state-acc log-state)]
-          {::log/state (log/exception (if log-state-acc
+          {::weald/state (log/exception (if log-state-acc
                                         log-state
                                         (log/error log-state
                                                    ::do-handle

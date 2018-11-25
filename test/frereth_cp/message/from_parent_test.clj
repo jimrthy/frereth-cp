@@ -1,14 +1,15 @@
 (ns frereth-cp.message.from-parent-test
   (:require [clojure.test :refer (deftest is testing)]
-            [clojure.tools.logging :as log]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.from-child :as from-child]
-            [frereth-cp.message.from-parent :as from-parent]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.test-utilities :as test-helpers]
-            [frereth-cp.message.to-parent :as to-parent]
-            [frereth-cp.shared.logging :as log2]
-            [frereth-cp.util :as utils])
+            [frereth-cp.message
+             [constants :as K]
+             [from-child :as from-child]
+             [from-parent :as from-parent]
+             [specs :as specs]
+             [test-utilities :as test-helpers]
+             [to-parent :as to-parent]]
+            [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest verify-block-collapse
@@ -32,7 +33,7 @@
   ;; conditions.
   ;; (Note that this has been broken since at least July)
   ;; FIXME: Circle back around and get this fixed.
-  (let [logger (log2/std-out-log-factory)
+  (let [logger (log/std-out-log-factory)
         start-state (test-helpers/build-ack-flag-message-portion logger)
         raw-buffer (::test-helpers/packet start-state)
         start-state (dissoc start-state ::test-helpers/packet)
@@ -50,11 +51,11 @@
                                           (take 2)
                                           (map #(-> % ::specs/buf .readableBytes))))
         {decoded-packet ::specs/packet
-         log-state ::log2/state} (from-parent/deserialize (::log2/state start-state)
-                                                          raw-buffer)
-        log-state (log2/debug log-state ::check-flackd-others "Calling failing flag-ackd"
-                              {::specs/state start-state
-                               ::specs/packet decoded-packet})]
+         log-state ::weald/state} (from-parent/deserialize (::weald/state start-state)
+                                                           raw-buffer)
+        log-state (log/debug log-state ::check-flackd-others "Calling failing flag-ackd"
+                             {::specs/state start-state
+                              ::specs/packet decoded-packet})]
     (let [{{:keys [::specs/blocks
                    ::specs/ackd-addr
                    ::specs/contiguous-stream-count
@@ -62,9 +63,9 @@
                    ::specs/total-blocks
                    ::specs/total-block-transmissions]
             :as outgoing} ::specs/outgoing
-           log-state ::log2/state
+           log-state ::weald/state
            :as flagged} (from-parent/flag-ackd-others! (assoc start-state
-                                                              ::log2/state log-state)
+                                                              ::weald/state log-state)
                                                        decoded-packet)
           ;; The ACKs specified in the incoming packet should drop the first two blocks
           expected-remaining-blocks (drop 2 (get-in start-state [::specs/outgoing ::specs/blocks]))]
@@ -161,10 +162,11 @@
                                                                      :receive-written 0
                                                                      :strm-hwm 0}
                          ::specs/message-loop-name "from-parent-test/check-start-stop-calculation"}
-            log-state (log2/init "Unit test: Check start-stop calculations" 0)]
+            log-state (log/init "Unit test: Check start-stop calculations" 0)
+            logger (log/std-out-log-factory)]
         (let [{^bytes pkt ::specs/bs-or-eof
-               log-state ::log2/state} (to-parent/build-message-block-description log-state (assoc dscr ::specs/message-id 1))
-              {log-state ::log2/state
+               log-state ::weald/state} (to-parent/build-message-block-description log-state (assoc dscr ::specs/message-id 1))
+              {log-state ::weald/state
                decoded-packet ::specs/packet} (from-parent/deserialize log-state pkt)
               _ (throw (RuntimeException. "I've really mangled this"))
               calculated (from-parent/calculate-start-stop-bytes start-state decoded-packet)]
@@ -184,7 +186,7 @@
               (is (= expected'
                      calculated')))
             (catch NullPointerException ex
-              (log/error ex "Step 2")
+              (log/flush-logs! logger (log/exception log-state ex "Step 2"))
               (is (not ex) "Setting up calculation"))))
         (testing " - ACK"
           ;; Main point here: there aren't any bytes to read.

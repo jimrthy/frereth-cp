@@ -18,9 +18,10 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [serialization :as serial]
              [specs :as specs]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -80,12 +81,12 @@
 (s/fdef handshake-client-child-spawner!
         :args (s/cat :chan strm/source?
                      :io-handle ::msg-specs/io-handle)
-        :ret ::log/state)
+        :ret ::weald/state)
 (defn handshake-client-child-spawner!
   "Spawn the client-child for the handshake test and initiate the fun"
   [ch
-   {log-state-atom ::log/state-atom
-    logger ::log/logger
+   {log-state-atom ::weald/state-atom
+    logger ::weald/logger
     :as io-handle}]
   {:pre [io-handle]}
   (when-not log-state-atom
@@ -106,7 +107,7 @@
   (try
     (strm/consume (partial handshake-client-cb
                            (assoc io-handle
-                                  ::log/state
+                                  ::weald/state
                                   @log-state-atom))
                   ch)
     ;; Q: Worth converting this to something like an HTTP request
@@ -162,8 +163,8 @@
 (deftest verify-ctor-spec
   ;; FIXME: This is broken now
   (testing "Does the spec really work as intended?"
-    (let [base-options {::log/logger (log/std-out-log-factory)
-                        ::log/state (log/init ::verify-ctor-spec)
+    (let [base-options {::weald/logger (log/std-out-log-factory)
+                        ::weald/state (log/init ::verify-ctor-spec)
                         ::shared/extension factory/server-extension
                         ::msg-specs/child-spawner! (fn [io-handle]
                                                      (println "Server child-spawner! called for side-effects"))
@@ -200,7 +201,7 @@
                   state (server/start! pre-state)]
               (try
                 (println "Server started. Looks like:  <------------")
-                (pprint (dissoc state ::log/state))
+                (pprint (dissoc state ::weald/state))
                 (is (not (s/explain-data ::srvr-state/checkable-state (dissoc state
                                                                               ::msg-specs/child-spawner
                                                                               ::srvr-state/event-loop-stopper!))))
@@ -455,7 +456,7 @@
                           (throw (RuntimeException. "Timed out putting Hello to Server")))))))
                 (finally
                   (let [cleaned (if (map? client)
-                                  (dissoc client ::log/state)
+                                  (dissoc client ::weald/state)
                                   {::client-state client})]
                     (try
                       (println "Stopping client agent" cleaned)
@@ -472,7 +473,7 @@
                   (try
                     (println "Trying to print out the client state")
                     (pprint (dissoc client
-                                    ::log/state))
+                                    ::weald/state))
                     (catch Exception ex
                       (is not ex)
                       (println "Something got terribly broken:"))))))

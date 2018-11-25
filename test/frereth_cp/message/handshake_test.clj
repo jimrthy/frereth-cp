@@ -9,8 +9,9 @@
             [frereth-cp.message.message-test :as m-t]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [gloss.core :as gloss]
             [gloss.io :as io]
             [manifold.deferred :as dfrd]
@@ -58,7 +59,7 @@
   ;; Then again, you *could* do something like
   ;; this, to experiment with the unencrypted
   ;; networking protocol.
-  (swap! log-atom #(log/info % log-ctx "Message over network" {::log/ctx message-loop-name}))
+  (swap! log-atom #(log/info % log-ctx "Message over network" {::weald/ctx message-loop-name}))
   (println "DEBUG:" message-loop-name "consumer:" log-ctx)
 
   (let [prelog (utils/pre-log message-loop-name)
@@ -159,7 +160,7 @@
            #(log/debug %
                        ::buffer-response!
                        "Ready to send message frames"
-                       {::log/ctx message-loop-name
+                       {::weald/ctx message-loop-name
                         ::frame-count (count frames)}))
     (doseq [frame frames]
       (let [array (if (.hasArray frame)
@@ -178,7 +179,7 @@
                  #(log/debug %
                              ::buffer-response!
                              "frame sent"
-                             {::log/ctx message-loop-name
+                             {::weald/ctx message-loop-name
                               ::frame-size (count array)})))))))
 (comment
   ;; Inline test for test-helper.
@@ -209,7 +210,7 @@
                     (if-not (keyword? bs)
                       {::message-size (count bs)}
                       {::eof-flag bs})
-                    ::log/ctx "TODO: Which child?"
+                    ::weald/ctx "TODO: Which child?"
                     ::specs/bs-or-eof bs))
   (if-not (keyword? bs)
     (do
@@ -220,7 +221,7 @@
                (str "This is probably a prefix expecting "
                     (b-t/uint16-unpack bs)
                     " bytes")
-               {::log/ctx "TODO: Which child?"}))
+               {::weald/ctx "TODO: Which child?"}))
       (let [decoded (strm/try-take! decode-sink ::drained 10 false)]
         (strm/put! decode-src bs)
         (deref decoded 10 false)))
@@ -239,7 +240,7 @@
          ::server-child-processor
          (str "Matching '" incoming
               "', a " (class incoming))
-         {::log/ctx "server"
+         {::weald/ctx "server"
           ::server-state @server-atom
           ::other-state @state-atom})
   (let [rsp (condp = incoming
@@ -252,7 +253,7 @@
            log/info
            ::server-child-processor
            "Incoming triggered"
-           {::log/ctx "server"
+           {::weald/ctx "server"
             ::incoming incoming
             ::response rsp})
     (if (not= rsp ::specs/normal)
@@ -273,7 +274,7 @@
              log/info
              ::server-child-processor
              "Client requested chzbrgr. Send out of lock-step"
-             {::log/ctx "server"})
+             {::weald/ctx "server"})
       ;; Only 3 messages are arriving at the client.
       ;; This almost definitely means that the chzbrgr is the problem.
       ;; Trying to send a raw byte-array here definitely does not work.
@@ -317,7 +318,7 @@
            #(log/info %
                       ::client-child-processor
                       "incoming"
-                      {::log/ctx "client"
+                      {::weald/ctx "client"
                        ::client-state client-state
                        ::received incoming}))
     (if incoming
@@ -348,7 +349,7 @@
                          #(log/info %
                                     ::client-child-processor
                                     "Client child callback is drained (but still need server's EOF)"
-                                    {::log/ctx "client"}))
+                                    {::weald/ctx "client"}))
                   (try
                     (message/child-close! @client-atom)
                     (catch RuntimeException ex
@@ -361,7 +362,7 @@
                                              ex
                                              ::client-child-processor
                                              "This really shouldn't pass"
-                                             {::log/ctx "client"}))
+                                             {::weald/ctx "client"}))
                       (is (not ex))))
                   nil)
               5 (do
@@ -370,7 +371,7 @@
                          #(log/info %
                                     ::client-child-processor
                                     "Received server EOF"
-                                    {::log/ctx "client"}))
+                                    {::weald/ctx "client"}))
                   (dfrd/success! succeeded? ::kthxbai)
                   ;; At this point, we signalled the end of the transaction.
                   ;; We closed our outbound pipe in the previous step,
@@ -388,7 +389,7 @@
                           ;; up.
                           ;; Then again, that's just the unit test, so it
                           ;; really isn't very interesting
-                          {::log/ctx "client"
+                          {::weald/ctx "client"
                            ::incoming incoming
                            ::next-message next-message}))
         (swap! client-state-atom update ::count inc)
@@ -410,7 +411,7 @@
                              ::client-child-processor
                              "returning"
                              {::too-many-attempts? (not result)
-                              ::log/ctx "client"}))
+                              ::weald/ctx "client"}))
           result))
       (swap! log-atom
              #(log/error %
@@ -639,9 +640,9 @@
                              chzbrgr-length)
                     srvr-decode-sink)
 
-      (let [client-init (message/initial-state "Client" false {::log/state @client-log-atom} client-logger)
+      (let [client-init (message/initial-state "Client" false {::weald/state @client-log-atom} client-logger)
             {client-io ::specs/io-handle}  (message/do-start client-init client-logger client-parent-cb client-child-cb)
-            server-init (message/initial-state "Server" true {::log/state @server-log-atom} server-logger)
+            server-init (message/initial-state "Server" true {::weald/state @server-log-atom} server-logger)
             ;; It seems like this next part really shouldn't happen until the initial message arrives
             ;; from the client.
             ;; Actually, it starts when the Initiate(?) packet arrives as part of the handshake. So

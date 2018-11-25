@@ -8,11 +8,12 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [specs :as specs]
              [serialization :as serial]
              [templates :as templates]]
             [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -29,18 +30,18 @@
 ;;;; Internal
 
 (s/fdef decrypt-actual-cookie
-        :args (s/cat :this (s/keys :req [::log/state
+        :args (s/cat :this (s/keys :req [::weald/state
                                          ::shared/packet
                                          ::state/server-security
                                          ::state/shared-secrets])
                      :received ::templates/cookie-frame)
-        :ret (s/keys :req [::log/state]
+        :ret (s/keys :req [::weald/state]
                      :opt [::state/server-security]))
 (defn decrypt-actual-cookie
   [{:keys [::shared/packet
            ::state/server-security
            ::state/shared-secrets]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}
    {:keys [::templates/client-extension
            ::templates/client-nonce-suffix
@@ -59,14 +60,14 @@
     (when-not shared
       (throw (ex-info "Missing client-short<->server-long secret"
                       {::state/shared-secrets shared-secrets
-                       ::log/state log-state})))
+                       ::weald/state log-state})))
     (try
       (let [log-state (log/debug log-state ::decrypt-actual-cookie
                                  "Getting ready to try to unbox cookie\nFIXME: Don't log shared secret"
                                  (assoc (select-keys rcvd [::templates/cookie
                                                            ::templates/client-nonce-suffix])
                                         ::state/client-short<->server-long shared))
-            {log-state ::log/state
+            {log-state ::weald/state
              decrypted ::crypto/unboxed} (crypto/open-box log-state
                                                           K/cookie-nonce-prefix
                                                           client-nonce-suffix
@@ -81,30 +82,30 @@
                                        ::state/server-cookie server-cookie)]
             (assert server-cookie)
             {::state/server-security server-security
-             ::log/state log-state})
-          {::log/state (log/warn log-state
-                                 ::decrypt-actual-cookie
-                                 "Decryption failed silently")}))
+             ::weald/state log-state})
+          {::weald/state (log/warn log-state
+                                   ::decrypt-actual-cookie
+                                   "Decryption failed silently")}))
       (catch RuntimeException ex
-        {::log/state (log/exception log-state
-                                    ex
-                                    ::decrypt-actual-cookie
-                                    "Decryption failed")}))))
+        {::weald/state (log/exception log-state
+                                      ex
+                                      ::decrypt-actual-cookie
+                                      "Decryption failed")}))))
 
 (s/fdef decrypt-cookie-packet
-        :args (s/cat :this (s/keys :req [::log/state
+        :args (s/cat :this (s/keys :req [::weald/state
                                          ::shared/extension
                                          ::shared/packet
                                          ::state/server-extension
                                          ::state/server-security
                                          ::state/shared-secrets]))
-        :ret (s/keys :req [::log/state]
+        :ret (s/keys :req [::weald/state]
                      :opt [::state/server-security]))
 (defn decrypt-cookie-packet
   [{:keys [::shared/extension
            ::shared/packet
            ::state/server-extension]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
   (when-not (= (count packet) K/cookie-packet-length)
     (let [err {::expected-length K/cookie-packet-length
@@ -141,7 +142,7 @@
                (b-t/bytes= extension client-extension)
                (b-t/bytes= server-extension server-extension))
       (decrypt-actual-cookie (assoc this
-                                    ::log/state log-state)
+                                    ::weald/state log-state)
                              rcvd))))
 
 (s/fdef expected-sender?
@@ -201,8 +202,8 @@
         :ret ::state/state)
 (defn received-response!
   "Hello triggers this (via wait-for-cookie) when it hears back from a Server"
-  [{log-state ::log/state
-    :keys [::log/logger
+  [{log-state ::weald/state
+    :keys [::weald/logger
            ::state/server-security]
     :as this}
    {:keys [:host :message :port]
@@ -232,11 +233,11 @@
                                                                            ::state/server-extension
                                                                            ::state/server-security
                                                                            ::state/shared-secrets])
-                                                             ::log/state log-state
+                                                             ::weald/state log-state
                                                              ::shared/packet message))]
               ;; Q: Would merge-with be more appropriate?
               (let [{:keys [::state/server-security]
-                     log-state ::log/state} decrypted
+                     log-state ::weald/state} decrypted
                     {:keys [::shared/my-keys]
                      :as this} (merge this decrypted)]
                 (if server-security
@@ -265,16 +266,16 @@
                                                  {::problem "How is this proceeding?"})))
                         ;; Yay! Reached the Happy Path
                         (assoc this
-                               ::log/state (log/debug log-state
-                                                      log-label
-                                                      (str "Prepared shared short-term secret\n"
-                                                           "Cookie:\n"
-                                                           (b-t/->string (get-in decrypted [::state/server-security
-                                                                                            ::state/server-cookie]))))
+                               ::weald/state (log/debug log-state
+                                                        log-label
+                                                        (str "Prepared shared short-term secret\n"
+                                                             "Cookie:\n"
+                                                             (b-t/->string (get-in decrypted [::state/server-security
+                                                                                              ::state/server-cookie]))))
                                ::state/server-security (::state/server-security decrypted)
                                ::state/shared-secrets shared-secrets
                                ::shared/network-packet cookie))
-                      (update this ::log/state
+                      (update this ::weald/state
                               #(log/error %
                                           log-label
                                           (str "Missing ::specs/public-short among\n"
@@ -285,36 +286,36 @@
                   ;; Discards the packet, update recent (and thus the polling timeout)
                   ;; and go back to polling.
                   (assoc this
-                         ::log/state (log/warn log-state
-                                               log-label
-                                               "Missing ::state/server-security"
-                                               {::problem cookie
-                                                ::decrypted (dissoc decrypted ::log/state)}))))
+                         ::weald/state (log/warn log-state
+                                                 log-label
+                                                 "Missing ::state/server-security"
+                                                 {::problem cookie
+                                                  ::decrypted (dissoc decrypted ::weald/state)}))))
               (assoc this
-                     ::log/state (log/warn log-state
-                                           log-label
-                                           "Decryption failed so badly we didn't even get back a log message"
-                                           {::problem cookie})))
+                     ::weald/state (log/warn log-state
+                                             log-label
+                                             "Decryption failed so badly we didn't even get back a log message"
+                                             {::problem cookie})))
             ;; TODO: Look into recovering from the variations that are recoverable
             (catch Throwable ex
-              (assoc this ::log/state (log/exception log-state
-                                                     ex
-                                                     log-label
-                                                     "Unhandled failure"))))
+              (assoc this ::weald/state (log/exception log-state
+                                                       ex
+                                                       log-label
+                                                       "Unhandled failure"))))
           (assoc this
-                 ::log/state (log/warn log-state
-                                       log-label
+                 ::weald/state (log/warn log-state
+                                         log-label
                                          "Invalid response. Just discard and retry"
                                          {::problem cookie
                                           ::cookie-length (count cookie)})))
         (let [log-state (log/warn log-state
                                   log-label
                                   "Server didn't respond to HELLO. Move on to next.")]
-          (assoc this ::log/state log-state)))
+          (assoc this ::weald/state log-state)))
       (catch Exception ex
-        {::log/state (log/exception log-state
-                                    ex
-                                    log-label)}
+        {::weald/state (log/exception log-state
+                                      ex
+                                      log-label)}
         (throw ex)))))
 
 (s/fdef wrap-received
@@ -322,18 +323,18 @@
                      :incoming ::specs/network-packet)
         :ret ::state/state)
 (defn wrap-received
-  [{log-state ::log/state
-    :keys [::log/logger]
+  [{log-state ::weald/state
+    :keys [::weald/logger]
     :as this}
    incoming]
   (println "The wait for the cookie has ended")
   (pprint incoming)
   (let [this
         (assoc this
-               ::log/state (log/flush-logs! logger (log/trace log-state
-                                                              ::wait-for-cookie!
-                                                              "Pulled from server"
-                                                              {::specs/network-packet incoming})))]
+               ::weald/state (log/flush-logs! logger (log/trace log-state
+                                                                ::wait-for-cookie!
+                                                                "Pulled from server"
+                                                                {::specs/network-packet incoming})))]
     (received-response! this incoming)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -344,8 +345,8 @@
         :ret ::state/state)
 (defn servers-polled
   "Got back a cookie. Respond with an Initiate"
-  [{log-state ::log/state
-    logger ::log/logger
+  [{log-state ::weald/state
+    logger ::weald/logger
     ;; Q: Is there a good way to pry this out
     ;; so it's its own parameter?
     ;; A: Well, we could work our way back up to
@@ -380,7 +381,7 @@
           ;; size blocks to fill Message Packets.
           {:keys [::state/child]
            :as this} (state/fork! (assoc this
-                                         ::log/state log-state))]
+                                         ::weald/state log-state))]
       this)
     (catch Exception ex
       (let [log-state (log/exception log-state
@@ -389,24 +390,24 @@
             log-state (log/flush-logs! logger log-state)
             failure (dfrd/error-deferred ex)]
         (assoc this
-               ::log/state log-state
+               ::weald/state log-state
                ::specs/deferrable failure)))))
 
 (s/def wait-for-cookie! ::state/cookie-waiter)
 (defn wait-for-cookie!
   "Pulls Cookie Packet from the wire, then triggers the response"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::state/chan<-server]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}
    timeout send-success]
   (if (not= send-success ::state/sending-hello-timed-out)
     (let [this (assoc this
-                      ::log/state (log/flush-logs! logger
-                                                   (log/info (::log/state this)
-                                                             ::wait-for-cookie!
-                                                             "Sent to server"
-                                                             send-success)))]
+                      ::weald/state (log/flush-logs! logger
+                                                     (log/info (::weald/state this)
+                                                               ::wait-for-cookie!
+                                                               "Sent to server"
+                                                               send-success)))]
       (-> (strm/try-take! chan<-server
                                   ::drained
                                   timeout

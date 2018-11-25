@@ -6,14 +6,15 @@
              [state :as state]]
             [frereth-cp.shared
              [crypto :as crypto]
-             [logging :as log]
-             [specs :as specs]]))
+             [specs :as specs]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]))
 
 (deftest fork-nameless-loop
   (let [log-state (log/init ::fork-without-loop-name)
-        {log-state ::log/state
+        {log-state ::weald/state
          :keys [::state/client-state]
-         :as result} (initiate/do-fork-child! {::log/state log-state} nil)]
+         :as result} (initiate/do-fork-child! {::weald/state log-state} nil)]
     (println "do-fork-child! returned: " result)
     (is log-state)
     (is (not client-state))))

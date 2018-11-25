@@ -6,8 +6,9 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K-shared]
-            [frereth-cp.shared.logging :as log]
             [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo
@@ -69,17 +70,17 @@
 
 (s/fdef read-next-bytes-from-child!
         :args (s/or :recursing (s/cat :monitor-id ::specs/monitor-id
-                                      :log-state ::log/state
+                                      :log-state ::weald/state
                                       :child-out ::specs/child-out
                                       :prefix bytes?
                                       :available-bytes nat-int?
                                       :max-to-read nat-int?)
                     :top-level (s/cat :monitor-id ::specs/monitor-id
-                                      :log-state ::log/state
+                                      :log-state ::weald/state
                                       :child-out ::specs/child-out
                                       :available-bytes nat-int?
                                       :max-to-read nat-int?))
-        :ret (s/keys :req [::log/state
+        :ret (s/keys :req [::weald/state
                            ::specs/bs-or-eof]))
 (defn read-next-bytes-from-child!
   ([monitor-id
@@ -116,7 +117,7 @@
          (if (= n bytes-to-read)
            (do
              (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
-             {::log/state log-state
+             {::weald/state log-state
               ::specs/bs-or-eof bytes-read})
            (do
              ;; If this happens frequently, the buffer's probably too small.
@@ -129,7 +130,7 @@
                    actual-result (byte-array (+ prefix-gap n))]
                (b-t/byte-copy! actual-result 0 prefix-gap prefix)
                (b-t/byte-copy! actual-result prefix-gap n bytes-read)
-               {::log/state log-state
+               {::weald/state log-state
                 ::specs/bs-or-eof actual-result}))))
        (try
          ;; More often, we should spend all our time waiting.
@@ -192,10 +193,10 @@
                                                 combined-prefix
                                                 bytes-remaining
                                                 (dec max-to-read)))
-                 {::log/state log-state
+                 {::weald/state log-state
                   ::specs/bs-or-eof (byte-array prefix)}))
              (if (< 0 prefix-gap)  ;; EOF
-               {::log/state (log/info log-state
+               {::weald/state (log/info log-state
                                       ::read-next-bytes-from-child!
                                       "Reached EOF. Have buffered bytes to send first"
                                       {::prefix-gap prefix-gap
@@ -210,26 +211,26 @@
                 ;; and pretend that everything's normal.
                 ;; We'll get the EOF signal soon enough.
                 ::specs/bs-or-eof prefix}
-               {::log/state (log/warn log-state
-                                      ::read-next-bytes-from-child!
-                                      "Signalling normal EOF"
-                                      {::specs/monitor-id monitor-id})
+               {::weald/state (log/warn log-state
+                                        ::read-next-bytes-from-child!
+                                        "Signalling normal EOF"
+                                        {::specs/monitor-id monitor-id})
                 ::specs/bs-or-eof ::specs/normal})))
          ;; TODO: Tighten these up. If a .read call throws an exception,
          ;; then OK.
          ;; If something else has a problem, that's really a different story.
          (catch IOException ex
-           {::log/state (log/warn log-state
-                                  ::read-next-bytes-from-child!
-                                  "EOF"
-                                  {::specs/monitor-id monitor-id})
+           {::weald/state (log/warn log-state
+                                    ::read-next-bytes-from-child!
+                                    "EOF"
+                                    {::specs/monitor-id monitor-id})
             ::specs/bs-or-eof ::specs/normal})
          (catch RuntimeException ex
-           {::log/state (log/exception log-state
-                                       ex
-                                       ::read-next-bytes-from-child!
-                                       "Reading from child failed"
-                                       {::specs/monitor-id monitor-id})
+           {::weald/state (log/exception log-state
+                                         ex
+                                         ::read-next-bytes-from-child!
+                                         "Reading from child failed"
+                                         {::specs/monitor-id monitor-id})
             ::specs/bs-or-eof ::specs/error})))))
   ([monitor-id
     log-state
@@ -244,7 +245,7 @@
                                 max-to-read)))
 
 (s/fdef byte-consumer
-        :args (s/cat :log-state ::log/state
+        :args (s/cat :log-state ::weald/state
                      :block ::specs/block
                      :eof? boolean
                      :buf-size nat-int?
@@ -276,10 +277,10 @@
         ;; algorithm later to consolidate smaller blocks,
         ;; so maybe it doesn't make sense to mess with it here.
         block (assoc block ::specs/start-pos strm-hwm)
-        [builder-log-state caller-log-state] (log/synchronize log-state (::log/state state))
-        log-state (update caller-log-state ::log/entries
+        [builder-log-state caller-log-state] (log/synchronize log-state (::weald/state state))
+        log-state (update caller-log-state ::weald/entries
                           (fn [cur]
-                            (into [] (concat cur (::log/entries builder-log-state)))))
+                            (into [] (concat cur (::weald/entries builder-log-state)))))
         log-state (log/debug log-state
                              ::byte-consumer
                              (str "Adding new message block to unsent others from a thunk")
@@ -344,14 +345,14 @@
                  (assoc result
                         ::specs/send-eof bs-or-eof)
                  result))))
-          (assoc ::log/state log-state)))))
+          (assoc ::weald/state log-state)))))
 
 (s/fdef build-byte-consumer
         ;; TODO: This is screaming for generative testing
         :args (s/cat :monitor-id ::specs/monitor-id
-                     :log-state ::log/state
+                     :log-state ::weald/state
                      :bs-or-eof ::specs/bs-or-eof)
-        :ret (s/keys :req [::log/state
+        :ret (s/keys :req [::weald/state
                            ::callback]))
 (defn build-byte-consumer
   "Accepts a byte-array from the child."
@@ -411,17 +412,17 @@
                                        ::specs/bs-or-eof bs-or-eof
                                        ::specs/block block})]
     {::callback (partial byte-consumer monitor-id log-state block eof? buf-size bs-or-eof)
-     ::log/state external-log-state}))
+     ::weald/state external-log-state}))
 
 (s/fdef try-multiple-sends
         :args (s/cat :monitor-id ::specs/monitor-id
                      :stream ::specs/stream
                      :bs-or-eof ::specs/bs-or-eof
                      :blocker dfrd/deferrable?
-                     :log-state ::log/state
+                     :log-state ::weald/state
                      :attempts nat-int?
                      :timeout nat-int?)
-        :ret (s/keys :req [::log/state
+        :ret (s/keys :req [::weald/state
                            ::specs/bs-or-eof]))
 (defn try-multiple-sends
   "The parameters are weird because I refactored it out of a lexical closure"
@@ -452,7 +453,7 @@
                                        ::specs/monitor-id monitor-id})]
               (if (< 0 n)
                 (recur (dec n) log-state)
-                {::log/state log-state
+                {::weald/state log-state
                  ::specs/bs-or-eof ::specs/error}))
             ;; Bytes buffered
             (let [log-state (if (bytes? bs-or-eof)
@@ -473,23 +474,23 @@
               ;; set when it's time to stop.
               ;; I was doing it that way at one point.
               ;; Q: Why did I switch?
-              {::log/state log-state
+              {::weald/state log-state
                ::specs/bs-or-eof bs-or-eof}))))
-      {::log/state (log/warn log-state
-                             ::try-multiple-sends
-                             "Destination stream closed waiting to put"
-                             {::specs/bs-or-eof bs-or-eof
-                              ::specs/monitor-id monitor-id})
+      {::weald/state (log/warn log-state
+                               ::try-multiple-sends
+                               "Destination stream closed waiting to put"
+                               {::specs/bs-or-eof bs-or-eof
+                                ::specs/monitor-id monitor-id})
        ::specs/bs-or-eof ::specs/error})))
 
 (s/fdef forward-bytes-from-child!
         :args (s/cat :monitor-id ::specs/monitor-id
-                     :log-state ::log/state
+                     :log-state ::weald/state
                      :stream ::specs/stream
                      :on-completion dfrd/deferred?
                      :bs-or-eof ::specs/bs-or-eof)
         :fn #(= (:ret %) (-> % :args :array-o-bytes))
-        :ret (s/keys :req [::log/state
+        :ret (s/keys :req [::weald/state
                            ::specs/bs-or-eof]))
 (defn forward-bytes-from-child!
   [monitor-id
@@ -498,7 +499,7 @@
    on-completion
    bs-or-eof]
   (let [{:keys [::callback]
-         log-state ::log/state} (build-byte-consumer monitor-id log-state  bs-or-eof)
+         log-state ::weald/state} (build-byte-consumer monitor-id log-state  bs-or-eof)
         log-state (log/debug log-state
                              ::forward-bytes-from-child!
                              (str
@@ -551,11 +552,11 @@
                                                                ::failure failure})]
                               (deliver on-completion forked-log-state))))
         (try-multiple-sends monitor-id stream bs-or-eof blocker log-state 10 timeout))
-      {::log/state (log/warn log-state
-                             ::forward-bytes-from-child!
-                             "Destination stream closed. Discarding message"
-                             {::discarded bs-or-eof
-                              ::specs/monitor-id monitor-id})
+      {::weald/state (log/warn log-state
+                               ::forward-bytes-from-child!
+                               "Destination stream closed. Discarding message"
+                               {::discarded bs-or-eof
+                                ::specs/monitor-id monitor-id})
        ::specs/bs-or-eof bs-or-eof})))
 
 (s/fdef room-for-child-bytes?
@@ -598,13 +599,13 @@
 
 (s/fdef process-next-bytes-from-child!
         :args (s/cat :monitor-id ::specs/monitor-id
-                     :log-state ::log/state
+                     :log-state ::weald/state
                      :child-out ::specs/child-out
                      :stream ::specs/stream
                      :max-to-read int?
                      :on-bytes-forwarded dfrd/deferred?)
         :ret (s/keys :req [::specs/bs-or-eof
-                           ::log/state]))
+                           ::weald/state]))
 (defn process-next-bytes-from-child!
   [monitor-id
    log-state
@@ -615,31 +616,31 @@
   (let [available-bytes (.available child-out)
         ;; note that this may also be the EOF flag
         {:keys [::specs/bs-or-eof]
-         log-state ::log/state} (try
-                                  (read-next-bytes-from-child! monitor-id
-                                                               log-state
-                                                               child-out
-                                                               available-bytes
-                                                               max-to-read)
-                                  (catch ExceptionInfo ex
-                                    (let [{ex-log-state ::log/state
-                                           :as ex-data} (.getData ex)]
-                                      ;; Q: Should a problem there trigger EOF?
-                                      {::log/state (log/exception (if ex-log-state
-                                                                    ex-log-state
-                                                                    log-state)
-                                                                  ex
-                                                                  ::process-next-bytes-from-child!
-                                                                  ""
-                                                                  (dissoc ex-data ::log/state))
+         log-state ::weald/state} (try
+                                    (read-next-bytes-from-child! monitor-id
+                                                                 log-state
+                                                                 child-out
+                                                                 available-bytes
+                                                                 max-to-read)
+                                    (catch ExceptionInfo ex
+                                      (let [{ex-log-state ::weald/state
+                                             :as ex-data} (.getData ex)]
+                                        ;; Q: Should a problem there trigger EOF?
+                                        {::weald/state (log/exception (if ex-log-state
+                                                                        ex-log-state
+                                                                        log-state)
+                                                                      ex
+                                                                      ::process-next-bytes-from-child!
+                                                                      ""
+                                                                      (dissoc ex-data ::weald/state))
+                                         ::specs/bs-or-eof ::specs/error}))
+                                    (catch RuntimeException ex
+                                      {::weald/state (log/exception log-state
+                                                                    ex
+                                                                    ::process-next-bytes-from-child!
+                                                                    ""
+                                                                    {::specs/monitor-id monitor-id})
                                        ::specs/bs-or-eof ::specs/error}))
-                                  (catch RuntimeException ex
-                                    {::log/state (log/exception log-state
-                                                                ex
-                                                                ::process-next-bytes-from-child!
-                                                                ""
-                                                                {::specs/monitor-id monitor-id})
-                                     ::specs/bs-or-eof ::specs/error}))
         ;; In order to do this, we have to query for state.
         ;; Which is obnoxious.
         ;; *And* we need to watch for buffer space to
@@ -669,7 +670,7 @@
 
 (s/fdef initial-child-monitor-loop
         :args (s/cat :state ::specs/state
-                     :logger ::log/logger
+                     :logger ::weald/logger
                      :client-waiting-on-response dfrd/deferrable?
                      :monitor-id ::specs/monitor-id
                      :child-out ::specs/child-out
@@ -687,7 +688,7 @@
    stream
    eof?-atom]
   (loop [state state]
-    (let [log-state (log/flush-logs! logger (log/debug (::log/state state)
+    (let [log-state (log/flush-logs! logger (log/debug (::weald/state state)
                                                        ::initial-child-monitor-loop
                                                        "Top of client-waiting-on-initial-response loop"
                                                        {::specs/message-loop-name message-loop-name
@@ -698,7 +699,7 @@
       (if (not (realized? client-waiting-on-response))
         (let [on-bytes-forwarded (dfrd/deferred)
               {msg-or-eof'? ::specs/bs-or-eof
-               log-state ::log/state}
+               log-state ::weald/state}
               ;; TODO: This also needs access to log-state
               ;; And it needs to return the updated log-state
               ;; Actually, it should also return a set of
@@ -710,7 +711,7 @@
                                               K/max-bytes-in-initiate-message
                                               on-bytes-forwarded)
               state (update state
-                            ::log/state
+                            ::weald/state
                             #(log/flush-logs! logger %))]
           (dfrd/on-realized on-bytes-forwarded
                             (fn [success-logs]
@@ -720,7 +721,7 @@
           (if (bytes? msg-or-eof'?)
             (recur state)  ; regular message. Keep going
             (let [state (update state
-                                ::log/state
+                                ::weald/state
                                 #(log/warn %
                                            ::initial-child-monitor-loop
                                            "EOF signalled before we ever heard back from server"
@@ -733,7 +734,7 @@
 
 (s/fdef monitor-loop
         :args (s/cat :state ::specs/state
-                     :logger ::log/logger
+                     :logger ::weald/logger
                      :monitor-id ::specs/monitor-id
                      :child-out ::specs/child-out
                      :stream strm/sink?
@@ -750,14 +751,14 @@
    eof?-atom]
   (loop [state state]
     (if (not @eof?-atom)
-      (let [log-state (log/debug (::log/state state)
+      (let [log-state (log/debug (::weald/state state)
                                  ::child-monitor-loop
                                  "Top of main child-read loop"
                                  {::specs/message-loop-name message-loop-name
                                   ::specs/monitor-id monitor-id})
             on-bytes-forwarded (dfrd/deferred)
             {eof'? ::specs/bs-or-eof  ; FIXME: Rename this to bs-or-eof
-             log-state ::log/state}
+             log-state ::weald/state}
             (process-next-bytes-from-child! monitor-id
                                             log-state
                                             child-out
@@ -771,19 +772,19 @@
                             (log/flush-logs! logger err-logs)))
         (if (bytes? eof'?)
           (recur (assoc state
-                        ::log/state
+                        ::weald/state
                         (log/flush-logs! logger log-state)))
           (do
             (when (nil? eof'?)
               (throw (ex-info "What just happened?"
                               {::specs/monitor-id monitor-id})))
             (swap! eof?-atom not)
-            (assoc state ::log/state (log/warn log-state
-                                               ::child-monitor-loop
-                                               "EOF signal received"
-                                               {::specs/eof-flag eof'?
-                                                ::specs/message-loop-name message-loop-name
-                                                ::specs/monitor-id monitor-id})))))
+            (assoc state ::weald/state (log/warn log-state
+                                                 ::child-monitor-loop
+                                                 "EOF signal received"
+                                                 {::specs/eof-flag eof'?
+                                                  ::specs/message-loop-name message-loop-name
+                                                  ::specs/monitor-id monitor-id})))))
       state)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -821,9 +822,9 @@
   [{:keys [::specs/message-loop-name]
     {:keys [::specs/client-waiting-on-response]
      :as flow-control} ::specs/flow-control
-    log-state ::log/state
+    log-state ::weald/state
     :as initial-state}
-   {:keys [::log/logger
+   {:keys [::weald/logger
            ::specs/child-out
            ::specs/stream]
     :as io-handle}]
@@ -849,7 +850,7 @@
         ;; in parallel may work better than a single thread trying
         ;; to handle all of them.
         state (update initial-state
-                      ::log/state
+                      ::weald/state
                       #(log/info %
                                  ::start-child-monitor!
                                  "Starting the child-monitor thread"
@@ -869,19 +870,19 @@
           (as-> (initial-child-monitor-loop state logger client-waiting-on-response monitor-id child-out stream eof?-atom)
               state
             (monitor-loop state logger monitor-id child-out stream eof?-atom)
-            (update state ::log/state
+            (update state ::weald/state
                     #(log/warn %
                                ::start-child-monitor!
                                "Child monitor exiting"
                                {::specs/message-loop-name message-loop-name
                                 ::specs/monitor-id monitor-id}))
-            (update state ::log/state
+            (update state ::weald/state
                     #(log/flush-logs! logger %)))
           (catch IOException ex
             ;; TODO: Need to send an EOF signal to main ioloop so
             ;; it can notify the parent (or quit, as the case may be)
             (log/flush-logs! logger
-                             (log/exception (::log/state state)
+                             (log/exception (::weald/state state)
                                             ex
                                             ::start-child-monitor!
                                             "TODO: Not Implemented. This should only happen when child closes pipe"
@@ -895,7 +896,7 @@
             ;;    (and they're the ones we *really* care about)
             ;; 2. The clock's going to be totally out of whack
             (log/flush-logs! logger
-                             (log/exception (::log/state state)
+                             (log/exception (::weald/state state)
                                             ex
                                             ::start-child-monitor!
                                             ""
@@ -904,7 +905,7 @@
                                                                      ::specs/monitor-id monitor-id}))))
           (catch Exception ex
             (log/flush-logs! logger
-                             (log/exception (::log/state state)
+                             (log/exception (::weald/state state)
                                             ex
                                             ::start-child-monitor!
                                             "Badly unexpected exception"

@@ -9,10 +9,11 @@
              [child :as child]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [specs :as shared-specs]
              [serialization :as serial]
              [templates :as templates]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.stream :as strm])
   (:import [io.netty.buffer ByteBuf]))
 
@@ -128,8 +129,8 @@
                                ::client-read-chan
                                ::client-write-chan
                                ::max-active-clients
-                               ::log/logger
-                               ::log/state
+                               ::weald/logger
+                               ::weald/state
                                ::msg-specs/message-loop-name-base
                                ::shared/extension
                                ;; Q: Does this make any sense here?
@@ -253,12 +254,12 @@
 
 (defn hide-secrets!
   "Scrambles sensitive byte-arrays in place"
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :as this}]
   (let [log-state (log/info log-state
                             ::hide-secrets!
                             "Top")
-        this (assoc this ::log/state log-state)]
+        this (assoc this ::weald/state log-state)]
     ;; This is almost the top of the server's for(;;)
     ;; Missing step: reset timeout
     ;; Missing step: copy :minute-key into :last-minute-key
@@ -303,7 +304,7 @@
   Om next are trying to solve. So that approach might not be as obvious as it
   seems at first."
   [{:keys [::cookie-cutter]
-    log-state ::log/state
+    log-state ::weald/state
     :as state}]
   (try
     (let [log-state (log/info log-state
@@ -336,20 +337,20 @@
               log-state (log/warn log-state
                                   ::handle-key-rotation
                                   "Saved key for previous minute. Hiding")]
-          (assoc (hide-secrets! (assoc state ::log/state log-state))
+          (assoc (hide-secrets! (assoc state ::weald/state log-state))
                  ::timeout timeout))
         (assoc state
                ::timeout timeout
-               ::log/state log-state)))
+               ::weald/state log-state)))
     (catch Exception ex
       ;; Unfortunately, this will lose logs that happened before the
       ;; exception.
       ;; Q: Are those worth adding a log-state-atom?
       ;; A: Not until this is a problem.
       (assoc state
-             ::log/state (log/exception log-state
-                                        ex
-                                        ::handle-key-rotation)))))
+             ::weald/state (log/exception log-state
+                                          ex
+                                          ::handle-key-rotation)))))
 
 (defn randomized-cookie-cutter
   []

@@ -8,10 +8,11 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [serialization :as serial]
              [specs :as specs]]
             [frereth-cp.util :as util]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -30,7 +31,7 @@
                                     ::state/server-extension
                                     ::state/server-security
                                     ::state/shared-secrets
-                                    ::log/state]))
+                                    ::weald/state]))
 
 ;; Pieces needed for build-actual-packet
 (s/def ::packet-builders (s/merge ::raw-template
@@ -68,16 +69,16 @@
 
 (s/fdef send-succeeded!
         ;; Yes, the logger parameter is redundant
-        :args (s/cat :logger ::log/logger
+        :args (s/cat :logger ::weald/logger
                      :this ::state/state)
         :ret any?)
 (defn send-succeeded!
   [logger this]
-  (as-> (::log/state this) x
+  (as-> (::weald/state this) x
     (log/info x
               ::send-succeeded!
               "Polling complete. Child should be able to trigger Initiate/Vouch"
-              {::result (dissoc this ::log/state)})
+              {::result (dissoc this ::weald/state)})
     ;; Note that the log-flush gets discarded, except
     ;; for its side-effects.
     ;; But those side-effects *do* include updating the clock.
@@ -90,8 +91,8 @@
                      :problem ::specs/throwable)
         :ret any?)
 (defn send-failed!
-  [{:keys [::log/logger
-           ::log/state]
+  [{:keys [::weald/logger
+           ::weald/state]
     :as this}
    completion
    ex]
@@ -109,7 +110,7 @@
                       :short-term-nonce any?
                       :internal-nonce-suffix (s/and sequential?
                                                     #(= (count %) ::specs/client-nonce-suffix-length)))
-        :ret (s/keys :req [::K/hello-spec ::log/state]))
+        :ret (s/keys :req [::K/hello-spec ::weald/state]))
 (defn build-raw-template-values
   "Set up the values for injecting into the template"
   [{:keys [::shared/extension
@@ -117,7 +118,7 @@
            ::state/server-extension
            ::state/server-security
            ::state/shared-secrets]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}
    short-term-nonce
    internal-nonce-suffix]
@@ -167,7 +168,7 @@
                  ::K/zeros nil
                  ::K/client-nonce-suffix nonce-suffix
                  ::K/crypto-box boxed}
-     ::log/state log-state}))
+     ::weald/state log-state}))
 
 (s/fdef build-actual-packet
         :args (s/cat :this ::packet-builders
@@ -180,14 +181,14 @@
                      :safe-nonce ::shared/safe-nonce)
         :ret ::state/state)
 (defn build-actual-packet
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :as this}
    short-term-nonce
    safe-nonce]
   (let [{raw-hello ::template
-         log-state ::log/state} (build-raw-template-values this
-                                                           short-term-nonce
-                                                           safe-nonce)
+         log-state ::weald/state} (build-raw-template-values this
+                                                             short-term-nonce
+                                                             safe-nonce)
         log-state (log/info log-state
                             ::build-actual-packet
                             "Building Hello"
@@ -203,12 +204,12 @@
                             {::expected-length K/hello-packet-length
                              ::actual n}))))
         {::shared/packet result
-         ::log/state log-state})
+         ::weald/state log-state})
       (catch Throwable ex
         (if (realized? composition-succeeded?)
           (throw ex)
-          {::log/state (log/exception log-state ex ::build-actual-packet
-                                      "Failed to compose HELLO")})))))
+          {::weald/state (log/exception log-state ex ::build-actual-packet
+                                        "Failed to compose HELLO")})))))
 
 ;; This matches the global hellowait array from line 27
 (let [hello-wait-time (reduce (fn [acc n]
@@ -233,13 +234,13 @@
                      :cookie-waiter ::state/cookie-waiter
                      :raw-packet ::specs/network-packet)
         :fn (s/or :recursion (s/fspec :args nil?
-                                      :ret ::log/state)
-                  :giving-up ::log/state))
+                                      :ret ::weald/state)
+                  :giving-up ::weald/state))
 (defn possibly-recurse
   "Try the next server (if any)"
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::state/server-ips]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}
    cookie-waiter
    raw-packet]
@@ -269,7 +270,7 @@
   :ret ::skipping-state)
 (defn cookie-validation
   "Check whether the cookie matches our expectations"
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :keys [::shared/network-packet
            ::state/server-security
            ::state/shared-secrets]
@@ -290,7 +291,7 @@
     ;; likely to cause logs like this to just disappear)
     (println (str ::cookie-validation
                   ":\n"
-                  (dissoc this ::log/state)
+                  (dissoc this ::weald/state)
                   "\nTop-level keys:\n"
                   (keys this)
                   "\nServer: "
@@ -303,15 +304,15 @@
       (if network-packet
         (do
           (if (and server-security shared-secrets)
-            (assoc this ::log/state (log/debug log-state
-                                               ::cookie-retrieved
-                                               "Got back a usable cookie"
-                                               (dissoc this ::log/state)))
-            (let [logger (::log/logger this)]
+            (assoc this ::weald/state (log/debug log-state
+                                                 ::cookie-retrieved
+                                                 "Got back a usable cookie"
+                                                 (dissoc this ::weald/state)))
+            (let [logger (::weald/logger this)]
               (log/flush-logs! logger (log/error log-state
                                                  ::cookie-retrieved
                                                  "Got back a network-packet but missing something else"
-                                                 {::state/cookie-response (dissoc this ::log/state)}))
+                                                 {::state/cookie-response (dissoc this ::weald/state)}))
               (throw (ex-info "Network-packet missing either security or shared-secrets"
                               {::problem this})))))
         (let [elapsed (- now start-time)
@@ -323,25 +324,25 @@
             (assoc this
                    ::continue true
                    ::remaining remaining
-                   ::log/state (log/info log-state
-                                         ::cookie-validation
-                                         "Still waiting on server"
-                                         {::shared/host srvr-ip
-                                          ::millis-remaining remaining}))
+                   ::weald/state (log/info log-state
+                                           ::cookie-validation
+                                           "Still waiting on server"
+                                           {::shared/host srvr-ip
+                                            ::millis-remaining remaining}))
             (assoc this
                    ::recurse true
-                   ::log/state (log/info log-state
-                                         ::cookie-validation
-                                         "Out of time. Next server")))))
+                   ::weald/state (log/info log-state
+                                           ::cookie-validation
+                                           "Out of time. Next server")))))
       (do
         ;; Move on the next server in the list
         (binding [*out* *err*]
           (println "hello/cookie-retrieved: Missing the server-cookie!!\nAmong:\n" server-security))
         (assoc this
-               ::log/state (log/info log-state
-                                     ::cookie-validation
-                                     "Moving on to next ip"
-                                     {::timeout timeout})
+               ::weald/state (log/info log-state
+                                       ::cookie-validation
+                                       "Moving on to next ip"
+                                       {::timeout timeout})
                ::recurse true)))))
 
 (s/fdef cookie-retrieved
@@ -353,17 +354,17 @@
                      :ips ::specs/srvr-ips)
         :ret ::state/state)
 (defn cookie-retrieved
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :keys [::continue
            ::recurse
-           ::log/logger
+           ::weald/logger
            ::state/server-security]
     :as this}
    raw-packet
    cookie-waiter
    start-time
    timeout]
-  (let [this (assoc this ::log/state (log/flush-logs! logger log-state))]
+  (let [this (assoc this ::weald/state (log/flush-logs! logger log-state))]
     (if-not recurse
       (if-not continue
         ;; It doesn't look like there's actually anything to do here
@@ -394,7 +395,7 @@
   ;; Probably the short-term key.
   ;; But definitely not the full state.
   ;; FIXME: Do that, in a different branch
-  :ret (s/keys :req [::log/state]
+  :ret (s/keys :req [::weald/state]
                :opt [::shared/packet-nonce
                      ::shared/packet]))
 (defn do-build-packet
@@ -414,11 +415,11 @@
         ;; to share among all of them simply does not work.
         {:keys [::shared/extension
                 ::state/client-extension-load-time]
-         log-state ::log/state
+         log-state ::weald/state
          :as extension-initialized} (state/clientextension-init (select-keys this
                                                                              [::state/client-extension-load-time
-                                                                              ::log/logger
-                                                                              ::log/state
+                                                                              ::weald/logger
+                                                                              ::weald/state
                                                                               ::msg-specs/recent
                                                                               ::shared/extension]))
         ;; It's tempting to protect against the error that the nonce space has been exhausted.
@@ -434,7 +435,7 @@
                               "Packed short-term- into safe- -nonces"
                               {::short-term-nonce short-term-nonce
                                ::specs/client-nonce-suffix nonce-suffix})
-          packet-builders (select-keys this [::log/state
+          packet-builders (select-keys this [::weald/state
                                              ::state/server-extension
                                              ::state/server-security
                                              ::shared/my-keys
@@ -442,14 +443,14 @@
                                              ::state/shared-secrets])
           packet-builders (assoc packet-builders ::shared/extension extension)
           {:keys [::shared/packet]
-           log-state ::log/state} (build-actual-packet packet-builders
-                                                       short-term-nonce
-                                                       nonce-suffix)
+           log-state ::weald/state} (build-actual-packet packet-builders
+                                                         short-term-nonce
+                                                         nonce-suffix)
           log-state (log/info log-state
                               ::do-build-packet
                               "hello packet possibly built. Returning/updating")]
       (assoc extension-initialized
-             ::log/state log-state
+             ::weald/state log-state
              ::shared/packet-nonce short-term-nonce
              ::shared/packet (if packet
                                (b-s/convert packet specs/byte-array-type)
@@ -464,7 +465,7 @@
         :ret ::state/state)
 
 (defn do-polling-loop
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::specs/executor
            ::state/chan->server
            ::state/server-security]
@@ -475,17 +476,17 @@
   ;; a dfrd/loop.
   (let [;; Have to adjust nonce for each server.
         {hello-packet ::shared/packet
-         log-state ::log/state
+         log-state ::weald/state
          :as delta} (do-build-packet (select-keys this [::state/client-extension-load-time
                                                         ::shared/extension
-                                                        ::log/logger
+                                                        ::weald/logger
                                                         ::shared/my-keys
                                                         ::shared/packet-nonce
                                                         ::msg-specs/recent
                                                         ::state/server-extension
                                                         ::state/server-security
                                                         ::state/shared-secrets
-                                                        ::log/state]))
+                                                        ::weald/state]))
         this (into this (dissoc delta ::shared/packet))
         log-state (log/info log-state
                             ::do-polling-loop
@@ -493,13 +494,13 @@
                             {::changed-keys (keys delta)
                              ::shared/extension (::shared/extension this)})
         srvr-ip (first ips)
-        log-state (log/info (::log/state this)
+        log-state (log/info (::weald/state this)
                             ::do-polling-loop
                             "Polling server"
                             {::specs/srvr-ip srvr-ip})
         {:keys [::specs/srvr-port]} server-security
         this (-> this
-                 (assoc ::log/state log-state)
+                 (assoc ::weald/state log-state)
                  (assoc-in [::state/server-security ::specs/srvr-ip] srvr-ip))]
     (-> chan->server
         (strm/try-put! {:host srvr-ip
@@ -523,7 +524,7 @@
                              ;; FIXME: This is where actually using the log-state-atom would
                              ;; have been handy
                              ;; (so I wouldn't lose anything that led up to this point)
-                             ::log/state #_(swap! log-state-atom #(log/flush-logs! logger %))
+                             ::weald/state #_(swap! log-state-atom #(log/flush-logs! logger %))
                              (log/flush-logs! logger
                                               (log/exception log-state
                                                              ex
@@ -538,7 +539,7 @@
         :ret ::servers-polled)
 (defn set-up-server-polling!
   "Start polling the server(s) with HELLO Packets"
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :keys [::state/server-ips]
     :as this}
    wait-for-cookie!]
@@ -552,7 +553,7 @@
     ;; Q: Is a quarter second a reasonable amount of time to
     ;; wait for the [initial] send?
     (do-polling-loop (assoc this
-                            ::log/state log-state
+                            ::weald/state log-state
                             ;; Q: Do we really want to max out at 8?
                             ;; 8 means over 46 seconds waiting for a response,
                             ;; but what if you want the ability to try 20?

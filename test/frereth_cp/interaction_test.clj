@@ -6,8 +6,6 @@
             [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            ;; FIXME: Make this go away
-            [clojure.tools.logging :as log]
             [frereth-cp.client :as clnt]
             [frereth-cp.client
              [initiate :as clnt-init]
@@ -23,8 +21,9 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log2]
              [specs :as specs]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
@@ -155,23 +154,35 @@
                       (is (= 0 (bs/compare-bytes bs plain-text))))
                     (is false "Failed to open the box I care about")))))))))))
 
+(s/fdef retrieve-hello
+  :args (s/cat :log-state ::weald/state
+               ;; I have specs for async.chan and ByteBufs.
+               ;; Although hello as a ByteBuf seems suspicious
+               :mem-pool any?
+               :client-chan any?
+               :hello any?)
+  :ret dfrd/deferred?)
 (defn retrieve-hello
   "This is really a server-side method"
-  [mem-pool client-chan hello]
-  (log/info "Pulled HELLO from client")
-  (let [n (.readableBytes hello)]
-    (println "Have" n "bytes to write to " client-chan)
+  [log-state mem-pool client-chan hello]
+  (let [
+        n (.readableBytes hello)
+        log-state (log/info "Pulled HELLO from client"
+                            {::byte-count n
+                             ::write-to client-chan})]
     (if (= 224 n)
       (let [copy (.directBuffer mem-pool n)]
         (.readBytes hello copy)
         (.release hello)
+        (throw (RuntimeException. "This is part of a deferred chain, but needs to return log-state also"))
         (strm/try-put! (:chan client-chan)
                        {:message copy
                         :host "test-client"
                         :port 65536}
                        500
                        ::timed-out))
-      (throw (RuntimeException. "Bad Hello")))))
+      (throw (ex-info "Bad Hello"
+                      log-state)))))
 
 (defn wrote-hello
   [client-chan success]
@@ -510,11 +521,14 @@
 
 (deftest handshake
   "Q: How does this compare with server-test/handshake?"
-  (log/info "**********************************\nNew Hand-Shake test")
-  ;; Shouldn't be trying to re-use buffers produced at client side on the server.
-  ;; And vice-versa.
-  ;; That's just adding needless complexity
-  (let [options (build-hand-shake-options)
+  (let [logger (log/std-out-log-factory)
+        log-state (log/debug (log/init ::handshake)
+                              ::handshake
+                              "**********************************\nNew Hand-Shake test")
+        ;; Shouldn't be trying to re-use buffers produced at client side on the server.
+        ;; And vice-versa.
+        ;; That's just adding needless complexity
+        options (build-hand-shake-options)
         ;; Note that the channel names in here seem backward.
         ;; Remember that they're really a mirror image:
         ;; So this is really the stream that the client uses
@@ -524,103 +538,107 @@
         ;; TODO: This seems like it would be a great place to try switching to integrant
         client (clnt/ctor (assoc (::client options)
                                  ::clnt-state/chan<-server chan<-server
-                                 ::clnt-state/chan->server chan->server))]
-    (log/warn "Verify that (crypto/random-keypair) really is random")
-    (log/warn "TODO: Switch to hard-coded client key pair for debugging ease")
+                                 ::clnt-state/chan->server chan->server))
+        log-state (log/warn log-state
+                            ::handshake
+                            "Verify that (crypto/random-keypair) really is random")
+        log-state (log/warn log-state
+                            ::handshake
+                            "TODO: Switch to hard-coded client key pair for debugging ease")]
     (try
       (let [unstarted-server (srvr/ctor (::server options))
             chan<-client {:chan (strm/stream)}
             chan->client {:chan (strm/stream)}]
         (try
-          (log/debug "Starting server based on\n"
-                     #_(with-out-str (pprint (srvr/hide-long-arrays unstarted-server)))
-                     "...stuff...")
-          (try
-            (let [server (srvr/start! (assoc unstarted-server
-                                             ::srvr-state/client-read-chan chan<-client
-                                             ::srvr-state/client-write-chan chan->client))]
-              (try
-                (double-check-long-term-shared-secrets client server)
-                ;; Currently just called for side-effects.
-                ;; TODO: Seems like I really should hide that little detail
-                ;; by having it return this.
-                ;; Except that that "little detail" really sets off the handshake
-                ;; Q: Is there anything interesting about the deferred that it
-                ;; currently returns?
-                (let [eventually-started (clnt/start! client)
-                      clnt->srvr (::clnt-state/chan->server @client)
-                      ;; Start with one that prefers direct buffers, even though it doesn't
-                      ;; make a lot of sense for this test.
-                      ;; I'm as certain as I can be (without actual metrics) that's the most
-                      ;; realistic picture I'll get of the way it needs to really work
-                      mem-pool (io.netty.buffer.PooledByteBufAllocator. true)]
-                  (assert (= chan->server clnt->srvr)
-                          (str "Client channels don't match.\n"
-                               "Expected:" chan->server
-                               "\nHave:" clnt->srvr))
-                  (assert chan->server)
-                  (let [write-hello (partial retrieve-hello mem-pool chan<-client)
-                        build-cookie (partial wrote-hello chan->client)
-                        write-cookie (partial forward-cookie chan<-server)
-                        ;; This pulls the Initiate packet from the client
-                        get-cookie (partial wrote-cookie chan->server)
-                        write-vouch (partial vouch->server mem-pool chan<-client)
-                        get-server-response (partial wrote-vouch chan->client)
-                        write-server-response (partial finalize chan<-server)
-                        _ (log/info "interaction-test: Starting the stream "
-                                    clnt->srvr)
-                        fut (dfrd/chain (strm/take! clnt->srvr)
-                              write-hello
-                              build-cookie
-                              write-cookie
-                              get-cookie
-                              write-vouch
-                              get-server-response
-                              write-server-response
-                              (fn [wrote]
-                                (is (not= wrote ::timeout))))]
-                    (log/info "Dereferencing the deferreds set up by handshake")
-                    (let [outcome (deref fut 5000 ::timeout)]
-                      (when (instance? Exception outcome)
-                        (if (instance? RuntimeException outcome)
-                          (if (instance? ExceptionInfo outcome)
-                            (log/error outcome (str "FAIL:\n"
-                                                    (with-out-str (pprint (.getData outcome)))))
-                            (do
-                              (log/error outcome "Ugly failure:")))
-                          (log/error outcome "Low Level Failure:"))
-                        (.printStackTrace outcome)
-                        (throw outcome))
-                      (is (not= outcome ::timeout)))
-                    ;; This really should have been completed as soon as
-                    ;; I read from chan->server2 the first time
-                    ;; Q: Right?
-                    (is (not= (deref eventually-started 500 ::timeout)
-                              ::timeout))))
-                (catch Exception ex
-                  ;; FIXME: This is failing due to "Bad Cookie packet from Server"
-                  (log/error ex
-                             (str "Unhandled exception escaped!\n"
-                                  "Stack Trace:\n"
-                                  ;; TODO: Switch to util/get-stack-trace
-                                  (with-out-str (.printStackTrace ex))
-                                  "\nClient state:\n"
-                                  (with-out-str (pprint (clnt/hide-long-arrays @client)))
-                                  (if-let [err (agent-error client)]
-                                    (str "\nClient failure:\n" err)
-                                    (str "\n(client agent thinks everything is fine)"))))
-                  (is (not ex)))
-                (finally
-                  (log/info "Test done. Stopping server.")
-                  (srvr/stop! server))))
-            (catch clojure.lang.ExceptionInfo ex
-              (let [msg (str "Unhandled ex-info:\n"
-                             ex
-                             "\nAssociated Data:\n"
-                             (.getData ex)
-                             "\nStack Trace:\n"
-                             (with-out-str (.printStackTrace ex)))]
-                (is false msg))))
+          (let [log-state (log/debug log-state
+                                     ::handshake"Starting server based on\n"
+                                     #_(with-out-str (pprint (srvr/hide-long-arrays unstarted-server)))
+                                     "...stuff...")
+                server (srvr/start! (assoc unstarted-server
+                                           ::srvr-state/client-read-chan chan<-client
+                                           ::srvr-state/client-write-chan chan->client))]
+            (try
+              (double-check-long-term-shared-secrets client server)
+              ;; Currently just called for side-effects.
+              ;; TODO: Seems like I really should hide that little detail
+              ;; by having it return this.
+              ;; Except that that "little detail" really sets off the handshake
+              ;; Q: Is there anything interesting about the deferred that it
+              ;; currently returns?
+              (let [eventually-started (clnt/start! client)
+                    clnt->srvr (::clnt-state/chan->server @client)
+                    ;; Start with one that prefers direct buffers, even though it doesn't
+                    ;; make a lot of sense for this test.
+                    ;; I'm as certain as I can be (without actual metrics) that's the most
+                    ;; realistic picture I'll get of the way it needs to really work
+                    mem-pool (io.netty.buffer.PooledByteBufAllocator. true)]
+                (assert (= chan->server clnt->srvr)
+                        (str "Client channels don't match.\n"
+                             "Expected:" chan->server
+                             "\nHave:" clnt->srvr))
+                (assert chan->server)
+                (let [write-hello (partial retrieve-hello log-state mem-pool chan<-client)
+                      build-cookie (partial wrote-hello chan->client)
+                      write-cookie (partial forward-cookie chan<-server)
+                      ;; This pulls the Initiate packet from the client
+                      get-cookie (partial wrote-cookie chan->server)
+                      write-vouch (partial vouch->server mem-pool chan<-client)
+                      get-server-response (partial wrote-vouch chan->client)
+                      write-server-response (partial finalize chan<-server)
+                      log-state (log/info log-state
+                                          ::handshake
+                                          "interaction-test: Starting the stream"
+                                          {::client->server clnt->srvr})
+                      fut (dfrd/chain (strm/take! clnt->srvr)
+                                      write-hello
+                                      build-cookie
+                                      write-cookie
+                                      get-cookie
+                                      write-vouch
+                                      get-server-response
+                                      write-server-response
+                                      (fn [wrote]
+                                        (is (not= wrote ::timeout))))
+                      log-state (log/info log-state
+                                          ::handshake
+                                          "Dereferencing the deferreds set up by handshake")]
+                  (let [outcome (deref fut 5000 ::timeout)]
+                    (when (instance? Exception outcome)
+                      (let [log-state (log/exception log-state
+                                                     outcome
+                                                     "FAIL")]
+                        (log/flush-logs! logger log-state))
+                      (throw outcome))
+                    (is (not= outcome ::timeout)))
+                  ;; This really should have been completed as soon as
+                  ;; I read from chan->server2 the first time
+                  ;; Q: Right?
+                  (is (not= (deref eventually-started 500 ::timeout)
+                            ::timeout))))
+              (catch Exception ex
+                ;; FIXME: This is failing due to "Bad Cookie packet from Server"
+                (log/flush-logs! logger
+                                 (log/exception log-state
+                                                ex
+                                                "Unhandled exception escaped!"
+                                                {::client-state (clnt/hide-long-arrays @client)
+                                                 ::client-failure (or (agent-error client)
+                                                                      "client agent thinks everything is fine")}))
+                (is (not ex)))
+              (finally
+                (log/flush-logs! logger
+                                 (log/info log-state
+                                           ::handshake
+                                           "Test done. Stopping server."))
+                (srvr/stop! server))))
+          (catch clojure.lang.ExceptionInfo ex
+            (let [msg (str "Unhandled ex-info:\n"
+                           ex
+                           "\nAssociated Data:\n"
+                           (.getData ex)
+                           "\nStack Trace:\n"
+                           (with-out-str (.printStackTrace ex)))]
+              (is false msg)))
           (finally (strm/close! (:chan chan->client))
                    (strm/close! (:chan chan<-client)))))
       (finally
@@ -700,18 +718,18 @@
 
         server-shared (crypto/box-prepare my-client-long-public
                                           my-server-long-secret)
-        log-state (log2/debug (log2/init ::innermost-initiate-round-trip)
-                              ::innermost-initiate-round-trip
-                              "Shared keys"
-                              {::client (b-t/->string client-shared)
-                               ::server (b-t/->string server-shared)})]
+        log-state (log/debug (log/init ::innermost-initiate-round-trip)
+                             ::innermost-initiate-round-trip
+                             "Shared keys"
+                             {::client (b-t/->string client-shared)
+                              ::server (b-t/->string server-shared)})]
     (is (b-t/bytes= client-shared server-shared))
     (let [raw-nonce-suffix [0x19 0x91 0x98 0xE6 0x6E 0xA9 0x0D 0x68
                             0xC7 0xFE 0x1F 0x34 0x6C 0x44 0x5D 0xDF]
           nonce-suffix (byte-array raw-nonce-suffix)
           {client-short-pk ::specs/my-test-public
            :as key-pair} (crypto/random-keys "test")
-          {log-state ::log2/state
+          {log-state ::weald/state
            vouch ::specs/vouch} (clnt-init/encrypt-inner-vouch log-state
                                                                client-shared
                                                                nonce-suffix
@@ -722,12 +740,12 @@
             client-message-box {::K/hidden-client-short-pk vouch
                                 ::K/inner-i-nonce nonce-suffix
                                 ::K/long-term-public-key my-client-long-public}
-            {log-state ::log2/state
+            {log-state ::weald/state
              :keys [::specs/public-short]} (srvr-init/unbox-innermost-key log-state
                                                                           my-keys
                                                                           client-message-box)]
         (is public-short)
         (when-not public-short
-          (let [logger (log2/std-out-log-factory)]
-            (log2/flush-logs! logger log-state)))
+          (let [logger (log/std-out-log-factory)]
+            (log/flush-logs! logger log-state)))
         (is (b-t/bytes= client-short-pk public-short))))))

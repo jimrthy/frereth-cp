@@ -2,8 +2,9 @@
   "Top-level message helpers"
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.logging :as log]
-            [frereth-cp.util :as utils])
+            [frereth-cp.util :as utils]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log])
   (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -33,7 +34,7 @@
     :as block}]
   {:pre [transmissions]}
   (let [state (update state
-                      ::log/state
+                      ::weald/state
                       #(log/debug %
                                   ::flag-ackd-blocks
                                   ""
@@ -46,7 +47,7 @@
               (+ start-pos length)
               stop)
         (-> state
-            (update ::log/state
+            (update ::weald/state
                     #(log/trace %
                                 ::flag-ackd-blocks
                                 "(it's a match)"))
@@ -63,10 +64,10 @@
 
 (s/fdef earliest-block-time
         :args (s/cat :message-loop-name string?
-                     :log-state ::log/state
+                     :log-state ::weald/state
                      :blocks ::specs/un-ackd-blocks)
         :ret (s/keys :req [::specs/earliest-time
-                           ::log/state]))
+                           ::weald/state]))
 (defn earliest-block-time
   "Calculate the earliest time
 
@@ -87,7 +88,7 @@ Based on earliestblocktime_compute, in lines 138-153
                              "Calculating min-time across un-ACK'd blocks"
                              {::specs/message-loop-name message-loop-name
                               ::un-ackd-count (count un-flagged)})]
-    {::log/state log-state
+    {::weald/state log-state
      ::specs/earliest-time
      (if (< 0 (count un-flagged))
        (let [original (apply min (map ::specs/time
@@ -139,7 +140,7 @@ Based on earliestblocktime_compute, in lines 138-153
         to-drop (filter ::specs/ackd? un-ackd-blocks)
         to-keep (remove ::specs/ackd? un-ackd-blocks)
         state (update state
-                      ::log/state
+                      ::weald/state
                       #(log/debug %
                                   ::drop-ackd!
                                   "Keeping un-ACKed"
@@ -158,7 +159,7 @@ Based on earliestblocktime_compute, in lines 138-153
                      un-ackd-blocks
                      to-drop)
         state (-> state
-                  (update ::log/state
+                  (update ::weald/state
                           #(log/warn %
                                      ::drop-ackd!
                                      "Really should be smarter re: ::ackd-addr here"
@@ -179,7 +180,7 @@ Based on earliestblocktime_compute, in lines 138-153
                         (let [^ByteBuf buffer (::specs/buf block)]
                           (.release buffer))
                         (update state
-                                ::log/state
+                                ::weald/state
                                 #(log/debug %
                                             ::drop-ackd!
                                             "Releasing associated buf"
@@ -187,13 +188,13 @@ Based on earliestblocktime_compute, in lines 138-153
                       state
                       to-drop)]
     (let [{:keys [::specs/earliest-time]
-           log-state ::log/state} (earliest-block-time message-loop-name
-                                                        (::log/state state)
+           log-state ::weald/state} (earliest-block-time message-loop-name
+                                                        (::weald/state state)
                                                         un-ackd-blocks)]
       (assoc (assoc-in state
                        [::specs/outgoing ::specs/earliest-time]
                        earliest-time)
-             ::log/state log-state))))
+             ::weald/state log-state))))
 
 ;;;; 155-185: acknowledged(start, stop)
 (s/fdef mark-ackd-by-addr
@@ -220,7 +221,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
         ;; any of these addressing options and really only ACK'ing
         ;; the high-water-mark stream address.
         state (update state
-                      ::log/state
+                      ::weald/state
                       #(log/debug %
                                   ::mark-ackd-by-addr
                                   "Setting ACK flags on blocks between start and stop"
@@ -238,7 +239,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                 ;; so it's probably just my broken logic
                 ;; TODO: Figure out something more extreme to do here.
                 (update state
-                        ::log/state
+                        ::weald/state
                         #(log/error %
                                     ::mark-ackd-by-addr
                                     "Other side ACK'd bytes we haven't sent yet"
@@ -254,14 +255,14 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
                     state
                     un-ackd-blocks) state
         (update state
-                ::log/state
+                ::weald/state
                 #(log/debug %
                             ::mark-ackd-by-addr
                             "Done w/ initial flag reduce"
-                            (dissoc state ::log/state)))
+                            (dissoc state ::weald/state)))
         ;; Again, gaps kill it
         (update state
-                ::log/state
+                ::weald/state
                 #(log/warn %
                            ::mark-ackd-by-addr
                            "This treatment of ::ackd-addr also fails"
@@ -292,7 +293,7 @@ Based [cleverly] on acknowledged(), running from lines 155-185"
 
       ;; No real change
       (update state
-              ::log/state
+              ::weald/state
               #(log/info %
                          ::mark-ackd-by-addr
                          "Nothing ACK'd by address"

@@ -14,10 +14,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
              [child :as child]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [serialization :as serial]
              [specs :as specs]]
             [frereth-cp.util :as util]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold
              [deferred :as dfrd]
              [executor :as exec]
@@ -87,7 +88,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/def ::packet-builder (s/fspec :args (s/cat :state ::child-send-state
                                               :msg-packet bytes?)
-                                 :ret (s/keys :req [::log/state]
+                                 :ret (s/keys :req [::weald/state]
                                               :opt [::shared/packet])))
 
 ;; This is for really extreme conditions where sanity has flown
@@ -117,8 +118,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; But, in practice, it will never change over the
                                      ;; course of the client's lifetime
                                      ::shared/extension
-                                     ::log/logger
-                                     ::log/state
+                                     ::weald/logger
+                                     ::weald/state
                                      ;; Q: Does this really make any sense?
                                      ;; A: Not in any sane reality.
                                      ::outgoing-message
@@ -165,19 +166,19 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; Pieces used to initialize the extension
 (s/def ::extension-initializers
   (s/keys :req [::client-extension-load-time
-                ::log/logger
-                ::log/state
+                ::weald/logger
+                ::weald/state
                 ::msg-specs/recent
                 ::shared/extension]))
 ;; What comes back from extension initialization
 (s/def ::extension-initialized (s/keys :req [::client-extension-load-time
-                                             ::log/state
+                                             ::weald/state
                                              ::shared/extension]))
 
 ;; FIXME: This really should be ::message-building-params.
 ;; Except that those are different.
-(s/def ::initiate-building-params (s/keys :req [::log/logger
-                                                ::log/state
+(s/def ::initiate-building-params (s/keys :req [::weald/logger
+                                                ::weald/state
                                                 ::msg-specs/message-loop-name
                                                 ;; Q: Why was this ever here?
                                                 #_::chan->server
@@ -197,7 +198,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 ;; Refactored from hello so it can be used by ::cookie/success-callback
 (s/def ::cookie-response
-  (fn [{:keys [::log/state
+  (fn [{:keys [::weald/state
                ::security
                ::shared-secrets
                ::shared/network-packet]
@@ -224,9 +225,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;; Internal Implementation
 
 (s/fdef load-keys
-        :args (s/cat :logger ::log/state
+        :args (s/cat :logger ::weald/state
                      :my-keys ::shared/my-keys)
-        :ret (s/keys :req [::log/state
+        :ret (s/keys :req [::weald/state
                            ::shared/my-keys]))
 (defn load-keys
   [log-state my-keys]
@@ -240,7 +241,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
     {::shared/my-keys (assoc my-keys
                              ::shared/long-pair long-pair
                              ::shared/short-pair short-pair)
-     ::log/state log-state}))
+     ::weald/state log-state}))
 
 (s/fdef ->message-exchange-mode
         :args (s/cat :this ::state
@@ -252,7 +253,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   [{:keys [::chan<-server
            ::chan->server
            ::msg-specs/->child]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}
    initial-server-response]
   (when-not log-state
@@ -311,7 +312,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ;; Honestly, all the log calls that happen here should be updates modifying
            ;; an atom.
            ;; Q: Is that really true?
-           ::log/state log-state)))
+           ::weald/state log-state)))
 
 (declare current-timeout)
 (s/fdef final-wait
@@ -327,8 +328,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
   [this
    sent]
   (print "Entering final-wait. sent:" sent)
-  (let [{:keys [::log/logger]
-         log-state ::log/state} this]
+  (let [{:keys [::weald/logger]
+         log-state ::weald/state} this]
     (when-not log-state
       (throw (ex-info
               "Missing log-state"
@@ -344,7 +345,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
         (strm/try-take! chan<-server
                         ::drained timeout
                         ::initial-response-timed-out))
-      (throw (ex-info "Timed out trying to send vouch" {::state (dissoc this ::log/state)})))))
+      (throw (ex-info "Timed out trying to send vouch" {::state (dissoc this ::weald/state)})))))
 
 (s/fdef extract-child-send-state
         :args (s/cat :state ::state)
@@ -353,8 +354,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
   "Extract the pieces that are actually used to forward a message from the Child"
   [state]
   (select-keys state [::chan->server
-                      ::log/logger
-                      ::log/state
+                      ::weald/logger
+                      ::weald/state
                       ::msg-specs/message-loop-name
                       ::shared/extension
                       ::shared/my-keys
@@ -395,7 +396,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                      :packet ::valid-outgoing-binary
                      :timeout ::specs/timeout
                      :timeout-key any?)
-        :ret (s/keys :req [::log/state ::specs/deferrable]))
+        :ret (s/keys :req [::weald/state ::specs/deferrable]))
 (defn do-send-packet
   "Send a ByteBuf (et al) as UDP to the server
 
@@ -408,12 +409,12 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; Q: Is it worth making that happen?
   ;; I've already backed off here because put-packet seems
   ;; more usable.
-  [{log-state ::log/state
+  [{log-state ::weald/state
     {:keys [::specs/srvr-ip
             ::specs/srvr-port]
      :as server-security} ::server-security
     :keys [::chan->server
-           ::log/logger]
+           ::weald/logger]
     :as this}
    on-success
    on-failure
@@ -439,8 +440,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                                       (throw (ex-info "Expected [B"
                                                                                       {::actual (class packet)
                                                                                        ::value packet
-                                                                                       :log/state log-state}))))})]
-    {::log/state log-state
+                                                                                       ::weald/state log-state}))))})]
+    {::weald/state log-state
      ::specs/deferrable (dfrd/on-realized d
                                           on-success
                                           on-failure)}))
@@ -503,9 +504,9 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; send another.
   ;; That's perfectly legal, but seems wasteful in terms
   ;; of CPU and network.
-  [{log-state ::log/state
+  [{log-state ::weald/state
     :keys [::chan->server
-           ::log/logger
+           ::weald/logger
            ::packet-builder
            ::server-security]
     :as state}
@@ -561,8 +562,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
     ;; in a single thread.
 
     ;; This is the point behind ->message-exchange-mode.
-    (let [{log-state ::log/state
-           message-packet ::shared/packet} (packet-builder (assoc state ::log/state log-state)
+    (let [{log-state ::weald/state
+           message-packet ::shared/packet} (packet-builder (assoc state ::weald/state log-state)
                                                            message-block)
           raw-message-packet (if message-packet
                                (b-s/convert message-packet specs/byte-array-type)
@@ -599,7 +600,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                             timeout
                             ::child->timed-out
                             raw-message-packet)
-            {log-state ::log/state
+            {log-state ::weald/state
              result ::specs/deferrable} composite-result-placeholder]
         result))))
 
@@ -616,10 +617,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
   ;; every time the client forwards us a packet.
   ;; However: it only does the reload once every 30 seconds.
   [{:keys [::client-extension-load-time
-           ::log/logger
+           ::weald/logger
            ::msg-specs/recent
            ::shared/extension]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
   {:pre [(and client-extension-load-time recent)]}
   (let [reload? (>= recent client-extension-load-time)
@@ -628,7 +629,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                              ""
                              {::reload? reload?
                               ::shared/extension extension
-                              ::this (dissoc this ::log/state)})
+                              ::this (dissoc this ::weald/state)})
         client-extension-load-time (if reload?
                                      (+ recent (* 30 shared/nanos-in-second)
                                         client-extension-load-time))
@@ -660,13 +661,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               "Loaded extension"
                               {::shared/extension (vec extension)})]
       {::client-extension-load-time client-extension-load-time
-       ::log/state log-state
+       ::weald/state log-state
        ::shared/extension extension})))
 
 (s/fdef initialize-immutable-values
         :args (s/cat :this ::immutable-value
                      :log-initializer (s/fspec :args (s/cat)
-                                               :ret ::log/logger))
+                                               :ret ::weald/logger))
         :ret ::immutable-value)
 (defn initialize-immutable-values
   "Sets up the immutable value that will be used in tandem with the mutable state later"
@@ -675,7 +676,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ::server-extension
            ::server-ips
            ::specs/executor]
-    log-state ::log/state
+    log-state ::weald/state
     ;; TODO: Play with the numbers here to come up with something reasonable
     :or {executor (exec/utilization-executor cpu-utilization-target)}
     :as this}
@@ -689,7 +690,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                      ::big-picture this})))
   (let [logger (log-initializer)]
     (-> this
-        (assoc ::log/logger logger
+        (assoc ::weald/logger logger
                ::chan->server (strm/stream)
                ::specs/executor executor)
         (into (load-keys log-state (::shared/my-keys this))))))
@@ -701,7 +702,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (defn initialize-mutable-state!
   [{:keys [::shared/my-keys
            ::server-security
-           ::log/logger
+           ::weald/logger
            ::msg-specs/message-loop-name]
     :as this}
    packet-builder]
@@ -743,13 +744,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              server-long-term-pk
                                                              (.getSecretKey short-pair))}
              ::server-security server-security
-             ::log/state log-state
+             ::weald/state log-state
              ::terminated terminated}))))
 
 (s/fdef fork!
         :args (s/cat :state ::state)
         :ret (s/keys :req [::child/state
-                           ::log/state]))
+                           ::weald/state]))
 ;; It's tempting to try to deprecate this and just have
 ;; callers call the version in shared.child instead.
 ;; That would be a mistake.
@@ -757,11 +758,11 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;; coupling between the implementations remain loose.
 (defn fork!
   "Create a new Child to do all the interesting work."
-  [{:keys [::log/logger
+  [{:keys [::weald/logger
            ::msg-specs/->child
            ::msg-specs/child-spawner!
            ::msg-specs/message-loop-name]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
   {:pre [message-loop-name]}
   (when-not log-state
@@ -788,8 +789,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                        (keys this)
                        "\namong\n"
                        this))
-        build-params (select-keys this [::log/logger
-                                        ::log/state
+        build-params (select-keys this [::weald/logger
+                                        ::weald/state
                                         ::msg-specs/->child
                                         ::msg-specs/child-spawner!
                                         ::msg-specs/message-loop-name])
@@ -801,10 +802,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
 
 (s/fdef stop!
         :args (s/cat :this ::state)
-        :ret ::log/state)
+        :ret ::weald/state)
 (defn do-stop
   [{child-state ::child/state
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
   (if child-state
     (child/do-halt! log-state child-state)

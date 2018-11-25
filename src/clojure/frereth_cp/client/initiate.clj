@@ -12,9 +12,10 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [serialization :as serial]
              [specs :as specs]]
+            [frereth.weald :as weald]
+            [frereth.weald.logging :as log]
             [manifold.deferred :as dfrd])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
@@ -29,11 +30,11 @@
 ;;;; Specs
 
 ;;; These pieces are about the innermost nonce
-(s/def ::vouch-building-params (s/keys :req [::log/logger
+(s/def ::vouch-building-params (s/keys :req [::weald/logger
                                              ::shared/my-keys
                                              ::state/shared-secrets]))
 
-(s/def ::vouch-encryption-response (s/keys :req [::log/state
+(s/def ::vouch-encryption-response (s/keys :req [::weald/state
                                                  ::specs/vouch]))
 (s/def ::vouch-built (s/merge ::vouch-encryption-respons
                               (s/keys :req [::specs/inner-i-nonce])))
@@ -50,10 +51,10 @@
         :args (s/cat :this ::message-building-params
                      :msg bytes?
                      :outer-nonce-suffix bytes?)
-        :ret (s/keys :req [::specs/crypto-box ::log/state]))
+        :ret (s/keys :req [::specs/crypto-box ::weald/state]))
 (defn build-initiate-interior
   "This is the 368+M cryptographic box that's the real payload/Vouch+message portion of the Initiate pack"
-  [{log-state ::log/state
+  [{log-state ::weald/state
     inner-nonce-suffix ::specs/inner-i-nonce
     {^TweetNaclFast$Box$KeyPair long-pair ::shared/long-pair
      :keys [::specs/srvr-name]} ::shared/my-keys
@@ -107,8 +108,8 @@
                                  ::shared-secret (b-t/->string secret)
                                  ::specs/crypto-box (b-t/->string crypto-box)})]
         {::specs/crypto-box crypto-box
-         ::log/state log-state})
-      {::log/state (log/warn log-state
+         ::weald/state log-state})
+      {::weald/state (log/warn log-state
                              ::build-initiate-interior
                              "Missing server name"
                              (select-keys this [::shared/my-keys]))})))
@@ -136,12 +137,12 @@
                 (= (count real-result)
                    (+ 544 (count legal-to-send)))
                 true))
-        :ret (s/keys :req [::log/state]
+        :ret (s/keys :req [::weald/state]
                      :opt [::shared/packet]))
 (defn build-initiate-packet
   "Combine message buffer and client state into an Initiate packet"
-  [{log-state ::log/state
-    :keys [::log/logger
+  [{log-state ::weald/state
+    :keys [::weald/logger
            ::msg-specs/message-loop-name
            ::state/server-security]
     :as this}
@@ -160,12 +161,12 @@
     (if msg
       (if (K/legal-vouch-message-length? msg)
         ;; c.f. lines 329-334 in the reference spec.
-        (let [{log-state ::log/state
+        (let [{log-state ::weald/state
                nonce-suffix ::specs/client-nonce-suffix} (crypto/get-safe-client-nonce-suffix log-state)
               {:keys [::specs/crypto-box]
-               log-state ::log/state
+               log-state ::weald/state
                :as initiate-interior} (build-initiate-interior (select-keys this
-                                                                            [::log/state
+                                                                            [::weald/state
                                                                              ::shared/my-keys
                                                                              ::specs/inner-i-nonce
                                                                              ::specs/vouch
@@ -196,31 +197,31 @@
                   raw-result-bytes (serial/compose dscr
                                                    fields)
                   result-bytes (b-s/convert raw-result-bytes specs/byte-array-type)
-                  {log-state ::log/state
+                  {log-state ::weald/state
                    result ::message/possible-response
                    :as filtered} (message/filter-initial-message-bytes log-state
                                                                        result-bytes)]
-              {::log/state (log/debug log-state
-                                      ::build-initiate-packet
-                                      ""
-                                      {::filtered filtered})
+              {::weald/state (log/debug log-state
+                                        ::build-initiate-packet
+                                        ""
+                                        {::filtered filtered})
                ::shared/packet result})
             (do
               (log/flush-logs! logger log-state)
               (throw (ex-info "Building initiate-interior failed to generate a crypto-box"
                               {::problem (dissoc initiate-interior
-                                                 ::log/state)})))))
-        {::log/state (log/warn log-state
-                               ::build-initiate-packet
-                               "Invalid message length from child"
-                               {::message-length (count msg)})})
+                                                 ::weald/state)})))))
+        {::weald/state (log/warn log-state
+                                 ::build-initiate-packet
+                                 "Invalid message length from child"
+                                 {::message-length (count msg)})})
       (do
         (log/flush-logs! logger log-state)
         (throw (ex-info "Missing outgoing message"
                 {::specs/msg-bytes msg}))))))
 
 (s/fdef encrypt-inner-vouch
-        :args (s/cat :log-state ::log/state
+        :args (s/cat :log-state ::weald/state
                      :shared-secret ::shared/shared-secret
                      :nonce-suffix ::specs/server-nonce-suffix
                      :clear-text ::shared/text)
@@ -250,7 +251,7 @@
                               {::shared/safe-nonce (b-t/->string nonce)
                                ::state/shared-secret (b-t/->string shared-secret)
                                ::specs/vouch (b-t/->string vouch)})]
-      {::log/state log-state
+      {::weald/state log-state
        ::specs/vouch vouch})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -263,9 +264,9 @@
   "Build the innermost vouch/nonce pair"
   [{:keys [::shared/my-keys
            ::state/shared-secrets]
-    log-state ::log/state
+    log-state ::weald/state
     :as this}]
-  (let [{log-state ::log/state
+  (let [{log-state ::weald/state
          nonce-suffix ::specs/server-nonce-suffix} (crypto/get-safe-server-nonce-suffix log-state)
         ;; FIXME: This really belongs inside its own try/catch
         ;; block.
@@ -276,27 +277,27 @@
         clear-text (byte-array K/key-length)]
     (b-t/byte-copy! clear-text 0 K/key-length (.getPublicKey short-pair))
     (if-let [shared-secret (::state/client-long<->server-long shared-secrets)]
-      (let [{log-state ::log/state
+      (let [{log-state ::weald/state
              :keys [::specs/vouch]} (encrypt-inner-vouch log-state
                                                          shared-secret
                                                          nonce-suffix
                                                          clear-text)]
         (assert log-state)
         {::specs/inner-i-nonce nonce-suffix
-         ::log/state log-state
+         ::weald/state log-state
          ::specs/vouch vouch})
       (throw (ex-info "Missing long-term shared keys"
                       {::problem shared-secrets})))))
 
 (s/fdef initial-packet-sent
-        :args (s/cat :logger ::log/logger
-                     :log-state-atom ::log/state-atom
+        :args (s/cat :logger ::weald/logger
+                     :log-state-atom ::weald/state-atom
                      :this ::state/state)
         :ret ::state/state)
 (defn initial-packet-sent
   "Initiate packet was put onto wire"
-  [{log-state ::log/state
-    :keys [::log/logger]
+  [{log-state ::weald/state
+    :keys [::weald/logger]
     :as this}]
   {:pre [log-state]}
   (if (not (or (= this ::state/sending-vouch-timed-out)
@@ -310,14 +311,14 @@
       ;; And we can't do this yet: have to wait for a Message
       ;; Packet to come back.
       (state/->message-exchange-mode  (assoc this
-                                             ::log/state log-state)
+                                             ::weald/state log-state)
                                       ;; Q: When/where does this message actually
                                       ;; arrive?
                                       #_(throw (RuntimeException. "This parameter should be the initial response Message"))
                                       nil))
     (let [failure (ex-info "Something about polling/sending Initiate failed"
                            {::problem this})]
-      (update this ::log/state #(log/flush-logs! logger
-                                                 (log/exception %
-                                                                failure
-                                                                ::initial-packet-sent))))))
+      (update this ::weald/state #(log/flush-logs! logger
+                                                   (log/exception %
+                                                                  failure
+                                                                  ::initial-packet-sent))))))

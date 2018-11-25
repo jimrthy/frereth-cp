@@ -1,4 +1,6 @@
 (ns frereth-cp.shared.indirect-spec-gen
+  "This was really just a proof of concept trying to narrow down spec.gen oddities"
+  ;; FIXME: Make this ns go away completely
   (:require [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
             [clojure.test :refer (deftest is)]))
