@@ -3,8 +3,9 @@
   (:require [clojure.spec.alpha :as s]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.util :as utils]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log])
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]])
   (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

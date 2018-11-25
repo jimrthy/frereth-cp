@@ -1,7 +1,8 @@
 (ns frereth-cp.message.to-child-test
   (:require [clojure.test :refer (deftest is testing)]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.to-child :as x])
+            [frereth-cp.message
+             [specs :as specs]
+             [to-child :as x]])
   (:import io.netty.buffer.Unpooled))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

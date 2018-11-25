@@ -3,8 +3,9 @@
             [clojure.test :refer (deftest is testing)]
             [frereth-cp.message.registry :as reg]
             [frereth-cp.message.specs :as specs]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold.executor :as exec]
             [manifold.stream :as strm]))
 

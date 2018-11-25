@@ -5,8 +5,9 @@
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.util :as utils]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]))
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Internal Helpers

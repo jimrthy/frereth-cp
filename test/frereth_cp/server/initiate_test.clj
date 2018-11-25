@@ -7,8 +7,9 @@
             [frereth-cp.shared
              [crypto :as crypto]
              [specs :as specs]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]))
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]))
 
 (deftest fork-nameless-loop
   (let [log-state (log/init ::fork-without-loop-name)

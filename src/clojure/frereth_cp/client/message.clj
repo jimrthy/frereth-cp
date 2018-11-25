@@ -5,8 +5,9 @@
             [frereth-cp.shared
              [constants :as K]
              [specs :as specs]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold.stream :as strm])
   (:import io.netty.buffer.ByteBuf))
 

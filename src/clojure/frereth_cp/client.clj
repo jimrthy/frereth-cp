@@ -9,8 +9,6 @@
             [clojure.data :as data]
             [clojure.spec.alpha :as s]
             [clojure.pprint :refer [pprint]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
             [frereth-cp.client
              [cookie :as cookie]
              [hello :as hello]
@@ -25,6 +23,9 @@
              [crypto :as crypto]
              [specs :as specs]]
             [frereth-cp.util :as util]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])

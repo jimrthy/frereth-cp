@@ -20,8 +20,9 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])

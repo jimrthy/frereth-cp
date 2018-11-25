@@ -1,8 +1,9 @@
 (ns frereth-cp.message.helpers-test
   (:require [clojure.test :refer (deftest is testing)]
-            [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.test-utilities :as test-helpers]))
+            [frereth-cp.message
+             [helpers :as help]
+             [specs :as specs]
+             [test-utilities :as test-helpers]]))
 
 (deftest check-basic-acking
   (let [target {::value 1

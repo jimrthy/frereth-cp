@@ -1,9 +1,10 @@
 (ns frereth-cp.shared.crypto-test
   (:require [clojure.spec.test.alpha :as test]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]
-            [frereth-cp.shared.crypto :as crypto]))
+            [frereth-cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]
+             [crypto :as crypto]]))
 
 (deftest shared-secret-basics
   (let [client (crypto/random-key-pair)

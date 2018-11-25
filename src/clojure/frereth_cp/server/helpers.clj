@@ -1,7 +1,6 @@
 (ns frereth-cp.server.helpers
   "Utility functions that are generally useful for Curve servers"
-  (:require
-            [frereth-cp.shared :as shared]
+  (:require [frereth-cp.shared :as shared]
             [frereth-cp.shared.constants :as K]))
 
 (defn hide-long-arrays

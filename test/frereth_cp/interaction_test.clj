@@ -1,11 +1,13 @@
 (ns frereth-cp.interaction-test
   "This is really about message interactions"
-  (:require [aleph.netty :as netty]
-            [aleph.udp :as udp]
+  (:require [aleph
+             [netty :as netty]
+             [udp :as udp]]
             [byte-streams :as bs]
-            [clojure.pprint :refer (pprint)]
+            [clojure
+             [pprint :refer (pprint)]
+             [test :refer (deftest is testing)]]
             [clojure.spec.alpha :as s]
-            [clojure.test :refer (deftest is testing)]
             [frereth-cp.client :as clnt]
             [frereth-cp.client
              [initiate :as clnt-init]
@@ -22,8 +24,9 @@
              [constants :as K]
              [crypto :as crypto]
              [specs :as specs]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])

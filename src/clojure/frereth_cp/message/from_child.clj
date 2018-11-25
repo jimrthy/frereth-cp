@@ -7,8 +7,9 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.constants :as K-shared]
             [frereth-cp.util :as utils]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold.deferred :as dfrd]
             [manifold.stream :as strm])
   (:import clojure.lang.ExceptionInfo

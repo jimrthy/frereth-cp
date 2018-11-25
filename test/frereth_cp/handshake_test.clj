@@ -2,10 +2,11 @@
   "Test the different pieces involved in connection establishment"
   (:require [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp.client :as clnt]
+            [frereth-cp
+             [client :as clnt]
+             [server :as server]
+             [shared :as shared]]
             [frereth-cp.client.initiate :as clnt-init]
-            [frereth-cp.server :as server]
-            [frereth-cp.shared :as shared]
             [frereth-cp.shared
              [constants :as K]
              [specs :as specs]
@@ -54,7 +55,7 @@
         ;; This is totally wrong.
         ;; The ByteBuf argument is the message that goes along with the initiate packet.
         raw-vouches (s/exercise ::K/initiate-packet-spec)
-        vouches (map (partial clnt-init/build-initiate-packet! client-state) raw-vouches)]
+        vouches (map (partial clnt-init/build-initiate-packet client-state) raw-vouches)]
     ;; TODO:
     ;; Use client/build-vouch to generate a vouch wrapper.
     ;; Then call server/decrypt-initiate-vouch to verify that

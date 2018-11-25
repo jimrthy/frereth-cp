@@ -1,8 +1,9 @@
 (ns frereth-cp.message.to-parent-test
   (:require [clojure.test :refer (are deftest is testing)]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.from-parent :as from-parent]
-            [frereth-cp.message.to-parent :as to-parent])
+            [frereth-cp.message
+             [from-parent :as from-parent]
+             [specs :as specs]
+             [to-parent :as to-parent]])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (defn build-buf

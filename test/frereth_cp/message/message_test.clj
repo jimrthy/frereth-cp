@@ -1,24 +1,28 @@
 (ns frereth-cp.message.message-test
-  (:require [clojure.data]
-            [clojure.edn :as edn]
-            [clojure.pprint :refer (pprint)]
+  (:require [clojure
+             data
+             [edn :as edn]
+             [pprint :refer (pprint)]
+             [test :refer (are deftest is testing)]]
             [clojure.spec.alpha :as s]
-            [clojure.test :refer (are deftest is testing)]
             [frereth-cp.message :as message]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.from-child :as from-child]
-            [frereth-cp.message.from-parent :as from-parent]
-            [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.test-utilities :as test-helpers]
-            [frereth-cp.message.to-child :as to-child]
-            [frereth-cp.message.to-parent :as to-parent]
+            [frereth-cp.message
+             [constants :as K]
+             [from-child :as from-child]
+             [from-parent :as from-parent]
+             [helpers :as help]
+             [specs :as specs]
+             [test-utilities :as test-helpers]
+             [to-child :as to-child]
+             [to-parent :as to-parent]]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import [clojure.lang
             ExceptionInfo
             PersistentQueue]

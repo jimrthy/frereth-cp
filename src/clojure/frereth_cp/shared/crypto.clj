@@ -12,8 +12,9 @@
              [serialization :as serial]
              [specs :as specs]]
             [frereth-cp.util :as util]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log2])
+            [frereth.weald
+             [logging :as log2]
+             [specs :as weald]])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]

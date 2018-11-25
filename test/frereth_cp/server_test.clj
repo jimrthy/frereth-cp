@@ -20,8 +20,9 @@
              [crypto :as crypto]
              [serialization :as serial]
              [specs :as specs]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])

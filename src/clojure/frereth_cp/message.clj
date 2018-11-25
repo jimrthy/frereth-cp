@@ -26,8 +26,9 @@
             [frereth-cp.shared.crypto :as crypto]
             [frereth-cp.shared.specs :as shared-specs]
             [frereth-cp.util :as utils]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold.deferred :as dfrd]
             [manifold.executor :as exec]
             [manifold.stream :as strm])

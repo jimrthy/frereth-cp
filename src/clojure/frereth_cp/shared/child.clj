@@ -4,15 +4,16 @@
   ;; But there's already far too much going on in there.
   "Manage child ioloops"
   (:require [clojure.spec.alpha :as s]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
             [frereth-cp.message :as message]
             [frereth-cp.message
              [registry :as registry]
              [specs :as msg-specs]]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
-             [specs :as specs]]))
+             [specs :as specs]]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants

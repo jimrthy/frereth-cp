@@ -5,9 +5,10 @@
             [clojure.test :refer (are deftest is testing)]
             [clojure.test.check :refer (quick-check)]
             [clojure.test.check.clojure-test :refer (defspec)]
-            [clojure.test.check.generators :as lo-gen]
-            [clojure.test.check.properties :as props]
-            [clojure.test.check.rose-tree :as rose]
+            [clojure.test.check
+             [generators :as lo-gen]
+             [properties :as props]
+             [rose-tree :as rose]]
             [frereth-cp.shared :as shared]
             [frereth-cp.shared
              [constants :as K]

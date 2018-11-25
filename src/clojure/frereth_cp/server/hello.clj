@@ -15,8 +15,9 @@
              [serialization :as serial]
              [specs :as specs]]
             [frereth-cp.util :as util]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold
              [deferred :as deferred]
              [stream :as stream]])

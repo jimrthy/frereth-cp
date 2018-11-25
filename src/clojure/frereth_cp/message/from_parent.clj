@@ -9,8 +9,9 @@
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.shared.serialization :as serial]
             [frereth-cp.util :as utils]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log])
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]])
   (:import [io.netty.buffer ByteBuf Unpooled]
            java.nio.ByteOrder))
 

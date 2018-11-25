@@ -12,8 +12,9 @@
              [specs :as shared-specs]
              [serialization :as serial]
              [templates :as templates]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold.stream :as strm])
   (:import [io.netty.buffer ByteBuf]))
 

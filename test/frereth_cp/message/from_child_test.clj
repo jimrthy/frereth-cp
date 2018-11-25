@@ -3,9 +3,10 @@
             ;; FIXME: Make this go away
             [clojure.tools.logging :as log]
             [frereth-cp.message :as msg]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.from-child :as from-child]
-            [frereth-cp.message.specs :as specs]
+            [frereth-cp.message
+             [constants :as K]
+             [from-child :as from-child]
+             [specs :as specs]]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils])
   (:import clojure.lang.PersistentQueue

@@ -6,8 +6,9 @@
              [constants :as K-shared]
              [specs :as shared-specs]]
             [frereth-cp.util :as util]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])

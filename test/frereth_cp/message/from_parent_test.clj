@@ -8,8 +8,9 @@
              [test-utilities :as test-helpers]
              [to-parent :as to-parent]]
             [frereth-cp.util :as utils]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log])
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (deftest verify-block-collapse

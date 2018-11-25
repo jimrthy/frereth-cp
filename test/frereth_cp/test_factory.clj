@@ -12,8 +12,9 @@
              [constants :as K]
              [crypto :as crypto]
              [specs :as shared-specs]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold
              [executor :as exec]
              [stream :as strm]])

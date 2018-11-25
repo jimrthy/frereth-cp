@@ -5,17 +5,21 @@
             [clojure.spec.alpha :as s]
             [clojure.test :refer (are deftest is testing)]
             [frereth-cp.message :as message]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.message-test :as m-t]
-            [frereth-cp.message.specs :as specs]
+            [frereth-cp.message
+             [constants :as K]
+             [message-test :as m-t]
+             [specs :as specs]]
             [frereth-cp.shared.bit-twiddling :as b-t]
             [frereth-cp.util :as utils]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]
-            [gloss.core :as gloss]
-            [gloss.io :as io]
-            [manifold.deferred :as dfrd]
-            [manifold.stream :as strm])
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
+            [gloss
+             [core :as gloss]
+             [io :as io]]
+            [manifold
+             [deferred :as dfrd]
+             [stream :as strm]])
   (:import clojure.lang.ExceptionInfo
            io.netty.buffer.Unpooled))
 

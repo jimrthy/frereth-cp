@@ -5,8 +5,9 @@
             [frereth-cp.shared
              [crypto :as crypto]
              [specs :as specs]]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log]))
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]))
 
 ;; Generated randomly using random-keys for reproducible tests
 (def client-keys

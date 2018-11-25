@@ -19,9 +19,15 @@
             [frereth-cp.message :as msg]
             [frereth-cp.shared
              [bit-twiddling :as b-t]
-             [logging :as log]
              [specs :as shared-specs]]
             [frereth-cp.util :as utils]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]]
             [manifold
              [deferred :as dfrd]
              [stream :as strm]]))
+
+(def +frereth-component+
+  "Just to make it easier to track which is what"
+  'frereth.cp)

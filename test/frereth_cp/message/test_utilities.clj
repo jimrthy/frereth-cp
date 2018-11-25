@@ -4,8 +4,9 @@
             [frereth-cp.message :as msg]
             [frereth-cp.message.specs :as specs]
             [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth.weald :as weald]
-            [frereth.weald.logging :as log])
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]])
   (:import [io.netty.buffer ByteBuf Unpooled]))
 
 (s/fdef build-flag-ack-start-state
