@@ -1,12 +1,10 @@
 (ns frereth-cp.shared.serialization
-  "I didn't do enough research before choosing this name.
-
-Marshalling is really tied in with things like RMI and CORBA
-and DCOM. It's really about OOP, which just does not belong
-in this picture.
-
-FIXME: Rename for better semantics before this progresses any further."
+  ;; Something like protocol buffers or avro seems very tempting.
+  ;; Those are actually higher-level constructs that these wrap up.
+  ;; This is more about building things like raw TCP packets.
+  "Convert native data structures to/from raw bytes for network travel"
   (:require [clojure.spec.alpha :as s]
+            ;; FIXME: Make this go away.
             [clojure.tools.logging :as log]
             [frereth-cp.shared
              [bit-twiddling :as b-t]

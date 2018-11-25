@@ -49,10 +49,12 @@
  jar {:main        'frereth-cp.server
       :file        (str "frereth-cp-" version ".jar")})
 
-(require '[adzerk.boot-test :refer [test]]
+(require '[adzerk.bootlaces :refer [bootlaces! build-jar push-snapshot push-release]]
+         '[adzerk.boot-test :refer [test]]
          '[boot.pod :as pod]
          '[samestep.boot-refresh :refer [refresh]]
          '[tolitius.boot-check :as check])
+(bootlaces! version)
 
 (deftask build
   "Build the project locally as a JAR."
