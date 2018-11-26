@@ -29,9 +29,25 @@ on, above and beyond the bit twiddling.
 
 ## Usage
 
+Although you probably don't want to actually use it yet.
+
+### Local Installation
+
     boot install
 
-Although you probably don't want to actually use it.
+### Publish to clojars
+
+#### From the master branch
+
+    boot build-jar push-snapshot
+
+or
+
+    boot build-jar push-release
+
+#### From a working branch
+
+    boot publish-from-branch
 
 ## Notes
 

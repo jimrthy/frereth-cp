@@ -36,6 +36,8 @@
 
 (task-options!
  aot {:namespace   #{'frereth-cp.server 'frereth-cp.client}}
+ jar {:main        'frereth-cp.server
+      :file        (str "frereth-cp-" version ".jar")}
  pom {:project     project
       :version     version
       :description "Implement CurveCP in clojure"
@@ -45,16 +47,15 @@
       ;; Q: Should this go into public domain like the rest
       ;; of the pieces?
       :license     {"Eclipse Public License"
-                    "http://www.eclipse.org/legal/epl-v10.html"}}
- jar {:main        'frereth-cp.server
-      :file        (str "frereth-cp-" version ".jar")})
+                    "http://www.eclipse.org/legal/epl-v10.html"}})
 
 (require '[adzerk.bootlaces :refer [bootlaces! build-jar push-snapshot push-release]]
          '[adzerk.boot-test :refer [test]]
          '[boot.pod :as pod]
          '[samestep.boot-refresh :refer [refresh]]
          '[tolitius.boot-check :as check])
-(bootlaces! version)
+
+(bootlaces! version :dont-modify-paths? true)
 
 (deftask build
   "Build the project locally as a JAR."
@@ -108,6 +109,12 @@
   ;; Q: Should they move to there also?
   (let [port (or port 32767)]
     (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl :port port :bind "0.0.0.0"))))
+
+(deftask publish-from-branch
+  "Publish to clojars from your current branch"
+  []
+  (task-options! push {:ensure-branch nil})
+  (comp (build-jar) (push-snapshot)))
 
 (deftask run
   "Run the project."
