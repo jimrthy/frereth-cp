@@ -386,6 +386,7 @@
                                                             ;; FIXME: Verify that this is a valid Initiate packet
                                                             (if-not (or (= initiate ::drained)
                                                                         (= initiate ::timeout))
+                                                              ;; This next step should be pretty pointless.
                                                               (let [initiate (update initiate :message
                                                                                      (fn [bs]
                                                                                        (b-s/convert bs (Class/forName "[B"))))]
@@ -419,7 +420,10 @@
                                                                                                   1000
                                                                                                   ::timeout)]
                                                                           (if (not= ::timeout put)
-                                                                            (let [first-full-clnt-message @(strm/try-take! client->server ::drained 1000 ::timeout)]
+                                                                            (let [first-full-client-message @(strm/try-take! client->server
+                                                                                                                             ::drained
+                                                                                                                             1000
+                                                                                                                             ::timeout)]
                                                                               ;; As long as we got a message back, we should be able to call
                                                                               ;; this test done.
                                                                               (if (= ::timeout first-full-clnt-message)
@@ -445,6 +449,8 @@
                                           (let [actual-initiate-outcome (deref initiate-outcome 2000 ::initiate-timeout)]
                                             (is (not= ::initiate-timeout actual-initiate-outcome))
                                             ;; Q: What are we dealing with here?
+                                            ;; It's a network packet.
+                                            ;; So :host, :port, and a byte array in :message
                                             (is (not actual-initiate-outcome) (str "Message is a " (-> actual-initiate-outcome :message class))))
                                           (catch Exception ex
                                             ;; We get here on any of those dfrd/error! triggers above

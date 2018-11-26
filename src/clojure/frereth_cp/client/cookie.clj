@@ -197,11 +197,11 @@
                     "= " srvr-ip " " host ")")))
     result))
 
-(s/fdef received-response!
+(s/fdef do-received-response
         :args (s/cat :this ::state/state
                      :cookie ::specs/network-packet)
         :ret ::state/state)
-(defn received-response!
+(defn do-received-response
   "Hello triggers this (via wait-for-cookie) when it hears back from a Server"
   [{log-state ::weald/state
     :keys [::weald/logger
@@ -210,7 +210,7 @@
    {:keys [:host :message :port]
         :or {message (byte-array 0)}
         :as cookie}]
-  (let [log-label ::received-response!
+  (let [log-label ::do-received-response
         log-state (log/info log-state
                             log-label
                             "Possibly got a response from server"
@@ -336,7 +336,7 @@
                                                                 ::wait-for-cookie!
                                                                 "Pulled from server"
                                                                 {::specs/network-packet incoming})))]
-    (received-response! this incoming)))
+    (do-received-response this incoming)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -416,8 +416,8 @@
           (dfrd/chain
            (partial wrap-received this))
           (dfrd/catch (fn [ex]
-                        (println "cookie/received-response! failed:" ex)
-                        (throw (ex-info "received-response! failed"
+                        (println "cookie/do-received-response failed:" ex)
+                        (throw (ex-info "cookie/do-received-response failed"
                                         {::last-known this}
                                         ex))))))
     (throw (RuntimeException. "Timed out sending the initial HELLO packet"))))
