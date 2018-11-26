@@ -642,8 +642,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
                               ::shared/extension extension
                               ::this (dissoc this ::weald/state)})
         client-extension-load-time (if reload?
-                                     (+ recent (* 30 shared/nanos-in-second)
-                                        client-extension-load-time))
+                                     (+ recent (* 30 shared/nanos-in-second))
+                                     client-extension-load-time)
         [extension log-state] (if reload?
                                 (try [(-> "/etc/curvecpextension"
                                            ;; This is pretty inefficient...we really only want 16 bytes.

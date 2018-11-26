@@ -13,7 +13,6 @@
             [frereth-cp.shared
              [constants :as K]
              [crypto :as crypto]
-             [logging :as log]
              [specs :as specs]
              [templates :as templates]]
             [frereth.weald
