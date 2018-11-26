@@ -31,6 +31,10 @@ on, above and beyond the bit twiddling.
 
 Although you probably don't want to actually use it yet.
 
+### Docker creation
+
+    docker build -t frereth/curve-cp .
+
 ### Local Installation
 
     boot install
