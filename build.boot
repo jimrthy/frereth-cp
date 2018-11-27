@@ -114,7 +114,9 @@
   "Publish to clojars from your current branch"
   []
   (task-options! push {:ensure-branch nil})
-  (comp (build-jar) (push-snapshot)))
+  ;; Note that the javac step is vital, although not normally needed
+  ;; for a clojure-only bootlaces publish.
+  (comp (javac) (build-jar) (push-snapshot)))
 
 (deftask run
   "Run the project."

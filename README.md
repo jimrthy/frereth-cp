@@ -45,11 +45,11 @@ Although you probably don't want to actually use it yet.
 
 #### From the master branch
 
-    boot build-jar push-snapshot
+    boot javac build-jar push-snapshot
 
 or
 
-    boot build-jar push-release
+    boot javac build-jar push-release
 
 #### From a working branch
 
