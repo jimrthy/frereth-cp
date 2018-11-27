@@ -3,7 +3,7 @@
 
 ;; TODO: Add a dependency on weald and refactor away the local copy
 ;; of shared.logging.
-(set-env! :resource-paths #{"src/clojure" "src/java"}
+(set-env! :resource-paths #{"src/clojure"}
           :dependencies '[[adzerk/bootlaces "0.1.13" :scope "test"]
                           [adzerk/boot-test "RELEASE" :scope "test"]
                           ;; Stick with whichever version of netty this inherits.
@@ -32,7 +32,7 @@
                           ;; (sadly, it isn't a straight copy/paste)
                           [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]
                           [tolitius/boot-check "0.1.11" :scope "test" :exclusions [org.clojure/clojure]]]
-          :source-paths   #{#_"src/java"})
+          :source-paths   #{"src/java"})
 
 (task-options!
  aot {:namespace   #{'frereth-cp.server 'frereth-cp.client}}

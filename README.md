@@ -1,5 +1,7 @@
 # frereth-cp
 
+[![Clojars Project](https://img.shields.io/clojars/v/frereth/cp.svg)](https://clojars.org/frereth/cp)
+
 CurveCP is a low-level protocol for streaming bytes across
 the network, much like TCP. Except in a secure manner.
 
