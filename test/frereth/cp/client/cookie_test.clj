@@ -1,4 +1,4 @@
-(ns frereth-cp.client.cookie-test
+(ns frereth.cp.client.cookie-test
   "Test out pieces involved in client cookie handling"
   (:require [clojure.test :refer (deftest is testing)]))
 

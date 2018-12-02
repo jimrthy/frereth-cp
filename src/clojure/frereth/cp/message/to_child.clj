@@ -1,4 +1,4 @@
-(ns frereth-cp.message.to-child
+(ns frereth.cp.message.to-child
   "Looks like this may not be needed at all
 
   Pretty much everything that might have been interesting really
@@ -10,11 +10,12 @@
   the bottom of each event loop."
   (:require [clojure.pprint :refer (cl-format)]
             [clojure.spec.alpha :as s]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.util :as utils]
+            [frereth.cp.shared.bit-twiddling :as b-t]
+            [frereth.cp.message
+             [constants :as K]
+             [helpers :as help]
+             [specs :as specs]]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

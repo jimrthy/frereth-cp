@@ -1,6 +1,6 @@
-(ns frereth-cp.message.helpers-test
+(ns frereth.cp.message.helpers-test
   (:require [clojure.test :refer (deftest is testing)]
-            [frereth-cp.message
+            [frereth.cp.message
              [helpers :as help]
              [specs :as specs]
              [test-utilities :as test-helpers]]))

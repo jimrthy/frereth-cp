@@ -1,14 +1,14 @@
-(ns frereth-cp.client.initiate
+(ns frereth.cp.client.initiate
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [frereth-cp
+            [frereth.cp
              [shared :as shared]
              [util :as utils]]
-            [frereth-cp.client
+            [frereth.cp.client
              [message :as message]
              [state :as state]]
-            [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.shared
+            [frereth.cp.message.specs :as msg-specs]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]

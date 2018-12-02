@@ -1,9 +1,9 @@
-(ns frereth-cp.message.test-utilities
+(ns frereth.cp.message.test-utilities
   "Utility functions shared among different tests"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message :as msg]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.bit-twiddling :as b-t]
+            [frereth.cp.message :as msg]
+            [frereth.cp.message.specs :as specs]
+            [frereth.cp.shared.bit-twiddling :as b-t]
             [frereth.weald
              [logging :as log]
              [specs :as weald]])

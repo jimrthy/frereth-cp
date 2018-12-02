@@ -1,6 +1,6 @@
-(ns frereth-cp.server.message
+(ns frereth.cp.server.message
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.server.state :as state]
+            [frereth.cp.server.state :as state]
             [manifold.stream :as strm]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

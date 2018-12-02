@@ -1,8 +1,8 @@
-(ns frereth-cp.message.registry
+(ns frereth.cp.message.registry
   "Track active message loops"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.shared.specs :as shared-specs]))
+            [frereth.cp.message.specs :as msg-specs]
+            [frereth.cp.shared.specs :as shared-specs]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs

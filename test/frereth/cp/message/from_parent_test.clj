@@ -1,13 +1,13 @@
-(ns frereth-cp.message.from-parent-test
+(ns frereth.cp.message.from-parent-test
   (:require [clojure.test :refer (deftest is testing)]
-            [frereth-cp.message
+            [frereth.cp.message
              [constants :as K]
              [from-child :as from-child]
              [from-parent :as from-parent]
              [specs :as specs]
              [test-utilities :as test-helpers]
              [to-parent :as to-parent]]
-            [frereth-cp.util :as utils]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]])

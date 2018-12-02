@@ -1,4 +1,4 @@
-(ns frereth-cp.message.flow-control-test
+(ns frereth.cp.message.flow-control-test
   (:require [clojure.core.reducers :as r]
             [clojure.spec.gen.alpha :as gen]
             [clojure.test :refer (deftest is testing)]))

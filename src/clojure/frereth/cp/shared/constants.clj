@@ -1,7 +1,7 @@
-(ns frereth-cp.shared.constants
+(ns frereth.cp.shared.constants
   "Magical names, numbers, and data structures"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.shared.specs :as specs])
+            [frereth.cp.shared.specs :as specs])
   (:import io.netty.buffer.ByteBuf))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

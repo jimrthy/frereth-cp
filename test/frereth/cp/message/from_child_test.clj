@@ -1,14 +1,14 @@
-(ns frereth-cp.message.from-child-test
+(ns frereth.cp.message.from-child-test
   (:require [clojure.test :refer (deftest is testing)]
             ;; FIXME: Make this go away
             [clojure.tools.logging :as log]
-            [frereth-cp.message :as msg]
-            [frereth-cp.message
+            [frereth.cp.message :as msg]
+            [frereth.cp.message
              [constants :as K]
              [from-child :as from-child]
              [specs :as specs]]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.util :as utils])
+            [frereth.cp.shared.bit-twiddling :as b-t]
+            [frereth.cp.util :as utils])
   (:import clojure.lang.PersistentQueue
            [java.io
             IOException

@@ -1,8 +1,8 @@
-(ns frereth-cp.client.message
+(ns frereth.cp.client.message
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.client.state :as state]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.client.state :as state]
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [constants :as K]
              [specs :as specs]]
             [frereth.weald

@@ -1,10 +1,10 @@
-(ns frereth-cp.shared.bit-twiddling
+(ns frereth.cp.shared.bit-twiddling
   "Shared functions for fiddling with bits"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             ;; FIXME: Make this go away
             [clojure.tools.logging :as log]
-            [frereth-cp.shared.constants :as K])
+            [frereth.cp.shared.constants :as K])
   (:import clojure.lang.BigInt
            io.netty.buffer.ByteBuf
            io.netty.buffer.UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf

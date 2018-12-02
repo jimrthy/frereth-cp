@@ -1,9 +1,10 @@
-(ns frereth-cp.shared-test
+(ns frereth.cp.shared-test
   (:require [clojure.spec.alpha :as s]
             [clojure.test :refer (are is deftest testing)]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.constants :as K]))
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
+             [bit-twiddling :as b-t]
+             [constants :as K]]))
 
 (deftest server-encoding
   (let [encoded (shared/encode-server-name "foo..bacon.com")]

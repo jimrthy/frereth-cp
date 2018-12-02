@@ -1,19 +1,19 @@
-(ns frereth-cp.server.initiate
+(ns frereth.cp.server.initiate
   "For coping with Initiate packets
 
 This is the part that possibly establishes a 'connection'"
   (:require [clojure.spec.alpha :as s]
             [clojure.string :as str]
-            [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.server
+            [frereth.cp.message.specs :as msg-specs]
+            [frereth.cp.server
              ;; FIXME: Don't want these siblings to have any
              ;; dependencies on each other.
              [message :as message]
              [state :as state]]
-            [frereth-cp
+            [frereth.cp
              [message :as root-message]
              [shared :as shared]]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [child :as child]
              [constants :as K]
@@ -21,7 +21,7 @@ This is the part that possibly establishes a 'connection'"
              [serialization :as serial]
              [specs :as specs]
              [templates :as templates]]
-            [frereth-cp.util :as util]
+            [frereth.cp.util :as util]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

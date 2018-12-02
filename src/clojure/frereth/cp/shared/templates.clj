@@ -1,7 +1,7 @@
-(ns frereth-cp.shared.templates
+(ns frereth.cp.shared.templates
   "Descriptions of binary files to marshall"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [constants :as K]
              [specs :as specs]]))
 

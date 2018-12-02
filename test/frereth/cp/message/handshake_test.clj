@@ -1,16 +1,16 @@
-(ns frereth-cp.message.handshake-test
+(ns frereth.cp.message.handshake-test
   "Test basic message exchanges"
   (:require [clojure.edn :as edn]
             [clojure.java.io :as jio]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (are deftest is testing)]
-            [frereth-cp.message :as message]
-            [frereth-cp.message
+            [frereth.cp.message :as message]
+            [frereth.cp.message
              [constants :as K]
              [message-test :as m-t]
              [specs :as specs]]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.util :as utils]
+            [frereth.cp.shared.bit-twiddling :as b-t]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

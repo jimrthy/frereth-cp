@@ -1,4 +1,4 @@
-(ns frereth-cp.interaction-test
+(ns frereth.cp.interaction-test
   "This is really about message interactions"
   (:require [aleph
              [netty :as netty]
@@ -8,18 +8,18 @@
              [pprint :refer (pprint)]
              [test :refer (deftest is testing)]]
             [clojure.spec.alpha :as s]
-            [frereth-cp.client :as clnt]
-            [frereth-cp.client
+            [frereth.cp.client :as clnt]
+            [frereth.cp.client
              [initiate :as clnt-init]
              [state :as clnt-state]]
-            [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.server :as srvr]
-            [frereth-cp.server
+            [frereth.cp.message.specs :as msg-specs]
+            [frereth.cp.server :as srvr]
+            [frereth.cp.server
              [initiate :as srvr-init]
              [state :as srvr-state]]
-            [frereth-cp.server-test :as server-test]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.server-test :as server-test]
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]

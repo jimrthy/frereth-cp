@@ -1,4 +1,4 @@
-(ns frereth-cp.shared.serialization-test
+(ns frereth.cp.shared.serialization-test
   (:require [clojure.data :as data]
             [clojure.spec.alpha :as s]
             [clojure.spec.gen.alpha :as gen]
@@ -9,13 +9,13 @@
              [generators :as lo-gen]
              [properties :as props]
              [rose-tree :as rose]]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [constants :as K]
              [crypto :as crypto]
              [serialization :as serial]
              [specs :as specs]]
-            [frereth-cp.util :as utils]))
+            [frereth.cp.util :as utils]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Helpers

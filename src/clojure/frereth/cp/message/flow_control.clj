@@ -1,10 +1,11 @@
-(ns frereth-cp.message.flow-control
+(ns frereth.cp.message.flow-control
   "Cope with flow-control algorithms"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.util :as utils]
+            [frereth.cp.message
+             [constants :as K]
+             [specs :as specs]]
+            [frereth.cp.shared.crypto :as crypto]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]))

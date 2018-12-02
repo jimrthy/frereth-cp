@@ -1,17 +1,18 @@
-(ns frereth-cp.client.cookie
+(ns frereth.cp.client.cookie
   (:require [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
-            [frereth-cp.client
+            [frereth.cp.client
              [state :as state]]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp
+             [shared :as shared]
+             [util :as utils]]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
              [specs :as specs]
              [serialization :as serial]
              [templates :as templates]]
-            [frereth-cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

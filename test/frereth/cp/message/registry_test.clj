@@ -1,13 +1,14 @@
-(ns frereth-cp.message.registry-test
+(ns frereth.cp.message.registry-test
   (:require [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp.message.registry :as reg]
-            [frereth-cp.message.specs :as specs]
+            [frereth.cp.message.registry :as reg]
+            [frereth.cp.message.specs :as specs]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]
-            [manifold.executor :as exec]
-            [manifold.stream :as strm]))
+            [manifold
+             [executor :as exec]
+             [stream :as strm]]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Helpers

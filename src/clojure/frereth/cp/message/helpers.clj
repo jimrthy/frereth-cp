@@ -1,8 +1,8 @@
-(ns frereth-cp.message.helpers
+(ns frereth.cp.message.helpers
   "Top-level message helpers"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.util :as utils]
+            [frereth.cp.message.specs :as specs]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]])

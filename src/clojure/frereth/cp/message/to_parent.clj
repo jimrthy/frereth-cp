@@ -1,11 +1,12 @@
-(ns frereth-cp.message.to-parent
+(ns frereth.cp.message.to-parent
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.constants :as shared-K]
-            [frereth-cp.util :as utils]
+            [frereth.cp.message
+             [constants :as K]
+             [helpers :as help]
+             [specs :as specs]]
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared.constants :as shared-K]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

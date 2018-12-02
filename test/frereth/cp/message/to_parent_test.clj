@@ -1,6 +1,6 @@
-(ns frereth-cp.message.to-parent-test
+(ns frereth.cp.message.to-parent-test
   (:require [clojure.test :refer (are deftest is testing)]
-            [frereth-cp.message
+            [frereth.cp.message
              [from-parent :as from-parent]
              [specs :as specs]
              [to-parent :as to-parent]])

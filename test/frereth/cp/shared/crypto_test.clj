@@ -1,7 +1,7 @@
-(ns frereth-cp.shared.crypto-test
+(ns frereth.cp.shared.crypto-test
   (:require [clojure.spec.test.alpha :as test]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]]))

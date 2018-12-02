@@ -1,7 +1,7 @@
-(ns frereth-cp.server.shared-specs
+(ns frereth.cp.server.shared-specs
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.server.state :as state]
-            [frereth-cp.shared :as shared]
+            [frereth.cp.server.state :as state]
+            [frereth.cp.shared :as shared]
             [frereth.weald.specs :as weald]))
 
 (s/def ::clear-text bytes?)

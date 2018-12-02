@@ -1,12 +1,12 @@
-(ns frereth-cp.message.message-test
+(ns frereth.cp.message.message-test
   (:require [clojure
              data
              [edn :as edn]
              [pprint :refer (pprint)]
              [test :refer (are deftest is testing)]]
             [clojure.spec.alpha :as s]
-            [frereth-cp.message :as message]
-            [frereth-cp.message
+            [frereth.cp.message :as message]
+            [frereth.cp.message
              [constants :as K]
              [from-child :as from-child]
              [from-parent :as from-parent]
@@ -15,8 +15,8 @@
              [test-utilities :as test-helpers]
              [to-child :as to-child]
              [to-parent :as to-parent]]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.util :as utils]
+            [frereth.cp.shared.bit-twiddling :as b-t]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

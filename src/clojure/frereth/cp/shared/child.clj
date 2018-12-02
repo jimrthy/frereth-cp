@@ -1,16 +1,16 @@
-(ns frereth-cp.shared.child
+(ns frereth.cp.shared.child
   ;; I could make a strong argument that this really belongs under
   ;; message.
   ;; But there's already far too much going on in there.
   "Manage child ioloops"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp
+            [frereth.cp
              [message :as message]
              [shared :as shared]]
-            [frereth-cp.message
+            [frereth.cp.message
              [registry :as registry]
              [specs :as msg-specs]]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [constants :as K]
              [crypto :as crypto]
              [specs :as specs]

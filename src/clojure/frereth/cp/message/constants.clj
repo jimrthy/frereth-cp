@@ -1,5 +1,5 @@
-(ns frereth-cp.message.constants
-  (:require [frereth-cp.shared.constants :as K]))
+(ns frereth.cp.message.constants
+  (:require [frereth.cp.shared.constants :as K]))
 
 (def ^:const stream-length-limit
   "How many bytes can the stream send before we've exhausted the address space?

@@ -1,13 +1,13 @@
-(ns frereth-cp.handshake-test
+(ns frereth.cp.handshake-test
   "Test the different pieces involved in connection establishment"
   (:require [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp
+            [frereth.cp
              [client :as clnt]
              [server :as server]
              [shared :as shared]]
-            [frereth-cp.client.initiate :as clnt-init]
-            [frereth-cp.shared
+            [frereth.cp.client.initiate :as clnt-init]
+            [frereth.cp.shared
              [constants :as K]
              [specs :as specs]
              [templates :as templates]])

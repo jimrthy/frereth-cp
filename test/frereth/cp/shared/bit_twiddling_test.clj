@@ -1,4 +1,4 @@
-(ns frereth-cp.shared.bit-twiddling-test
+(ns frereth.cp.shared.bit-twiddling-test
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as test]
@@ -7,7 +7,7 @@
              [clojure-test :as c-t]
              [generators :as lo-gen]
              [properties :as props]]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]])
   (:import clojure.lang.BigInt

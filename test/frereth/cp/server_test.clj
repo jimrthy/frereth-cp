@@ -1,20 +1,20 @@
-(ns frereth-cp.server-test
+(ns frereth.cp.server-test
   (:require [byte-streams :as b-s]
             [clojure.java.io :as jio]
             [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp
+            [frereth.cp
              [client :as client]
              [message :as msg]
              [server :as server]
              [shared :as shared]
              [test-factory :as factory]
              [util :as utils]]
-            [frereth-cp.client.state :as client-state]
-            [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.server.state :as srvr-state]
-            [frereth-cp.shared
+            [frereth.cp.client.state :as client-state]
+            [frereth.cp.message.specs :as msg-specs]
+            [frereth.cp.server.state :as srvr-state]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]

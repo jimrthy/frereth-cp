@@ -1,22 +1,22 @@
-(ns frereth-cp.client-test
+(ns frereth.cp.client-test
   (:require [clojure.pprint :refer (pprint)]
             [clojure.spec.alpha :as s]
             [clojure.test :refer (deftest is testing)]
-            [frereth-cp
+            [frereth.cp
              [client :as client]
              [message :as message]
              [shared :as shared]
              [test-factory :as factory]
              [util :as util]]
-            [frereth-cp.client
+            [frereth.cp.client
              [cookie :as cookie]
              [hello :as hello]
              [state :as state]]
-            [frereth-cp.message
+            [frereth.cp.message
              [registry :as registry]
              [specs :as msg-specs]]
-            [frereth-cp.server.cookie :as srvr-cookie]
-            [frereth-cp.shared
+            [frereth.cp.server.cookie :as srvr-cookie]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]]

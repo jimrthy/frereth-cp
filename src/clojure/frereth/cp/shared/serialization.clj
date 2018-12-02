@@ -1,4 +1,4 @@
-(ns frereth-cp.shared.serialization
+(ns frereth.cp.shared.serialization
   ;; Something like protocol buffers or avro seems very tempting.
   ;; Those are actually higher-level constructs that these wrap up.
   ;; This is more about building things like raw TCP packets.
@@ -6,7 +6,7 @@
   (:require [clojure.spec.alpha :as s]
             ;; FIXME: Make this go away.
             [clojure.tools.logging :as log]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [specs :as specs]]

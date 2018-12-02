@@ -1,4 +1,4 @@
-(ns frereth-cp.client
+(ns frereth.cp.client
   "Implement the client half of the CurveCP protocol.
 
   It seems like it would be nice if I could just declare
@@ -9,20 +9,20 @@
             [clojure.data :as data]
             [clojure.spec.alpha :as s]
             [clojure.pprint :refer [pprint]]
-            [frereth-cp.client
+            [frereth.cp.client
              [cookie :as cookie]
              [hello :as hello]
              [initiate :as initiate]
              [state :as state]]
-            [frereth-cp.message
+            [frereth.cp.message
              [specs :as msg-specs]]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
              [specs :as specs]]
-            [frereth-cp.util :as util]
+            [frereth.cp.util :as util]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

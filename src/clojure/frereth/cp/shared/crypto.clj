@@ -1,17 +1,17 @@
-(ns frereth-cp.shared.crypto
+(ns frereth.cp.shared.crypto
   "Wrap up the low-level crypto functions"
   (:require [byte-streams :as b-s]
             [clojure.java.io :as io]
             [clojure.spec.alpha :as s]
             ;; FIXME: Make this go away
             [clojure.tools.logging :as log]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [serialization :as serial]
              [specs :as specs]]
-            [frereth-cp.util :as util]
+            [frereth.cp.util :as util]
             [frereth.weald
              [logging :as log2]
              [specs :as weald]])

@@ -1,12 +1,12 @@
-(ns frereth-cp.server.cookie
+(ns frereth.cp.server.cookie
   "For dealing with cookie packets on the server side"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [frereth-cp.server
+            [frereth.cp.server
              [shared-specs :as srvr-specs]
              [state :as state]]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]

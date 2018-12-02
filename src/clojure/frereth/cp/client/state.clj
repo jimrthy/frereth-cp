@@ -1,22 +1,22 @@
-(ns frereth-cp.client.state
+(ns frereth.cp.client.state
   "Handle the inherently stateful pieces associated with the client side of things.
 
 The fact that this is so big says a lot about needing to re-think my approach"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [frereth-cp.message :as message]
-            [frereth-cp.message
+            [frereth.cp.message :as message]
+            [frereth.cp.message
              [registry :as registry]
              [specs :as msg-specs]]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [child :as child]
              [constants :as K]
              [crypto :as crypto]
              [serialization :as serial]
              [specs :as specs]]
-            [frereth-cp.util :as util]
+            [frereth.cp.util :as util]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

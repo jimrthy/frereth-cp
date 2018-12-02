@@ -1,10 +1,10 @@
-(ns frereth-cp.shared
+(ns frereth.cp.shared
   "For pieces shared among client, server, and messaging"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.string]
             [clojure.tools.logging :as log]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [serialization :as serial]

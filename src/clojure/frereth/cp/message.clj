@@ -1,4 +1,4 @@
-(ns frereth-cp.message
+(ns frereth.cp.message
   "Translation of curvecpmessage.c
 
   This is really a generic buffer program
@@ -13,25 +13,28 @@
   really the main point."
   (:require [clojure.pprint :refer (cl-format)]
             [clojure.spec.alpha :as s]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.flow-control :as flow-control]
-            [frereth-cp.message.from-child :as from-child]
-            [frereth-cp.message.from-parent :as from-parent]
-            [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.message.to-child :as to-child]
-            [frereth-cp.message.to-parent :as to-parent]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.crypto :as crypto]
-            [frereth-cp.shared.specs :as shared-specs]
-            [frereth-cp.util :as utils]
+            [frereth.cp.message
+             [constants :as K]
+             [flow-control :as flow-control]
+             [from-child :as from-child]
+             [from-parent :as from-parent]
+             [helpers :as help]
+             [specs :as specs]
+             [to-child :as to-child]
+             [to-parent :as to-parent]]
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
+             [bit-twiddling :as b-t]
+             [crypto :as crypto]
+             [specs :as shared-specs]]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]
-            [manifold.deferred :as dfrd]
-            [manifold.executor :as exec]
-            [manifold.stream :as strm])
+            [manifold
+             [deferred :as dfrd]
+             [executor :as exec]
+             [stream :as strm]])
   (:import [clojure.lang ExceptionInfo IDeref PersistentQueue]
            [io.netty.buffer ByteBuf Unpooled]
            [java.io IOException PipedInputStream PipedOutputStream]

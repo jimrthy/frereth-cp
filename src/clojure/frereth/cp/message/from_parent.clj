@@ -1,14 +1,16 @@
-(ns frereth-cp.message.from-parent
+(ns frereth.cp.message.from-parent
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.message.flow-control :as flow-control]
-            [frereth-cp.message.headers :as hdr]
-            [frereth-cp.message.helpers :as help]
-            [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared.bit-twiddling :as b-t]
-            [frereth-cp.shared.serialization :as serial]
-            [frereth-cp.util :as utils]
+            [frereth.cp.message
+             [constants :as K]
+             [flow-control :as flow-control]
+             [headers :as hdr] 
+             [helpers :as help]
+             [specs :as specs]]
+            [frereth.cp
+             [shared :as shared]
+             [bit-twiddling :as b-t]
+             [serialization :as serial]]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]])

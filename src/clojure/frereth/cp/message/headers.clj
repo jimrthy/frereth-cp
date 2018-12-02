@@ -1,6 +1,6 @@
-(ns frereth-cp.message.headers
-  (:require [frereth-cp.message.specs :as specs]
-            [frereth-cp.shared.constants :as K]))
+(ns frereth.cp.message.headers
+  (:require [frereth.cp.message.specs :as specs]
+            [frereth.cp.shared.constants :as K]))
 
 (def message-header-dscr
   "This is the first, metadata portion of the message

@@ -1,14 +1,15 @@
-(ns frereth-cp.test-factory
+(ns frereth.cp.test-factory
   "Build common pieces that the tests share"
   (:require [clojure.java.io :as io]
             [clojure.spec.alpha :as s]
-            [frereth-cp.client :as clnt]
-            [frereth-cp.client.state :as client-state]
-            [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.server :as server]
-            [frereth-cp.server.state :as srvr-state]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp
+             [client :as clnt]
+             [server :as server]
+             [shared :as shared]]
+            [frereth.cp.client.state :as client-state]
+            [frereth.cp.message.specs :as msg-specs]
+            [frereth.cp.server.state :as srvr-state]
+            [frereth.cp.shared
              [constants :as K]
              [crypto :as crypto]
              [specs :as shared-specs]]

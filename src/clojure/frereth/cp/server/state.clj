@@ -1,10 +1,10 @@
-(ns frereth-cp.server.state
+(ns frereth.cp.server.state
   "Managing CurveCP server state"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.server.helpers :as helpers]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.message.specs :as msg-specs]
+            [frereth.cp.server.helpers :as helpers]
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [child :as child]
              [constants :as K]

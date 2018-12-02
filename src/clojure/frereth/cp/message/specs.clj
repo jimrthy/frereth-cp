@@ -1,11 +1,11 @@
-(ns frereth-cp.message.specs
+(ns frereth.cp.message.specs
   "Common specs that are shared among message namespaces"
   (:require [clojure.spec.alpha :as s]
-            [frereth-cp.message.constants :as K]
-            [frereth-cp.shared
+            [frereth.cp.message.constants :as K]
+            [frereth.cp.shared
              [constants :as K-shared]
              [specs :as shared-specs]]
-            [frereth-cp.util :as util]
+            [frereth.cp.util :as util]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

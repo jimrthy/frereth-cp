@@ -1,10 +1,10 @@
-(ns frereth-cp.server.initiate-test
+(ns frereth.cp.server.initiate-test
   "Test out pieces involved in Server Cookie handling"
   (:require [clojure.test :refer (deftest is testing)]
-            [frereth-cp.server
+            [frereth.cp.server
              [initiate :as initiate]
              [state :as state]]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [crypto :as crypto]
              [specs :as specs]]
             [frereth.weald

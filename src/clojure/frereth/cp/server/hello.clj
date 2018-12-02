@@ -1,20 +1,20 @@
-(ns frereth-cp.server.hello
+(ns frereth.cp.server.hello
   "For coping with incoming HELLO packets"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [frereth-cp.server
+            [frereth.cp.server
              [cookie :as cookie]
              [helpers :as helpers]
              [shared-specs :as srvr-specs]
              [state :as state]]
-            [frereth-cp.shared :as shared]
-            [frereth-cp.shared
+            [frereth.cp.shared :as shared]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
              [serialization :as serial]
              [specs :as specs]]
-            [frereth-cp.util :as util]
+            [frereth.cp.util :as util]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]
