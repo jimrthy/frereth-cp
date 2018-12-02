@@ -40,7 +40,7 @@
       default-version)))
 
 (def project 'com.frereth/cp)
-(def version #_"0.0.1-SNAPSHOT" (deduce-version-from-git))
+(def version #_"0.0.2-SNAPSHOT" (deduce-version-from-git))
 
 ;; TODO: Add a dependency on weald and refactor away the local copy
 ;; of shared.logging.

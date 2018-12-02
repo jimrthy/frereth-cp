@@ -33,6 +33,10 @@ on, above and beyond the bit twiddling.
 
 Although you probably don't want to actually use it yet.
 
+### Maven Coordinates
+
+    [com.frereth/cp "current version"]
+
 ### Docker creation
 
     docker build -t frereth/curve-cp .
