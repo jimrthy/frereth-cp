@@ -1,7 +1,3 @@
-# TODO: Look into inheriting from the plain clojure
-# image instead.
-# c.f. https://github.com/Quantisav/docker-clojure
-#FROM adzerk/boot-clj:latest
 FROM clojure:boot-2.7.2-alpine
 
 ENV CURVE_CP_DIR=/opt/frereth/curvecp
