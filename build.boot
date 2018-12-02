@@ -10,7 +10,7 @@
 
 (def default-version
   "Really just for running inside docker w/out git tags"
-  "0.0.1-???-dirty")
+  "0.0.2-???-dirty")
 (defn deduce-version-from-git
   "Avoid another decade of pointless, unnecessary and error-prone
   fiddling with version labels in source code.
