@@ -145,7 +145,7 @@
             ;; Not that it matters for the purposes of this test.
             src (byte-array (take K/k-1 (repeat 3)))
             dscr (build-message-block-description src)
-            base-expectations #:frereth-cp.message.from-parent {:min-k 0
+            base-expectations #:frereth.cp.message.from-parent {:min-k 0
                                                                 :max-k size
                                                                 :delta-k size
                                                                 :max-rcvd K/recv-byte-buf-size
@@ -157,7 +157,7 @@
             ;; Rubber meets the road.
             ;; receive-bytes is the "number of initial bytes fully received"
             ;; receive-written is "within receivebytes, number of bytes given to child"
-            start-state {::specs/incoming #:frereth-cp.message.specs{:contiguous-stream-count 0
+            start-state {::specs/incoming #:frereth.cp.message.specs{:contiguous-stream-count 0
                                                                      :receive-eof ::specs/false
                                                                      :receive-total-bytes 0
                                                                      :receive-written 0
@@ -241,7 +241,7 @@
           state {::specs/incoming {::specs/contiguous-stream-count K/k-1
                                    ::specs/receive-written K/k-div2}}
           calculated (from-parent/calculate-start-stop-bytes state decoded-packet)]
-      (is (= #:frereth-cp.message.from-parent {:min-k 0
+      (is (= #:frereth.cp.message.from-parent {:min-k 0
                                                :max-k size
                                                :delta-k size
                                                :max-rcvd (+ K/k-128 size)

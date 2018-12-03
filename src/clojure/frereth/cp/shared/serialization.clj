@@ -10,7 +10,7 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [specs :as specs]]
-            [frereth-cp.util :as util])
+            [frereth.cp.util :as util])
   (:import [io.netty.buffer ByteBuf Unpooled]
            java.util.Arrays))
 

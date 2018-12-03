@@ -1068,7 +1068,7 @@
         scheduling-time 8820859844762393,
         actual-next nil
         now 8820859845124380
-        success [:frereth-cp.message/query-state ::whatever]
+        success [::query-state ::whatever]
         fmt (str "Awakening event loop that was sleeping for ~g ms "
                  "after ~:d at ~:d\n"
                  "at ~:d because: ~a")]

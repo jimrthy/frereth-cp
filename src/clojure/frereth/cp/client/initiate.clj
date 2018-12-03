@@ -186,7 +186,7 @@
                                   +
                                   (count msg))
                   ^TweetNaclFast$Box$KeyPair short-pair (get-in this [::shared/my-keys ::shared/short-pair])
-                  fields #:frereth-cp.shared.constants{:prefix K/initiate-header
+                  fields #:frereth.cp.shared.constants{:prefix K/initiate-header
                                                        :srvr-xtn (::state/server-extension this)
                                                        :clnt-xtn (::shared/extension this)
                                                        :clnt-short-pk (.getPublicKey short-pair)

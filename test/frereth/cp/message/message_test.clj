@@ -806,32 +806,32 @@
 (comment (bigger-echo))
 
 (deftest scheduling-differences
-  "2018-01-03T22:54:36,391 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
+  "2018-01-03T22:54:36,391 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Top of scheduler at 1,077,185,440,236,800
-2018-01-03T22:54:36,393 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
+2018-01-03T22:54:36,393 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Scheduling considerations
  Minimum send time: 1,077,185,421,583,970
 which is 1,000,000,000 nanoseconds
 after last block time 1,077,184,421,583,970.
 Recent was 5,913,406 ns in the past
 Default +1 minute: 1,077,245,434,836,309 from 1,077,185,434,836,309
-Scheduling based on want-ping value :frereth-cp.message.specs/immediate
+Scheduling based on want-ping value :frereth.cp.message.specs/immediate
 Based on ping settings, adjusted next time to: 1,077,185,421,583,970
 EOF/unsent criteria:
 un-ackd-count: 0
 un-sent-count: 0
-send-eof: :frereth-cp.message.specs/false
+send-eof: :frereth.cp.message.specs/false
 send-eof-processed: false
 Due to EOF status: 1,077,185,421,583,970
 Adjusted for RTT: 1,077,185,421,583,970
 After [pretending to] adjusting for closed/ignored child watcher: 1,077,185,421,583,970
-2018-01-03T22:54:36,393 WARN  frereth-cp.message: Client (manifold-pool-36-1):
+2018-01-03T22:54:36,393 WARN  frereth.cp.message: Client (manifold-pool-36-1):
  Scheduling Mismatch!
-2018-01-03T22:54:36,395 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
+2018-01-03T22:54:36,395 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Calculating next scheduled time took 182,705 nanoseconds and calculated 1,077,185,434,836,309.
 Building the messages about this took 1,238,220 nanoseconds
 Alt approach took 7,542 and calculated 1,077,185,421,583,970
-2018-01-03T22:54:36,395 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
+2018-01-03T22:54:36,395 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Initially calculated scheduled delay: 0 nanoseconds after 1,077,185,434,836,309 vs. 1,077,185,440,236,800
 Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0, :drained? false, :buffer-size 0, :permanent? false, :type manifold, :sink? true, :closed? false, :pending-takes 1, :buffer-capacity 0, :source? true} >>
 "
@@ -873,32 +873,32 @@ Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0
             faster-alt 1077185421583970
             calculated-fast (message/condensed-choose-next-scheduled-time state to-child-done?)]
         (is (= actual calculated-slow calculated-fast))))
-    "2018-01-03T22:54:36,402 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
+    "2018-01-03T22:54:36,402 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Top of scheduler at 1,077,185,451,123,755
-2018-01-03T22:54:36,403 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
+2018-01-03T22:54:36,403 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Scheduling considerations
  Minimum send time: 1,077,185,421,583,970
 which is 1,000,000,000 nanoseconds
 after last block time 1,077,184,421,583,970.
 Recent was 2,635,956 ns in the past
 Default +1 minute: 1,077,245,448,862,638 from 1,077,185,448,862,638
-Scheduling based on want-ping value :frereth-cp.message.specs/immediate
+Scheduling based on want-ping value :frereth.cp.message.specs/immediate
 Based on ping settings, adjusted next time to: 1,077,185,421,583,970
 EOF/unsent criteria:
 un-ackd-count: 0
 un-sent-count: 0
-send-eof: :frereth-cp.message.specs/false
+send-eof: :frereth.cp.message.specs/false
 send-eof-processed: false
 Due to EOF status: 1,077,185,421,583,970
 Adjusted for RTT: 1,077,185,421,583,970
 After [pretending to] adjusting for closed/ignored child watcher: 1,077,185,421,583,970
-2018-01-03T22:54:36,403 WARN  frereth-cp.message: Client (manifold-pool-36-1):
+2018-01-03T22:54:36,403 WARN  frereth.cp.message: Client (manifold-pool-36-1):
  Scheduling Mismatch!
-2018-01-03T22:54:36,404 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
+2018-01-03T22:54:36,404 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Calculating next scheduled time took 136,401 nanoseconds and calculated 1,077,185,448,862,638.
 Building the messages about this took 980,574 nanoseconds
 Alt approach took 5,308 and calculated 1,077,185,421,583,970
-2018-01-03T22:54:36,405 DEBUG frereth-cp.message: Client (manifold-pool-36-1):
+2018-01-03T22:54:36,405 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Initially calculated scheduled delay: 0 nanoseconds after 1,077,185,448,862,638 vs. 1,077,185,451,123,755
 Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0, :drained? false, :buffer-size 0, :permanent? false, :type manifold, :sink? true, :closed? false, :pending-takes 2, :buffer-capacity 0, :source? true} >>
 "
@@ -938,7 +938,7 @@ Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0
         ;; like this.
         (is (= calculated-slow actual calculated-fast))))
     (testing "3"
-      "2018-01-10T22:38:13,629 DEBUG frereth-cp.message: Client (manifold-pool-40-1):
+      "2018-01-10T22:38:13,629 DEBUG frereth.cp.message: Client (manifold-pool-40-1):
  Scheduling considerations
  Minimum resend time: 1,681,003,667,872,581
 which is 1,000,000,000 nanoseconds
@@ -946,12 +946,12 @@ after last block time 1,681,002,667,872,581.
 Recent was 8,837,171 ns in the past
 rtt-timeout: 1,000,000,000
 Default +1 minute: 1,681,062,667,872,581 from 1,681,002,667,872,581
-Scheduling based on want-ping value :frereth-cp.message.specs/false
+Scheduling based on want-ping value :frereth.cp.message.specs/false
 Based on ping settings, adjusted next time to: 1,681,062,667,872,581
 EOF/unsent criteria:
 un-ackd-count: 1
 un-sent-count: 0
-send-eof: :frereth-cp.message.specs/false
+send-eof: :frereth.cp.message.specs/false
 send-eof-processed: false
 Due to EOF status: 1,681,062,667,872,581
 Adjusted for RTT: 1,681,062,667,872,581

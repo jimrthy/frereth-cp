@@ -244,7 +244,7 @@
    (read-next-bytes-from-child! monitor-id
                                 log-state
                                 child-out
-                                []
+                                (byte-array [])
                                 available-bytes
                                 max-to-read)))
 

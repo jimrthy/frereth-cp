@@ -1,5 +1,7 @@
 FROM clojure:boot-2.7.2-alpine
 
+RUN apk add git
+
 ENV CURVE_CP_DIR=/opt/frereth/curvecp
 
 RUN mkdir -p ${CURVE_CP_DIR}

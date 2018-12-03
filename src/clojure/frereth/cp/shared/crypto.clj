@@ -520,7 +520,7 @@
   "Sticks a new random key pair into a map"
   [which]
   (let [pair (random-key-pair)
-        namespace "frereth-cp.shared.specs"
+        namespace "frereth.cp.shared.specs"
         ;; The keys generated here don't really mesh well with the
         ;; way specs is written.
         ;; That really just uses ::public-long and ::public-short

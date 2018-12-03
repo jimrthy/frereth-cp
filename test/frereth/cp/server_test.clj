@@ -33,7 +33,7 @@
    {:keys [::specs/public-short]
     :as my-short-keys}]
   (throw (RuntimeException. "This is obsolete"))
-  ;; frereth-cp.client.hello is really my model for setting
+  ;; frereth.cp.client.hello is really my model for setting
   ;; this up.
   ;; I'm not overly fond of the current implementation.
   ;; Still, it's silly not to use whatever the client does.

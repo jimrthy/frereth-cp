@@ -2,7 +2,7 @@
   "Pieces refactored from frereth.common.util
 
   Because I haven't really decided what to do with them yet"
-  ;; TODO: Move into frereth-cp.shared.util
+  ;; TODO: Move into frereth.cp.shared.util
   (:require [clojure.pprint :as pprint]
             [clojure.spec.alpha :as s]
             [clojure.stacktrace :as s-t]

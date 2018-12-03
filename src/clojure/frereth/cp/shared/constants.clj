@@ -174,7 +174,7 @@
 (s/def ::inner-i-nonce ::specs/inner-i-nonce)
 (s/def ::long-term-public-key ::specs/public-long)
 ;; FIXME: Actually, this should be a full-blown
-;; :frereth-cp.message.specs/packet, with a better
+;; :frereth.cp.message.specs/packet, with a better
 ;; name.
 ;; FIXME: Switch to that name.
 (s/def ::message (s/and bytes?

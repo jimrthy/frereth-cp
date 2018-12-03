@@ -1,18 +1,18 @@
-(ns frereth-cp.server
+(ns frereth.cp.server
   "Implement the server half of the CurveCP protocol"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            [frereth-cp.message.specs :as msg-specs]
-            [frereth-cp.server
+            [frereth.cp.message.specs :as msg-specs]
+            [frereth.cp.server
              [cookie :as cookie]
              [hello :as hello]
              [helpers :as helpers]
              [initiate :as initiate]
              [state :as state]]
-            [frereth-cp
+            [frereth.cp
              [shared :as shared]
              [util :as util]]
-            [frereth-cp.shared
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]

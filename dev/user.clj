@@ -16,11 +16,11 @@
              [generators :as lo-gen]]
             ;; These are moderately useless under boot.
             [clojure.tools.namespace.repl :refer (refresh refresh-all)]
-            [frereth-cp.message :as msg]
-            [frereth-cp.shared
+            [frereth.cp.message :as msg]
+            [frereth.cp.shared
              [bit-twiddling :as b-t]
              [specs :as shared-specs]]
-            [frereth-cp.util :as utils]
+            [frereth.cp.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

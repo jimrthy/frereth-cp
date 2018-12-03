@@ -239,7 +239,7 @@
     ;; So I need a way to manually halt that also.
 
     ;; There are some interrupt functions in the top-level
-    ;; frereth-cp.message ns that seem to do the trick.
+    ;; frereth.cp.message ns that seem to do the trick.
     ;; It's tempting to expose them.
     ;; Then again, they're a sledge hammer that just stops
     ;; all the message loops.
