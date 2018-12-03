@@ -51,7 +51,7 @@
                           ;; netty isn't shy about breaking backwards compatibility
                           ;; between build versions.
                           [aleph "0.4.7-alpha3"]
-                          [com.frereth/weald "0.0.4-gacd4108"]
+                          [com.frereth/weald "0.0.4-ga530ad0"]
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
                           ;; users
