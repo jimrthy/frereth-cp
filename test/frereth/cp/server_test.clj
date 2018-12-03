@@ -147,7 +147,6 @@
           ;; FIXME: This is broken now.
           inited (factory/build-server logger
                                        log-state
-                                       (gensym "server-start-stop-")
                                        (fn [bs]
                                          (println "Message from client to server child")
                                          (println (b-t/->string bs))))
@@ -426,11 +425,11 @@
                                                                                                                              ::timeout)]
                                                                               ;; As long as we got a message back, we should be able to call
                                                                               ;; this test done.
-                                                                              (if (= ::timeout first-full-clnt-message)
+                                                                              (if (= ::timeout first-full-client-message)
                                                                                 (do
                                                                                   (dfrd/error! initiate-outcome
                                                                                                (RuntimeException. "Timed out waiting for initial client message")))
-                                                                                (dfrd/success! initiate-outcome first-full-clnt-message)))
+                                                                                (dfrd/success! initiate-outcome first-full-client-message)))
                                                                             (do
                                                                               (dfrd/error! initiate-outcome
                                                                                            (RuntimeException. "Timed out writing first server Message packet to client")))))

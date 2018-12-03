@@ -862,17 +862,21 @@ Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0
                                      ::specs/un-ackd-blocks []
                                      ::specs/want-ping want-ping}
                    ::specs/message-loop-name "Fix scheduling mismatches"
-                   ::specs/recent recent}
+                   ::specs/recent recent
+                   ::weald/state (log/init ::scheduling-differences)}
             to-child-done? (promise)
             ;; Based on these values, the original "mainline" approach
             ;; returned recent, which should never be correct.
-            actual 1077185434836309
+            expected 1077185434836309
+            _ (pprint state)
             calculated-slow (message/choose-next-scheduled-time state to-child-done?)
             ;; Just based an the want-ping setting, this looks correct
             ;; Except that it's less than recent. That can't be correct.
+            _ (println "Next scheduled time chosen, slowly")
             faster-alt 1077185421583970
             calculated-fast (message/condensed-choose-next-scheduled-time state to-child-done?)]
-        (is (= actual calculated-slow calculated-fast))))
+        (is (= (::message/next-action-time calculated-slow) expected))
+        (is (= (::message/next-action-time calculated-fast) expected))))
     "2018-01-03T22:54:36,402 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
  Top of scheduler at 1,077,185,451,123,755
 2018-01-03T22:54:36,403 DEBUG frereth.cp.message: Client (manifold-pool-36-1):
@@ -927,16 +931,18 @@ Setting timer to trigger in 1 ms (vs 0 scheduled) on << stream: {:pending-puts 0
                                      ::specs/un-ackd-blocks []
                                      ::specs/want-ping want-ping}
                    ::specs/message-loop-name "Fix scheduling mismatches: 2"
-                   ::specs/recent recent}
+                   ::specs/recent recent
+                   ::weald/state (log/init ::scheduling-differences-2)}
             to-child-done? (promise)
             ;; This is the +1 minute
             calculated-slow (message/choose-next-scheduled-time state to-child-done?)
-            actual 1077185448862638
+            expected 1077185448862638
             faster-alt 1077185421583970
             calculated-fast (message/condensed-choose-next-scheduled-time state to-child-done?)]
         ;; Actually, there are a bunch of entries that look pretty much exactly
         ;; like this.
-        (is (= calculated-slow actual calculated-fast))))
+        (is (= expected (::message/next-action-time calculated-slow)))
+        (is (= expected (::message/next-action-time calculated-fast)))))
     (testing "3"
       "2018-01-10T22:38:13,629 DEBUG frereth.cp.message: Client (manifold-pool-40-1):
  Scheduling considerations
@@ -980,17 +986,19 @@ After [pretending to] adjusting for closed/ignored child watcher: 1,681,062,667,
                                      ::specs/un-sent-blocks []
                                      ::specs/un-ackd-blocks [1]
                                      ::specs/want-ping want-ping}
-                   ::specs/message-loop-name "Fix scheduling mismatches: 2"
-                   ::specs/recent recent}
+                   ::specs/message-loop-name "Fix scheduling mismatches: 3"
+                   ::specs/recent recent
+                   ::weald/state (log/init ::fix-scheduling-mismatches-3)}
             to-child-done? (promise)
             ;; This is the +1 minute
             calculated-slow (message/choose-next-scheduled-time state to-child-done?)
-            actual 1681062667872581
+            expected 1681062667872581
             faster-alt 1681003667872581
             calculated-fast (message/condensed-choose-next-scheduled-time state to-child-done?)]
         ;; Actually, there are a bunch of entries that look pretty much exactly
         ;; like this.
-        (is (= calculated-slow actual calculated-fast))))))
+        (is (= expected (::message/next-action-time calculated-slow)))
+        (is (= expected (::message/next-action-time calculated-fast)))))))
 
 (deftest check-initial-state-override
   (let [opts {::specs/outgoing {::specs/pipe-from-child-size K/k-1}

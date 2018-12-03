@@ -260,7 +260,8 @@
   ;; As it is, right now, this is busted.
   ;; TODO: get this test working
   (testing "Values for big message streams"
-    (let [^ByteBuf buf (Unpooled/buffer 48)]
+    (let [log-state (log/init ::check-big-flackd-others)
+          ^ByteBuf buf (Unpooled/buffer 48)]
       ;; We're going to have to be able to cope with big numbers
       ;; sooner or later
       (.writeLong buf -56)   ; bytes in range #1
@@ -274,7 +275,12 @@
       (.writeShort buf 16)  ; bytes in range #5
       (.writeShort buf 24)  ; bytes between ranges 5-6
       (.writeShort buf 32)  ; bytes in range #6
-      (let [flagged (from-parent/flag-ackd-others! {::specs/message-loop-name "Check big flackd"}
+      ;; Note that this test is very different than the implementation.
+      ;; We're building up the sort of raw buffer that it expects to already
+      ;; have decomposed into a map full of ack-gap and ack-length keys.
+      ;; So this is one that is known to be broken
+      (let [flagged (from-parent/flag-ackd-others! {::specs/message-loop-name "Check big flackd"
+                                                    ::weald/state log-state}
                                                    {::specs/message-id 10237
                                                     ::specs/receive-buf buf})]
         (is (not flagged) "What should that look like?")))))

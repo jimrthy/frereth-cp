@@ -11,7 +11,7 @@
   I keep wanting to think of this as a simple transducer and just
   skip the buffering pieces, but they (and the flow control) are
   really the main point."
-  (:require [clojure.pprint :refer (cl-format)]
+  (:require [clojure.pprint :refer (cl-format pprint)]
             [clojure.spec.alpha :as s]
             [frereth.cp.message
              [constants :as K]
@@ -587,8 +587,7 @@
      ::weald/state log-state}))
 
 (s/fdef choose-next-scheduled-time
-        :args (s/cat :outgoing ::specs/outgoing
-                     :state ::specs/state
+        :args (s/cat :state ::specs/state
                      :to-child-done? ::specs/to-child-done?)
         :ret (s/keys :req [::next-action-time
                            ::weald/state]))
@@ -610,11 +609,17 @@
     log-state ::weald/state
     :as state}
    to-child-done?]
-  {:pre [state
-         outgoing
+  {:pre [flow-control
          last-block-time
-         flow-control
-         n-sec-per-block]}
+         n-sec-per-block
+         outgoing
+         state]}
+  (println "choose-next-scheduled-time for")
+  (pprint state)
+  (when-not log-state
+    (throw (ex-info (str "Missing " ::weald/state)
+                    {::among (keys state)
+                     ::full state})))
   ;;; This amounts to lines 286-305
 
   ;; I should be able to just completely bypass this if there's

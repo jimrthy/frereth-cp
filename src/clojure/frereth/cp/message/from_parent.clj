@@ -361,8 +361,8 @@
       (assoc state ::weald/state log-state))))
 
 (s/fdef flag-ackd-others!
-        :args (s/cat :state ::specs/state
-                     :packet ::specs/packet)
+  :args (s/cat :state ::specs/state
+               :packet ::specs/packet)
         :ret ::specs/state)
 (defn flag-ackd-others!
   "Cope with sent message the other side just ACK'd
@@ -403,6 +403,7 @@
                      log-state ::weald/state
                      :as state}
                     [start stop :as gap-key]]
+                 (println "Reducing from" start "to" stop "until" stop-byte "based on" gap-key)
                  (let [log-state
                        (if-not (and start stop)
                          (log/error log-state
