@@ -1,4 +1,4 @@
-(ns frereth.cp.util
+(ns frereth.cp.shared.util
   "Pieces refactored from frereth.common.util
 
   Because I haven't really decided what to do with them yet"

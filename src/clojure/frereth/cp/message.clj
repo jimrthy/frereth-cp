@@ -26,8 +26,8 @@
             [frereth.cp.shared
              [bit-twiddling :as b-t]
              [crypto :as crypto]
-             [specs :as shared-specs]]
-            [frereth.cp.util :as utils]
+             [specs :as shared-specs]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]
@@ -109,7 +109,7 @@
                            -1
                            1)))
                      (catch NullPointerException ex
-                       (let [log-state (log/exception log-state
+                       (let [log-state (log/exception (log/clean-fork log-state ::failed)
                                                        ex
                                                        ::build-un-ackd-blocks
                                                        "Comparing time"

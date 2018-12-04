@@ -15,8 +15,9 @@
              [test-utilities :as test-helpers]
              [to-child :as to-child]
              [to-parent :as to-parent]]
-            [frereth.cp.shared.bit-twiddling :as b-t]
-            [frereth.cp.util :as utils]
+            [frereth.cp.shared
+             [bit-twiddling :as b-t]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

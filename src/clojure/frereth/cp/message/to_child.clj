@@ -10,12 +10,13 @@
   the bottom of each event loop."
   (:require [clojure.pprint :refer (cl-format)]
             [clojure.spec.alpha :as s]
-            [frereth.cp.shared.bit-twiddling :as b-t]
             [frereth.cp.message
              [constants :as K]
              [helpers :as help]
              [specs :as specs]]
-            [frereth.cp.util :as utils]
+            [frereth.cp.shared
+             [bit-twiddling :as b-t]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

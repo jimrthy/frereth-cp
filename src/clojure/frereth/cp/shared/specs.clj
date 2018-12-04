@@ -2,7 +2,7 @@
   "For specs that make sense to share among all the pieces"
   (:require [clojure.spec.alpha :as s]
             [clojure.test.check.generators :as lo-gen]
-            [frereth.cp.util :as utils]
+            [frereth.cp.shared.util :as utils]
             [manifold.deferred :as dfrd])
   (:import [io.aleph.dirigiste Executor]))
 

@@ -21,8 +21,8 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
-             [specs :as specs]]
-            [frereth.cp.util :as util]
+             [specs :as specs]
+             [util :as util]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

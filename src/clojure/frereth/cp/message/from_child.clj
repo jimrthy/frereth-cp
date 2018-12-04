@@ -7,8 +7,8 @@
              [specs :as specs]]
             [frereth.cp.shared
              [bit-twiddling :as b-t]
-             [constants :as K-shared]]
-            [frereth.cp.util :as utils]
+             [constants :as K-shared]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

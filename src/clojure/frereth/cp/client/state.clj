@@ -15,8 +15,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
              [constants :as K]
              [crypto :as crypto]
              [serialization :as serial]
-             [specs :as specs]]
-            [frereth.cp.util :as util]
+             [specs :as specs]
+             [util :as util]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

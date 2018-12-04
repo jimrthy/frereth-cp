@@ -20,8 +20,8 @@ This is the part that possibly establishes a 'connection'"
              [crypto :as crypto]
              [serialization :as serial]
              [specs :as specs]
-             [templates :as templates]]
-            [frereth.cp.util :as util]
+             [templates :as templates]
+             [util :as util]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

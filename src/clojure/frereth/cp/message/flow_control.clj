@@ -4,8 +4,9 @@
             [frereth.cp.message
              [constants :as K]
              [specs :as specs]]
-            [frereth.cp.shared.crypto :as crypto]
-            [frereth.cp.util :as utils]
+            [frereth.cp.shared
+             [crypto :as crypto]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]))

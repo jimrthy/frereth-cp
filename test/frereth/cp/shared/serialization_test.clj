@@ -14,8 +14,8 @@
              [constants :as K]
              [crypto :as crypto]
              [serialization :as serial]
-             [specs :as specs]]
-            [frereth.cp.util :as utils]))
+             [specs :as specs]
+             [util :as utils]]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Helpers

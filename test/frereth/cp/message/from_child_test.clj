@@ -5,8 +5,9 @@
              [constants :as K]
              [from-child :as from-child]
              [specs :as specs]]
-            [frereth.cp.shared.bit-twiddling :as b-t]
-            [frereth.cp.util :as utils]
+            [frereth.cp.shared
+             [bit-twiddling :as b-t]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]])
@@ -20,13 +21,15 @@
   (let [logger (log/std-out-log-factory)
         log-state (log/init ::child-consumption)
         message-loop-name "Testing basic consumption from child"
+        un-ackd-blocks (msg/build-un-ackd-blocks {::weald/logger logger
+                                                  ::weald/state log-state})
         start-state #:frereth.cp.message.specs {:message-loop-name message-loop-name
                                                 :outgoing #:frereth.cp.message.specs {:max-block-length 512
                                                                                       :ackd-addr 0
                                                                                       :strm-hwm 0
                                                                                       :un-sent-blocks PersistentQueue/EMPTY
-                                                                                      :un-ackd-blocks (msg/build-un-ackd-blocks {::weald/logger logger
-                                                                                                                                 ::weald/state log-state})}}
+                                                                                      :un-ackd-blocks un-ackd-blocks}
+                                                ::weald/state log-state}
         bytes-to-send (byte-array (range 8193))]
     ;; This test is now completely broken.
     ;; And obsolete.
@@ -37,7 +40,8 @@
     ;; That seems like more trouble than it's worth, since I have bigger-picture
     ;; tests that already cover this more thoroughly in message-test.
     ;; I should probably just scrap this.
-    (let [consumer (from-child/build-byte-consumer message-loop-name bytes-to-send)
+    (let [{log-state ::weald/state
+           consumer ::from-child/callback} (from-child/build-byte-consumer message-loop-name log-state bytes-to-send)
           {:keys [::specs/outgoing]
            :as result} (consumer start-state)]
       (is (= 8193 (::specs/strm-hwm outgoing)))

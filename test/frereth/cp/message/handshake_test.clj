@@ -9,8 +9,9 @@
              [constants :as K]
              [message-test :as m-t]
              [specs :as specs]]
-            [frereth.cp.shared.bit-twiddling :as b-t]
-            [frereth.cp.util :as utils]
+            [frereth.cp.shared
+             [bit-twiddling :as b-t]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

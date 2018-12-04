@@ -5,7 +5,7 @@
             [frereth.cp.shared
              [constants :as K-shared]
              [specs :as shared-specs]]
-            [frereth.cp.util :as util]
+            [frereth.cp.shared.util :as util]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

@@ -7,7 +7,7 @@
              [specs :as specs]
              [test-utilities :as test-helpers]
              [to-parent :as to-parent]]
-            [frereth.cp.util :as utils]
+            [frereth.cp.shared.util :as utils]
             [frereth.weald
              [logging :as log]
              [specs :as weald]])

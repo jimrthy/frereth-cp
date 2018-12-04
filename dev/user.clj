@@ -19,8 +19,8 @@
             [frereth.cp.message :as msg]
             [frereth.cp.shared
              [bit-twiddling :as b-t]
-             [specs :as shared-specs]]
-            [frereth.cp.util :as utils]
+             [specs :as shared-specs]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]
