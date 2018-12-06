@@ -92,6 +92,7 @@
 
 (require '[adzerk.bootlaces :refer [bootlaces! build-jar push-snapshot push-release]]
          '[adzerk.boot-test :refer [test]]
+         '[boot.core :as boot]
          '[boot.pod :as pod]
          '[samestep.boot-refresh :refer [refresh]]
          '[tolitius.boot-check :as check])
@@ -155,9 +156,67 @@
   "Publish to clojars from your current branch"
   []
   (task-options! push {:ensure-branch nil})
-  ;; Note that the javac step is vital, although not normally needed
-  ;; for a clojure-only bootlaces publish.
-  (comp (javac) (build-jar) (push-snapshot)))
+  (let [old-version version
+        version (str old-version "-SNAPSHOT")]
+    (comp
+     ;; Q: Should fileset be a vector like this?
+     ;; (it doesn't seem to make any difference. I've seen examples
+     ;; both ways)
+     (with-pre-wrap [fileset]
+       (println "Setting bootlaces to publish version" version)
+       ;; Note that this is really just setting the options to
+       ;; push, which is part of boot.task.built-in.
+       ;; Actually, the bootlaces task is just a wrapper around
+       ;; that.
+       (bootlaces! version :dont-modify-paths? true)
+       (println "Compiling")
+       #_(let [a ((javac) fileset)
+             _ (println "Java files compiled")
+             b (build-jar a)
+             _ (println "JAR built")
+             c (push-snapshot b)]
+         (println "Snapshot pushed")
+         c)
+
+       ;; Note that the javac step is vital, although not normally needed
+       ;; for a clojure-only bootlaces publish.
+       #_(-> fileset
+           javac
+           build-jar
+           push-snapshot)
+       ;; This fails: TmpFileSet cannot be cast to a java.lang.CharSequence
+       #_(boot/commit! ((comp javac build-jar push-snapshot) fileset))
+       ;; This cannot work: We must commit
+       #_((comp javac build-jar push-snapshot) fileset)
+       ;; Fails: no implementation of commit!
+       ;; of protocol: #'boot.tmpdir/ITmpFileSet found for class:
+       ;; boot.task.built_in$fn__2586$fn__2587$fn__2592$fn__2593
+       #_(boot/commit! (comp (javac) (build-jar) (push-snapshot)) fileset)
+       ;; Fails: Arguments must be either all strings or all fns
+       (boot/commit! (boot (comp (javac) (build-jar) (push-snapshot)) fileset)))
+     (with-post-wrap fileset
+       (bootlaces! old-version :dont-modify-paths? true)))
+    #_(fn middleware [next-handler]
+      (fn handler [fileset]
+        (bootlaces! version :dont-modify-paths? true)
+        (println "doing interesting things to fileset")
+        (let [fileset' #_((comp (javac) (build-jar) (push-snapshot)))
+              (let [a ((javac) fileset)
+                    _ (println "compiled" fileset "to" a)
+                    b ((build-jar) a)
+                    _ (println "built-jar into" b)
+                    c ((push-snapshot) b)
+                    _ (println "Snapshot pushed:" c)]
+                c)
+              #_[fileset' (fileset' fileset)]
+              _ (println "Commiting" fileset')
+              fileset' (boot/commit! (boot fileset'))
+              _ (println "Calling wrapper")
+              result (next-handler fileset')]
+          (println "Restoring previous settings")
+          (bootlaces! old-version :dont-modify-paths? true)
+          (println "Returning result")
+          result)))))
 
 (deftask run
   "Run the project."

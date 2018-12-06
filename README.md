@@ -8,6 +8,13 @@ the network, much like TCP. Except in a secure manner.
 This is an attempt to translate the reference implementation
 into clojure.
 
+## TODO
+
+bootlaces tries to use adzerk.bootlaces.template/update-
+dependency to update the version referenced in here.
+
+FIXME: Take advantage of that
+
 ## Background
 
 It was initially designed by Daniel J. Bernstein. The spec,
