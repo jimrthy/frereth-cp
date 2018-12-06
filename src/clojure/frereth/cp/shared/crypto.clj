@@ -272,19 +272,20 @@
     (restart-agent nonce-writer (initial-nonce-agent-state)))
   (defn do-safe-nonce
     "Shoves a theoretically safe 16-byte nonce suffix into dst at offset"
-    ;; Note that this is extremely brittle.
-    ;; It's only called from 2 places, but it's still a bit worrisome.
-    ;; TODO: Take this out of the public interface section.
-    ;; Anything that does call it now should switch to get-safe-nonce
     ([log-state dst key-dir offset long-term?]
      ;; It's tempting to try to set this up to allow multiple
      ;; nonce trackers. It seems like having a single shared
      ;; one risks leaking information to attackers.
      ;; This current implementation absolutely cannot
-     ;; handle that sort of thing.
+     ;; handle that sort of thing. (To be fair, neither can the
+     ;; reference implementation).
      ;; Right now, we have one agent with a single nonce key
      ;; (along with counters).
      ;; Maybe it doesn't matter.
+
+     ;; Q: Does this arity make any sense at all?
+     ;; As things stand, it doesn't seem like anything uses it outside
+     ;; unit tests.
 
      (when-let [ex (agent-error nonce-writer)]
        (throw ex))

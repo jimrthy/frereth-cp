@@ -4,15 +4,15 @@
             [frereth.cp.client
              [state :as state]]
             [frereth.cp
-             [shared :as shared]
-             [util :as utils]]
+             [shared :as shared]]
             [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
              [specs :as specs]
              [serialization :as serial]
-             [templates :as templates]]
+             [templates :as templates]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

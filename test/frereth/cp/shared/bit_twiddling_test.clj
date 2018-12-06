@@ -99,7 +99,7 @@ Since it really isn't secure, that might be a terrible idea"
 (deftest byte-1-uint64-pack
   ;; This is really just a circular truism.
   ;; uint64-pack! is built around possibly-2s-complement-8.
-  (are [expected] (= (aget (b-t/uint64-pack! expected) 0)
+  (are [expected] (= (aget (b-t/uint64-pack expected) 0)
                      (b-t/possibly-2s-complement-8 expected))
     1 127 128 180))
 

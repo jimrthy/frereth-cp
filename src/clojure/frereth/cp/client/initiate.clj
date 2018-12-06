@@ -2,8 +2,7 @@
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [frereth.cp
-             [shared :as shared]
-             [util :as utils]]
+             [shared :as shared]]
             [frereth.cp.client
              [message :as message]
              [state :as state]]
@@ -13,7 +12,8 @@
              [constants :as K]
              [crypto :as crypto]
              [serialization :as serial]
-             [specs :as specs]]
+             [specs :as specs]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]

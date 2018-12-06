@@ -1,6 +1,7 @@
 (ns frereth.cp.client.cookie-test
   "Test out pieces involved in client cookie handling"
-  (:require [clojure.test :refer (deftest is testing)]))
+  (:require [clojure.test :refer (deftest is testing)]
+            [frereth.cp.client.cookie :as cookie]))
 
 (deftest url-comparison
   (testing "Distinct addresses"

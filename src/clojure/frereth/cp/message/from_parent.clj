@@ -1,8 +1,7 @@
 (ns frereth.cp.message.from-parent
   (:require [clojure.spec.alpha :as s]
             [frereth.cp
-             [shared :as shared]
-             [util :as utils]]
+             [shared :as shared]]
             [frereth.cp.message
              [constants :as K]
              [flow-control :as flow-control]
@@ -11,7 +10,8 @@
              [specs :as specs]]
             [frereth.cp.shared
              [bit-twiddling :as b-t]
-             [serialization :as serial]]
+             [serialization :as serial]
+             [util :as utils]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]])

@@ -4,14 +4,14 @@
             [frereth.cp.client.state :as state]
             [frereth.cp.message.specs :as msg-specs]
             [frereth.cp
-             [shared :as shared]
-             [util :as util]]
+             [shared :as shared]]
             [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [crypto :as crypto]
              [serialization :as serial]
-             [specs :as specs]]
+             [specs :as specs]
+             [util :as util]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]
