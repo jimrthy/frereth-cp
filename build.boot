@@ -40,7 +40,7 @@
       default-version)))
 
 (def project 'com.frereth/cp)
-(def version #_"0.0.3" (deduce-version-from-git))
+#_(def version #_"0.0.3" (deduce-version-from-git))
 
 ;; TODO: Add a dependency on weald and refactor away the local copy
 ;; of shared.logging.
@@ -77,10 +77,8 @@
 
 (task-options!
  aot {:namespace   #{'frereth-cp.server 'frereth-cp.client}}
- jar {:main        'frereth-cp.server
-      :file        (str "frereth-cp-" version ".jar")}
+ jar {:main        'frereth-cp.server}
  pom {:project     project
-      :version     version
       :description "Implement CurveCP in clojure"
       ;; TODO: Add a real website
       :url         "https://github.com/jimrthy/frereth-cp"
@@ -88,7 +86,10 @@
       ;; Q: Should this go into public domain like the rest
       ;; of the pieces?
       :license     {"Eclipse Public License"
-                    "http://www.eclipse.org/legal/epl-v10.html"}})
+                    "http://www.eclipse.org/legal/epl-v10.html"}}
+ ;; This might not be generally warranted.
+ ;; Then again...it seems like it only matters for "real" releases.
+ push {:ensure-branch nil})
 
 (require '[adzerk.bootlaces :refer [bootlaces! build-jar push-snapshot push-release]]
          '[adzerk.boot-test :refer [test]]
@@ -97,7 +98,14 @@
          '[samestep.boot-refresh :refer [refresh]]
          '[tolitius.boot-check :as check])
 
-(bootlaces! version :dont-modify-paths? true)
+(deftask set-version
+  []
+  (let [version (deduce-version-from-git)]
+    (task-options!
+     jar {:file (str "frereth-cp-" version ".jar")}
+     pom {:version version})
+    (bootlaces! version :dont-modify-paths? true))
+  identity)
 
 (deftask build
   "Build the project locally as a JAR."
@@ -107,7 +115,7 @@
   ;; TODO: Eliminate this discrepancy (not that it matters for
   ;; a library)
   (let [dir (if (seq dir) dir #{"target"})]
-    (comp (javac) (aot) (pom) (jar) (target :dir dir))))
+    (comp (set-version) (javac) (aot) (pom) (jar) (target :dir dir))))
 
 (deftask check-conflicts
   "Verify there are no dependency conflicts."
@@ -152,71 +160,42 @@
   (let [port (or port 32767)]
     (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl :port port :bind "0.0.0.0"))))
 
-(deftask publish-from-branch
-  "Publish to clojars from your current branch"
+(deftask to-clojars
+  "Publish"
   []
-  (task-options! push {:ensure-branch nil})
-  (let [old-version version
-        version (str old-version "-SNAPSHOT")]
+  (comp (set-version) (javac) (build-jar) (push-release)))
+
+(deftask from-snapshot
+  "Allow publishing a snapshot version"
+  ;; TODO: Split this into 2 tasks.
+  ;; One to wrap, pushing/popping options without updating the
+  ;; fileset.
+  ;; The other should do the actual changes in the pipeline
+  []
+
+  (let [old-version (deduce-version-from-git)
+        version (str old-version "-SNAPSHOT")
+        ;old-pom-options pom
+        old-push-options push
+        ]
     (comp
      ;; Q: Should fileset be a vector like this?
      ;; (it doesn't seem to make any difference. I've seen examples
      ;; both ways)
-     (with-pre-wrap [fileset]
+     (with-pre-wrap fileset
        (println "Setting bootlaces to publish version" version)
        ;; Note that this is really just setting the options to
        ;; push, which is part of boot.task.built-in.
        ;; Actually, the bootlaces task is just a wrapper around
        ;; that.
+       (task-options! )
+       ;(task-options! pom {:version version})
        (bootlaces! version :dont-modify-paths? true)
-       (println "Compiling")
-       #_(let [a ((javac) fileset)
-             _ (println "Java files compiled")
-             b (build-jar a)
-             _ (println "JAR built")
-             c (push-snapshot b)]
-         (println "Snapshot pushed")
-         c)
-
-       ;; Note that the javac step is vital, although not normally needed
-       ;; for a clojure-only bootlaces publish.
-       #_(-> fileset
-           javac
-           build-jar
-           push-snapshot)
-       ;; This fails: TmpFileSet cannot be cast to a java.lang.CharSequence
-       #_(boot/commit! ((comp javac build-jar push-snapshot) fileset))
-       ;; This cannot work: We must commit
-       #_((comp javac build-jar push-snapshot) fileset)
-       ;; Fails: no implementation of commit!
-       ;; of protocol: #'boot.tmpdir/ITmpFileSet found for class:
-       ;; boot.task.built_in$fn__2586$fn__2587$fn__2592$fn__2593
-       #_(boot/commit! (comp (javac) (build-jar) (push-snapshot)) fileset)
-       ;; Fails: Arguments must be either all strings or all fns
-       (boot/commit! (boot (comp (javac) (build-jar) (push-snapshot)) fileset)))
+       fileset)
      (with-post-wrap fileset
-       (bootlaces! old-version :dont-modify-paths? true)))
-    #_(fn middleware [next-handler]
-      (fn handler [fileset]
-        (bootlaces! version :dont-modify-paths? true)
-        (println "doing interesting things to fileset")
-        (let [fileset' #_((comp (javac) (build-jar) (push-snapshot)))
-              (let [a ((javac) fileset)
-                    _ (println "compiled" fileset "to" a)
-                    b ((build-jar) a)
-                    _ (println "built-jar into" b)
-                    c ((push-snapshot) b)
-                    _ (println "Snapshot pushed:" c)]
-                c)
-              #_[fileset' (fileset' fileset)]
-              _ (println "Commiting" fileset')
-              fileset' (boot/commit! (boot fileset'))
-              _ (println "Calling wrapper")
-              result (next-handler fileset')]
-          (println "Restoring previous settings")
-          (bootlaces! old-version :dont-modify-paths? true)
-          (println "Returning result")
-          result)))))
+       (bootlaces! old-version :dont-modify-paths? true)
+       ;(task-options! pom old-pom-options)
+       (task-options! push old-push-options)))))
 
 (deftask run
   "Run the project."
