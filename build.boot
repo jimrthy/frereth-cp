@@ -10,7 +10,8 @@
 
 (def default-version
   "Really just for running inside docker w/out git tags"
-  "0.0.2-???-dirty")
+  "0.0.4-???-dirty")
+
 (defn deduce-version-from-git
   "Avoid another decade of pointless, unnecessary and error-prone
   fiddling with version labels in source code.
@@ -23,8 +24,8 @@
   messages for describe to work properly:
   `git tag 0.0.2 -m 'Move forward'`"
   []
-  (let [[version commits hash dirty?]
-        (next (re-matches #"(.*?)-(.*?)-(.*?)(-dirty)?\n"
+  (let [[version previous-hash commits hash dirty?]
+        (next (re-matches #"(\d+\.\d+\.\d+)(-\w*)?-(\d*)-(.*?)(-dirty)?\n"
                           (:out (sh/sh "git"
                                        "describe"
                                        "--always"
@@ -40,10 +41,7 @@
       default-version)))
 
 (def project 'com.frereth/cp)
-#_(def version #_"0.0.3" (deduce-version-from-git))
 
-;; TODO: Add a dependency on weald and refactor away the local copy
-;; of shared.logging.
 (set-env! :resource-paths #{"src/clojure"}
           :dependencies '[[adzerk/bootlaces "0.1.13" :scope "test"]
                           [adzerk/boot-test "RELEASE" :scope "test"]
@@ -88,7 +86,6 @@
       :license     {"Eclipse Public License"
                     "http://www.eclipse.org/legal/epl-v10.html"}}
  ;; This might not be generally warranted.
- ;; Then again...it seems like it only matters for "real" releases.
  push {:ensure-branch nil})
 
 (require '[adzerk.bootlaces :refer [bootlaces! build-jar push-snapshot push-release]]
@@ -164,44 +161,3 @@
   "Publish"
   []
   (comp (set-version) (javac) (build-jar) (push-release)))
-
-(deftask from-snapshot
-  "Allow publishing a snapshot version"
-  ;; TODO: Split this into 2 tasks.
-  ;; One to wrap, pushing/popping options without updating the
-  ;; fileset.
-  ;; The other should do the actual changes in the pipeline
-  []
-
-  (let [old-version (deduce-version-from-git)
-        version (str old-version "-SNAPSHOT")
-        ;old-pom-options pom
-        old-push-options push
-        ]
-    (comp
-     ;; Q: Should fileset be a vector like this?
-     ;; (it doesn't seem to make any difference. I've seen examples
-     ;; both ways)
-     (with-pre-wrap fileset
-       (println "Setting bootlaces to publish version" version)
-       ;; Note that this is really just setting the options to
-       ;; push, which is part of boot.task.built-in.
-       ;; Actually, the bootlaces task is just a wrapper around
-       ;; that.
-       (task-options! )
-       ;(task-options! pom {:version version})
-       (bootlaces! version :dont-modify-paths? true)
-       fileset)
-     (with-post-wrap fileset
-       (bootlaces! old-version :dont-modify-paths? true)
-       ;(task-options! pom old-pom-options)
-       (task-options! push old-push-options)))))
-
-(deftask run
-  "Run the project."
-  [f file FILENAME #{str} "Application arguments passed to main."]
-  ;; This is a leftover template from another project that I
-  ;; really just copy/pasted over.
-  ;; Q: Does it make any sense to keep it around?
-  (require '[frereth-cp.server :as app])
-  (apply (resolve 'app/-main) file))
