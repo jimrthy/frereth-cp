@@ -11,7 +11,7 @@
              [specs :as specs]
              [util :as util]]
             [frereth.weald
-             [logging :as log2]
+             [logging :as log]
              [specs :as weald]])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
@@ -103,9 +103,7 @@
         :ret ::nonce-state)
 (defn initial-nonce-agent-state
   []
-  {::weald/state (log2/init ::nonce-agent)
-   ;; FIXME: Needs a logger for flushing
-   ;; the log-state (soon)
+  {::weald/state (log/init ::nonce-agent)
    ::counter-low 0
    ::counter-high 0
    ::data (byte-array 16)
@@ -124,7 +122,7 @@
     :as this}
    logger
    key-dir]
-  (let [log-state-atom (atom (log2/debug log-state
+  (let [log-state-atom (atom (log/debug log-state
                                          ::load-nonce-key
                                          ""
                                          {::key-dir key-dir}))]
@@ -135,7 +133,7 @@
           (let [raw-nonce-key (byte-array nonce-key-length)
                 bytes-read (.read key-file raw-nonce-key)]
             (when (not= bytes-read nonce-key-length)
-              (log2/flush-logs! logger @log-state-atom)
+              (log/flush-logs! logger @log-state-atom)
               (throw (ex-info "Key too short"
                               {::expected K/key-length
                                ::actual bytes-read
@@ -144,12 +142,12 @@
               (deliver key-loaded? true)
               (assoc this
                      ::nonce-key nonce-key
-                     ::weald/state (log2/flush-logs! logger log-state)))))
+                     ::weald/state (log/flush-logs! logger log-state)))))
         (do
-          (log2/flush-logs! logger @log-state-atom)
+          (log/flush-logs! logger @log-state-atom)
           (throw (ex-info "Missing noncekey file"
                           {::searching-in key-dir
-                           ::log2/state log-state})))))))
+                           ::log/state log-state})))))))
 
 (declare encrypt-block)
 (defn obscure-nonce
@@ -207,9 +205,9 @@
    logger
    key-dir
    long-term?]
-  (let [log-state (log2/debug log-state
-                              ::reload-nonce
-                              "Top")
+  (let [log-state (log/debug log-state
+                             ::reload-nonce
+                             "Top")
         raw-path (str key-dir "/.expertsonly/")
         path (io/resource raw-path)]
     (let [f (io/file path "lock")]
@@ -219,9 +217,9 @@
           (let [channel (.getChannel (RandomAccessFile. f "rw"))]
             (try
               (let [lock (.lock channel 0 Long/MAX_VALUE false)
-                    log-state (log2/info log-state
-                                         ::reload-nonce
-                                         "Lock acquired")]
+                    log-state (log/info log-state
+                                        ::reload-nonce
+                                        "Lock acquired")]
                 (try
                   (let [nonce-counter (io/file path "noncecounter")]
                     (when-not (.exists nonce-counter)
@@ -229,22 +227,22 @@
                       (with-open [counter (io/output-stream nonce-counter)]
                         ;; FIXME: What's a good initial value?
                         (.write counter (byte-array 8))))
-                    (let [log-state (log2/debug log-state
-                                                ::reload-nonce
-                                                "Opening"
-                                                {::nonce-file-name nonce-counter})]
+                    (let [log-state (log/debug log-state
+                                               ::reload-nonce
+                                               "Opening"
+                                               {::nonce-file-name nonce-counter})]
                       (with-open [counter (io/input-stream nonce-counter)]
-                        (let [log-state (log2/debug log-state
-                                                    ::reload-nonce
-                                                    "Nonce counter file opened for reading")
+                        (let [log-state (log/debug log-state
+                                                   ::reload-nonce
+                                                   "Nonce counter file opened for reading")
                               data (bytes data)
                               bytes-read (.read counter data 0 8)
-                              log-state (log2/debug log-state
-                                                    ::reload-nonce
-                                                    "Read bytes"
-                                                    {::byte-count bytes-read})]
+                              log-state (log/debug log-state
+                                                   ::reload-nonce
+                                                   "Read bytes"
+                                                   {::byte-count bytes-read})]
                           (when (not= bytes-read 8)
-                            (log2/flush-logs! logger log-state)
+                            (log/flush-logs! logger log-state)
                             (throw (ex-info "Nonce counter file too small"
                                             {::contents (b-t/->string data)
                                              ::length bytes-read})))
@@ -258,7 +256,7 @@
                             (assoc this
                                    ::counter-low counter-low
                                    ::counter-high counter-high
-                                   ::weald/state (log2/flush-logs! logger log-state)))))))
+                                   ::weald/state (log/flush-logs! logger log-state)))))))
                   (finally
                     ;; Closing the channel should release the lock,
                     ;; but being explicit about this doesn't hurt
@@ -324,9 +322,9 @@
      ;; Read the last saved version from keydir
      (let [log-state
            (if-not (-> nonce-writer deref ::key-loaded? realized?)
-             (let [log-state (log2/debug log-state
-                                         ::do-safe-nonce
-                                         "Triggering nonce-key initial load")]
+             (let [log-state (log/debug log-state
+                                        ::do-safe-nonce
+                                        "Triggering nonce-key initial load")]
                (send nonce-writer load-nonce-key logger key-dir)
                log-state)
              log-state)]
@@ -342,18 +340,18 @@
          ;; nonce-writer?
 
        (if-let [ex (agent-error nonce-writer)]
-         (log2/exception log-state
-                         ex
-                         ::do-safe-nonce
-                         "System is down")
+         (log/exception log-state
+                        ex
+                        ::do-safe-nonce
+                        "System is down")
          log-state)))
     ([log-state dst offset]
      (let [length-to-fill (- (count dst) offset)
            tmp (get-random-bytes length-to-fill)]
        (b-t/byte-copy! dst offset length-to-fill tmp)
-       (log2/debug log-state
-                   ::safe-nonce!
-                   "Picked a random nonce")))))
+       (log/debug log-state
+                  ::safe-nonce!
+                  "Picked a random nonce")))))
 (comment
   (get-nonce-agent-state)
   (reset-safe-nonce-state!))
@@ -578,14 +576,14 @@
   (if keydir
     (let [secret (util/slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
           pair (TweetNaclFast$Box/keyPair_fromSecretKey secret)
-          log-state (log2/info log-state
-                               ::do-load-keypair
-                               (str "FIXME: Don't record these\n"
-                                    "Loaded secret key from file")
-                               {::secret-key-contents (b-t/->string secret)
-                                ::specs/secret-long (b-t/->string (.getSecretKey pair))
-                                ::specs/public-long
-                                (b-t/->string (.getPublicKey pair))})]
+          log-state (log/info log-state
+                              ::do-load-keypair
+                              (str "FIXME: Don't record these\n"
+                                   "Loaded secret key from file")
+                              {::secret-key-contents (b-t/->string secret)
+                               ::specs/secret-long (b-t/->string (.getSecretKey pair))
+                               ::specs/public-long
+                               (b-t/->string (.getPublicKey pair))})]
       {::java-key-pair pair
        ::weald/state log-state})
     ;; FIXME: This really should call random-keys instead.
@@ -687,9 +685,9 @@
     (if (and box
              (>= (count box) (+ box-offset box-length))
              (>= box-length K/box-zero-bytes))
-      (let [log-state (log2/debug log-state
-                                  ::open-after
-                                  "Box is large enough")]
+      (let [log-state (log/debug log-state
+                                 ::open-after
+                                 "Box is large enough")]
         (let [n (+ box-length K/box-zero-bytes)
               cipher-text (byte-array n)
               plain-text (byte-array n)]
@@ -717,9 +715,9 @@
             (comment (-> plain-text
                          vec
                          (subvec K/decrypt-box-zero-bytes)))
-            {::weald/state (log2/debug log-state
-                                       ::open-after
-                                       "Box Opened")
+            {::weald/state (log/debug log-state
+                                      ::open-after
+                                      "Box Opened")
              ;; Q: Why am I wrapping this in a ByteBuf?
              ;; That seems like I'm probably jumping through extra hoops
              ;; for the sake of hoop-jumping.
@@ -774,26 +772,11 @@
     (try
       (open-after log-state crypto-box 0 crypto-length nonce shared-key)
       (catch Exception ex
-        {::weald/state (log2/exception log-state
+        {::weald/state (log/exception log-state
                                       ex
                                       ::open-box
                                       "Failed to open box")}))))
 
-(defn decompose-box
-  "Open a crypto box and decompose its bytes"
-  [log-state tmplt nonce-prefix nonce-suffix crypto-box shared-key]
-  (let [{log-state ::weald/state
-         :keys [::unboxed]
-         :as opened} (open-box log-state
-                               nonce-prefix
-                               nonce-suffix
-                               crypto-box
-                               shared-key)]
-    (if unboxed
-      (let [result (serial/decompose-array tmplt unboxed)]
-        {::weald/state log-state
-         ::serial/decomposed result})
-      opened)))
 
 (s/fdef random-array
   :args (s/cat :n integer?)
