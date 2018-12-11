@@ -53,8 +53,8 @@
                           ;; TODO: Eliminate these logging dependencies.
                           ;; I have no business imposing them on library
                           ;; users
-                          [org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
-                          [org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
+                          #_[org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
+                          #_[org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
                           [org.clojure/clojure "1.9.0" :exclusions [org.clojure/spec.alpha] :scope "provided"]
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
@@ -63,7 +63,7 @@
                           ;; TODO: Eliminate this dependency. It's another one
                           ;; that I really don't have any business imposing on anyone else
                           ;; Then again, we inherit it from aleph no matter what.
-                          [org.clojure/tools.logging "0.4.1" :exclusions [org.clojure/clojure]]
+                          #_[org.clojure/tools.logging "0.4.1" :exclusions [org.clojure/clojure]]
                           ;; Q: Why do we need this?
                           ;; A: clojure.tools.analyzer.jvm uses it.
                           [org.clojure/tools.reader "1.3.2" :exclusions [org.clojure/clojure]]

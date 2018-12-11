@@ -3,12 +3,13 @@
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
             [clojure.string]
-            [clojure.tools.logging :as log]
             [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [serialization :as serial]
-             [specs :as specs]])
+             [specs :as specs]]
+            [frereth.weald
+             [logging :as log]])
   (:import [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
            [io.netty.buffer ByteBuf Unpooled]))
@@ -161,14 +162,6 @@
  [bs]
  (with-out-str (b-s/print-bytes bs)))
 
-;;; STARTED: Refactor compose (along with their
-;;; support functions) into its own marshalling ns.
-(defn compose
-  "Convert the map in fields into a ByteBuf in dst, according to the rules described in tmplt"
-  ^ByteBuf [tmplt fields ^ByteBuf dst]
-  (log/warn "Deprecated compose: use marshal ns instead")
-  (serial/compose! tmplt fields dst))
-
 ;;; encode-server name no longer seems to be used anywhere
 ;;; except unit tests.
 ;;; That basic fact is absolutely misleading. Clients definitely
@@ -225,8 +218,3 @@
                        :else v))))
           {}
           (keys src)))
-
-(defn zero-out!
-  [dst start end]
-  (log/warn "Deprecated: Moved to shared.bit-twiddling")
-  (b-t/zero-out! dst start end))

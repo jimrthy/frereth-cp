@@ -133,7 +133,7 @@
                                 ::total-length u
                                 ::specs/message-id next-message-id
                                 ::specs/start-pos start-pos})]
-      ;; Q: Is this worth switching to shared/compose?
+      ;; Q: Is this worth switching to serialize/compose?
       (.writeInt send-buf next-message-id)
 
       ;; XXX: include any acknowledgments that have piled up (--DJB)

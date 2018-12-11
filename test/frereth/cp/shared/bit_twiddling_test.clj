@@ -98,7 +98,7 @@ Since it really isn't secure, that might be a terrible idea"
 
 (deftest byte-1-uint64-pack
   ;; This is really just a circular truism.
-  ;; uint64-pack! is built around possibly-2s-complement-8.
+  ;; uint64-pack is built around possibly-2s-complement-8.
   (are [expected] (= (aget (b-t/uint64-pack expected) 0)
                      (b-t/possibly-2s-complement-8 expected))
     1 127 128 180))
@@ -120,7 +120,7 @@ Since it really isn't secure, that might be a terrible idea"
           ;; Actual value (from C):
           ;; => 00 48 7e d0 1f f4 d3 fe
           ;; (hex -> base10 says I have that part correct now)
-          packed (b-t/uint64-pack! n)]
+          packed (b-t/uint64-pack n)]
       (is packed)
       (println (vec packed))
       (testing "\n\t\tunpacking"
@@ -147,7 +147,7 @@ Since it really isn't secure, that might be a terrible idea"
     (let [n (rand64)]
       (if (not= n 0)
         (testing "\n\tpacking"
-          (let [packed (b-t/uint64-pack! n)]
+          (let [packed (b-t/uint64-pack n)]
             (is packed)
             (testing "\n\t\tunpacking"
               (is (= (b-t/uint64-unpack packed)

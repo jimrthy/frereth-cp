@@ -6,8 +6,7 @@
              [client :as client]
              [message :as message]
              [shared :as shared]
-             [test-factory :as factory]
-             [util :as util]]
+             [test-factory :as factory]]
             [frereth.cp.client
              [cookie :as cookie]
              [hello :as hello]
@@ -19,7 +18,8 @@
             [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
-             [crypto :as crypto]]
+             [crypto :as crypto]
+             [util :as util]]
             [frereth.weald
              [logging :as log]
              [specs :as weald]]
@@ -104,7 +104,8 @@
                                           (log/warn (log/init ::drained)
                                                     ::chan<-server
                                                     "Channel from server drained"))))
-      (let [cookie (byte-array 200)  ;  <---- Note that this is gibberish that should get discarded.
+      ;; Note that the cookie is gibberish that should get discarded.
+      (let [cookie (byte-array K/cookie-packet-length)
             ;; The edge case: At the time of this writing, I was failing to decrypt that Cookie,
             ;; but then proceeding
             ;; as though it succeeded. And then the Client fails to build the Initiate packet
@@ -151,20 +152,31 @@
                                 (partial check-success client "Taking the vouch")
                                 (fn [{:keys [:host :message :port]
                                       :as network-packet}]
-                                  ;; This is actually a PersistentArrayMap
-                                  ;; Probably a ::shared/network-packet
-                                  ;; TODO: Fix this next problem
-                                  (is (instance? ByteBuf message)
+                                  (is (bytes? message)
                                       (str "Expected ByteBuf. Got " (class message)))
                                   ;; FIXME: Need to extract the cookie from the vouch that
                                   ;; we just received.
                                   (let [expected-n (count cookie)
-                                        actual-n (.readableBytes message)]
-                                    (is (= expected-n actual-n)))
-                                  (let [response (byte-array (.readableBytes message))]
-                                    (.getBytes message 0 response)
-                                    (is (= (vec response) (vec cookie)))
-                                    true)))]
+                                        actual-n (count message)]
+                                    ;; This isn't true.
+                                    ;; We should get an Initiate packet
+                                    ;; in response to a Cookie. That
+                                    ;; should be 544 bytes of overhead
+                                    ;; plus the length of the actual
+                                    ;; message.
+                                    ;; Instead, the client is sending
+                                    ;; another HELLO packet because the
+                                    ;; Cookie was gibberish.
+                                    ;; TODO: Construct a real cookie.
+                                    ;; Then again, the behavior here is
+                                    ;; important: we need a good way to
+                                    ;; verify that the Cookie got
+                                    ;; discarded as expected.
+                                    (is (= expected-n actual-n))
+                                    (let [response (byte-array actual-n)]
+                                      (.getBytes message 0 response)
+                                      (is (= (vec response) (vec cookie)))
+                                      true))))]
         (is @success)))))
 (comment
   ;; Maybe the problem isn't just CIDER. This also looks as

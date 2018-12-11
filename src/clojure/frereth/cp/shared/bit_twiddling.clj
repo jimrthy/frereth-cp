@@ -2,9 +2,9 @@
   "Shared functions for fiddling with bits"
   (:require [byte-streams :as b-s]
             [clojure.spec.alpha :as s]
-            ;; FIXME: Make this go away
-            [clojure.tools.logging :as log]
-            [frereth.cp.shared.constants :as K])
+            [frereth.cp.shared.constants :as K]
+            [frereth.weald
+             [logging :as log]])
   (:import clojure.lang.BigInt
            io.netty.buffer.ByteBuf
            io.netty.buffer.UnpooledByteBufAllocator$InstrumentedUnpooledUnsafeHeapByteBuf
@@ -295,13 +295,7 @@ buried inside a class.
 So stick with this translation.
 "
   ([^bytes dst ^Long index ^Long src]
-   (uint-pack! dst index src Long/BYTES))
-  ([x]
-   ;; FIXME: This arity should go away.
-   (log/warn "Deprecation: use uint64-pack instead")
-   (let [dst (byte-array 8)]
-     (uint64-pack! dst 0 x)
-     dst)))
+   (uint-pack! dst index src Long/BYTES)))
 
 (defn uint64-pack
   [x]
@@ -371,6 +365,8 @@ So stick with this translation.
 
 (defn zero-out!
   "Shove zeros into the byte-array at dst, from offset start to offset end"
+  ;; Note that this doesn't seem to actually be used anywhere, so
+  ;; could/should go away.
   [dst start end]
   (let [n (- end start)]
     (when (<= (count K/all-zeros) n)

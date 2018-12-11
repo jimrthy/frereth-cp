@@ -9,6 +9,7 @@
             [frereth.cp.client.initiate :as clnt-init]
             [frereth.cp.shared
              [constants :as K]
+             [serialization :as serial]
              [specs :as specs]
              [templates :as templates]])
   (:import io.netty.buffer.Unpooled))
@@ -40,7 +41,7 @@
                      ::K/client-nonce-suffix client-nonce-suffix
                      ::K/cookie cookie}]
       (try
-        (let [composed (shared/compose templates/cookie-frame to-encode dst)]
+        (let [composed (serial/compose templates/cookie-frame to-encode dst)]
           ;; It's very tempting to dissect this for a round trip.
           ;; But, honestly, that's what property-based tests are best at
           (is composed))
