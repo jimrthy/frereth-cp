@@ -70,7 +70,8 @@
     ;; A: It starts by sending a HELO
     ;; packet, then setting the client up to wait for a
     ;; Cookie back from the server.
-    (let [parent-cb (fn [client
+    (let [log-state (log/init ::step-1)
+          parent-cb (fn [client
                          chunk]
                       (println "parent-cb: getting ready to fail")
                       (throw (ex-info "Didn't really expect anything at parent callback"
@@ -81,7 +82,7 @@
                      (throw (ex-info "Didn't really expect anything at child callback"
                                      {::message chunk})))
           keydir "curve-test"
-          srvr-long-pair (crypto/do-load-keypair keydir)
+          {srvr-long-pair ::crypto/java-key-pair} (crypto/do-load-keypair log-state keydir)
           srvr-pk-long (.getPublicKey srvr-long-pair)
           log-state (log/init ::step-1)
           client (factory/raw-client "step-1"

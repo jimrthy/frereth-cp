@@ -233,7 +233,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
 (defn load-keys
   [log-state my-keys]
   (let [key-dir (::shared/keydir my-keys)
-        long-pair (crypto/do-load-keypair key-dir)
+        {log-state ::weald/state
+         long-pair ::crypto/java-key-pair} (crypto/do-load-keypair log-state key-dir)
         short-pair (crypto/random-key-pair)
         log-state (log/info log-state
                             ::load-keys

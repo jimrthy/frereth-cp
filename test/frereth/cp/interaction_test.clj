@@ -42,7 +42,8 @@
                                         -23 -72 109 -58 -100 87 115 95
                                         89 -74 -21 -33 20 21 110 95])
             keydir "curve-test"
-            server-pair (crypto/do-load-keypair keydir)
+            log-state (log/init ::basic-sanity)
+            {server-pair ::crypto/java-key-pair} (crypto/do-load-keypair log-state keydir)
             client-pair (crypto/random-key-pair)
             client-shared (TweetNaclFast$Box. server-long-pk (.getSecretKey client-pair))
             server-shared (TweetNaclFast$Box.
@@ -63,7 +64,8 @@
                                     -23 -72 109 -58 -100 87 115 95
                                     89 -74 -21 -33 20 21 110 95])
         keydir "curve-test"
-        server-pair (crypto/do-load-keypair keydir)
+        log-state (log/init ::verify-basic-round-trips)
+        {server-pair ::crypto/java-key-pair} (crypto/do-load-keypair log-state keydir)
         pk (.getPublicKey server-pair)]
     (testing "Disk matches hard-coded in-memory"
         (is (b-t/bytes= pk server-long-pk)))
@@ -142,10 +144,12 @@
             (testing "Low-level 'nm' decryption"
               (try
                 (let [;; This is the approach that I really think I should use
-                      de3 (crypto/open-after crypto-text3 0 (count crypto-text) nonce server-shared-nm)
+                      {de3 ::crypto/unboxed
+                       log-state ::weald/state} (crypto/open-after log-state crypto-text3 0 (count crypto-text) nonce server-shared-nm)
                       ;; Verify that my low-level open function can decrypt a box that was
                       ;; wrapped using the high-level approach
-                      de4 (crypto/open-after crypto-text 0 (count crypto-text) nonce server-shared-nm)]
+                      {de4 ::crypto/unboxed
+                       log-state ::weald/state} (crypto/open-after log-state crypto-text 0 (count crypto-text) nonce server-shared-nm)]
                   (if de3
                     (let [bs (byte-array (.readableBytes de3))]
                       (.readBytes de3 bs)

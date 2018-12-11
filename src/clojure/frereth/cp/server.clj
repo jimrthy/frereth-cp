@@ -414,7 +414,8 @@
                             "CurveCP Server: Starting the server state")
         ;; So we're starting by loading up the long-term keys
         keydir (::shared/keydir my-keys)
-        long-pair (crypto/do-load-keypair keydir)
+        {log-state ::weald/state
+         long-pair ::crypto/java-key-pair} (crypto/do-load-keypair log-state keydir)
         this (assoc-in this [::shared/my-keys ::shared/long-pair] long-pair)
         almost (assoc this
                       ::state/cookie-cutter (state/randomized-cookie-cutter))
