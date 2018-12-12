@@ -10,7 +10,11 @@
              [bit-twiddling :as b-t]
              [constants :as K]
              [specs :as specs]
-             [util :as util]])
+             [util :as util]]
+            [frereth.weald
+             [logging :as log2]
+             [specs :as weald]]
+            [byte-streams :as b-s])
   (:import [io.netty.buffer ByteBuf Unpooled]
            java.util.Arrays))
 
@@ -24,105 +28,115 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal
 
-(defn composition-reduction
+(s/fdef do-composition-reduction
+  :args (s/cat :tmplt any?  ; FIXME: Needs a spec.
+               :dst ::specs/byte-buf
+               :log-state ::weald/state
+               :k keyword?)
+  :ret ::weald/state)
+(defn do-composition-reduction
   "Reduction function associated for run!ing from compose.
 
 TODO: Think about a way to do this using specs instead.
 
 Needing to declare these things twice is annoying."
-  [tmplt fields ^ByteBuf dst k]
+  [tmplt fields ^ByteBuf dst log-state k]
   (let [dscr (k tmplt)
         cnvrtr (::K/type dscr)
-        ^bytes v (k fields)]
+        v (bytes (k fields))
+        ;; Q: Worth making this a transient instead?
+        ;; (would that even work?)
+        log-state-atom (atom log-state)]
     ;; An assertion error here is better than killing the JVM
     ;; through a SIGSEGV, which is what happens without it
     (assert (or (= ::K/zeroes cnvrtr)
                 (and (= ::K/const cnvrtr)
                      (::K/contents dscr))
-                v) (try (str "Composing from '"
-                             (pr-str v)
-                             "' (a "
-                             (pr-str (class v))
-                             ")\nbased on "
-                             k
-                             " among\n"
-                             (keys fields)
-                             "\nto "
-                             dst
-                             "\nbased on "
-                             cnvrtr
-                             "\nfor\n"
-                             dscr)
-                        (catch ClassCastException ex
-                          (str ex "\nTrying to build error message about '" v
-                               "' under " k " in\n" fields))))
+                v)
+            (try (str "Composing from '"
+                      (pr-str v)
+                      "' (a "
+                      (pr-str (class v))
+                      ")\nbased on "
+                      k
+                      " among\n"
+                      (keys fields)
+                      "\nto "
+                      dst
+                      "\nbased on "
+                      cnvrtr
+                      "\nfor\n"
+                      dscr)
+                 (catch ClassCastException ex
+                   (str ex "\nTrying to build error message about '" v
+                        "' under " k " in\n" fields))))
     (try
       (case cnvrtr
         ::K/bytes (let [n (long (::K/length dscr))
                         beg (.readableBytes dst)]
+                    (swap! log-state-atom
+                           #(log2/debug %
+                                        ::do-composition-reduction
+                                        "Writing bytes to a field"
+                                        {::byte-count n
+                                         ::destination dst
+                                         ::destination-class (class dst)
+                                         ::field-name k
+                                         ::source-bytes v
+                                         ::source-byte-count (count v)}))
                     (try
-                      (log/debug (str "Getting ready to write "
-                                      n
-                                      " bytes to\n"
-                                      dst
-                                      " a "
-                                      (class dst)
-                                      "\nfor field "
-                                      k
-                                      "\nfrom " (count v)
-                                      " bytes in " v))
                       (.writeBytes dst v 0 n)
                       (let [end (.readableBytes dst)]
-                        (assert (= (- end beg) n)))
-                      (catch ClassCastException ex
-                        (log/error ex (str "Trying to write " n " bytes from\n"
-                                           v "\nto\n" dst))
+                        (assert (= (- end beg) n))
+                        @log-state-atom)
+                      (catch RuntimeException ex
+                        (swap! log-state-atom
+                               #(log2/exception %
+                                                ex
+                                                ::writing
+                                                ""
+                                                {::byte-count n
+                                                 ::destination dst
+                                                 ::raw-source v
+                                                 ::source (vec v)}))
                         (throw (ex-info "Setting bytes failed"
                                         {::field k
                                          ::length n
                                          ::dst dst
                                          ::dst-length (.capacity dst)
-                                         ::src v
+                                         ::source v
                                          ::source-class (class v)
-                                         ::description dscr
-                                         ::error ex})))
-                      (catch IllegalArgumentException ex
-                        (log/error ex (str "Trying to write " n " bytes from\n"
-                                           v "\nto\n" dst))
-                        (throw (ex-info "Setting bytes failed"
-                                        {::field k
-                                         ::length n
-                                         ::dst dst
-                                         ::dst-length (.capacity dst)
-                                         ::src v
-                                         ::source-class (class v)
-                                         ::description dscr
-                                         ::error ex})))))
-        ::K/const (let [contents (::K/contents dscr)]
-                    (log/debug (str "Writing "
-                                    (::K/length dscr)
-                                    " constant bytes "
-                                    contents
-                                    " to "
-                                    dst
-                                    " based on "
-                                    (util/pretty dscr)))
-                    (.writeBytes dst contents))
-        ::K/int-64 (.writeLong dst v)
-        ::K/zeroes (let [n (::K/length dscr)]
-                     (log/debug "Getting ready to write " n " zeros to " dst " based on "
-                                (util/pretty dscr))
-                     (.writeZero dst n))
+                                         ::description (util/pretty dscr)
+                                         ::error ex
+                                         ::weald/log @log-state-atom})))))
+        ::K/const (let [contents (::K/contents dscr)
+                        log-state (log2/debug log-state
+                                              ::do-composition-reduction
+                                              "Writing const field"
+                                              {::field k
+                                               ::length (::K/length dscr)
+                                               ::raw-source contents
+                                               ::source (vec contents)
+                                               ::destination dst
+                                               ::description (util/pretty dscr)})]
+                    (.writeBytes dst contents)
+                    log-state)
+        ::K/int-64 (do
+                     (.writeLong dst v)
+                     log-state)
+        ::K/zeroes (let [n (::K/length dscr)
+                         log-state (log2/debug log-state
+                                               ::do-composition-reduction
+                                               "Zeroing"
+                                               {::field k
+                                                ::length n
+                                                ::destination dst
+                                                ::description (util/pretty dscr)})]
+                     (.writeZero dst n)
+                     log-state)
         (throw (ex-info "No matching clause" dscr)))
-      (catch IllegalArgumentException ex
-        (throw (ex-info "Missing clause"
-                        {::problem ex
-                         ::cause cnvrtr
-                         ::field k
-                         ::description dscr
-                         ::source-value v})))
-      (catch NullPointerException ex
-        (throw (ex-info "NULL"
+      (catch RuntimeException ex
+        (throw (ex-info ""
                         {::problem ex
                          ::cause cnvrtr
                          ::field k
@@ -299,23 +313,34 @@ Needing to declare these things twice is annoying."
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public
 
-(defn compose!
+(s/fdef do-compose
+  :args (s/cat :log-state ::weald/state
+               :tmplt any?
+               :fields (s/coll-of keyword?)
+               :dst ::specs/byte-buf))
+(defn do-compose
+  ;; Nothing outside unit tests calls this.
+  ;; It's possible that's a mistake and huge
+  ;; performance hit.
+  ;; Keep this around until I get a chance to
+  ;; FIXME: profile this.
   "compose destructively. If you need that optimization"
-  ^ByteBuf [tmplt fields ^ByteBuf dst]
+  ^ByteBuf [log-state tmplt fields ^ByteBuf dst]
   ;; Q: How much do I gain by supplying dst?
   ;; A: It does let callers reuse the buffer, which
   ;; will definitely help with GC pressure.
   ;; Yes, it's premature optimization. And how
   ;; often will this get used?
-  ;; Rename this to compose!
-  ;; Add a purely functional version of compose that
-  ;; creates the ByteBuf, calls compose! and
-  ;; returns dst.
-  (run!
-   (partial composition-reduction tmplt fields dst)
-   (keys tmplt))
-  dst)
+  (reduce (fn [log-state k]
+            (do-composition-reduction tmplt fields dst log-state k))
+          log-state
+          (keys tmplt)))
 
+(s/fdef compose
+  :args (s/cat :log-state ::weald/state
+               :tmplt any?
+               :fields (s/coll-of keyword?))
+  :ret (s/keys :req [::specs/byte-array ::weald/state]))
 (defn compose
   "serialize a map into a ByteBuf"
   ;; TODO: This should really just return a [B
@@ -324,14 +349,19 @@ Needing to declare these things twice is annoying."
   ;; how many callers need to do that vs. the ones that
   ;; actually take advantage of the ByteBuf.
   ;; TODO: Look into this.
-  ^ByteBuf [tmplt fields]
+  ^ByteBuf [log-state tmplt fields]
   ;; Q: Is it worth precalculating the size?
   (let [size (reduce + (map calculate-length (vals tmplt)))
-        dst (Unpooled/buffer size)]
-    (run!
-     (partial composition-reduction tmplt fields dst)
-     (keys tmplt))
-    dst))
+        ;; Callers need to .release this buffer.
+        ;; TODO: Switch to returning a byte-array (vector?)
+        ;; instead.
+        dst (Unpooled/buffer size)
+        log-state (reduce
+                   (fn [log-state k]
+                     (do-composition-reduction tmplt fields dst log-state k))
+                   (keys tmplt))]
+    {::specs/byte-array (b-s/convert dst specs/byte-array-type)
+     ::weald/state log-state}))
 
 (s/fdef decompose
         ;; TODO: tmplt needs a spec for the values

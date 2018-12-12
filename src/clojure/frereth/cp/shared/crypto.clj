@@ -378,7 +378,7 @@
                            (or (-> % :args :offset) 0)))
                    #(= (count (:ret %))
                        (+ (-> % :args :plain-text) specs/box-zero-bytes)))
-        :ret bytes?)
+        :ret ::specs/byte-array)
 (defn box-after
   "Accept some plain text and turn it into cipher text"
   ([shared-key plain-text length nonce]
@@ -445,42 +445,44 @@
 
 (s/fdef build-box
         ;; FIXME: Figure out a meaningful way to spec out template and source
-        :args (s/cat :template any?
-                     :source any?
-                     :shared-key ::specs/crypto-key
-                     :nonce-prefix (s/or :server ::specs/server-nonce-prefix
-                                         :client ::specs/client-nonce-prefix)
-                     :nonce-suffix (s/or :server ::specs/server-nonce-suffix
-                                         :client ::specs/client-nonce-suffix))
+  :args (s/cat :log-state ::weald/state
+               :template any?
+               :source any?
+               :shared-key ::specs/crypto-key
+               :nonce-prefix (s/or :server ::specs/server-nonce-prefix
+                                   :client ::specs/client-nonce-prefix)
+               :nonce-suffix (s/or :server ::specs/server-nonce-suffix
+                                   :client ::specs/client-nonce-suffix))
         ;; The length of :ret can be determined by :template.
         ;; But that gets into troublesome details about serialization
-        ;; FIXME: Refactor this to accept/return ::weald/state
-        :ret bytes?)
+  :ret (s/keys :req [::specs/byte-array
+                     ::weald/state]))
 (defn build-box
   "Compose a map into bytes and encrypt it
 
   Note that tmplt should *not* include the requisite 32 bytes of 0 padding"
-  [tmplt src shared-key nonce-prefix nonce-suffix]
-  (let [^ByteBuf buffer (serial/compose tmplt src)]
-    (let [n (.readableBytes buffer)
-          nonce (byte-array K/nonce-length)
-          dst (byte-array n)
-          nonce-suffix-length (count nonce-suffix)
-          nonce-prefix-length (count nonce-prefix)]
-      (.getBytes buffer 0 dst)
-      (b-t/byte-copy! nonce nonce-prefix)
-      ;; FIXME: Convert this to a log message
-      (println "Copying"
-               nonce-suffix-length
-               "bytes into a"
-               K/nonce-length
-               "byte array, starting at offset"
-               nonce-prefix-length)
+  [log-state tmplt src shared-key nonce-prefix nonce-suffix]
+  (let [{clear-text ::specs/byte-array
+         log-state ::weald/state} (serial/compose log-state tmplt src)
+        nonce (byte-array K/nonce-length)
+        nonce-suffix-length (count nonce-suffix)
+        nonce-prefix-length (count nonce-prefix)]
+    (b-t/byte-copy! nonce nonce-prefix)
+    (let [log-state (log/debug log-state
+                               ::build-box
+                               "Copying"
+                               {::source-byte-count nonce-suffix-length
+                                ::destination-length K/nonce-length
+                                ::offset nonce-prefix-length})]
       (b-t/byte-copy! nonce
                       nonce-prefix-length
                       nonce-suffix-length
                       nonce-suffix)
-      (box-after shared-key dst n nonce))))
+      {::specs/byte-array (box-after shared-key
+                                     clear-text
+                                     (count clear-text)
+                                     nonce)
+       ::weald/state log-state})))
 
 (defn encrypt-block
   "Block-encrypt a byte-array"

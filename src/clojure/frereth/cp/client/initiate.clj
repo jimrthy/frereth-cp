@@ -195,9 +195,10 @@
                                                                         ::state/server-cookie])
                                                        :outer-i-nonce nonce-suffix
                                                        :vouch-wrapper crypto-box}
-                  raw-result-bytes (serial/compose dscr
-                                                   fields)
-                  result-bytes (b-s/convert raw-result-bytes specs/byte-array-type)
+                  {result-bytes ::specs/byte-array
+                   log-state ::weald/state} (serial/compose log-state
+                                                            dscr
+                                                            fields)
                   {log-state ::weald/state
                    result ::message/possible-response
                    :as filtered} (message/filter-initial-message-bytes log-state

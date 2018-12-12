@@ -199,10 +199,12 @@
      ::weald/state log-state}))
 
 (s/fdef build-cookie-packet
-        :args (s/cat)
-        :ret ::K/cookie-packet)
+        :args (s/cat :log-state ::weald/state)
+        :ret (s/keys :req [::K/cookie-packet
+                           ::weald/state]))
 (defn build-cookie-packet
-  [{client-extension ::K/clnt-xtn
+  [log-state
+   {client-extension ::K/clnt-xtn
     server-extension ::K/srvr-xtn}
    nonce-suffix
    crypto-cookie]
@@ -211,8 +213,18 @@
                    ::templates/server-extension server-extension
                    ::templates/client-nonce-suffix nonce-suffix
                    ::templates/cookie crypto-cookie}
-          ^ByteBuf composed (serial/compose templates/cookie-frame fillers)]
-      (b-s/convert composed specs/byte-array-type))))
+          {composed ::specs/byte-array
+           log-state ::weald/state} (serial/compose log-state templates/cookie-frame fillers)]
+      (try
+        {::K/cookie-packet (bytes composed)
+         ::weald/state log-state}
+        (catch RuntimeException ex
+          {::weald/state (log/exception log-state
+                                        ex
+                                        ::build-cookie-packet
+                                        "Converting to bytes failed"
+                                        {::problem composed
+                                         ::problem-class (class composed)})})))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Public
@@ -242,5 +254,7 @@
     ;; And it does save a malloc/GC.
     ;; I can't do that, because of the way compose works.
     ;; TODO: Revisit this decision if/when the GC turns into a problem.
-    {::K/cookie-packet (build-cookie-packet hello-spec nonce-suffix crypto-box)
-     ::weald/state log-state}))
+    (build-cookie-packet log-state
+                         hello-spec
+                         nonce-suffix
+                         crypto-box)))

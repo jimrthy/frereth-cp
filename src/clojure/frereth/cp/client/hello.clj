@@ -181,7 +181,8 @@
                      ;; And that bigint isn't killing performance.
                      :short-nonce integer?
                      :safe-nonce ::shared/safe-nonce)
-        :ret ::state/state)
+        :ret (s/keys :req [::weald/state]
+                     :opt [::specs/byte-array]))
 (defn build-actual-packet
   [{log-state ::weald/state
     :as this}
@@ -198,15 +199,18 @@
         ;; This is for the sake of tricksy exception handling
         composition-succeeded? (promise)]
     (try
-      (let [^ByteBuf result (serial/compose K/hello-packet-dscr raw-hello)]
+      (let [{msg ::specs/byte-array
+             log-state ::weald/state
+             :as result} (serial/compose log-state K/hello-packet-dscr raw-hello)
+            n (count msg)]
         (deliver composition-succeeded? true)
-        (let [n (.readableBytes result)]
-          (when (not= K/hello-packet-length n)
-            (throw (ex-info "Built a bad HELLO"
-                            {::expected-length K/hello-packet-length
-                             ::actual n}))))
-        {::shared/packet result
-         ::weald/state log-state})
+        (when (not= K/hello-packet-length n)
+          (throw (ex-info "Built a bad HELLO"
+                          {::expected-length K/hello-packet-length
+                           ::raw-actual n
+                           ::actual (vec msg)
+                           ::weald/state log-state})))
+        result)
       (catch Throwable ex
         (if (realized? composition-succeeded?)
           (throw ex)
@@ -444,7 +448,7 @@
                                              ::state/server-security
                                              ::state/shared-secrets])
           packet-builders (assoc packet-builders ::shared/extension extension)
-          {:keys [::shared/packet]
+          {packet ::specs/byte-array
            log-state ::weald/state} (build-actual-packet packet-builders
                                                          short-term-nonce
                                                          nonce-suffix)
@@ -454,9 +458,7 @@
       (assoc extension-initialized
              ::weald/state log-state
              ::shared/packet-nonce short-term-nonce
-             ::shared/packet (if packet
-                               (b-s/convert packet specs/byte-array-type)
-                               nil)))))
+             ::specs/byte-array packet))))
 
 (s/fdef do-polling-loop
         :args (s/cat :this ::state/state
@@ -476,8 +478,9 @@
    cookie-waiter start-time timeout]
   ;; TODO: At least consider ways to rewrite this as
   ;; a dfrd/loop.
+  ;; For that matter: What about ways to just skip the loop part completely?
   (let [;; Have to adjust nonce for each server.
-        {hello-packet ::shared/packet
+        {hello-packet ::shared/byte-array
          log-state ::weald/state
          :as delta} (do-build-packet (select-keys this [::state/client-extension-load-time
                                                         ::shared/extension

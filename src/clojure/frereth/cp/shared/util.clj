@@ -7,8 +7,8 @@
             [clojure.spec.alpha :as s]
             [clojure.stacktrace :as s-t]
             [clojure.string :as string]
-            ;; FIXME: Make this go away
-            [clojure.tools.logging :as log])
+            [frereth.weald
+             [logging :as log]])
   (:import clojure.lang.ExceptionInfo
            java.security.SecureRandom
            java.util.UUID))
@@ -67,13 +67,26 @@
   (try
     (with-out-str (apply pprint-proxy xs))
     (catch RuntimeException ex
-      (log/error ex "Pretty printing failed (there should be a stack trace about this failure).
-Falling back to standard")
-      (str xs))
+      (let [log-state (log/init ::pretty)
+            log-state (log/exception log-state
+                                     ex
+                                     ::failed
+                                     "Pretty Printing Failed"
+                                     {::problem xs})]
+        (print-str (-> log-state
+                       ::log/entries
+                       first))))
     (catch AbstractMethodError ex
       ;; Q: Why isn't this a RuntimeException?
-      (log/error ex "Something seriously wrong w/ pretty printing? Falling back to standard:\n")
-      (str xs))))
+      (let [log-state (log/init ::pretty)
+            log-state (log/exception log-state
+                                     ex
+                                     ::failed
+                                     "Something seriously wrong w/ pretty printing? Falling back to standard"
+                                     {::problem xs})]
+        (print-str (-> log-state
+                       ::log/entries
+                       first))))))
 
 (s/fdef random-uuid
         :args nil

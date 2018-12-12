@@ -46,7 +46,7 @@ This really seems like a bad road to go down."
 
 (s/def ::atom (class-predicate (class (atom nil))))
 (def byte-array-type
-  "This seems redundant. Should generally just use bytes?"
+  "Mostly for the sake of byte-streams/convert"
   (Class/forName "[B"))
 (s/def ::byte-array bytes?)
 (s/def ::byte-buf (class-predicate io.netty.buffer.ByteBuf))
