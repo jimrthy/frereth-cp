@@ -11,7 +11,7 @@
              [templates :as templates]
              [util :as util]]
             [frereth.weald
-             [logging :as log2]
+             [logging :as log]
              [specs :as weald]]
             [byte-streams :as b-s])
   (:import [io.netty.buffer ByteBuf Unpooled]
@@ -76,15 +76,15 @@ Needing to declare these things twice is annoying."
                     (swap! log-state-atom
                            (fn [current]
                              (println "Trying to add a log entry to" current)
-                             (log2/debug current
-                                         ::do-composition-reduction
-                                         "Writing bytes to a field"
-                                         {::byte-count n
-                                          ::destination dst
-                                          ::destination-class (class dst)
-                                          ::field-name k
-                                          ::source-bytes v
-                                          ::source-byte-count (count v)})))
+                             (log/debug current
+                                        ::do-composition-reduction
+                                        "Writing bytes to a field"
+                                        {::byte-count n
+                                         ::destination dst
+                                         ::destination-class (class dst)
+                                         ::field-name k
+                                         ::source-bytes v
+                                         ::source-byte-count (count v)})))
                     (try
                       (.writeBytes dst v 0 n)
                       (let [end (.readableBytes dst)]
@@ -92,14 +92,14 @@ Needing to declare these things twice is annoying."
                         @log-state-atom)
                       (catch RuntimeException ex
                         (swap! log-state-atom
-                               #(log2/exception %
-                                                ex
-                                                ::writing
-                                                ""
-                                                {::byte-count n
-                                                 ::destination dst
-                                                 ::raw-source v
-                                                 ::source (vec v)}))
+                               #(log/exception %
+                                               ex
+                                               ::writing
+                                               ""
+                                               {::byte-count n
+                                                ::destination dst
+                                                ::raw-source v
+                                                ::source (vec v)}))
                         (throw (ex-info "Setting bytes failed"
                                         {::field k
                                          ::K/length n
@@ -111,28 +111,28 @@ Needing to declare these things twice is annoying."
                                          ::error ex
                                          ::weald/log @log-state-atom})))))
         ::K/const (let [contents (::K/contents dscr)
-                        log-state (log2/debug log-state
-                                              ::do-composition-reduction
-                                              "Writing const field"
-                                              {::field k
-                                               ::K/length (::K/length dscr)
-                                               ::raw-source contents
-                                               ::source (vec contents)
-                                               ::destination dst
-                                               ::description (util/pretty dscr)})]
+                        log-state (log/debug log-state
+                                             ::do-composition-reduction
+                                             "Writing const field"
+                                             {::field k
+                                              ::K/length (::K/length dscr)
+                                              ::raw-source contents
+                                              ::source (vec contents)
+                                              ::destination dst
+                                              ::description (util/pretty dscr)})]
                     (.writeBytes dst contents)
                     log-state)
         ::K/int-64 (do
                      (.writeLong dst v)
                      log-state)
         ::K/zeroes (let [n (::K/length dscr)
-                         log-state (log2/debug log-state
-                                               ::do-composition-reduction
-                                               "Zeroing"
-                                               {::field k
-                                                ::K/length n
-                                                ::destination dst
-                                                ::description (util/pretty dscr)})]
+                         log-state (log/debug log-state
+                                              ::do-composition-reduction
+                                              "Zeroing"
+                                              {::field k
+                                               ::K/length n
+                                               ::destination dst
+                                               ::description (util/pretty dscr)})]
                      (.writeZero dst n)
                      log-state)
         (throw (ex-info "No matching clause" dscr)))
@@ -164,11 +164,11 @@ Needing to declare these things twice is annoying."
        ::K/length result})
     (catch IllegalArgumentException ex
       {::weald/state
-       (log2/exception log-state
-                       ex
-                       ::calculate-length
-                       ""
-                       {::problem dscr})})))
+       (log/exception log-state
+                      ex
+                      ::calculate-length
+                      ""
+                      {::problem dscr})})))
 
 (s/fdef extract-byte-array-subset
         :args (s/and (s/cat :offset nat-int?
