@@ -30,6 +30,14 @@
 ;;; Specs
 ;;;; FIXME: Lots need to move into here
 
+(s/def ::field (s/keys :req [::K/type]
+                       ;; This isn't really representative.
+                       ;; It's really an xor scenario.
+                       :opt [::K/length
+                             ::K/contents]))
+
+(s/def ::pattern (s/map-of keyword? ::field))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Cookie Packets
 

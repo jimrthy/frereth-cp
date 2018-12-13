@@ -121,13 +121,15 @@
       (let [log-state (log/info log-state
                                  ::open-packet
                                  "This is the correct size")
-            ;; Q: Is the convenience here worth the [hypothetical] performance hit of using decompose?
-            {:keys [::K/clnt-xtn
-                    ::K/crypto-box
-                    ::K/client-nonce-suffix
-                    ::K/srvr-xtn]
-             ^bytes clnt-short-pk ::K/clnt-short-pk
-             :as decomposed} (serial/decompose-array K/hello-packet-dscr message)]
+            ;; Q: Is the convenience here worth the [hypothetical but
+            ;; highly likely] performance hit of using decompose?
+            {{:keys [::K/clnt-xtn
+                     ::K/crypto-box
+                     ::K/client-nonce-suffix
+                     ::K/srvr-xtn]
+              ^bytes clnt-short-pk ::K/clnt-short-pk} ::serial/decomposed
+             log-state ::weald/state
+             :as decomposed} (serial/decompose-array log-state K/hello-packet-dscr message)]
         (when (not clnt-short-pk)
           (throw (ex-info "HELLO packet missed client short-term pk" decomposed)))
 

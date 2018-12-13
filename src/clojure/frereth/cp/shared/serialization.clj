@@ -4,12 +4,11 @@
   ;; This is more about building things like raw TCP packets.
   "Convert native data structures to/from raw bytes for network travel"
   (:require [clojure.spec.alpha :as s]
-            ;; FIXME: Make this go away.
-            [clojure.tools.logging :as log]
             [frereth.cp.shared
              [bit-twiddling :as b-t]
              [constants :as K]
              [specs :as specs]
+             [templates :as templates]
              [util :as util]]
             [frereth.weald
              [logging :as log2]
@@ -103,7 +102,7 @@ Needing to declare these things twice is annoying."
                                                  ::source (vec v)}))
                         (throw (ex-info "Setting bytes failed"
                                         {::field k
-                                         ::length n
+                                         ::K/length n
                                          ::dst dst
                                          ::dst-length (.capacity dst)
                                          ::source v
@@ -116,7 +115,7 @@ Needing to declare these things twice is annoying."
                                               ::do-composition-reduction
                                               "Writing const field"
                                               {::field k
-                                               ::length (::K/length dscr)
+                                               ::K/length (::K/length dscr)
                                                ::raw-source contents
                                                ::source (vec contents)
                                                ::destination dst
@@ -131,7 +130,7 @@ Needing to declare these things twice is annoying."
                                                ::do-composition-reduction
                                                "Zeroing"
                                                {::field k
-                                                ::length n
+                                                ::K/length n
                                                 ::destination dst
                                                 ::description (util/pretty dscr)})]
                      (.writeZero dst n)
@@ -145,18 +144,31 @@ Needing to declare these things twice is annoying."
                          ::description dscr
                          ::source-value v}))))))
 
+(s/fdef calculate-length
+  :args (s/cat :log-state ::weald/state
+               :description ::templates/field)
+  :ret (s/keys :req [::weald/state]
+               :opt [::K/length]))
 (defn calculate-length
-  [{cnvrtr ::K/type
+  [log-state
+   {cnvrtr ::K/type
     :as dscr}]
   (try
-    (case cnvrtr
-      ::K/bytes (::K/length dscr)
-      ::K/const (count (::K/contents dscr))
-      ::K/int-64 8
-      ::K/zeroes (::K/length dscr))
+    (let [result
+          (case cnvrtr
+            ::K/bytes (::K/length dscr)
+            ::K/const (count (::K/contents dscr))
+            ::K/int-64 8
+            ::K/zeroes (::K/length dscr))]
+      {::weald/state log-state
+       ::K/length result})
     (catch IllegalArgumentException ex
-      (log/error ex (str "Trying to calculate length for "
-                         dscr)))))
+      {::weald/state
+       (log2/exception log-state
+                       ex
+                       ::calculate-length
+                       ""
+                       {::problem dscr})})))
 
 (s/fdef extract-byte-array-subset
         :args (s/and (s/cat :offset nat-int?
@@ -174,32 +186,33 @@ Needing to declare these things twice is annoying."
     dst))
 
 (s/fdef decompose-array-field
-        :args (s/cat :src ::bytes?
-                     ;; FIXME: find or write a spec for this
-                     :tmplt map?
-                     ;; FIXME: find or write a spec for this
-                     :acc map?
-                     ;; Really, it's a function for pulling the
-                     ;; appropriate field out of tmplt.
-                     ;; In practice, it's a keyword
-                     :k keyword?)
-        ;; Q: Can I write anything meaningful in the functional
-        ;; part of the spec?
-        ;; A: Well, :k should be in :ret, but not [:args :acc],
-        ;; and those maps really should otherwise be the same.
-        ;; Don't really have a way to check the before/after
-        ;; (.tell src)
-        ;; Q: Are there any other possibilities?
-        :ret ::decomposed)
+  :args (s/cat :src ::bytes?
+               :tmplt ::templates/pattern
+               ;; FIXME: find or write a spec for this
+               :acc map?
+               ;; Really, it's a function for pulling the
+               ;; appropriate field out of tmplt.
+               ;; In practice, it's a keyword
+               :k keyword?)
+  ;; Q: Can I write anything meaningful in the functional
+  ;; part of the spec?
+  ;; A: Well, :k should be in :ret, but not [:args :acc],
+  ;; and those maps really should otherwise be the same.
+  ;; Don't really have a way to check the before/after
+  ;; (.tell src)
+  ;; Q: Are there any other possibilities?
+  :ret ::decomposed)
 (defn decompose-array-field
   "Refactored from inside a reduce"
   [^bytes src
    tmplt
    {:keys [::index]
+    log-state ::weald/state
     :as acc}
    k]
   (let [dscr (k tmplt)
-        field-length (calculate-length dscr)
+        {field-length ::K/length
+         log-state ::weald/state} (calculate-length log-state dscr)
         cnvrtr (::K/type dscr)]
     (assoc acc k (case cnvrtr
                    ::K/bytes (extract-byte-array-subset index src field-length)
@@ -210,7 +223,6 @@ Needing to declare these things twice is annoying."
                                                  {::expected (vec contents)
                                                   ::actual (vec extracted)})))
                                extracted)
-                   ;; FIXME: Write these next 3
                    ::K/int-64 (.readLong src)
                    ::K/int-32 (.readInt src)
                    ::K/int-16 (.readShort src)
@@ -233,7 +245,8 @@ Needing to declare these things twice is annoying."
                                     ::key k
                                     ::template tmplt
                                     ::source src})))
-           ::index (+ index (calculate-length dscr)))))
+           ::index (+ index (calculate-length dscr))
+           ::weald/state log-state)))
 
 (s/fdef read-byte-array
   :args (s/cat :dscr map?  ; still needs a real spec
@@ -388,17 +401,19 @@ Needing to declare these things twice is annoying."
    (keys tmplt)))
 
 (s/fdef decompose-array
-  ;; FIXME: Still need a spec for the template array-map
-  :args (s/cat :tmplt map?
+  :args (s/cat :tmplt ::templates/pattern
                :src bytes?)
-  :ret ::decomposed)
+  :ret (s/keys :req [::decomposed
+                     ::weald/state]))
 (defn decompose-array
   "Read a C-style struct from a byte array into a map, based on template"
-  [tmplt src]
-  (let [src (bytes src)]
-    (dissoc
-     (reduce
-      (partial decompose-array-field src tmplt)
-      {::index 0}
-      (keys tmplt))
-     ::index)))
+  [log-state tmplt src]
+  (let [src (bytes src)
+        result (reduce
+                (fn [acc k]
+                  (decompose-array-field src tmplt acc k))
+                {::index 0
+                 ::weald/state log-state}
+                (keys tmplt))]
+    {::decomposed (dissoc result ::index ::weald/state)
+     ::weald/state (::weald/state result)}))

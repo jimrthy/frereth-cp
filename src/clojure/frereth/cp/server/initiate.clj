@@ -1,9 +1,11 @@
 (ns frereth.cp.server.initiate
   "For coping with Initiate packets
 
-This is the part that possibly establishes a 'connection'"
+  This is the part that possibly establishes a 'connection'"
   (:require [clojure.spec.alpha :as s]
-            [clojure.string :as str]
+            [clojure
+             [set :as set]
+             [string :as str]]
             [frereth.cp.message.specs :as msg-specs]
             [frereth.cp.server
              ;; FIXME: Don't want these siblings to have any
@@ -27,7 +29,8 @@ This is the part that possibly establishes a 'connection'"
              [specs :as weald]]
             [manifold
              [deferred :as dfrd]
-             [stream :as strm]])
+             [stream :as strm]]
+            [clojure.set :as set])
   (:import clojure.lang.ExceptionInfo
            com.iwebpp.crypto.TweetNaclFast$Box$KeyPair
            [io.netty.buffer ByteBuf Unpooled]))
@@ -335,11 +338,12 @@ This is the part that possibly establishes a 'connection'"
                :keys [::specs/matched?]} (client-short-pk-matches-cookie? log-state
                                                                           initiate
                                                                           key-array)]
-          {::weald/state log-state
-           ::templates/cookie-spec (when matched?
-                                     (serial/decompose-array templates/black-box-dscr
-                                                             inner-vouch-bytes))}))
-      {::weald/state log-state})))
+          (if matched?
+            (set/rename-keys (serial/decompose-array log-state
+                                                     templates/black-box-dscr
+                                                     inner-vouch-bytes)
+                             {::serial/decomposed ::templates/cookie-spec})
+            {::weald/state log-state}))))))
 
 (s/fdef open-client-crypto-box
   :args (s/cat :log-state ::weald/state
@@ -803,7 +807,8 @@ This is the part that possibly establishes a 'connection'"
 (s/fdef decompose-initiate-packet
   :args (s/cat :packet-length nat-int?
                :message-packet ::shared/message)
-  :ret ::K/initiate-packet-spec)
+  :ret (s/keys :req [::K/initiate-packet-spec
+                     ::weald/state]))
 (defn decompose-initiate-packet
   "Extract the raw outer portions of a Client Initiate Packet"
   [packet-length
@@ -817,7 +822,8 @@ This is the part that possibly establishes a 'connection'"
                          [::K/vouch-wrapper ::K/length]
                          +
                          (- packet-length packet-header-length))]
-    (serial/decompose-array tmplt message-packet)))
+    (set/rename-keys (serial/decompose-array tmplt message-packet)
+                     {::serial/decomposed ::K/initiate-packet-spec})))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Public

@@ -121,10 +121,13 @@
                              "Incoming packet that looks like it might be a cookie"
                              {::raw-packet packet
                               ::human-readable (shared/bytes->string packet)})
-        {:keys [::templates/header
-                ::templates/client-extension
-                ::templates/server-extension]
-         :as rcvd} (serial/decompose-array templates/cookie-frame packet)
+        {{:keys [::templates/header
+                 ::templates/client-extension
+                 ::templates/server-extension]
+          :as rcvd} ::serial/decomposed
+         log-state ::weald/state} (serial/decompose-array log-state
+                                                          templates/cookie-frame
+                                                          packet)
         log-state (log/info log-state
                             ::decrypt-cookie-packet
                             "Verifying that decrypted packet looks like a Cookie"
