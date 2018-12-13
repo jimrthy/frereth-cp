@@ -56,11 +56,10 @@ Although you probably don't want to actually use it yet.
 
 #### From the master branch
 
-    boot javac build-jar push-snapshot
+    boot set-version javac build-jar push-release
 
-or
-
-    boot javac build-jar push-release
+TODO: Add option for builds that look like "real" releases with no
+hashes in the version "number."
 
 #### From a working branch
 

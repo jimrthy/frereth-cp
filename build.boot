@@ -82,11 +82,9 @@
       :url         "https://github.com/jimrthy/frereth-cp"
       :scm         {:url "https://github.com/jimrthy/frereth-cp"}
       ;; Q: Should this go into public domain like the rest
-      ;; of the pieces?
+      ;; of CurveCP?
       :license     {"Eclipse Public License"
-                    "http://www.eclipse.org/legal/epl-v10.html"}}
- ;; This might not be generally warranted.
- push {:ensure-branch nil})
+                    "http://www.eclipse.org/legal/epl-v10.html"}})
 
 (require '[adzerk.bootlaces :refer [bootlaces! build-jar push-snapshot push-release]]
          '[adzerk.boot-test :refer [test]]
@@ -101,7 +99,9 @@
     (task-options!
      jar {:file (str "frereth-cp-" version ".jar")}
      pom {:version version})
-    (bootlaces! version :dont-modify-paths? true))
+    (bootlaces! version :dont-modify-paths? true)
+    ;; This probably isn't generally warranted.
+    (task-options! push {:ensure-branch nil}))
   identity)
 
 (deftask build
