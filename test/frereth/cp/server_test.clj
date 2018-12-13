@@ -28,29 +28,6 @@
              [stream :as strm]])
   (:import io.netty.buffer.ByteBuf))
 
-(defn build-hello
-  [srvr-xtn
-   {:keys [::specs/public-short]
-    :as my-short-keys}]
-  (throw (RuntimeException. "This is obsolete"))
-  ;; frereth.cp.client.hello is really my model for setting
-  ;; this up.
-  ;; I'm not overly fond of the current implementation.
-  ;; Still, it's silly not to use whatever the client does.
-  ;; TODO: Make what the client does less objectionable
-  ;; Although, realistically, this is the wrong place for
-  ;; tackling that.
-  (let [empty-crypto-box "Q: What is this?"  ; A: a B] of (- K/hello-crypto-box-length K/box-zero-bytes) zeros
-        crypto-box "FIXME: How do I encrypt this?"
-        hello-dscr {::K/hello-prefix K/hello-header
-                    ::K/srvr-xtn srvr-xtn
-                    ::K/clnt-xtn (byte-array (take K/extension-length (drop 256 (range))))
-                    ::K/clnt-short-pk public-short
-                    ::K/zeros (K/zero-bytes K/zero-box-length)
-                    ::K/client-nonce-suffix (byte-array [0 0 0 0 0 0 0 1])
-                    ::K/crypto-box crypto-box}]
-    (serial/compose K/hello-packet-dscr hello-dscr)))
-
 (defn handshake->child
   "Client-child callback for bytes arriving on the message stream"
   [ch
@@ -297,12 +274,14 @@
                           ;; So this part is painfully implementation-dependent.
                           ;; Q: Is it worth generalizing?
                           hello-packet (bytes (:message hello))]
-                      (println (str "shake-hands: Trying to put hello packet\n"
-                                    (b-t/->string hello-packet)
-                                    "\nonto server channel "
-                                    ->srvr
-                                    " a "
-                                    (class ->srvr)))
+                      (if hello-packet
+                        (println (str "shake-hands: Trying to put hello packet\n"
+                                      (b-t/->string hello-packet)
+                                      "\nonto server channel "
+                                      ->srvr
+                                      " a "
+                                      (class ->srvr)))
+                        (is hello-packet (str hello)))
                       ;; The timing on this test is extremely susceptible to variations in
                       ;; system performance.
                       ;; I don't want to let it run forever, but it would be nice to be able
@@ -329,9 +308,6 @@
                                 ;; parameter to their ctor. The B] approach is slower due to
                                 ;; copying, but recommended for any but advanced users,
                                 ;; to avoid needing to cope with reference counts).
-                                ;; TODO: See which format aleph works with natively to
-                                ;; minimize copying for writes (this may or may not mean
-                                ;; rewriting compose to return B] instead)
                                 ;; Note that I didn't need to do this for the Hello packet.
                                 packet-take (strm/try-take! srvr->client
                                                             ::drained

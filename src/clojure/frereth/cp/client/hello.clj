@@ -210,6 +210,7 @@
                            ::raw-actual n
                            ::actual (vec msg)
                            ::weald/state log-state})))
+        (println "build-actual-packet" msg "in" (dissoc result ::weald/state))
         result)
       (catch Throwable ex
         (if (realized? composition-succeeded?)
@@ -454,7 +455,8 @@
                                                          nonce-suffix)
           log-state (log/info log-state
                               ::do-build-packet
-                              "hello packet possibly built. Returning/updating")]
+                              "hello packet possibly built. Returning/updating"
+                              {::specs/byte-array (vec packet)})]
       (assoc extension-initialized
              ::weald/state log-state
              ::shared/packet-nonce short-term-nonce
@@ -480,7 +482,7 @@
   ;; a dfrd/loop.
   ;; For that matter: What about ways to just skip the loop part completely?
   (let [;; Have to adjust nonce for each server.
-        {hello-packet ::shared/byte-array
+        {hello-packet ::specs/byte-array
          log-state ::weald/state
          :as delta} (do-build-packet (select-keys this [::state/client-extension-load-time
                                                         ::shared/extension

@@ -139,11 +139,13 @@
                                 structure-updater)
                          ::templates/message message-bytes)
         nonce-suffix (::templates/nonce structure)
-        box (crypto/build-box template
-                              structure
-                              crypto-key
-                              nonce-prefix
-                              nonce-suffix)
+        {box ::specs/byte-array
+         log-state ::weald/state} (crypto/build-box log-state
+                                                    template
+                                                    structure
+                                                    crypto-key
+                                                    nonce-prefix
+                                                    nonce-suffix)
         log-state (log/debug log-state
                              ::child->
                              "Trying to put"
@@ -152,23 +154,27 @@
     (deferred/on-realized success
       (fn [succeeded]
         (swap! state-atom
-               #(log/flush-logs! logger
-                                 (if (not= succeeded ::timed-out)
-                                   (log/debug log-state
-                                              ::child->
-                                              "Succeeded")
-                                   (log/warn log-state
-                                             ::child->
-                                             "Timed out")))))
+               (fn [current]
+                 (let [log-state (log/merge-state current log-state)]
+                   (log/flush-logs! logger
+                                    (if (not= succeeded ::timed-out)
+                                      (log/debug log-state
+                                                 ::child->
+                                                 "Succeeded")
+                                      (log/warn log-state
+                                                ::child->
+                                                "Timed out")))))))
       (fn [failed]
         (swap! state-atom
-               #(log/flush-logs! logger
-                                 ;; Q: What are the odds that failed
-                                 ;; is a Throwable?
-                                 (log/error log-state
-                                            ::child->
-                                            "Failed"
-                                            {::problem failed})))))
+               (fn [current]
+                 (let [log-state (log/merge-state current log-state)]
+                   (log/flush-logs! logger
+                                    ;; Q: What are the odds that failed
+                                    ;; is a Throwable?
+                                    (log/error log-state
+                                               ::child->
+                                               "Failed"
+                                               {::problem failed})))))))
     (throw (RuntimeException. "So, what should this do?"))))
 
 (s/fdef fork!

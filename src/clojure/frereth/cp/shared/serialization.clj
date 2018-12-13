@@ -75,15 +75,17 @@ Needing to declare these things twice is annoying."
         ::K/bytes (let [n (long (::K/length dscr))
                         beg (.readableBytes dst)]
                     (swap! log-state-atom
-                           #(log2/debug %
-                                        ::do-composition-reduction
-                                        "Writing bytes to a field"
-                                        {::byte-count n
-                                         ::destination dst
-                                         ::destination-class (class dst)
-                                         ::field-name k
-                                         ::source-bytes v
-                                         ::source-byte-count (count v)}))
+                           (fn [current]
+                             (println "Trying to add a log entry to" current)
+                             (log2/debug current
+                                         ::do-composition-reduction
+                                         "Writing bytes to a field"
+                                         {::byte-count n
+                                          ::destination dst
+                                          ::destination-class (class dst)
+                                          ::field-name k
+                                          ::source-bytes v
+                                          ::source-byte-count (count v)})))
                     (try
                       (.writeBytes dst v 0 n)
                       (let [end (.readableBytes dst)]
@@ -359,6 +361,7 @@ Needing to declare these things twice is annoying."
         log-state (reduce
                    (fn [log-state k]
                      (do-composition-reduction tmplt fields dst log-state k))
+                   log-state
                    (keys tmplt))]
     {::specs/byte-array (b-s/convert dst specs/byte-array-type)
      ::weald/state log-state}))

@@ -137,7 +137,9 @@
               (throw (ex-info "Key too short"
                               {::expected K/key-length
                                ::actual bytes-read
-                               ::path file-resource})))
+                               ::path file-resource
+                               ::raw (vec bytes-read)
+                               ::read (String. (bytes bytes-read))})))
             (let [nonce-key (SecretKeySpec. raw-nonce-key "AES")]
               (deliver key-loaded? true)
               (assoc this
@@ -148,6 +150,12 @@
           (throw (ex-info "Missing noncekey file"
                           {::searching-in key-dir
                            ::log/state log-state})))))))
+
+(comment
+  ;; Set up a random nonce for testing
+  (let [nonce-key (get-random-bytes nonce-key-length)]
+    (with-open [f (io/output-stream "/mnt/share/home/james/projects/programming/snowcrash/cp/test/curve-test/.expertsonly/noncekey")]
+      (.write f nonce-key))))
 
 (declare encrypt-block)
 (defn obscure-nonce
@@ -287,7 +295,6 @@
                                       :dst ::safe-nonce
                                       :offset (complement neg-int?)))
         :ret ::weald/state)
-;; TODO: Needs a way to flush the log-state
 (let [nonce-writer (agent (initial-nonce-agent-state))
       random-portion (byte-array 8)]
   (defn get-nonce-agent-state
@@ -689,48 +696,49 @@
              (>= box-length K/box-zero-bytes))
       (let [log-state (log/debug log-state
                                  ::open-after
-                                 "Box is large enough")]
-        (let [n (+ box-length K/box-zero-bytes)
-              cipher-text (byte-array n)
-              plain-text (byte-array n)]
-          ;; Q: Is this worth being smarter about the array copies?
-          (doseq [i (range box-length)]
-            (aset-byte cipher-text
-                       (+ K/box-zero-bytes i)
-                       (aget box (+ i box-offset))))
+                                 "Box is large enough")
+            n (+ box-length K/box-zero-bytes)
+            cipher-text (byte-array n)
+            plain-text (byte-array n)]
+        ;; Q: Is this worth being smarter about the array copies?
+        (doseq [i (range box-length)]
+          (aset-byte cipher-text
+                     (+ K/box-zero-bytes i)
+                     (aget box (+ i box-offset))))
           ;; Q: Where does shared-key come from?
           ;; A: crypto_box_beforenm
-          (let [success
-                (TweetNaclFast/crypto_box_open_afternm plain-text cipher-text
-                                                       n nonce
-                                                       shared-key)]
-            (when (not= 0 success)
-              (throw (ex-info "Opening box failed" {::error-code success
-                                                    ::box (b-t/->string box)
-                                                    ::offset box-offset
-                                                    ::length box-length
-                                                    ::nonce (b-t/->string nonce)
-                                                    ::shared-key (b-t/->string shared-key)})))
-            ;; TODO: Compare the speed of these approaches with allocating a new
-            ;; byte array without the 0-prefix padding and copying it back over
-            ;; Keep in mind that we're limited to 1088 bytes per message.
-            (comment (-> plain-text
-                         vec
-                         (subvec K/decrypt-box-zero-bytes)))
-            {::weald/state (log/debug log-state
-                                      ::open-after
-                                      "Box Opened")
-             ;; Q: Why am I wrapping this in a ByteBuf?
-             ;; That seems like I'm probably jumping through extra hoops
-             ;; for the sake of hoop-jumping.
-             ;; Odds are, the next step, in general, is to decompose
-             ;; what just got unwrapped. So this seems like a premature
-             ;; convenience that would make more sense as an extra
-             ;; wrapper elsewhere.
-             ;; TODO: Look into that, too.
-             ::unboxed (Unpooled/wrappedBuffer plain-text
-                                               K/decrypt-box-zero-bytes
-                                               ^Long (- box-length K/box-zero-bytes))})))
+
+        (let [success
+              (TweetNaclFast/crypto_box_open_afternm plain-text cipher-text
+                                                     n nonce
+                                                     shared-key)]
+          (when (not= 0 success)
+            (throw (ex-info "Opening box failed" {::error-code success
+                                                  ::box (b-t/->string box)
+                                                  ::offset box-offset
+                                                  ::length box-length
+                                                  ::nonce (b-t/->string nonce)
+                                                  ::shared-key (b-t/->string shared-key)})))
+          ;; TODO: Compare the speed of these approaches with allocating a new
+          ;; byte array without the 0-prefix padding and copying it back over
+          ;; Keep in mind that we're limited to 1088 bytes per message.
+          (comment (-> plain-text
+                       vec
+                       (subvec K/decrypt-box-zero-bytes)))
+          {::weald/state (log/debug log-state
+                                    ::open-after
+                                    "Box Opened")
+           ;; Q: Why am I wrapping this in a ByteBuf?
+           ;; That seems like I'm probably jumping through extra hoops
+           ;; for the sake of hoop-jumping.
+           ;; Odds are, the next step, in general, is to decompose
+           ;; what just got unwrapped. So this seems like a premature
+           ;; convenience that would make more sense as an extra
+           ;; wrapper elsewhere.
+           ;; TODO: Look into that, too.
+           ::unboxed (Unpooled/wrappedBuffer plain-text
+                                             K/decrypt-box-zero-bytes
+                                             ^Long (- box-length K/box-zero-bytes))}))
       (throw (ex-info "Box too small" {::box box
                                        ::offset box-offset
                                        ::length box-length

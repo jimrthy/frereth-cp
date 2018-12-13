@@ -92,11 +92,13 @@
                                   shared-secrets
                                   "'\nin\n"
                                   this))
-            crypto-box (crypto/build-box tmplt
-                                         src
-                                         secret
-                                         K/initiate-nonce-prefix
-                                         outer-nonce-suffix)
+            {crypto-box ::specs/byte-array
+             log-state ::weald/state} (crypto/build-box log-state
+                                                        tmplt
+                                                        src
+                                                        secret
+                                                        K/initiate-nonce-prefix
+                                                        outer-nonce-suffix)
             log-state (log/info log-state
                                 ::build-initiate-interior
                                 "Encrypting\nFIXME: Do not log the shared secret!"

@@ -11,7 +11,10 @@
              [constants :as K]
              [serialization :as serial]
              [specs :as specs]
-             [templates :as templates]])
+             [templates :as templates]]
+            [frereth.weald
+             [logging :as log]
+             [specs :as weald]])
   (:import io.netty.buffer.Unpooled))
 
 (deftest test-cookie-composition
@@ -35,13 +38,15 @@
         cookie (byte-array K/cookie-frame-length)]
     (.readBytes client-nonce-suffix-buffer client-nonce-suffix)
     (.readBytes cookie-buffer cookie)
-    (let [to-encode {::K/header K/cookie-header
-                     ::K/client-extension client-extension
-                     ::K/server-extension server-extension
-                     ::K/client-nonce-suffix client-nonce-suffix
-                     ::K/cookie cookie}]
+    (let [to-encode {::templates/header K/cookie-header
+                     ::templates/client-extension client-extension
+                     ::templates/server-extension server-extension
+                     ::templates/client-nonce-suffix client-nonce-suffix
+                     ::templates/cookie cookie}
+          log-state (log/init ::test-cookie-composition)]
       (try
-        (let [composed (serial/compose templates/cookie-frame to-encode dst)]
+        (let [{composed ::specs/byte-array
+               log-state ::weald/state} (serial/compose log-state templates/cookie-frame to-encode)]
           ;; It's very tempting to dissect this for a round trip.
           ;; But, honestly, that's what property-based tests are best at
           (is composed))

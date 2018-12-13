@@ -80,12 +80,14 @@
                               {::specs/server-nonce-suffix (vec nonce-suffix)})
          ;; In theory, this should be using secret-box.
          ;; The implementation's the same, so it doesn't matter.
-         boxed-cookie (crypto/build-box templates/black-box-dscr
-                                        {::templates/clnt-short-pk client-short-pk
-                                         ::templates/srvr-short-sk my-short-sk}
-                                        minute-key
-                                        K/cookie-nonce-minute-prefix
-                                        nonce-suffix)
+         {boxed-cookie ::specs/byte-array
+          log-state ::weald/state} (crypto/build-box log-state
+                                                     templates/black-box-dscr
+                                                     {::templates/clnt-short-pk client-short-pk
+                                                      ::templates/srvr-short-sk my-short-sk}
+                                                     minute-key
+                                                     K/cookie-nonce-minute-prefix
+                                                     nonce-suffix)
          ;; This is similar to what the reference implementation
          ;; does when it just overwrites the garbage portion of the zero-padding
          ;; with it on line 321.
@@ -133,16 +135,18 @@
                               ::templates/inner-cookie black-box
                               ::inner-box-size (count black-box)})]
     (try
-      (let [result
-            (crypto/build-box templates/cookie
+      (let [{result ::specs/byte-array
+             log-state ::weald/state}
+            (crypto/build-box log-state
+                              templates/cookie
                               {::templates/s' pk-session
                                ::templates/inner-cookie black-box}
                               shared-key
                               K/cookie-nonce-prefix
                               nonce-suffix)]
         {::weald/state (log/debug log-state
-                                ::build-cookie-wrapper
-                                "Encrypting the real cookie succeeded")
+                                  ::build-cookie-wrapper
+                                  "Encrypting the real cookie succeeded")
          ::templates/encrypted-cookie result})
       (catch Throwable ex
         {::weald/state (log/exception log-state ex ::build-cookie-wrapper

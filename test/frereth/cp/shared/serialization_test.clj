@@ -15,7 +15,8 @@
              [crypto :as crypto]
              [serialization :as serial]
              [specs :as specs]
-             [util :as utils]]))
+             [util :as utils]]
+            [frereth.weald.logging :as log]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Helpers
@@ -28,7 +29,8 @@
   [spec template src]
   ;; And then check all the parts
   (is (s/valid? spec src))
-  (let [serialized (serial/compose template src)
+  (let [log-state (log/init ::check-round-trip)
+        {serialized ::specs/byte-array} (serial/compose log-state template src)
         rhs (serial/decompose template serialized)]
     (doseq [k (keys rhs)]
       ;; This was a point of confusion for me, because the associated value
