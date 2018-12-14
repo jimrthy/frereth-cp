@@ -36,6 +36,8 @@
                        :opt [::K/length
                              ::K/contents]))
 
+(s/def ::field-names (s/coll-of keyword?))
+
 (s/def ::pattern (s/map-of keyword? ::field))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

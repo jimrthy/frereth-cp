@@ -9,10 +9,12 @@
              [constants :as K]
              [serialization :as serial]
              [specs :as specs]
+             [templates :as templates]
              [util :as util]]
             [frereth.weald
              [logging :as log]
-             [specs :as weald]])
+             [specs :as weald]]
+            [frereth.cp.shared.templates :as templates])
   (:import clojure.lang.ExceptionInfo
            [com.iwebpp.crypto TweetNaclFast
             TweetNaclFast$Box]
@@ -451,10 +453,9 @@
     shared))
 
 (s/fdef build-box
-        ;; FIXME: Figure out a meaningful way to spec out template and source
   :args (s/cat :log-state ::weald/state
-               :template any?
-               :source any?
+               :template ::templates/pattern
+               :source (s/coll-of keyword?)
                :shared-key ::specs/crypto-key
                :nonce-prefix (s/or :server ::specs/server-nonce-prefix
                                    :client ::specs/client-nonce-prefix)
@@ -787,6 +788,24 @@
                                       ::open-box
                                       "Failed to open box")}))))
 
+
+(s/fdef decompose-box
+  :args (s/cat :log-state ::weald/state
+               :template ::templates/pattern)
+  :ret (s/keys :req [::weald/state]
+               :opt [::serial/decomposed]))
+(defn decompose-box
+  [log-state
+   template
+   nonce-prefix
+   nonce-suffix
+   crypto-box
+   shared-key]
+  (let [{plain-text ::unboxed
+         log-state ::weald/state} (open-box log-state nonce-prefix nonce-suffix crypto-box shared-key)
+        decomposed (serial/decompose template plain-text)]
+    {::weald/state log-state
+     ::serial/decomposed decomposed}))
 
 (s/fdef random-array
   :args (s/cat :n integer?)

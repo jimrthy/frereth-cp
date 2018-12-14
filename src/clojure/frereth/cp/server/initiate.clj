@@ -85,12 +85,15 @@
    shared-key
    nonce-suffix
    box]
-  (crypto/decompose-box log-state
-                        templates/initiate-client-vouch-wrapper
-                        K/initiate-nonce-prefix
-                        nonce-suffix
-                        box
-                        shared-key))
+  (let [result
+        (crypto/decompose-box log-state
+                              templates/initiate-client-vouch-wrapper
+                              K/initiate-nonce-prefix
+                              nonce-suffix
+                              box
+                              shared-key)]
+    (set/rename-keys result {::serial/decomposed
+                             ::K/initiate-client-vouch-wrapper})))
 
 (s/fdef possibly-re-initiate-existing-client-connection
         :args (s/cat :state ::state

@@ -28,7 +28,7 @@
 ;;;; Internal
 
 (s/fdef do-composition-reduction
-  :args (s/cat :tmplt any?  ; FIXME: Needs a spec.
+  :args (s/cat :tmplt ::templates/pattern
                :dst ::specs/byte-buf
                :log-state ::weald/state
                :k keyword?)
@@ -249,7 +249,7 @@ Needing to declare these things twice is annoying."
            ::weald/state log-state)))
 
 (s/fdef read-byte-array
-  :args (s/cat :dscr map?  ; still needs a real spec
+  :args (s/cat :dscr ::templates/pattern
                :src ::specs/byte-buf)
   :ret bytes?)
 (defn read-byte-array!
@@ -264,8 +264,7 @@ Needing to declare these things twice is annoying."
 
 (s/fdef decompose-field!
         :args (s/cat :src ::specs/byte-buf
-                     ;; FIXME: find or write a spec for this
-                     :tmplt map?
+                     :tmplt ::templates/pattern
                      ;; FIXME: find or write a spec for this
                      :acc map?
                      ;; Really, it's a function for pulling the
@@ -330,8 +329,8 @@ Needing to declare these things twice is annoying."
 
 (s/fdef do-compose
   :args (s/cat :log-state ::weald/state
-               :tmplt any?
-               :fields (s/coll-of keyword?)
+               :tmplt ::templates/pattern
+               :fields ::templates/field-names
                :dst ::specs/byte-buf))
 (defn do-compose
   ;; Nothing outside unit tests calls this.
@@ -353,8 +352,8 @@ Needing to declare these things twice is annoying."
 
 (s/fdef compose
   :args (s/cat :log-state ::weald/state
-               :tmplt any?
-               :fields (s/coll-of keyword?))
+               :tmplt ::templates/pattern
+               :fields ::templates/field-names)
   :ret (s/keys :req [::specs/byte-array ::weald/state]))
 (defn compose
   "serialize a map into a ByteBuf"
@@ -380,8 +379,7 @@ Needing to declare these things twice is annoying."
      ::weald/state log-state}))
 
 (s/fdef decompose
-        ;; TODO: tmplt needs a spec for the values
-        :args (s/cat :template map?
+        :args (s/cat :template ::templates/pattern
                      :src #(instance? ByteBuf %))
         ;; TODO: Really should match each value in tmplt
         ;; with the corresponding value in ret and clarify
