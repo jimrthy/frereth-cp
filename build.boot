@@ -157,7 +157,15 @@
   (let [port (or port 32767)]
     (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl :port port :bind "0.0.0.0"))))
 
+(deftask lint
+  []
+  (comp
+   (check/with-yagni)
+   (check/with-eastwood)
+   (check/with-kibit)
+   (check/with-bikeshed)))
+
 (deftask to-clojars
   "Publish"
   []
-  (comp (set-version) (javac) (build-jar) (push-release)))
+  (comp (set-version) (lint) (javac) (build-jar) (push-release)))
