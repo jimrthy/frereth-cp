@@ -77,6 +77,9 @@
                :opt [::K/initiate-client-vouch-wrapper]))
 ;; TODO: Write server-test/vouch-extraction to gain confidence that
 ;; this works
+;; This isn't getting called. It seems like that means it should
+;; just go away, but that seems problematic.
+;; Q: How am I handling this instead?
 (defn decrypt-initiate-box
   "Decrypts the final 368+M byte box at packet's end
 
@@ -798,13 +801,12 @@
                                        ::weald/state log-state}
                                       packet
                                       initiate)
-        log-state (if log-state-2
-                    log-state-2
-                    (log/warn log-state
-                              ::do-create-forked-child!
-                              (str "Log state disappeared"
-                                   "  trying to build-new-client")
-                              {::built built}))]
+        log-state (or log-state-2
+                      (log/warn log-state
+                                ::do-create-forked-child!
+                                (str "Log state disappeared"
+                                     "  trying to build-new-client")
+                                {::built built}))]
     (assoc built ::weald/state log-state)))
 
 (s/fdef decompose-initiate-packet

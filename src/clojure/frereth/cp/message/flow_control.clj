@@ -25,7 +25,7 @@
     :as state}
    ackd-time]
   (let [rtt (- recent ackd-time)]
-    (when (> 0 rtt)
+    (when (neg? rtt)
       ;; I'm getting into scenarios with negative RTT, which
       ;; seems to have something to do with math overflow
       ;; warnings. That seems to be breaking things.
@@ -45,7 +45,7 @@
                       {::specs/recent recent
                        ::ackd-time ackd-time
                        ::delta rtt})))
-    (if (= 0 rtt-average)
+    (if (zero? rtt-average)
       (update state
               ::specs/flow-control
               (fn [s]
@@ -189,7 +189,8 @@
         ;; The math that leads to that *is* plausible.
         ;; But...does it ever make any sense?
         rtt-average (+ rtt-average (/ rtt-delta 8.0))
-        rtt-delta (if (> 0 rtt-delta)
+        ;; Really? No abs built-in?
+        rtt-delta (if (neg? rtt-delta)
                     (- rtt-delta)
                     rtt-delta)
         rtt-delta (- rtt-delta rtt-deviation)
@@ -203,7 +204,7 @@
         rtt-highwater (+ rtt-highwater (/ rtt-delta K/k-1f))
         rtt-delta (- rtt rtt-lowwater)
         rtt-lowwater (+ rtt-lowwater
-                        (if (> rtt-delta 0)
+                        (if (pos? rtt-delta)
                           (/ rtt-delta K/k-8f)
                           (/ rtt-delta K/k-div4f)))
         ;; Q: Are these actually used anywhere else?

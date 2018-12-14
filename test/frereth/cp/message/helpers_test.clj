@@ -48,8 +48,7 @@
                               b1)
               expected (apply set (map (partial disj b1) dropped))
               actual (set (mapcat (fn [x]
-                                    (if (::specs/ackd? x)
-                                      nil
+                                    (when-not (::specs/ackd? x)
                                       [x]))
                                   b2))]
           (println "Expected:\n" expected "\nbased on\n" b1)

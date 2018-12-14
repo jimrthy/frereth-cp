@@ -121,8 +121,7 @@ This really seems like a bad road to go down."
 (def header-length 8)
 (defn random-header
   []
-  (byte-array (take header-length
-                    (repeatedly #(- (rand-int 256) 128)))))
+  (byte-array (repeatedly header-length #(- (rand-int 256) 128))))
 (comment (random-header))
 
 (s/def ::prefix

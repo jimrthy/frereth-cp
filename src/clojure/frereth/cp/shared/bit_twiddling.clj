@@ -206,8 +206,8 @@ Thanks, java, for having a crippled numeric stack."
                    ^BigInt ret :ret}]
                (let [d (biginteger (:denominator args))
                      n (:numerator args)]
-                 (if (= n 0)
-                   (= ret 0)
+                 (if (zero? n)
+                   (zero? ret)
                    (<= (.abs (biginteger ret)) (.abs d)))))
          :ret integer?)
 (defn secure-mod

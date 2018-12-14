@@ -123,8 +123,8 @@
      ::weald/state log-state}))
 (comment
   (let [r #_80 #_800 #_640 6400]
-    [(= (bit-and r 0xf) 0)
-     (= (rem r 16) 0)]))
+    [(zero? (bit-and r 0xf))
+     (zero? (rem r 16))]))
 
 (s/fdef verify-my-packet
         :args (s/cat :this ::state
@@ -252,11 +252,11 @@
                                                           {::packet-type-id packet-type-id})}))]
               (as-> this x
                 (into x delta)
-                (assoc x
+                (update x
                        ::weald/state
-                       (log/debug (::weald/state x)
-                                  ::do-handle-incoming
-                                  "Handled"))))
+                       log/debug
+                       ::do-handle-incoming
+                       "Handled")))
             (assoc this
                    ::weald/state (log/info log-state
                                            ::do-handle-incoming
@@ -478,22 +478,23 @@
             log-state (log/flush-logs! logger (log/warn log-state
                                                         ::stop!
                                                         "Clearing secrets"))
-            outcome (-> (try
-                             (state/hide-secrets! this)
-                             (catch Exception ex
-                               ;; Very tempting to split RuntimeException
-                               ;; away from Exception. And then make Exception
-                               ;; fatal
-                               (update this ::weald/state
-                                       #(log/exception %
-                                                       ex
-                                                       ::stop!))))
-                        (dissoc ::state/event-loop-stopper!
-                                ;; This doesn't make any sense here anyway.
-                                ;; But it's actually breaking my spec
-                                ;; check.
-                                ;; Somehow.
-                                ::state/current-client))
+            outcome (dissoc (try
+                              (state/hide-secrets! this)
+                              (catch Exception ex
+                                ;; Very tempting to split RuntimeException
+                                ;; away from Exception. And then make Exception
+                                ;; fatal
+                                (update this ::weald/state
+                                        #(log/exception %
+                                                        ex
+                                                        ::stop!))))
+                            ::state/event-loop-stopper!
+                            ;; This doesn't make any sense here anyway.
+                            ;; But it's actually breaking my spec
+                            ;; check.
+                            ;; Somehow.
+                            ::state/current-client)
+
             log-state (log/warn log-state
                                 ::stop!
                                 "Secrets hidden")]
@@ -524,6 +525,6 @@
     (throw (ex-info "Invalid state construction attempt" problem)))
 
   (let [log-state (log/clean-fork log-state ::server)]
-    (-> cfg
-        (assoc ::state/active-clients {}
-               ::state/max-active-clients max-active-clients))))
+    (assoc cfg
+           ::state/active-clients {}
+           ::state/max-active-clients max-active-clients)))

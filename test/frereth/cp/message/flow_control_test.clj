@@ -20,7 +20,7 @@
             result (r/fold + ns)
             end (System/nanoTime)]
         ;; Just so the test looks like it's doing something
-        (is (< 0 result))
+        (is (pos? result))
         (reset! float-start-time start)
         (reset! float-finish-time end)))
     (testing "Ratios"
@@ -30,13 +30,13 @@
             denominators (r/foldcat (r/map (fn [_]
                                              (rand-int Integer/MAX_VALUE))
                                            (range iterations)))
-            ns (into [] (map (fn [numerator denominator]
-                               (/ numerator denominator))
-                             numerators denominators))
+            ns (vec (map (fn [numerator denominator]
+                           (/ numerator denominator))
+                         numerators denominators))
             start (System/nanoTime)
             result (r/fold + ns)
             end (System/nanoTime)]
-        (is (< 0 result))
+        (is (pos? result))
         (reset! ratio-start-time start)
         (reset! ratio-finish-time end)))
     (testing "Timing"
@@ -71,7 +71,7 @@
         denominators (r/foldcat (r/map (fn [_]
                                          (rand-int Integer/MAX_VALUE))
                                        (range iterations)))]
-    (into [] (map (fn [numerator denominator]
-                    (/ numerator denominator))
-                  numerators denominators)))
+    (vec (map (fn [numerator denominator]
+                (/ numerator denominator))
+              numerators denominators)))
   )

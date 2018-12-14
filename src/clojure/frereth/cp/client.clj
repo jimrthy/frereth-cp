@@ -69,9 +69,8 @@
                  (catch java.lang.ClassCastException ex
                    (throw (ex-info (str @this ": deferred that breaks everything")
                                    {:cause (str ex)})))))]
-    (-> this
-        ;; TODO: Write a mirror image version of dns-encode to just show this
-        (assoc-in [::server-security ::specs/srvr-name] "name"))))
+    ;; TODO: Write a mirror image version of dns-encode to just show this
+    (assoc-in this [::server-security ::specs/srvr-name] "name")))
 
 (defn child-exited!
   [this]

@@ -45,7 +45,7 @@
           {:keys [::specs/outgoing]
            :as result} (consumer start-state)]
       (is (= 8193 (::specs/strm-hwm outgoing)))
-      (is (= 0 (::specs/ackd-addr outgoing)))
+      (is (zero? (::specs/ackd-addr outgoing)))
       (is (= 512 (::specs/max-block-length outgoing)))
       (is (= 1 (+ (count (::specs/un-sent-blocks outgoing))
                   (count (::specs/un-ackd-blocks outgoing))))))))
@@ -164,7 +164,7 @@
                   log-state (log/info log-state
                                       ::read-top
                                       {::expecting remaining})]
-              (if (< 0 remaining)
+              (if (pos? remaining)
                 (let [{rcvd ::specs/bs-or-eof
                        log-state ::weald/state} (from-child/read-next-bytes-from-child! human-name
                                                                                         log-state
@@ -188,7 +188,7 @@
                          ::denouement
                          "Verifying what happens to reader after closing writer")]
           (try
-            (is (= (.available reader) 0))
+            (is (zero? (.available reader)))
             (let [final (.read reader)
                   log-state (log/info log-state
                                       ::unexpected

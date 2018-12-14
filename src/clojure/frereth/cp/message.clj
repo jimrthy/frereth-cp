@@ -315,7 +315,7 @@
 ;;;           417-433: for loop from 0-bytes read
 ;;;                    Copies bytes from incoming message buffer to message[][]
     (let [incoming-size (count message)]
-      (when (= 0 incoming-size)
+      (when (zero? incoming-size)
         (log/flush-logs! logger log-state)
         ;; This is supposed to kill the entire process
         ;; TODO: Be more graceful
@@ -552,7 +552,7 @@
                   K/max-outgoing-blocks)
                (if (not= ::specs/false send-eof)
                  (not send-eof-processed)
-                 (< 0 un-sent-count))) (min min-resend-time)
+                 (pos? un-sent-count))) (min min-resend-time)
           ;; Lines 293-296
           (and (not= 0 un-ackd-count)
                (> rtt-resend-time
@@ -661,7 +661,7 @@
                                       K/max-outgoing-blocks)
                                    (if (not= ::specs/false send-eof)
                                      (not send-eof-processed)
-                                     (< 0 un-sent-count)))
+                                     (pos? un-sent-count)))
                             (min next-based-on-ping min-resend-time)
                             next-based-on-ping)
         ;; Lines 293-296
@@ -1048,7 +1048,7 @@
           my-logs (::weald/state state)
           forked-logs (log/fork my-logs)
           mid (System/currentTimeMillis)]
-      (if (not (interrupted?))
+      (if-not (interrupted?)
         ;; This is taking a ludicrous amount of time.
         ;; Q: How much should I blame on logging?
         (schedule-next-timeout! io-handle (assoc state
@@ -1213,7 +1213,7 @@
                              ::schedule-next-timeout!
                              "Top of scheduler"
                              {::now now})]
-    (if (not (strm/closed? stream))
+    (if-not (strm/closed? stream)
       (let [{actual-next ::next-action-time
              log-state ::weald/state
              :as original-scheduled}

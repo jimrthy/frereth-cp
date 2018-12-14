@@ -130,7 +130,7 @@
               ^bytes clnt-short-pk ::K/clnt-short-pk} ::serial/decomposed
              log-state ::weald/state
              :as decomposed} (serial/decompose-array log-state K/hello-packet-dscr message)]
-        (when (not clnt-short-pk)
+        (when-not clnt-short-pk
           (throw (ex-info "HELLO packet missed client short-term pk" decomposed)))
 
         ;; Note: The reference implementation keeps a specific memory address for the

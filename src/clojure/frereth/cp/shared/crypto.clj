@@ -406,8 +406,8 @@
              cipher-text (byte-array padded-length)]
          (log/info (str "Encrypting " length " bytes into " padded-length))
          (b-t/byte-copy! plain-buffer K/box-zero-bytes length plain-text)
-         (when (= 0
-                  (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce shared-key))
+         (when (zero?
+                (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce shared-key))
            (b-t/sub-byte-array cipher-text K/box-zero-bytes)))))
    (box-after shared-key plain-text 0 length nonce))
   ([shared-key plain-text offset length nonce]
@@ -419,7 +419,7 @@
            plain-buffer (byte-array padded-length)]
        (b-t/byte-copy! plain-buffer K/decrypt-box-zero-bytes length plain-text offset)
        (let [success (TweetNaclFast/crypto_box_afternm cipher-text plain-buffer padded-length nonce shared-key)]
-         (if (= 0 success)
+         (if (zero? success)
            ;; After it's encrypted, we can discard the first 16 bytes.
            ;; But not the other extra 16.
            ;; This is an annoying API pitfall that has lead to a lot of

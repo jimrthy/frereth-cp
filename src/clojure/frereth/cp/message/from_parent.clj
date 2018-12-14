@@ -210,7 +210,7 @@
                                         stop-byte)]
               ;; 581-588: copy incoming into receivebuf
               (let [gap-after-start (- receive-written start-byte)
-                    min-k (if (< 0 gap-after-start)
+                    min-k (if (pos? gap-after-start)
                             0 gap-after-start)  ; drop bytes we've already written
                     ;; Address at the limit of our buffer size
                     max-rcvd (+ receive-written K/recv-byte-buf-size)
@@ -321,29 +321,28 @@
                                                     [(+ start-byte min-k) (+ start-byte max-k)]
                                                     incoming-buf)]
                                          (if eof-changed?
-                                           (do
-                                             ;; When the last gap's been consolidated (but not before),
-                                             ;; we need to
-                                             ;; a) write final pipes to child
-                                             ;; b) close that pipe
-                                             ;;    Except this isn't quite correct.
-                                             ;;    No, it is.
-                                             ;;    It's just that my handshake can't really
-                                             ;;    cope with it as-is.
-                                             ;;    It really needs something to happen when
-                                             ;;    this pipe closes.
-                                             ;;    Except that I think it's a stream closing.
-                                             ;;    Child can't know about those.
-                                             ;;    We need to send a ::eof signal to its callback.
-                                             ;; c) Also need to close the parent->child pipes
-                                             ;; d) And, really, need to deliver a deferred
-                                             ;;    that, in conjunction with the child->parent
-                                             ;;    parent pipes, will cause the main ioloop
-                                             ;;    to exit.
-                                             ;; Q: Is all that happening somewhere?
-                                             (assoc result
-                                                    [(+ start-byte max-k) (+ start-byte max-k)]
-                                                    receive-eof))
+                                           ;; When the last gap's been consolidated (but not before),
+                                           ;; we need to
+                                           ;; a) write final pipes to child
+                                           ;; b) close that pipe
+                                           ;;    Except this isn't quite correct.
+                                           ;;    No, it is.
+                                           ;;    It's just that my handshake can't really
+                                           ;;    cope with it as-is.
+                                           ;;    It really needs something to happen when
+                                           ;;    this pipe closes.
+                                           ;;    Except that I think it's a stream closing.
+                                           ;;    Child can't know about those.
+                                           ;;    We need to send a ::eof signal to its callback.
+                                           ;; c) Also need to close the parent->child pipes
+                                           ;; d) And, really, need to deliver a deferred
+                                           ;;    that, in conjunction with the child->parent
+                                           ;;    parent pipes, will cause the main ioloop
+                                           ;;    to exit.
+                                           ;; Q: Is all that happening somewhere?
+                                           (assoc result
+                                                  [(+ start-byte max-k) (+ start-byte max-k)]
+                                                  receive-eof)
                                            result))))))))
 
           ;; This seems problematic, but that's because
@@ -359,6 +358,36 @@
                               ::extract-message!
                               "Pure ACK never updates received gap-buffer"))))
       (assoc state ::weald/state log-state))))
+
+(defn flag-between-gaps
+  ;; Refactored out of the reduce in flag-ackd-others!
+  [{:keys [::stop-byte]
+    log-state ::weald/state
+    :as state}
+   [start stop :as gap-key]]
+  (println "Reducing from" start "to" stop "until" stop-byte "based on" gap-key)
+  (let [log-state
+        (if-not (and start stop)
+          (log/error log-state
+                     ::flag-between-gaps
+                     "Missing stop/start somewhere in packet"
+                     {::start start
+                      ::stop stop})
+          log-state)
+        ;; Note that this is based on absolute stream addresses
+        start-byte (+ stop-byte start)
+        stop-byte (+ start-byte stop)]
+    ;; This seems like an awkward way to get state modified to
+    ;; adjust the return value.
+    ;; It actually fits perfectly, but it isn't as obvious as
+    ;; I'd like.
+    (assoc (help/mark-ackd-by-addr (assoc state
+                                          ::weald/state
+                                          log-state)
+                                   start-byte
+                                   stop-byte)
+           ::stop-byte
+           stop-byte)))
 
 (s/fdef flag-ackd-others!
   :args (s/cat :state ::specs/state
@@ -398,38 +427,10 @@
                                "ACK'd with Gaps"
                                {::gaps (into [] gaps)
                                 ::specs/state state})]
-      (->
-       (reduce (fn [{:keys [::stop-byte]
-                     log-state ::weald/state
-                     :as state}
-                    [start stop :as gap-key]]
-                 (println "Reducing from" start "to" stop "until" stop-byte "based on" gap-key)
-                 (let [log-state
-                       (if-not (and start stop)
-                         (log/error log-state
-                                    ::flag-ackd-others!
-                                    "Missing stop/start somewhere in packet"
-                                    {::start start
-                                     ::stop stop})
-                         log-state)
-                       ;; Note that this is based on absolute stream addresses
-                       start-byte (+ stop-byte start)
-                       stop-byte (+ start-byte stop)]
-                   ;; This seems like an awkward way to get state modified to
-                   ;; adjust the return value.
-                   ;; It actually fits perfectly, but it isn't as obvious as
-                   ;; I'd like.
-                   (assoc (help/mark-ackd-by-addr (assoc state
-                                                         ::weald/state
-                                                         log-state)
-                                                  start-byte
-                                                  stop-byte)
-                          ::stop-byte
-                          stop-byte)))
-               (assoc state ::stop-byte 0)
-               gaps)
-       ;; Ditch the temp key we used to track the stop point
-       (dissoc ::stop-byte)))))
+      (dissoc (reduce flag-between-gaps
+                      (assoc state ::stop-byte 0)
+                      gaps)
+              ::stop-byte))))
 
 (s/fdef prep-send-ack
         :args (s/cat :state ::state
@@ -793,7 +794,7 @@ Line 608"
       (update state
               ::weald/state
               (fn [cur]
-                (if (< 0 len)
+                (if (pos? len)
                   (log/warn cur
                             ::possibly-ack!
                             "Illegal incoming message length"
@@ -828,7 +829,7 @@ Line 608"
                               ::parent->buffer-count (count parent->buffer)
                               ::specs/receive-written receive-written
                               ::specs/strm-hwm strm-hwm})]
-    (if (or (< 0 (count parent->buffer))   ; new incoming message?
+    (if (or (zero? (count parent->buffer))   ; new incoming message?
             ;; any previously buffered incoming messages to finish
             ;; processing?
             (not= 0 child-buffer-count)

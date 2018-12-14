@@ -239,7 +239,7 @@
   (is incoming)
   (is (or (keyword? incoming)
           (and (bytes? incoming)
-               (< 0 (count incoming)))))
+               (pos? (count incoming)))))
   (swap! log-atom
          log/debug
          ::server-child-processor

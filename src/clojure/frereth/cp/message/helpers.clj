@@ -155,8 +155,7 @@ Based on earliestblocktime_compute, in lines 138-153
         dropped-block-lengths (apply + (map (fn [b]
                                               (-> b ::specs/buf .readableBytes))
                                             to-drop))
-        kept (reduce (fn [acc dropped]
-                       (disj acc dropped))
+        kept (reduce disj
                      un-ackd-blocks
                      to-drop)
         state (-> state

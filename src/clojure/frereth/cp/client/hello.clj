@@ -307,27 +307,28 @@
                   (if server-cookie
                     (b-t/->string server-cookie)
                     "missing")))
+    ;; TODO: Try reframing this as a cond.
+    ;; See whether it makes the logic easier to follow.
     (if server-cookie
       (if network-packet
-        (do
-          (if (and server-security shared-secrets)
-            (assoc this ::weald/state (log/debug log-state
-                                                 ::cookie-retrieved
-                                                 "Got back a usable cookie"
-                                                 (dissoc this ::weald/state)))
-            (let [logger (::weald/logger this)]
-              (log/flush-logs! logger (log/error log-state
-                                                 ::cookie-retrieved
-                                                 "Got back a network-packet but missing something else"
-                                                 {::state/cookie-response (dissoc this ::weald/state)}))
-              (throw (ex-info "Network-packet missing either security or shared-secrets"
-                              {::problem this})))))
+        (if (and server-security shared-secrets)
+          (assoc this ::weald/state (log/debug log-state
+                                               ::cookie-retrieved
+                                               "Got back a usable cookie"
+                                               (dissoc this ::weald/state)))
+          (let [logger (::weald/logger this)]
+            (log/flush-logs! logger (log/error log-state
+                                               ::cookie-retrieved
+                                               "Got back a network-packet but missing something else"
+                                               {::state/cookie-response (dissoc this ::weald/state)}))
+            (throw (ex-info "Network-packet missing either security or shared-secrets"
+                            {::problem this}))))
         (let [elapsed (- now start-time)
               remaining (- timeout elapsed)
               log-state (log/info log-state
                                   ::cookie-retrieved
                                   "Discarding garbage cookie")]
-          (if (< 0 remaining)
+          (if (pos? remaining)
             (assoc this
                    ::continue true
                    ::remaining remaining

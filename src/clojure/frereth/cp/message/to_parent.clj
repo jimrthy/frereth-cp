@@ -31,7 +31,7 @@
                     length (.readableBytes buf)]
                 (>= ret (+ 48 length))))
         :ret (s/and nat-int?
-                    #(= 0 (mod % 16))
+                    #(zero? (mod % 16))
                     #(<= 16 %)
                     #(<= 1088 %)))
 (defn calculate-padded-size
@@ -329,7 +329,7 @@
                             ;; Really shouldn't be reusing IDs.
                             ;; Q: Does that matter?
                             (if (<= n' shared-K/max-32-int)
-                              (if (= 0 n')
+                              (if (zero? n')
                                 1
                                 n')
                               ;; 2s complement signed arithmetic.
@@ -443,7 +443,7 @@
         log-state (log/debug log-state
                              label
                              "Checking for a block to resend")]
-    (if (and (< 0 (count un-ackd-blocks))
+    (if (and (pos? (count un-ackd-blocks))
              (>= recent (+ earliest-time n-sec-per-block))
              (>= recent (+ earliest-time rtt-timeout)))
       (let [log-state (log/debug log-state
@@ -545,8 +545,8 @@
                  ;; if (sendeof ? sendeofprocessed : sendprocessed >= sendbytes)
                  ;; C programmers have assured me that it translates into
                  (if (= ::specs/false send-eof)
-                   (or (< 0 un-ackd-count)
-                       (< 0 (count un-sent-blocks)))
+                   (or (pos? un-ackd-count)
+                       (pos? (count un-sent-blocks)))
                    ;; The reference implementation sets this flag
                    ;; after checking this (line 376), just before it builds
                    ;; the message packet that it's going to send.
@@ -597,7 +597,7 @@
     ;; This is one of those places where I'm getting confused
     ;; by mixing the new blocks with the ones that have already
     ;; been sent at least once.
-    (if (and (< 0 block-count)
+    (if (and (pos? block-count)
              ok-send?)
       ;; XXX: if any Nagle-type processing is desired, do it here (--DJB)
       ;; Consolidating smaller blocks *would* be a good idea -- JRG

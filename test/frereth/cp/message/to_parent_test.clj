@@ -94,9 +94,9 @@
               (is (not packet)))
             (try
               (is (= message-id arbitrary-id) "message ID")
-              (is (= 0 acked-message) "ACKs go by themselves")
+              (is (zero? acked-message) "ACKs go by themselves")
               ;; Spot check a length that was breaking things at one point
-              (is (= 0 (::specs/ack-length-4 packet)) "length-4")
+              (is (zero? (::specs/ack-length-4 packet)) "length-4")
               (is (= length size-and-flags) "length flag")
               (is (= magical-start-byte start-byte) "start index")
               (comment

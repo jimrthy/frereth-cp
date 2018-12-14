@@ -39,7 +39,7 @@
 ;;;; TODO: Refactor these into shared.specs
 
 (s/def ::dns-string (s/and string?
-                           #(> (count %) 0)
+                           #(pos? (count %))
                            #(< (count %) 256)
                            (fn [s]
                              (let [ns (clojure.string/split s #"\.")]
@@ -110,7 +110,7 @@
   (s/def ::packet-length (s/and integer?
                                 pos?
                                 ;; evenly divisible by 16
-                                #(= 0 (bit-and % 0xf)))))
+                                #(zero? (bit-and % 0xf)))))
 (s/def ::packet-nonce integer?)
 
 ;; This is really arriving as a netty ByteBuf. It's tempting to work
@@ -144,7 +144,7 @@
   [^ByteBuf b]
   (let [ref-cnt (.refCnt b)]
     (throw (RuntimeException. "Start back here"))
-    (if (< 0 ref-cnt)
+    (if (pos? ref-cnt)
       {::capacity (.capacity b)
        ::backed-by-array? (.hasArray b)
        ::hash-code (.hashCode b)
@@ -183,7 +183,7 @@
     (let [pos (atom 0)]
       (doseq [n ns]
         (let [length (count n)]
-          (when (< 0 length)
+          (when (pos? length)
             (when (< 63 length)
               (throw (ex-info "Name segment too long" {:encoding name
                                                        :problem n})))

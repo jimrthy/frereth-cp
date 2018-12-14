@@ -77,18 +77,18 @@
 
 (defn validate-keys
   [src]
-  (dorun (map (fn [[spec o]]
-                (when-not (s/valid? spec o)
-                  (println o "is not a valid" spec)
-                  ;; This just failed. Want to get an explanation for that failure
-                  (is (not (s/explain-data spec o))
-                      (str "Expected: " spec
-                           "\nActual:\n"
-                           (if (bytes? o)
-                             {::payload (vec o)
-                              ::length (count o)}
-                             o)))))
-              src)))
+  (run! (fn [[spec o]]
+          (when-not (s/valid? spec o)
+            (println o "is not a valid" spec)
+            ;; This just failed. Want to get an explanation for that failure
+            (is (not (s/explain-data spec o))
+                (str "Expected: " spec
+                     "\nActual:\n"
+                     (if (bytes? o)
+                       {::payload (vec o)
+                        ::length (count o)}
+                       o)))))
+        src))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Generators
@@ -116,7 +116,7 @@
                                                       (let [n (count x)
                                                             extra (mod n 16)]
                                                         (println "Coping with" extra "extra bytes out of" n)
-                                                        (if (= 0 extra)
+                                                        (if (zero? extra)
                                                           x
                                                           (if (> n 16)
                                                             (drop extra x)

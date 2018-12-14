@@ -47,8 +47,7 @@
   (testing "valid"
     (let [loop-name "valid"
           io-handle (mock-io-handle loop-name)
-          reg (-> (reg/ctor)
-                  (reg/register io-handle))]
+          reg (reg/register (reg/ctor) io-handle)]
       (is (not (s/explain-data ::reg/registry reg)))
       (let [reg (reg/de-register reg loop-name)]
         (is (s/valid? ::reg/registry reg)))))

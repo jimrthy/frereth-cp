@@ -86,7 +86,7 @@
       (b-t/byte-copy! offset-text offset block-length plain-text)
 
       (testing "symmetric"
-        (is (= 0 (bs/compare-bytes server-shared-nm client-shared-bytes))))
+        (is (zero? (bs/compare-bytes server-shared-nm client-shared-bytes))))
 
       ;; This is fairly arbitrary...24 random-bytes seems better
       (aset-byte nonce 7 1)
@@ -118,7 +118,7 @@
             ;; That's what this particular part of this test
             ;; was all about
             (is (b-t/bytes= crypto-text crypto-text3))
-            (is (= 0 (bs/compare-bytes crypto-text crypto-text3))
+            (is (zero? (bs/compare-bytes crypto-text crypto-text3))
                 (str "Just proved that\n"
                      (with-out-str (bs/print-bytes crypto-text))
                      "==\n"
@@ -126,7 +126,7 @@
                      "even though they really are not"))
             (testing "Encryption is purely functional"
               ;; But the two boxed values really are the same
-              (is (= 0 (bs/compare-bytes crypto-text3a crypto-text3)))))
+              (is (zero? (bs/compare-bytes crypto-text3a crypto-text3)))))
           (testing "Decryption"
             (let [de2 (.open server-shared crypto-text3 nonce)  ; easiest, slowest approach
                   ;; This is the approach that almost everyone will use
@@ -158,7 +158,7 @@
                   (if de4
                     (let [bs (byte-array (.readableBytes de4))]
                       (.readBytes de4 bs)
-                      (is (= 0 (bs/compare-bytes bs plain-text))))
+                      (is (zero? (bs/compare-bytes bs plain-text))))
                     (is false "Failed to open the box I care about")))))))))))
 
 (s/fdef retrieve-hello
@@ -218,7 +218,7 @@
       (netty/acquire msg)
       (let [msg-size (.readableBytes msg)]
         (is (= 200 msg-size)))
-      (when-not (< 0 (.refCnt msg))
+      (when-not (pos? (.refCnt msg))
         (log/error (str msg
                         ", a " (class msg)
                         "\nhas already been released.\n"
@@ -312,8 +312,8 @@
   ;; Q: Is this a background-thread hidden sort of thing?
   ;; Maybe CIDER just isn't clever enough to spot it?
 
-  (is (not (= released-buffer ::timed-out)))
-  (is (not (= released-buffer ::drained)))
+  (is (not= released-buffer ::timed-out))
+  (is (not= released-buffer ::drained))
   ;; This is just the tip of the iceberg showing
   ;; why this approach was a terrible idea.
   (is (= released-buffer released-buffer))
@@ -441,7 +441,7 @@
                                          ::srvr-state/client-write-chan server->client))]
           (try
             (is (-> server ::srvr-state/active-clients deref))
-            (is (= 0 (-> server ::srvr-state/active-clients deref count)))
+            (is (zero? (-> server ::srvr-state/active-clients deref count)))
             (is (not (srvr-state/find-client server (.getBytes "won't find this"))))
             (finally (srvr/stop! server))))
         (finally

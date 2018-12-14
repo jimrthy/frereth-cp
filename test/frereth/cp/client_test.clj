@@ -305,8 +305,8 @@
           (try
             (let [hello-future (strm/try-take! chan->server ::drained 500 ::timeout)
                   hello (deref hello-future)]
-              (if (not (or (= hello ::timeout)
-                           (= hello ::drained)))
+              (if-not (or (= hello ::timeout)
+                          (= hello ::drained))
                 (do
                   ;; Pretty sure I'm running into a race condition over this shared
                   ;; resource.
@@ -349,16 +349,15 @@
                         (is (b-t/bytes= (.getBytes K/hello-header)
                                            (byte-array (subvec (vec backing-array) 0
                                                                (count K/hello-header))))))
-                      (do
-                        (if (.isDirect hello)
-                          (let [array (byte-array K/hello-packet-length)]
-                            (.getBytes hello 0 array)
-                            ;; Q: Anything else useful I can check here?
-                            (is (b-t/bytes= K/hello-header
-                                               (byte-array (subvec (vec array) 0
-                                                                   (count K/hello-header))))))
-                          ;; Q: What's going on here?
-                          (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct."))))
+                      (if (.isDirect hello)
+                        (let [array (byte-array K/hello-packet-length)]
+                          (.getBytes hello 0 array)
+                          ;; Q: Anything else useful I can check here?
+                          (is (b-t/bytes= K/hello-header
+                                          (byte-array (subvec (vec array) 0
+                                                              (count K/hello-header))))))
+                        ;; Q: What's going on here?
+                        (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct.")))
                     (is (b-t/bytes= K/hello-header
                                        (byte-array (subvec (vec hello) 0
                                                            (count K/hello-header))))))
@@ -389,7 +388,7 @@
   (-> junk :extension vec)
   (-> junk :server-extension vec)
   junk
-  (-> junk keys)
+  (keys junk)
   (alter-var-root #'junk #(.start %))
   (alter-var-root #'junk #(.stop %)))
 

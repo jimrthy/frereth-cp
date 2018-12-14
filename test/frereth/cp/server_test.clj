@@ -402,23 +402,18 @@
                                                                               ;; As long as we got a message back, we should be able to call
                                                                               ;; this test done.
                                                                               (if (= ::timeout first-full-client-message)
-                                                                                (do
-                                                                                  (dfrd/error! initiate-outcome
-                                                                                               (RuntimeException. "Timed out waiting for initial client message")))
+                                                                                (dfrd/error! initiate-outcome
+                                                                                             (RuntimeException. "Timed out waiting for initial client message"))
                                                                                 (dfrd/success! initiate-outcome first-full-client-message)))
-                                                                            (do
-                                                                              (dfrd/error! initiate-outcome
-                                                                                           (RuntimeException. "Timed out writing first server Message packet to client")))))
-                                                                        (do
-                                                                          (dfrd/error! initiate-outcome
-                                                                                       (ex-info "Failed pulling first real Message packet from Server"
-                                                                                                {::problem first-srvr-message})))))
-                                                                    (do
-                                                                      (dfrd/error! initiate-outcome
-                                                                                   (RuntimeException. "Timed out writing Initiate to Server"))))))
-                                                              (do
-                                                                (dfrd/error! initiate-outcome (ex-info "Failed to take Initiate/Vouch from Client"
-                                                                                                       {::problem initiate})))))
+                                                                            (dfrd/error! initiate-outcome
+                                                                                         (RuntimeException. "Timed out writing first server Message packet to client"))))
+                                                                        (dfrd/error! initiate-outcome
+                                                                                     (ex-info "Failed pulling first real Message packet from Server"
+                                                                                              {::problem first-srvr-message}))))
+                                                                    (dfrd/error! initiate-outcome
+                                                                                 (RuntimeException. "Timed out writing Initiate to Server")))))
+                                                              (dfrd/error! initiate-outcome (ex-info "Failed to take Initiate/Vouch from Client"
+                                                                                                     {::problem initiate}))))
                                                           identity)
                                         (try
                                           (let [actual-initiate-outcome (deref initiate-outcome 2000 ::initiate-timeout)]

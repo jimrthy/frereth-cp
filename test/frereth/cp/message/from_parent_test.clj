@@ -130,11 +130,11 @@
         {:keys [::specs/buf ::specs/length ::specs/send-eof ::specs/start-pos]
          :as dscr}
         (build-message-block-description src K/k-2)]
-    (is (= 0 start-pos))
+    (is (zero? start-pos))
     (is (= 512 length))
     (is (= ::specs/false send-eof))
     (is (= 512 (.readableBytes buf)))
-    (is (= 0 (.writableBytes buf)))))
+    (is (zero? (.writableBytes buf)))))
 
 (deftest check-start-stop-calculation
   (testing "Happy Path"

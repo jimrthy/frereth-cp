@@ -172,8 +172,7 @@
               (update-in [::specs/incoming ::specs/gap-buffer] pop-map-first)
               (assoc ::weald/state log-state))))
       ;; Gap starts past the end of the stream.
-      (do
-        (reduced state)))))
+      (reduced state))))
 
 (s/fdef consolidate-gap-buffer
         :args (s/cat :state ::specs/state)
@@ -609,7 +608,7 @@
                                   log-state)
                          log-state))
         consolidated (assoc consolidated ::weald/state log-state)]
-    (if (< 0 block-count)
+    (if (pos? block-count)
       (let [preliminary (reduce (partial write-bytes-to-child-stream!
                                          parent-trigger)
                                 consolidated

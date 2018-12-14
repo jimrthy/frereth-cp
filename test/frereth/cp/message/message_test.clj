@@ -64,7 +64,7 @@
                                ::succeeded
                                (str "Sending took" (- (inc n) m) "attempt(s)"))]
           (log/flush-logs! logger logs))
-        (if (> 0 m)
+        (if (neg? m)
           (let [failure (ex-info failure-message
                                  failure-body)
                 logs (log/exception logs
@@ -308,8 +308,7 @@
                     ;; an ACK)
                     outcome (deref response 5000 ::timeout)]
                 (if (= outcome ::timeout)
-                  (do
-                    (is (not= outcome ::timeout) "Parent didn't get complete message from child"))
+                  (is (not= outcome ::timeout) "Parent didn't get complete message from child")
                   (do
                     (is (= 3 @parent-state))
                     ;; I'm getting the response message header here, which is
@@ -537,7 +536,7 @@
                                                          child-cb)]
     (is (= K/k-1 (get-in start-state [::specs/outgoing ::specs/pipe-from-child-size])))
     (is (= K/k-1 (::specs/pipe-from-child-size event-loop)))
-    (is (= 0 (.available (::specs/child-out event-loop))))
+    (is (zero? (.available (::specs/child-out event-loop))))
     (try
       ;; Start by trying to send a buffer that's just flat-out too big
       (is (not (message/child->! event-loop (byte-array K/k-4))))
@@ -762,7 +761,7 @@
                     (let [rcvd-blocks (:buffer outcome)
                           ;; This is not working at all.
                           ;; Q: Why not?
-                          byte-seq (into [] (apply concat rcvd-blocks))
+                          byte-seq (vec (apply concat rcvd-blocks))
                           _ (swap! log-atom
                                    log/debug
                                    ::bigger-outbound
@@ -785,7 +784,7 @@
             ;; The ACK for EOF marks 1 past the end of stream, to indicate
             ;; that we also received the EOF.
             (is (= (inc msg-len) (::specs/ackd-addr outgoing)))
-            (is (= 0 (from-child/buffer-size outcome)))
+            (is (zero? (from-child/buffer-size outcome)))
             (is (= ::specs/normal (::specs/send-eof outgoing)))
             ;; Keeping around as a reminder for when the implementation changes
             ;; and I need to see what's really going on again
@@ -1070,7 +1069,7 @@ After [pretending to] adjusting for closed/ignored child watcher: 1,681,062,667,
         (let [too-big (+ K/k-128 K/k-8)
               src (byte-array (range too-big))
               dst (byte-array (range too-big))]
-          (is (= 0 (.available in-pipe)))
+          (is (zero? (.available in-pipe)))
           (let [fut (future (.write out-pipe src)
                             (println "Bytes written")
                             ::written)]

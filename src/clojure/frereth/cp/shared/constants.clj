@@ -124,8 +124,7 @@
 (s/def ::clnt-short-pk ::specs/public-short)
 (s/def ::zeros (s/and bytes
                         #(= (count %) zero-box-length)
-                        (fn [x]
-                          (every? #(= 0 %) x))))
+                        #(every? zero? %)))
 (s/def ::crypto-box (s/and bytes
                            #(= (count %) hello-crypto-box-length)))
 (s/def ::hello-spec (s/keys :req [::hello-prefix
@@ -230,7 +229,7 @@
   [^bytes bs]
   (let [n (count bs)]
     (and (< n max-vouch-message-length)
-         (= 0 (rem n 16)))))
+         (zero? (rem n 16)))))
 
 ;;; FIXME: Move the rest of these into templates
 
@@ -283,7 +282,7 @@
                                    ;; This max size looks wrong, but it adds up.
                                    (+ minimum-vouch-length max-vouch-message-length))
                               ;; Evenly divisible by 16
-                              #(= 0 (mod (count %) 16))))
+                              #(zero? (mod (count %) 16))))
 
 (s/def ::initiate-packet-spec (s/keys :req [::prefix
                                             ::srvr-xtn

@@ -123,19 +123,18 @@
              (b-t/byte-copy! bytes-read 0 prefix-gap prefix)
              {::weald/state log-state
               ::specs/bs-or-eof bytes-read})
-           (do
-             ;; If this happens frequently, the buffer's probably too small.
-             (let [log-state (log/warn log-state
-                                       ::read-next-bytes-from-child!
-                                       "Got unexpected byte count from child"
-                                       {::specs/monitor-id monitor-id
-                                        ::expected bytes-to-read
-                                        ::actual n})
-                   actual-result (byte-array (+ prefix-gap n))]
-               (b-t/byte-copy! actual-result 0 prefix-gap prefix)
-               (b-t/byte-copy! actual-result prefix-gap n bytes-read)
-               {::weald/state log-state
-                ::specs/bs-or-eof actual-result}))))
+           ;; If this happens frequently, the buffer's probably too small.
+           (let [log-state (log/warn log-state
+                                     ::read-next-bytes-from-child!
+                                     "Got unexpected byte count from child"
+                                     {::specs/monitor-id monitor-id
+                                      ::expected bytes-to-read
+                                      ::actual n})
+                 actual-result (byte-array (+ prefix-gap n))]
+             (b-t/byte-copy! actual-result 0 prefix-gap prefix)
+             (b-t/byte-copy! actual-result prefix-gap n bytes-read)
+             {::weald/state log-state
+              ::specs/bs-or-eof actual-result})))
        (try
          ;; More often, we should spend all our time waiting.
 
@@ -161,7 +160,7 @@
                                        "more bytes waiting to be read"
                                        {::bytes-remaining bytes-remaining
                                         ::specs/monitor-id monitor-id})]
-               (if (< 0 bytes-remaining)
+               (if (pos? bytes-remaining)
                  ;; Assume this means the client just sent us a sizeable
                  ;; chunk.
                  ;; Go ahead and recurse.
@@ -199,7 +198,7 @@
                                                 (dec max-to-read)))
                  {::weald/state log-state
                   ::specs/bs-or-eof (byte-array prefix)}))
-             (if (< 0 prefix-gap)  ;; EOF
+             (if (pos? prefix-gap)  ;; EOF
                {::weald/state (log/info log-state
                                       ::read-next-bytes-from-child!
                                       "Reached EOF. Have buffered bytes to send first"
@@ -284,7 +283,7 @@
         [builder-log-state caller-log-state] (log/synchronize log-state (::weald/state state))
         log-state (update caller-log-state ::weald/entries
                           (fn [cur]
-                            (into [] (concat cur (::weald/entries builder-log-state)))))
+                            (vec (concat cur (::weald/entries builder-log-state)))))
         log-state (log/debug log-state
                              ::byte-consumer
                              (str "Adding new message block to unsent others from a thunk")
@@ -455,7 +454,7 @@
                                       "Timeout waiting to buffer bytes from child"
                                       {::attempts-remaining (- (inc attempts) n)
                                        ::specs/monitor-id monitor-id})]
-              (if (< 0 n)
+              (if (pos? n)
                 (recur (dec n) log-state)
                 {::weald/state log-state
                  ::specs/bs-or-eof ::specs/error}))
@@ -700,7 +699,7 @@
       ;; This is the key to the difference with the main loop.
       ;; Until this is realized, process-next-bytes-from-child!
       ;; is limited to K/max-bytes-in-initiate-message
-      (if (not (realized? client-waiting-on-response))
+      (if-not (realized? client-waiting-on-response)
         (let [on-bytes-forwarded (dfrd/deferred)
               {msg-or-eof'? ::specs/bs-or-eof
                log-state ::weald/state}
@@ -754,7 +753,7 @@
    stream
    eof?-atom]
   (loop [state state]
-    (if (not @eof?-atom)
+    (if-not @eof?-atom
       (let [log-state (log/debug (::weald/state state)
                                  ::child-monitor-loop
                                  "Top of main child-read loop"
@@ -813,7 +812,7 @@
   "Are there pending blocks from the child that haven't been sent once?"
   [{{:keys [::specs/un-sent-blocks]} ::specs/outgoing
     :as state}]
-  (< 0 (count un-sent-blocks)))
+  (pos? (count un-sent-blocks)))
 
 (s/fdef start-child-monitor!
         :args (s/cat :initial-state ::specs/state

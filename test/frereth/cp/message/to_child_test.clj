@@ -83,7 +83,7 @@
           (is (= 15 contiguous-stream-count)))
         (testing "Moved 'gap' out of gap-buffer"
           (let [n (count gap-buffer)]
-            (is (= 0 n))))))
+            (is (zero? n))))))
     (testing "Previously consolidated"
       (let [g-b [[4 9] contents]
             {:keys [::specs/->child-buffer
@@ -92,11 +92,11 @@
                                                                       incoming
                                                                       g-b)]
         (testing "Nothing new for child"
-          (is (= 0 (count ->child-buffer))))
+          (is (zero? (count ->child-buffer))))
         (testing "contiguous-byte counter didn't move"
           (is (= 10 contiguous-stream-count)))
         (testing "Dropped obsolete gap"
-          (is (= 0 (count gap-buffer))))))))
+          (is (zero? (count gap-buffer))))))))
 (comment
   (msg-consolidation)
   )
@@ -169,8 +169,8 @@
              :as consolidated} (x/consolidate-gap-buffer state)]
         (testing "All but first"
           ;; Nothing should have happened yet
-          (is (= 0 (count ->child-buffer)))
-          (is (= 0 contiguous-stream-count))
+          (is (zero? (count ->child-buffer)))
+          (is (zero? contiguous-stream-count))
           (is (= 7 (count gap-buffer))))
         (testing "all"
           (let [state (update-in state
@@ -187,4 +187,4 @@
             ;; updated correctly.
             ;; But that would make this test ridiculously more
             ;; complicated.
-            (is (= 0 (count gap-buffer)))))))))
+            (is (zero? (count gap-buffer)))))))))

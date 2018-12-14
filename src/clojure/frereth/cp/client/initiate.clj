@@ -71,7 +71,7 @@
   ;; Important detail: we can use up to 640 bytes that we've
   ;; received from the client/child.
   (let [msg-length (count msg)
-        _ (assert (< 0 msg-length))
+        _ (assert (pos? msg-length))
         tmplt (assoc-in K/vouch-wrapper [::K/child-message ::K/length] msg-length)]
     (if srvr-name
       (let [my-long-pk (.getPublicKey long-pair)
@@ -304,8 +304,8 @@
     :keys [::weald/logger]
     :as this}]
   {:pre [log-state]}
-  (if (not (or (= this ::state/sending-vouch-timed-out)
-               (= this ::state/drained)))
+  (if-not (or (= this ::state/sending-vouch-timed-out)
+              (= this ::state/drained))
     (let [log-state (log/flush-logs! logger
                                      (log/info log-state
                                                ::initial-packet-sent

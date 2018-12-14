@@ -280,7 +280,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                             "Initial Response from server"
                             initial-server-response)
         log-state
-        (if (not (keyword? (:message initial-server-response)))
+        (if-not (keyword? (:message initial-server-response))
           (if (and ->child chan->server)
             ;; Note the inherent side-effect that happens in here.
             ;; FIXME: Come up with a better way to handle this.
@@ -832,7 +832,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
   "Note that this can loop right back to a negative number."
   [nonce]
   (let [result (unchecked-inc (long nonce))]
-    (when (= result 0)
+    (when (zero? result)
       (throw (ex-info "nonce space expired"
                       {::must "End communication immediately"})))
     result))

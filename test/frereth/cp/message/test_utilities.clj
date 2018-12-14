@@ -77,8 +77,7 @@
                                 ::specs/time (- now 7)
                                 ::specs/transmissions 7}]  ; block 6
         log-state (log/init ::build-flag-ack-start-state 0)
-        start-blocks (reduce (fn [acc block]
-                               (conj acc block))
+        start-blocks (reduce conj
                              (msg/build-un-ackd-blocks {::weald/logger logger
                                                         ::weald/state log-state})
                              unsorted-start-blocks)]

@@ -142,7 +142,7 @@
   (let [base (if (instance? ExceptionInfo ex)
                (str ex "\n" (pretty (.getData ^ExceptionInfo ex)))
                (str ex))]
-    (reduce #(str %1 %2)
+    (reduce str
             base
             (get-stack-trace ex))))
 
