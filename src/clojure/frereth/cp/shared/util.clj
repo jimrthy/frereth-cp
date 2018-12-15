@@ -13,7 +13,7 @@
            java.security.SecureRandom
            java.util.UUID))
 
-(alter-var-root #'*warn-on-reflection* (constantly true))
+(set! *warn-on-reflection* true)
 
 (defn jvm-version
   []

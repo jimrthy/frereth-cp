@@ -135,7 +135,8 @@
                                                                                       reader
                                                                                       in3
                                                                                       n-remaining
-                                                                                      (* 2 n-remaining))]
+                                                                                      (* 2 n-remaining))
+                      in4 (bytes in4)]
                   (is (= (count send) (count in4)))
                   (when-not (b-t/bytes= send in4)
                     (dotimes [i (count send)]

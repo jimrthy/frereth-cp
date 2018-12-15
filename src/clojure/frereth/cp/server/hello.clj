@@ -36,7 +36,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(s/def ::opened (s/nilable ::crypto/unboxed))
+(s/def ::opened ::crypto/unboxed)
 (s/def ::shared-secret ::specs/crypto-key)
 
 (s/def ::cookie-response-builder

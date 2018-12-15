@@ -26,7 +26,10 @@
             [manifold
              [deferred :as dfrd]
              [stream :as strm]])
-  (:import io.netty.buffer.ByteBuf))
+  (:import io.netty.buffer.ByteBuf
+           com.iwebpp.crypto.TweetNaclFast$Box$KeyPair))
+
+(set! *warn-on-reflection* true)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Helpers
@@ -82,7 +85,8 @@
                      (throw (ex-info "Didn't really expect anything at child callback"
                                      {::message chunk})))
           keydir "curve-test"
-          {srvr-long-pair ::crypto/java-key-pair} (crypto/do-load-keypair log-state keydir)
+          {^TweetNaclFast$Box$KeyPair srvr-long-pair ::crypto/java-key-pair} (crypto/do-load-keypair log-state
+                                                                                                     keydir)
           srvr-pk-long (.getPublicKey srvr-long-pair)
           log-state (log/init ::step-1)
           client (factory/raw-client "step-1"
@@ -123,16 +127,22 @@
                                 ;; Mimic the server sending back its Cookie, which
                                 ;; we filled with garbage above.
                                 (fn [hello]
+                                  (is hello)
+                                  ;; This is nil.
+                                  ;; Q: Why?
+                                  (is (:message hello) (str hello))
                                   (let [hello
                                         (update hello :message
                                                 (fn [current]
                                                   (if (bytes? current)
                                                     current
-                                                    (let [^ByteBuf src current
-                                                          n (.readableBytes src)
-                                                          dst (byte-array n)]
-                                                      (.readBytes src dst)
-                                                      dst))))]
+                                                    (if-let [^ByteBuf src current]
+                                                      (let [n (.readableBytes src)
+                                                            dst (byte-array n)]
+                                                        (.readBytes src dst)
+                                                        dst)
+                                                      (throw (ex-info "No current message"
+                                                                      hello))))))]
                                     (is (not (s/explain-data ::shared/network-packet hello))))
                                   (log/flush-logs! logger (log/info log-state
                                                                     "Sending garbage Cookie from mock-server to Client"
@@ -153,12 +163,11 @@
                                 (partial check-success client "Taking the vouch")
                                 (fn [{:keys [:host :message :port]
                                       :as network-packet}]
-                                  (is (bytes? message)
-                                      (str "Expected ByteBuf. Got " (class message)))
-                                  ;; FIXME: Need to extract the cookie from the vouch that
-                                  ;; we just received.
-                                  (let [expected-n (count cookie)
+                                  (let [message (bytes message)
+                                        expected-n (count cookie)
                                         actual-n (count message)]
+                                    ;; FIXME: Need to extract the cookie from the vouch that
+                                    ;; we just received.
                                     ;; This isn't true.
                                     ;; We should get an Initiate packet
                                     ;; in response to a Cookie. That
@@ -173,11 +182,10 @@
                                     ;; important: we need a good way to
                                     ;; verify that the Cookie got
                                     ;; discarded as expected.
+
                                     (is (= expected-n actual-n))
-                                    (let [response (byte-array actual-n)]
-                                      (.getBytes message 0 response)
-                                      (is (= (vec response) (vec cookie)))
-                                      true))))]
+                                    (is (= (vec message) (vec cookie)))
+                                    true)))]
         (is @success)))))
 (comment
   ;; Maybe the problem isn't just CIDER. This also looks as
@@ -212,6 +220,7 @@
             (is (not= hello-bundle ::drained))
             (is (not= hello-bundle ::timeout))
             (let [packet (:message hello-bundle)]
+              ;; The rest of this test is terribly broken
               (is packet (str "Missing :message in " hello-bundle))
               (is (= K/hello-packet-length (count packet)))
               (let [v (vec packet)]
@@ -235,14 +244,12 @@
                                           (drop 136)
                                           (take 8)
                                           vec)
-                        {clear-text-buf ::crypto/unboxed} (crypto/open-box (log/init ::build-hello)
-                                                                           K/hello-nonce-prefix
-                                                                           (byte-array nonce-suffix)
-                                                                           (byte-array crypto-zeroes)
-                                                                           shared-key)
-                        expected (take 64 (repeat 0))
-                        clear-text-array (byte-array (.readableBytes clear-text-buf))]
-                    (.getBytes clear-text-buf 0 clear-text-array)
+                        {clear-text-array ::crypto/unboxed} (crypto/open-box (log/init ::build-hello)
+                                                                             K/hello-nonce-prefix
+                                                                             (byte-array nonce-suffix)
+                                                                             (byte-array crypto-zeroes)
+                                                                             shared-key)
+                        expected (take 64 (repeat 0))]
                     (let [clear-text (vec clear-text-array)]
                       (is (= (count expected) (count clear-text)))
                       (is (= expected clear-text)))))))
@@ -307,7 +314,7 @@
                   hello (deref hello-future)]
               (if-not (or (= hello ::timeout)
                           (= hello ::drained))
-                (do
+                (let [hello (bytes hello)]
                   ;; Pretty sure I'm running into a race condition over this shared
                   ;; resource.
                   ;; i.e. sender is clearing the packet as soon as I receive it,
@@ -336,31 +343,10 @@
                   ;; Or a portion of a ByteArray that will be
                   ;; copied into a ByteBuffer.
                   (is (= K/hello-packet-length
-                         (if (bytes? hello)
-                           (count hello)
-                           (.readableBytes hello))))
-                  (if-not (bytes? hello)
-                    (if (.hasArray hello)
-                      (let [backing-array (.array hello)]
-                        ;; Really don't want to mess with the backing array at all.
-                        ;; Especially since, realistically, I should build everything
-                        ;; except the crypto box in a Direct buffer, then copy that in
-                        ;; and send it to the network.
-                        (is (b-t/bytes= (.getBytes K/hello-header)
-                                           (byte-array (subvec (vec backing-array) 0
-                                                               (count K/hello-header))))))
-                      (if (.isDirect hello)
-                        (let [array (byte-array K/hello-packet-length)]
-                          (.getBytes hello 0 array)
-                          ;; Q: Anything else useful I can check here?
-                          (is (b-t/bytes= K/hello-header
-                                          (byte-array (subvec (vec array) 0
-                                                              (count K/hello-header))))))
-                        ;; Q: What's going on here?
-                        (println "Got an nio Buffer from a ByteBuf that isn't an Array, but it isn't direct.")))
-                    (is (b-t/bytes= K/hello-header
-                                       (byte-array (subvec (vec hello) 0
-                                                           (count K/hello-header))))))
+                         (count hello)))
+                  (is (b-t/bytes= K/hello-header
+                                  (byte-array (subvec (vec hello) 0
+                                                      (count K/hello-header)))))
                   (println "Hello packet verified. Now I'd send it to the server"))
                 (throw (ex-info "Failed pulling hello packet"
                                 {:client-thread client-thread}))))
@@ -392,8 +378,9 @@
   (alter-var-root #'junk #(.start %))
   (alter-var-root #'junk #(.stop %)))
 
-(defn basic-test
-  "This should probably go away"
+(defn round-trip
+  ;; TODO: Move this into the crypto-test ns
+  "Check fundamental encryption/decryption"
   []
   (let [client-keys (crypto/random-key-pair)
         ;; Q: Do I want to use this or TweetNaclFast/keyPair?
@@ -403,9 +390,19 @@
         nonce (byte-array [1 2 3 4 5 6 7 8 9 10
                            11 12 13 14 15 16 17
                            18 19 20 21 22 23 24])
-        boxer (crypto/box-prepare (.getPublicKey server-keys) (.getSecretKey client-keys))
-        ;; This seems likely to get confused due to arity issues
-        boxed (.box boxer bs nonce)
-        unboxer (crypto/box-prepare (.getPublicKey client-keys) (.getSecretKey server-keys))]
-    (String. (.open unboxer boxed nonce))))
-(comment (basic-test))
+        boxer (bytes (crypto/box-prepare (.getPublicKey server-keys) (.getSecretKey client-keys)))
+        boxed (crypto/box-after boxer bs (count bs) nonce)
+        unboxer (bytes (crypto/box-prepare (.getPublicKey client-keys) (.getSecretKey server-keys)))
+        log-state (log/init ::basics)
+        {clear-text ::crypto/unboxed
+         :as result} (crypto/open-after log-state
+                                        boxed
+                                        0
+                                        (count boxed)
+                                        nonce
+                                        unboxer)
+        _ (is clear-text (str "Missing ::crypto/unboxed in\n" result
+                              "\namong "(keys result)))
+        clear-text (bytes clear-text)]
+    (String. clear-text)))
+(comment (round-trip))

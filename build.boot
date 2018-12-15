@@ -168,4 +168,4 @@
 (deftask to-clojars
   "Publish"
   []
-  (comp (set-version) (lint) (javac) (build-jar) (push-release)))
+  (comp (set-version) (javac) #_(lint) (build-jar) (push-release)))

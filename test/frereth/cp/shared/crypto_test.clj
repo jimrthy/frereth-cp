@@ -45,9 +45,8 @@
                                                           (+ length K/box-zero-bytes)
                                                           nonce
                                                           server-shared)
-          dst (byte-array length)]
-      (.getBytes decrypted 0 dst)
-      (is (b-t/bytes= dst plain-text)))))
+          decrypted (bytes decrypted)]
+      (is (b-t/bytes= decrypted plain-text)))))
 
 ;;; FIXME: Also need a test that checks crypto/open-box
 

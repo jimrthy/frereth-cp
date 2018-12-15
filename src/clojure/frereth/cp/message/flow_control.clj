@@ -228,7 +228,7 @@
         been-a-minute? (- recent last-edge K/minute-1)]
     (cond
       ;; Note that we generally don't need to make any changes
-      (and (> 0 been-a-minute?)
+      (and (neg? been-a-minute?)
            (< recent (+ last-doubling
                         (* 4 n-sec-per-block)
                         (* 64 rtt-timeout)

@@ -322,34 +322,32 @@
   ;; Although that approach is undeniably faster
   (let [hello-cookie (bytes (::K/cookie initiate))
         {log-state ::weald/state
-         ^ByteBuf inner-vouch-buffer ::crypto/unboxed} (decrypt-cookie log-state
-                                                                       cookie-cutter
-                                                                       hello-cookie)]
+         inner-vouch-buffer ::crypto/unboxed} (decrypt-cookie log-state
+                                                              cookie-cutter
+                                                              hello-cookie)]
     (if inner-vouch-buffer
-      ;; Yet again: Converting this to a ByteBuf was a mistake
-      (let [inner-vouch-bytes (byte-array (.readableBytes inner-vouch-buffer))]
-        (.readBytes inner-vouch-buffer inner-vouch-bytes)
-        ;; Reference code:
-        ;; Verifies that the "first" 32 bytes (after the 32 bytes of
-        ;; decrypted 0 padding) of the 80 bytes it decrypted
-        ;; out of the inner vouch match the client short-term
-        ;; key in the outer initiate packet.
-        (let [full-decrypted-vouch (vec inner-vouch-bytes)
-              ;; Round-tripping through a vector seems pretty ridiculous.
-              ;; I really just want to verify that the first 32 bytes match
-              ;; the supplied key.
-              ;; Note that the initial padding has been discarded
-              key-array (byte-array (subvec full-decrypted-vouch 0 K/key-length))
-              {log-state ::weald/state
-               :keys [::specs/matched?]} (client-short-pk-matches-cookie? log-state
-                                                                          initiate
-                                                                          key-array)]
-          (if matched?
-            (set/rename-keys (serial/decompose-array log-state
-                                                     templates/black-box-dscr
-                                                     inner-vouch-bytes)
-                             {::serial/decomposed ::templates/cookie-spec})
-            {::weald/state log-state}))))))
+      (let [inner-vouch-bytes (bytes inner-vouch-buffer)
+            ;; Reference code:
+            ;; Verifies that the "first" 32 bytes (after the 32 bytes of
+            ;; decrypted 0 padding) of the 80 bytes it decrypted
+            ;; out of the inner vouch match the client short-term
+            ;; key in the outer initiate packet.
+            full-decrypted-vouch (vec inner-vouch-bytes)
+            ;; Round-tripping through a vector seems pretty ridiculous.
+            ;; I really just want to verify that the first 32 bytes match
+            ;; the supplied key.
+            ;; Note that the initial padding has been discarded
+            key-array (byte-array (subvec full-decrypted-vouch 0 K/key-length))
+            {log-state ::weald/state
+             :keys [::specs/matched?]} (client-short-pk-matches-cookie? log-state
+                                                                        initiate
+                                                                        key-array)]
+        (if matched?
+          (set/rename-keys (serial/decompose-array log-state
+                                                   templates/black-box-dscr
+                                                   inner-vouch-bytes)
+                           {::serial/decomposed ::templates/cookie-spec})
+          {::weald/state log-state})))))
 
 (s/fdef open-client-crypto-box
   :args (s/cat :log-state ::weald/state
@@ -399,7 +397,7 @@
              ::K/initiate-client-vouch-wrapper (serial/decompose (assoc-in templates/initiate-client-vouch-wrapper
                                                                            [::K/message ::K/length]
                                                                            message-length)
-                                                                 clear-text)}
+                                                                 (Unpooled/wrappedBuffer (bytes clear-text)))}
             {::weald/state (log/warn log-state
                                      ::open-client-crypto-box
                                      "Opening client crypto vouch failed")})
@@ -501,9 +499,7 @@
                                                     hidden-client-short-pk
                                                     shared-secret)]
     (if unboxed
-      (let [inner-pk-buf ^ByteBuf unboxed
-            inner-pk (byte-array K/key-length)]
-        (.getBytes inner-pk-buf 0 inner-pk)
+      (let [inner-pk (bytes unboxed)]
         {::weald/state log-state
          ::specs/public-short inner-pk})
       {::weald/state (log/warn log-state

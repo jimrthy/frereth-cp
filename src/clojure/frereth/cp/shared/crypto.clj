@@ -23,6 +23,7 @@
            java.nio.channels.FileChannel
            java.security.SecureRandom
            java.security.spec.AlgorithmParameterSpec
+           java.util.Arrays
            [javax.crypto Cipher KeyGenerator SecretKey]
            [javax.crypto.spec IvParameterSpec SecretKeySpec]))
 
@@ -52,7 +53,7 @@
 (s/def ::java-key-pair (specs/class-predicate com.iwebpp.crypto.TweetNaclFast$Box$KeyPair))
 (s/def ::legal-key-algorithms #{"AES"})
 (s/def ::long-short #{::long ::short})
-(s/def ::unboxed #(instance? ByteBuf %))
+(s/def ::unboxed (s/nilable bytes?))
 
 (s/def ::counter-low nat-int?)
 (s/def ::counter-high nat-int?)
@@ -720,26 +721,26 @@
                                                   ::length box-length
                                                   ::nonce (b-t/->string nonce)
                                                   ::shared-key (b-t/->string shared-key)})))
-          ;; TODO: Compare the speed of these approaches with allocating a new
-          ;; byte array without the 0-prefix padding and copying it back over
-          ;; Keep in mind that we're limited to 1088 bytes per message.
-          (comment (-> plain-text
-                       vec
-                       (subvec K/decrypt-box-zero-bytes)))
           {::weald/state (log/debug log-state
                                     ::open-after
                                     "Box Opened")
-           ;; Q: Why am I wrapping this in a ByteBuf?
-           ;; That seems like I'm probably jumping through extra hoops
-           ;; for the sake of hoop-jumping.
            ;; Odds are, the next step, in general, is to decompose
            ;; what just got unwrapped. So this seems like a premature
            ;; convenience that would make more sense as an extra
            ;; wrapper elsewhere.
-           ;; TODO: Look into that, too.
-           ::unboxed (Unpooled/wrappedBuffer plain-text
-                                             K/decrypt-box-zero-bytes
-                                             ^Long (- box-length K/box-zero-bytes))}))
+           ;; TODO: Look into adding that.
+
+           ;; TODO: Compare the speed of these approaches with allocating a new
+           ;; byte array without the 0-prefix padding and copying it back over
+           ;; Keep in mind that we're limited to 1088 bytes per message.
+           ::unboxed #_(-> plain-text
+                           ;; This approach produces a SubVector, which cannot
+                           ;; be cast to a [B
+                           vec
+                           (subvec K/decrypt-box-zero-bytes))
+           (Arrays/copyOfRange plain-text
+                               K/decrypt-box-zero-bytes
+                               (count plain-text))}))
       (throw (ex-info "Box too small" {::box box
                                        ::offset box-offset
                                        ::length box-length
@@ -758,13 +759,6 @@
                                                  (= specs/server-nonce-suffix-length n))))
                      :crypto-buffer bytes?
                      :shared-key ::specs/crypto-key)
-        ;; This doesn't match the return spec for open-after.
-        ;; I'm 90% certain this actually returns (s/nilable vector?)
-        ;; where the vector contents are all bytes.
-        ;; FIXME: establish that last 10% confidence and fix
-        ;; whichever spec is wrong.
-        ;; Although having both return (s/nilable bytes?) is
-        ;; starting to look like the best option.
         :ret (s/keys :req [::weald/state]
                      :opt [::unboxed]))
 (defn open-box
@@ -803,7 +797,7 @@
    shared-key]
   (let [{plain-text ::unboxed
          log-state ::weald/state} (open-box log-state nonce-prefix nonce-suffix crypto-box shared-key)
-        decomposed (serial/decompose template plain-text)]
+        decomposed (serial/decompose template (Unpooled/wrappedBuffer (bytes plain-text)))]
     {::weald/state log-state
      ::serial/decomposed decomposed}))
 

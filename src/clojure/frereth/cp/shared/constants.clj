@@ -7,6 +7,8 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Magic Constants
 
+(set! *warn-on-reflection* true)
+
 ;; Q: How many of the rest of this could benefit enough by
 ;; getting a ^:const metadata hint to justify adding it?
 ;; TODO: benchmarking
@@ -32,7 +34,7 @@
 (def server-key-length key-length)
 (def shared-key-length key-length)
 
-(def client-header-prefix-string "QvnQ5Xl")
+(def ^:const client-header-prefix-string "QvnQ5Xl")
 (def server-header-prefix-string "RL3aNMX")
 ;; Using an ordinary ^bytes type-hint here caused an
 ;; IllegalArgumentException at compile-time elsewhere
@@ -83,11 +85,15 @@
 ;;; Hello packets
 
 (def hello-packet-length 224)
-(def hello-header-string (str client-header-prefix-string "H"))
+(def ^:const hello-header-string (str client-header-prefix-string "H"))
 (comment (vec hello-header-string))
 (def hello-header (.getBytes hello-header-string))
 (s/def ::hello-prefix (s/and ::specs/prefix
-                             #(= hello-header-string (String. %))))
+                             ;; This is annoying.
+                             ;; ::specs/prefix already verified that we're
+                             ;; dealing with bytes.
+                             ;; Oh well.
+                             #(= hello-header-string (String. (bytes %)))))
 (def hello-nonce-prefix (.getBytes "CurveCP-client-H"))
 (def ^Integer hello-crypto-box-length 80)
 (def ^Integer ^:const zero-box-length (- hello-crypto-box-length box-zero-bytes))
@@ -139,7 +145,7 @@
 ;;; Cookie packets
 
 (def ^Integer ^:const cookie-frame-length 144)
-(def cookie-header-string (str server-header-prefix-string "K"))
+(def ^:const cookie-header-string (str server-header-prefix-string "K"))
 (def cookie-header (.getBytes cookie-header-string))
 (def cookie-nonce-prefix (.getBytes "CurveCPK"))
 (def cookie-nonce-minute-prefix (.getBytes "minute-k"))

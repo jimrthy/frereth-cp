@@ -3,7 +3,7 @@
             [frereth.cp.message
              [specs :as specs]
              [to-child :as x]])
-  (:import io.netty.buffer.Unpooled))
+  (:import [io.netty.buffer ByteBuf Unpooled]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Helpers
@@ -140,7 +140,7 @@
           (is (= 6 contiguous-stream-count))
           (is (= 3 (count gap-buffer))))
         (testing "consolidated"
-          (let [buf-2 (second ->child-buffer)]
+          (let [^ByteBuf buf-2 (second ->child-buffer)]
             ;; This covers the addresses from 1-5.
             ;; :filler accounts for bytes 0-3
             ;; So this skips the first 2 bytes (1 and 2)
