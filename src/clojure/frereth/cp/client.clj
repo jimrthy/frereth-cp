@@ -44,10 +44,13 @@
 ;;;; Specs
 
 (s/def ::ctor-options (s/keys :req [::msg-specs/->child
-                                    ::state/chan->server
-                                    ::specs/message-loop-name
                                     ::shared/my-keys
-                                    ::state/server-security]))
+                                    ::specs/message-loop-name
+                                    ::state/chan<-server
+                                    ::state/server-extension
+                                    ::state/server-ips
+                                    ::state/server-security
+                                    ::weald/logger]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal

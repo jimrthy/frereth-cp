@@ -584,24 +584,28 @@
   "Honestly, these should be stored with something like base64 encoding"
   [log-state
    keydir]
-  (if keydir
-    (let [secret (util/slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
-          pair (TweetNaclFast$Box/keyPair_fromSecretKey secret)
-          log-state (log/info log-state
-                              ::do-load-keypair
-                              (str "FIXME: Don't record these\n"
-                                   "Loaded secret key from file")
-                              {::secret-key-contents (b-t/->string secret)
-                               ::specs/secret-long (b-t/->string (.getSecretKey pair))
-                               ::specs/public-long
-                               (b-t/->string (.getPublicKey pair))})]
-      {::java-key-pair pair
-       ::weald/state log-state})
-    ;; FIXME: This really should call random-keys instead.
-    ;; Q: Shouldn't it?
-    ;; A: Well, that depends on context
-    {::java-key-pair (random-key-pair)
-     ::weald/state log-state}))
+  (let [log-state (log/debug log-state
+                             ::do-load-keypair
+                             "Looking for secretkey"
+                             {::directory keydir})]
+    (if keydir
+      (let [secret (util/slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
+            pair (TweetNaclFast$Box/keyPair_fromSecretKey secret)
+            log-state (log/info log-state
+                                ::do-load-keypair
+                                (str "FIXME: Don't record these\n"
+                                     "Loaded secret key from file")
+                                {::secret-key-contents (b-t/->string secret)
+                                 ::specs/secret-long (b-t/->string (.getSecretKey pair))
+                                 ::specs/public-long
+                                 (b-t/->string (.getPublicKey pair))})]
+        {::java-key-pair pair
+         ::weald/state log-state})
+      ;; FIXME: This really should call random-keys instead.
+      ;; Q: Shouldn't it?
+      ;; A: Well, that depends on context
+      {::java-key-pair (random-key-pair)
+       ::weald/state log-state})))
 
 (comment
   ;; Cheap way to save a key to disk in a way that's

@@ -411,7 +411,8 @@
   ;; A: Skip it, for now
   (let [log-state (log/warn log-state
                             ::start!
-                            "CurveCP Server: Starting the server state")
+                            "CurveCP Server: Starting the server state"
+                            my-keys)
         ;; So we're starting by loading up the long-term keys
         keydir (::shared/keydir my-keys)
         {log-state ::weald/state
@@ -427,10 +428,10 @@
         base-result (assoc almost
                            ::state/event-loop-stopper! (build-event-loop-stopper almost))
         flushed-logs (log/flush-logs! logger log-state)
-        result (assoc base-result ::weald/state flushed-logs)]
-    (let [log-state (do-begin result)]
-      (assoc result
-             ::weald/state log-state))))
+        result (assoc base-result ::weald/state flushed-logs)
+        log-state (do-begin result)]
+    (assoc result
+           ::weald/state log-state)))
 
 (s/fdef stop!
         :args (s/cat :this ::state/state)
@@ -527,4 +528,5 @@
   (let [log-state (log/clean-fork log-state ::server)]
     (assoc cfg
            ::state/active-clients {}
-           ::state/max-active-clients max-active-clients)))
+           ::state/max-active-clients max-active-clients
+           ::weald/state log-state)))

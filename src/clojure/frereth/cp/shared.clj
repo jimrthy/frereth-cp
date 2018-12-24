@@ -84,9 +84,9 @@
 ;; I think this is a TweetNaclFast$Box
 ;; TODO: Verify
 (s/def ::shared-secret any?)
-(s/def ::public-key (s/and bytes? #(= (count %) K/key-length)))
-(s/def ::secret-key (s/and bytes? #(= (count %) K/key-length)))
-(s/def ::symmetric-key (s/and bytes? #(= (count %) K/key-length)))
+(s/def ::public-key ::specs/crypto-key)
+(s/def ::secret-key ::specs/crypto-key)
+(s/def ::symmetric-key ::specs/crypto-key)
 
 ;; This seems really silly.
 ;; FIXME: Just make it go away.

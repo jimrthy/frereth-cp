@@ -50,20 +50,11 @@
                           ;; between build versions.
                           [aleph "0.4.7-alpha3"]
                           [com.frereth/weald "0.0.4-ga530ad0"]
-                          ;; TODO: Eliminate these logging dependencies.
-                          ;; I have no business imposing them on library
-                          ;; users
-                          #_[org.apache.logging.log4j/log4j-core "2.10.0" :scope "test"]
-                          #_[org.apache.logging.log4j/log4j-1.2-api "2.10.0" :scope "test"]
                           [org.clojure/clojure "1.9.0" :exclusions [org.clojure/spec.alpha] :scope "provided"]
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
                           [org.clojure/test.check "0.10.0-alpha3" :scope "test" :exclusions [org.clojure/clojure]]
-                          ;; TODO: Eliminate this dependency. It's another one
-                          ;; that I really don't have any business imposing on anyone else
-                          ;; Then again, we inherit it from aleph no matter what.
-                          #_[org.clojure/tools.logging "0.4.1" :exclusions [org.clojure/clojure]]
                           ;; Q: Why do we need this?
                           ;; A: clojure.tools.analyzer.jvm uses it.
                           [org.clojure/tools.reader "1.3.2" :exclusions [org.clojure/clojure]]
@@ -168,4 +159,8 @@
 (deftask to-clojars
   "Publish"
   []
+  ;; Running (lint) here hangs, sometimes.
+  ;; TODO: Look into that.
+  ;; (the problem may well just be that either linting or build-jar
+  ;; happened to run extremely slowly the last time I did this)
   (comp (set-version) (javac) #_(lint) (build-jar) (push-release)))
