@@ -622,7 +622,8 @@
   (let [k (generate-symmetric-key (* Byte/SIZE nonce-key-length))
         raw (.getEncoded k)]
     (when-not (io/resource key-dir)
-      (throw (ex-info (str "Missing folder on CLASSPATH: " key-dir))))
+      (throw (ex-info "Missing folder on CLASSPATH"
+                      {::expected key-dir})))
     (let [nonce-key-folder-path (str key-dir "/.expertsonly")
           nonce-key-folder (io/resource nonce-key-folder-path)]
       (when-not nonce-key-folder

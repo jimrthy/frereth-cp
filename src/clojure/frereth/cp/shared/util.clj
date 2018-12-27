@@ -19,6 +19,23 @@
   []
   (System/getProperty "java.runtime.version"))
 
+(defn get-class-path
+  []
+  ;; There are actually multiple CLASSPATHS available.
+  ;; For my current purposes, this returns empty.
+  ;; java.lang.ClassLoader/getSystemClassLoader includes
+  ;; 1. my boot script
+  ;; 2. the boot.jar
+  ;; 3. the openjdk tools.jar
+  ;; Gotta <3 java's ease of use.
+  (let [^java.net.URLClassLoader loader (-> (Thread/currentThread)
+                                            .getContextClassLoader)]
+    (-> loader
+        .getURLs
+        seq)))
+(comment
+  (get-class-path))
+
 (s/fdef get-cpu-count
         :ret nat-int?)
 (defn get-cpu-count
