@@ -36,6 +36,11 @@ But, hey, I've taken it this far. And this *does* give me a
 higher-level perspective to really think about what's going
 on, above and beyond the bit twiddling.
 
+And moving forward into multithreading seems like it should be very
+natural.
+
+So...maybe.
+
 ## Usage
 
 Although you probably don't want to actually use it yet.
@@ -58,8 +63,21 @@ Although you probably don't want to actually use it yet.
 
     boot set-version javac build-jar push-release
 
-TODO: Add option for builds that look like "real" releases with no
-hashes in the version "number."
+This should be the same as
+
+    boot to-clojars
+
+TODO: Verify that.
+
+##### Release Versions
+
+    git tag major.minor.patch
+
+Then push the release as described immediately above.
+
+Right now, this will trigger a warning that the tag already exists.
+
+This is something else that needs more hammock time.
 
 #### From a working branch
 
