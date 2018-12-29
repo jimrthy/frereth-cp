@@ -1,6 +1,6 @@
 # frereth-cp
 
-[![Clojars Project](https://img.shields.io/clojars/v/frereth/cp.svg)](https://clojars.org/frereth/cp)
+[![Clojars Project](https://img.shields.io/clojars/v/com.frereth/cp.svg)](https://clojars.org/frereth/cp)
 
 CurveCP is a low-level protocol for streaming bytes across
 the network, much like TCP. Except in a secure manner.
@@ -64,6 +64,12 @@ hashes in the version "number."
 #### From a working branch
 
     boot publish-from-branch
+
+### REPL connection
+
+    bash> boot cider-repl
+
+then connect to nrepl over port 32767.
 
 ## Notes
 

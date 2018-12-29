@@ -24,6 +24,11 @@
   messages for describe to work properly:
   `git tag 0.0.2 -m 'Move forward'`"
   []
+  ;; version looks like a semver
+  ;; previous-hash is really a hash associated with the previous version tag
+  ;; commits is the number of commits since that tag
+  ;; hash is the hash associated with that previous tag
+  ;; dirty? indicates that the current repo state doesn't match HEAD
   (let [[version previous-hash commits hash dirty?]
         (next (re-matches #"(\d+\.\d+\.\d+)(-\w*)?-(\d*)-(.*?)(-dirty)?\n"
                           (:out (sh/sh "git"
@@ -34,10 +39,12 @@
                                        "--tags"
                                        "--match" "[0-9].*"))))]
     (if commits
-      (cond
-        dirty? (str (next-version version) "-" hash "-dirty")
-        (pos? (Long/parseLong commits)) (str (next-version version) "-" hash)
-        :otherwise version)
+      (let [new-version (next-version version)]
+        (cond
+          dirty? (str new-version "-" hash "-dirty")
+          previous-hash (str version "-" hash)
+          (pos? (Long/parseLong commits)) (str new-version "-" hash)
+          :otherwise version))
       default-version)))
 
 (def project 'com.frereth/cp)
@@ -142,9 +149,10 @@
   [p port PORT int]
   ;; Just because I'm prone to forget one of the vital helper steps
   ;; Note that this would probably make more sense under profile.boot.
-  ;; Except that doesn't have access to the defined in here, such
+  ;; Except that doesn't have access to the tasks defined in here, such
   ;; as...well, almost any of what it actually uses.
   ;; Q: Should they move to there also?
+  ;; A: No. This should probably be a shell script.
   (let [port (or port 32767)]
     (comp (dev) (testing) (check-conflicts) (cider) (javac) (repl :port port :bind "0.0.0.0"))))
 
