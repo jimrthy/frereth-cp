@@ -817,6 +817,7 @@
      ;; ita  less obvious a win.
      next-action]
     {:pre [outgoing]}
+    ;; FIXME: This is broken with the changes I just made to weald
     (swap! log-state-atom log/do-sync-clock)
     (let [now (System/nanoTime)  ; It's tempting to just use millis, but that throws off recent
           ;; Line 337

@@ -208,6 +208,7 @@
     message :message
     :as packet}]
   (let [log-state (-> log-state
+                      ;; FIXME: Recent changes to weald break this
                       log/do-sync-clock
                       (log/debug log-state
                                  ::do-handle-incoming
@@ -442,6 +443,7 @@
            ::state/event-loop-stopper!]
     log-state ::weald/state
     :as this}]
+  ;; FIXME: Recent changes to weald break do-sync-clock
   (let [log-state (log/do-sync-clock log-state)
         log-state (log/warn log-state
                             ::stop!

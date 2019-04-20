@@ -108,7 +108,7 @@ behind using tweetnacl.
 
 ## License
 
-Copyright © 2017-2018 James Gatannah
+Copyright © 2017-2019 James Gatannah
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.

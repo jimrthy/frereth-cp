@@ -57,7 +57,7 @@
                           ;; between build versions.
                           [aleph "0.4.7-alpha3"]
                           [com.frereth/weald "0.0.4-ga530ad0"]
-                          [org.clojure/clojure "1.9.0" :exclusions [org.clojure/spec.alpha] :scope "provided"]
+                          [org.clojure/clojure "1.10.1-beta-beta2" :exclusions [org.clojure/spec.alpha] :scope "provided"]
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
