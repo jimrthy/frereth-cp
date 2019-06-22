@@ -50,25 +50,25 @@
 (def project 'com.frereth/cp)
 
 (set-env! :resource-paths #{"src/clojure"}
-          :dependencies '[[adzerk/bootlaces "0.1.13" :scope "test"]
+          :dependencies '[[adzerk/bootlaces "0.2.0" :scope "test"]
                           [adzerk/boot-test "RELEASE" :scope "test"]
                           ;; Stick with whichever version of netty this inherits.
                           ;; netty isn't shy about breaking backwards compatibility
                           ;; between build versions.
-                          [aleph "0.4.7-alpha3"]
+                          [aleph "0.4.7-alpha5"]
                           [com.frereth/weald "0.0.4-ga530ad0"]
-                          [org.clojure/clojure "1.10.1-beta-beta2" :exclusions [org.clojure/spec.alpha] :scope "provided"]
+                          [org.clojure/clojure "1.10.1" :exclusions [org.clojure/spec.alpha] :scope "provided"]
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
-                          [org.clojure/test.check "0.10.0-alpha3" :scope "test" :exclusions [org.clojure/clojure]]
+                          [org.clojure/test.check "0.10.0-alpha4" :scope "test" :exclusions [org.clojure/clojure]]
                           ;; Q: Why do we need this?
                           ;; A: clojure.tools.analyzer.jvm uses it.
                           [org.clojure/tools.reader "1.3.2" :exclusions [org.clojure/clojure]]
                           ;; TODO: Move this into the dev task
                           ;; (sadly, it isn't a straight copy/paste)
                           [samestep/boot-refresh "0.1.0" :scope "test" :exclusions [org.clojure/clojure]]
-                          [tolitius/boot-check "0.1.11" :scope "test" :exclusions [org.clojure/clojure]]]
+                          [tolitius/boot-check "0.1.12" :scope "test" :exclusions [org.clojure/clojure]]]
           :source-paths   #{"src/java"})
 
 (task-options!
