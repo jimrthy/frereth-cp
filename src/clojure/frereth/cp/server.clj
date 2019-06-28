@@ -445,8 +445,9 @@
            ::state/event-loop-stopper!]
     log-state ::weald/state
     :as this}]
-  ;; FIXME: Recent changes to weald break do-sync-clock
-  (let [log-state (log/do-sync-clock log-state)
+  (let [log-state (update log-state
+                          ::weald/lamport
+                          log/do-sync-clock)
         log-state (log/warn log-state
                             ::stop!
                             "Stopping server state")]

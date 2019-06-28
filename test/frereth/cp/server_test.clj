@@ -154,6 +154,13 @@
       ;; but this is an extremely special case.
       (is (not (s/explain-data ::server/pre-state-options (assoc base-options
                                                                  ::shared/keydir "somewhere"))))
+      ;; That fails because:
+      ;;clojure.lang.ExceptionInfo:
+      ;;Unable to construct gen at: [:io-handle :frereth.cp.message.specs/from-child]
+      ;;for:
+      ;; :frereth.cp.message.specs/from-child #:clojure.spec.alpha{:path [:io-handle :frereth.cp.message.specs/from-child],
+      ;;                                                           :form :frereth.cp.message.specs/from-child,
+      ;;                                                           :failure :no-gen}
       (let [pre-state-options (assoc base-options
                                      ;; The fact that keydir is stored here is worse than annoying.
                                      ;; It's wasteful and pointless.

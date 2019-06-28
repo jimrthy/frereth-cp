@@ -56,7 +56,7 @@
                           ;; netty isn't shy about breaking backwards compatibility
                           ;; between build versions.
                           [aleph "0.4.7-alpha5"]
-                          [com.frereth/weald "0.0.4-ga530ad0"]
+                          [com.frereth/weald "0.0.4-gfd10d89"]
                           [org.clojure/clojure "1.10.1" :exclusions [org.clojure/spec.alpha] :scope "provided"]
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
