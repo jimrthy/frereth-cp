@@ -53,15 +53,15 @@
                                                       ::state/client-read-chan
                                                       ::state/client-write-chan]))]
   ;; These are the pieces that are used to put together the pre-state
-  (s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]
-                                     :req (conj common-state-option-keys
-                                                ;; Can't include the child-spawner! spec,
-                                                ;; or checking it will spawn several children that we don't
-                                                ;; really want.
-                                                #_::msg-specs/child-spawner!
-                                                ;; ditto
-                                                #_::msg-specs/->child)))
-
+  (s/def ::pre-state-options (s/merge common-state-option-keys
+                                      (s/keys :opt [::state/max-active-clients]
+                                              :req [
+                                                    ;; Can't include the child-spawner! spec,
+                                                    ;; or checking it will spawn several children that we don't
+                                                    ;; really want.
+                                                    #_::msg-specs/child-spawner!
+                                                    ;; ditto
+                                                    #_::msg-specs/->child])))
 
   ;; Note that this really only exists as an intermediate step for the
   ;; sake of producing a ::state/state.
@@ -89,6 +89,10 @@
   ;; another one with the same details
   (s/def ::post-state-options (s/merge common-state-option-keys
                                        (s/keys :req [::state/max-active-clients]))))
+
+(comment
+  (s/describe ::pre-state-options))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Internal

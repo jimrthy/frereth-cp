@@ -121,7 +121,6 @@
   (testing "That we can start and stop successfully"
     (let [logger (log/std-out-log-factory)
           log-state (log/init ::verify-start-stop)
-          ;; FIXME: This is broken now.
           inited (factory/build-server logger
                                        log-state
                                        (fn [bs]
@@ -152,8 +151,9 @@
       ;; can't legally have both.
       ;; That very much flies in the face of the way specs were intended to work,
       ;; but this is an extremely special case.
-      (is (not (s/explain-data ::server/pre-state-options (assoc base-options
-                                                                 ::shared/keydir "somewhere"))))
+      (let [problems (s/explain-data ::server/pre-state-options (assoc base-options
+                                                                       ::shared/keydir "somewhere"))]
+        (is (not problems) (str problems)))
       ;; That fails because:
       ;;clojure.lang.ExceptionInfo:
       ;;Unable to construct gen at: [:io-handle :frereth.cp.message.specs/from-child]

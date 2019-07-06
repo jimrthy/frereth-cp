@@ -24,11 +24,15 @@ security for the Internet").
 
 ## Status
 
-Not even pre-alpha. I have most of the handshake translated,
-and I've been able to round-trip a single echo message without
-encryption or network access, but there's still a lot to be done.
+The preliminary translation work is done, though I'm not happy
+with it.
 
-In retrospect, this probably wasn't a great
+Writing C idioms in clojure was a terrible approach.
+Now that I understand what's going on, I'm strongly inclined to rewrite
+it more idiomatically.
+
+Alternatively, writing low-level networking code in a really high-level
+language probably wasn't a great
 idea. A pure java implementation seems like it would have been
 a much wiser choice.
 
@@ -85,9 +89,26 @@ This is something else that needs more hammock time.
 
 ### REPL connection
 
-    bash> boot cider-repl
+    M-x cider-jack-in
+
+(or whatever the equivalent is for your editor of choice) should
+probably work fine for most people.
+
+If you'd rather do it the old-fashioned way, for whatever reason:
+
+    bash> ./boot.sh cider-repl
 
 then connect to nrepl over port 32767.
+
+NOTE: Currently, the REPL starts with an error about "No namespace:
+reply.eval-modes.nrepl found." This is a nuisance issue with one of
+Boot 2.8.2's dependencies.
+
+It's fixed in Boot 2.8.3, but I've had issues pushing updates.
+
+So, for now, just ignore the warning.
+
+
 
 ## Notes
 

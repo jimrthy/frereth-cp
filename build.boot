@@ -10,7 +10,7 @@
 
 (def default-version
   "Really just for running inside docker w/out git tags"
-  "0.0.4-???-dirty")
+  "0.0.5-???-dirty")
 
 (defn deduce-version-from-git
   "Avoid another decade of pointless, unnecessary and error-prone
@@ -61,7 +61,7 @@
                           [org.clojure/spec.alpha "0.2.176"]
                           ;; FIXME: Move this to the testing task.
                           ;; Don't want to depend on it in general.
-                          [org.clojure/test.check "0.10.0-alpha4" :scope "test" :exclusions [org.clojure/clojure]]
+                          [org.clojure/test.check "0.10.0-RC1" :scope "test" :exclusions [org.clojure/clojure]]
                           ;; Q: Why do we need this?
                           ;; A: clojure.tools.analyzer.jvm uses it.
                           [org.clojure/tools.reader "1.3.2" :exclusions [org.clojure/clojure]]
