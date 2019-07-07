@@ -40,58 +40,75 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; Specs
 
-(let [shared-state-keys [::weald/logger
-                         ::weald/state-atom
-                         ::shared/extension]
-      common-state-option-keys (s/merge shared-state-keys
-                                        (s/keys :req [;; Honestly, this should be an xor.
-                                                      ;; It makes sense for the caller to
-                                                      ;; supply one or the other, but not both.
-                                                      (or ::shared/keydir ::shared/my-keys)
-                                                      ;; Remember the distinction between these and
-                                                      ;; the callbacks for sharing bytes with the child
-                                                      ::state/client-read-chan
-                                                      ::state/client-write-chan]))]
-  ;; These are the pieces that are used to put together the pre-state
-  (s/def ::pre-state-options (s/merge common-state-option-keys
-                                      (s/keys :opt [::state/max-active-clients]
-                                              :req [
-                                                    ;; Can't include the child-spawner! spec,
-                                                    ;; or checking it will spawn several children that we don't
-                                                    ;; really want.
-                                                    #_::msg-specs/child-spawner!
-                                                    ;; ditto
-                                                    #_::msg-specs/->child])))
+;;; These next 2 really should be private. They're building blocks
+;;; trying to reduce duplication (which may just fly in the face of
+;;; the way spec is supposed to work)
+(s/def ::shared-state-keys (s/keys :req [::weald/logger
+                                         ::weald/state-atom
+                                         ::shared/extension]))
+(s/def ::common-state-option-keys (s/merge ::shared-state-keys
+                                           (s/keys :req [;; Honestly, this should be an xor.
+                                                         ;; It makes sense for the caller to
+                                                         ;; supply one or the other, but not both.
+                                                         (or ::shared/keydir ::shared/my-keys)
+                                                         ;; Remember the distinction between these and
+                                                         ;; the callbacks for sharing bytes with the child
+                                                         ::state/client-read-chan
+                                                         ::state/client-write-chan])))
 
-  ;; Note that this really only exists as an intermediate step for the
-  ;; sake of producing a ::state/state.
-  (s/def ::pre-state (s/merge shared-state-keys
-                              (s/keys :req [::msg-specs/child-spawner!
-                                            ::state/active-clients
-                                            ::state/client-read-chan
-                                            ::state/client-write-chan
-                                            ::state/max-active-clients
-                                            ;; Note that this really only makes sense
-                                            ;; in terms of loading up my-keys.
-                                            ;; And, really, it seems like there are
-                                            ;; cleaner/better ways to handle that.
-                                            ;; Like storing them in a database that
-                                            ;; can handle expirations/rotations
-                                            ;; and passing them directly to the constructor
-                                            ::shared/keydir
-                                            ::shared/working-area]
-                                      :opt [::state/cookie-cutter
-                                            ::state/current-client
-                                            ::state/event-loop-stopper!
-                                            ::shared/my-keys])))
+;; These are the pieces that are used to put together the pre-state
+#_(s/def ::pre-state-options (s/merge ::common-state-option-keys
+                                    (s/keys :opt [::state/max-active-clients]
+                                            :req [
+                                                  ;; Can't include the child-spawner! spec,
+                                                  ;; or checking it will spawn several children that we don't
+                                                  ;; really want.
+                                                  #_::msg-specs/child-spawner!
+                                                  ;; ditto
+                                                  #_::msg-specs/->child])))
+
+;; This works fine
+#_(s/def ::pre-state-options any?)
+#_(s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]
+                                   :req [::shared/extension
+                                         (or ::shared/keydir ::shared/my-keys)
+                                         ::state/client-read-chan
+                                         ::state/client-write-chan
+                                         ::weald/logger
+                                         ::weald/state-atom]))
+(s/def ::pre-state-options (s/keys :opt [::state/max-active-clients]))
+
+;; Note that this really only exists as an intermediate step for the
+;; sake of producing a ::state/state.
+(s/def ::pre-state (s/merge ::shared-state-keys
+                            (s/keys :req [::msg-specs/child-spawner!
+                                          ::state/active-clients
+                                          ::state/client-read-chan
+                                          ::state/client-write-chan
+                                          ::state/max-active-clients
+                                          ;; Note that this really only makes sense
+                                          ;; in terms of loading up my-keys.
+                                          ;; And, really, it seems like there are
+                                          ;; cleaner/better ways to handle that.
+                                          ;; Like storing them in a database that
+                                          ;; can handle expirations/rotations
+                                          ;; and passing them directly to the constructor
+                                          ::shared/keydir
+                                          ::shared/working-area]
+                                    :opt [::state/cookie-cutter
+                                          ::state/current-client
+                                          ::state/event-loop-stopper!
+                                          ::shared/my-keys])))
 
   ;; After we've stopped it, these are the options we can use to start
   ;; another one with the same details
-  (s/def ::post-state-options (s/merge common-state-option-keys
-                                       (s/keys :req [::state/max-active-clients]))))
+
+(s/def ::post-state-options (s/merge ::common-state-option-keys
+                                     (s/keys :req [::state/max-active-clients])))
 
 (comment
-  (s/describe ::pre-state-options))
+  (s/describe ::pre-state-options)
+  )
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

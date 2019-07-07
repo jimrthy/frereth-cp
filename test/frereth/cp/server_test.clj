@@ -155,12 +155,13 @@
                                                                        ::shared/keydir "somewhere"))]
         (is (not problems) (str problems)))
       ;; That fails because:
-      ;;clojure.lang.ExceptionInfo:
-      ;;Unable to construct gen at: [:io-handle :frereth.cp.message.specs/from-child]
-      ;;for:
-      ;; :frereth.cp.message.specs/from-child #:clojure.spec.alpha{:path [:io-handle :frereth.cp.message.specs/from-child],
-      ;;                                                           :form :frereth.cp.message.specs/from-child,
-      ;;                                                           :failure :no-gen}
+      ;; clojure.lang.ExceptionInfo:
+      ;; Unable to construct gen at:
+      ;; [:io-handle :frereth.cp.message.specs/from-child] for:
+      ;; :frereth.cp.message.specs/from-child
+      ;; #:clojure.spec.alpha{:path [:io-handle :frereth.cp.message.specs/from-child],
+      ;; :form :frereth.cp.message.specs/from-child,
+      ;; :failure :no-gen}
       (let [pre-state-options (assoc base-options
                                      ;; The fact that keydir is stored here is worse than annoying.
                                      ;; It's wasteful and pointless.
@@ -197,6 +198,47 @@
                            (println "Server stopped")
                            (is (not (s/explain-data ::server/post-state-options stopped)))
                            (println "pre-state checked"))))))))))
+
+(comment
+  (let [options {::msg-specs/child-spawner! (fn [io-handle]
+                                              (println "Server child-spawner! called for side-effects"))}]
+    (s/explain-data ::server/pre-state-options options))
+
+  (let [base-options {::weald/logger (log/std-out-log-factory)
+                      ::weald/state (log/init ::verify-ctor-spec)
+                      ::shared/extension factory/server-extension
+                      ::msg-specs/child-spawner! (fn [io-handle]
+                                                   (println "Server child-spawner! called for side-effects"))
+                      ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
+                      ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}}]
+    (let [problems (#_s/explain-data
+                    #_s/conform
+                    s/explain
+                    ::server/pre-state-options
+                    #_::server/shared-state-keys
+                    (-> base-options
+                        (assoc
+                         ::shared/keydir "somewhere")
+                        ;; The problem is s/keys:
+                        ;; If there's a namespaced keyword in the
+                        ;; map's keys, and that keyword has a
+                        ;; registered spec, it *will* be validated.
+                        ;; Since I didn't include a gen, they check
+                        ;; will fail without this.
+                        (dissoc ::msg-specs/child-spawner!)))]
+      ;; That fails because:
+      ;; clojure.lang.ExceptionInfo:
+      ;; Unable to construct gen at:
+      ;; [:io-handle :frereth.cp.message.specs/from-child] for:
+      ;; :frereth.cp.message.specs/from-child
+      ;; #:clojure.spec.alpha{:path [:io-handle :frereth.cp.message.specs/from-child],
+      ;; :form :frereth.cp.message.specs/from-child,
+      ;; :failure :no-gen}
+      (when problems
+        (println "oops")
+        problems))
+    )
+  )
 
 (deftest shake-hands
   ;; Note that this is really trying to simulate the network layer between the two
