@@ -576,36 +576,37 @@
   (random-keys ::long))
 
 (s/fdef do-load-keypair
-  :args (s/cat :log-state ::weald/state
+  :args (s/cat :log-state-atom ::weald/state-atom
                :key-dir-name string?)
-  :ret (s/keys :req [::java-key-pair
-                     ::weald/state]))
+  :ret ::java-key-pair)
 (defn do-load-keypair
   "Honestly, these should be stored with something like base64 encoding"
-  [log-state
+  [log-state-atom
    keydir]
-  (let [log-state (log/debug log-state
-                             ::do-load-keypair
-                             "Looking for secretkey"
-                             {::directory keydir})]
-    (if keydir
-      (let [secret (util/slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
-            pair (TweetNaclFast$Box/keyPair_fromSecretKey secret)
-            log-state (log/info log-state
-                                ::do-load-keypair
-                                (str "FIXME: Don't record these\n"
-                                     "Loaded secret key from file")
-                                {::secret-key-contents (b-t/->string secret)
-                                 ::specs/secret-long (b-t/->string (.getSecretKey pair))
-                                 ::specs/public-long
-                                 (b-t/->string (.getPublicKey pair))})]
-        {::java-key-pair pair
-         ::weald/state log-state})
-      ;; FIXME: This really should call random-keys instead.
-      ;; Q: Shouldn't it?
-      ;; A: Well, that depends on context
-      {::java-key-pair (random-key-pair)
-       ::weald/state log-state})))
+  (log/atomically! log-state-atom
+                   log/debug
+                   ::do-load-keypair
+                   "Looking for secretkey"
+                   {::directory keydir})
+  (if keydir
+    (let [secret (util/slurp-bytes (io/resource (str keydir "/.expertsonly/secretkey")))
+          pair (TweetNaclFast$Box/keyPair_fromSecretKey secret)]
+      (log/atomically! log-state-atom
+                       log/info
+                       ::do-load-keypair
+                       (str "FIXME: Don't record these\n"
+                            "Loaded secret key from file")
+                       {::secret-key-contents (b-t/->string secret)
+                        ::specs/secret-long (b-t/->string (.getSecretKey pair))
+                        ::specs/public-long
+                        (b-t/->string (.getPublicKey pair))})
+      pair)
+    ;; FIXME: This really should call random-keys instead.
+    ;; Q: Shouldn't it?
+    ;; A: Yes. But then the happy path would be responsible for
+    ;; extracting it into a map.
+    ;; And maybe the caller has a reason to use the raw java class.
+    (random-key-pair)))
 
 (comment
   ;; Cheap way to save a key to disk in a way that's

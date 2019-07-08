@@ -42,22 +42,24 @@
 
 (s/fdef server-options
   :args (s/cat :logger ::weald/logger
-               :log-state ::weald/state
+               :log-state-atom ::weald/state-atom
                :->child ::msg-specs/->child)
   :ret (s/keys :req [::cp-server]))
 (defn server-options
-  [logger log-state ->child]
+  [logger log-state-atom ->child]
   (let [client-write-chan (strm/stream)
         client-read-chan (strm/stream)
         child-id-atom (atom 0)
         executor (exec/fixed-thread-executor 4)]
     {::cp-server {::weald/logger logger
-                  ::weald/state log-state
+                  ::weald/state-atom log-state-atom
                   ::msg-specs/->child ->child
                   ::msg-specs/child-spawner! (fn [io-handle]
-                                               (log/flush-logs! logger
-                                                                (log/debug (log/clean-fork log-state ::child-spawner!)
-                                                                           ::top)))
+                                               (log/atomically! log-state-atom
+                                                               log/debug
+                                                               "top"
+                                                               ::child-spawner!)
+                                               (log/flush-atomically! logger log-state-atom))
                   ::shared/extension server-extension
                   ::shared/my-keys #::shared{::shared-specs/srvr-name server-name
                                              :keydir "curve-test"}
@@ -66,21 +68,32 @@
 
 (s/fdef build-server
   :args (s/cat :logger ::weald/logger
-               :log-state ::weald/state
-               :child-> ::msg-specs/->child))
+               :log-state-atom ::weald/state-atom
+               :child-> ::msg-specs/->child)
+  :ret (s/keys :req [::cp-server
+                     ::srvr-state/client-read-chan
+                     ::srvr-state/client-write-chan]))
 (defn build-server
-  [logger log-state ->child]
+  [logger log-state-atom ->child]
   (try
-    (let [server (server/ctor (::cp-server (server-options logger
-                                                           log-state
-                                                           ->child)))]
+    (println "a")
+    (let [opts (server-options logger
+                               log-state-atom
+                               ->child)
+          _ (println "b")
+          pre-server (::cp-server opts)
+          _ (println "c")
+          server (server/ctor pre-server)]
+      (println "d")
       {::cp-server server
        ::srvr-state/client-read-chan (::srvr-state/client-read-chan server)
        ::srvr-state/client-write-chan (::srvr-state/client-write-chan server)})
     (catch ExceptionInfo ex
-      (log/flush-logs! logger (log/exception log-state
-                                             ex
-                                             ::build-server))
+      (log/atomically! log-state-atom
+                       log/exception
+                       ex
+                       ::build-server)
+      (log/flush-logs! logger log-state-atom)
       (throw ex))))
 
 (defn start-server

@@ -122,7 +122,7 @@
     (let [logger (log/std-out-log-factory)
           log-state (log/init ::verify-start-stop)
           inited (factory/build-server logger
-                                       log-state
+                                       (atom log-state)
                                        (fn [bs]
                                          (println "Message from client to server child")
                                          (println (b-t/->string bs))))
@@ -130,17 +130,24 @@
       (is started)
       (is (factory/stop-server started)))))
 (comment
-  (def test-sys (factory/build-server))
+  (def test-sys (let [logger (log/std-out-log-factory)
+                      _ (println "1")
+                      log-state (log/init ::verify-start-stop)]
+                  (println "2")
+                  (factory/build-server logger
+                                        (atom log-state)
+                                        (fn [bs]
+                                          (println "Message from client to server child")
+                                          (println (b-t/->string bs))))))
   (alter-var-root #'test-sys factory/start-server)
   (-> test-sys :client-chan keys)
   (alter-var-root #'test-sys cpt/stop-server)
   )
 
 (deftest verify-ctor-spec
-  ;; FIXME: This is broken now
   (testing "Does the spec really work as intended?"
     (let [base-options {::weald/logger (log/std-out-log-factory)
-                        ::weald/state (log/init ::verify-ctor-spec)
+                        ::weald/state-atom (atom (log/init ::verify-ctor-spec))
                         ::shared/extension factory/server-extension
                         ::msg-specs/child-spawner! (fn [io-handle]
                                                      (println "Server child-spawner! called for side-effects"))
@@ -151,17 +158,17 @@
       ;; can't legally have both.
       ;; That very much flies in the face of the way specs were intended to work,
       ;; but this is an extremely special case.
-      (let [problems (s/explain-data ::server/pre-state-options (assoc base-options
-                                                                       ::shared/keydir "somewhere"))]
+      (let [problems (s/explain-data ::server/pre-state-options (-> base-options
+                                                                    (assoc
+                                                                     ::shared/keydir "somewhere")
+                                                                    ;; The problem is s/keys:
+                                                                    ;; If there's a namespaced keyword in the
+                                                                    ;; map's keys, and that keyword has a
+                                                                    ;; registered spec, it *will* be validated.
+                                                                    ;; Since I didn't include a gen, they check
+                                                                    ;; will fail without this.
+                                                                    (dissoc ::msg-specs/child-spawner!)))]
         (is (not problems) (str problems)))
-      ;; That fails because:
-      ;; clojure.lang.ExceptionInfo:
-      ;; Unable to construct gen at:
-      ;; [:io-handle :frereth.cp.message.specs/from-child] for:
-      ;; :frereth.cp.message.specs/from-child
-      ;; #:clojure.spec.alpha{:path [:io-handle :frereth.cp.message.specs/from-child],
-      ;; :form :frereth.cp.message.specs/from-child,
-      ;; :failure :no-gen}
       (let [pre-state-options (assoc base-options
                                      ;; The fact that keydir is stored here is worse than annoying.
                                      ;; It's wasteful and pointless.
@@ -176,68 +183,31 @@
                                      ;; And I don't needs the parts I've required.
                                      ;; FIXME: Switch to a smarter implementation.
                                      ::shared/my-keys {::shared/keydir "curve-test"
-                                                       ::K/srvr-name factory/server-name})]
-        (println "Checking pre-state spec")
-        (is (not (s/explain-data ::server/pre-state-options pre-state-options)))
-        (println "pre-state spec passed")
+                                                       ::specs/srvr-name factory/server-name})]
+        (testing "Checking pre-state spec"
+          (is (not (s/explain-data ::server/pre-state-options (dissoc pre-state-options
+                                                                      ::msg-specs/child-spawner!)))))
         (testing
             "Start/Stop"
-            (let [pre-state (server/ctor pre-state-options)
-                  state (server/start! pre-state)]
-              (try
-                (println "Server started. Looks like:  <------------")
-                (pprint (dissoc state ::weald/state))
+          (let [pre-state (server/ctor pre-state-options)
+                state (server/start! pre-state)]
+            (try
+              (println "Server started. Looks like:  <------------")
+              (pprint (dissoc state ::weald/state))
+              (testing "Start"
                 (is (not (s/explain-data ::srvr-state/checkable-state (dissoc state
-                                                                              ::msg-specs/child-spawner
-                                                                              ::srvr-state/event-loop-stopper!))))
-                ;; Sending a SIGINT kills a thread that's blocking execution and
-                ;; allows this line to print.
-                (println "Spec checked")
-                (finally (let [stopped (server/stop! state)]
-                           ;; Not getting here, though
-                           (println "Server stopped")
-                           (is (not (s/explain-data ::server/post-state-options stopped)))
-                           (println "pre-state checked"))))))))))
-
+                                                                              ::msg-specs/child-spawner!
+                                                                              ::srvr-state/event-loop-stopper!)))))
+              (println "Spec checked")
+              (finally
+                (testing "Stop"
+                  (let [stopped (server/stop! state)]
+                    (println "Server stopped")
+                    (is (not (s/explain-data ::server/post-state-options
+                                             (dissoc stopped ::msg-specs/child-spawner!))))
+                    (println "pre-state checked")))))))))))
 (comment
-  (let [options {::msg-specs/child-spawner! (fn [io-handle]
-                                              (println "Server child-spawner! called for side-effects"))}]
-    (s/explain-data ::server/pre-state-options options))
-
-  (let [base-options {::weald/logger (log/std-out-log-factory)
-                      ::weald/state (log/init ::verify-ctor-spec)
-                      ::shared/extension factory/server-extension
-                      ::msg-specs/child-spawner! (fn [io-handle]
-                                                   (println "Server child-spawner! called for side-effects"))
-                      ::srvr-state/client-read-chan {::srvr-state/chan (strm/stream)}
-                      ::srvr-state/client-write-chan {::srvr-state/chan (strm/stream)}}]
-    (let [problems (#_s/explain-data
-                    #_s/conform
-                    s/explain
-                    ::server/pre-state-options
-                    #_::server/shared-state-keys
-                    (-> base-options
-                        (assoc
-                         ::shared/keydir "somewhere")
-                        ;; The problem is s/keys:
-                        ;; If there's a namespaced keyword in the
-                        ;; map's keys, and that keyword has a
-                        ;; registered spec, it *will* be validated.
-                        ;; Since I didn't include a gen, they check
-                        ;; will fail without this.
-                        (dissoc ::msg-specs/child-spawner!)))]
-      ;; That fails because:
-      ;; clojure.lang.ExceptionInfo:
-      ;; Unable to construct gen at:
-      ;; [:io-handle :frereth.cp.message.specs/from-child] for:
-      ;; :frereth.cp.message.specs/from-child
-      ;; #:clojure.spec.alpha{:path [:io-handle :frereth.cp.message.specs/from-child],
-      ;; :form :frereth.cp.message.specs/from-child,
-      ;; :failure :no-gen}
-      (when problems
-        (println "oops")
-        problems))
-    )
+  (verify-ctor-spec)
   )
 
 (deftest shake-hands
@@ -259,7 +229,7 @@
               srvr-log-state (log/init ::shake-hands.server)
               srvr->child (strm/stream)
               initial-server (factory/build-server srvr-logger
-                                                   srvr-log-state
+                                                   (atom srvr-log-state)
                                                    (partial handshake->child srvr->child))
               named-server (assoc-in initial-server
                                      [::factory/cp-server ::msg-specs/message-loop-name-base]

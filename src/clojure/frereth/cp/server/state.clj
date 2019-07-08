@@ -253,42 +253,64 @@
   [state client-short-key]
   (get-in state [::active-clients (vec client-short-key)]))
 
+(s/fdef hide-secrets!
+  :args (s/cat :this ::state)
+  :ret ::state)
 (defn hide-secrets!
   "Scrambles sensitive byte-arrays in place"
-  [{log-state ::weald/state
+  [{log-state-atom ::weald/state-atom
     :as this}]
-  (let [log-state (log/info log-state
-                            ::hide-secrets!
-                            "Top")
-        this (assoc this ::weald/state log-state)]
-    ;; This is almost the top of the server's for(;;)
-    ;; Missing step: reset timeout
-    ;; Missing step: copy :minute-key into :last-minute-key
-    ;; (that's handled by key rotation. Don't need to bother
-    ;; if we're "just" cleaning up on exit)
-    (let [minute-key-array (get-in this [::cookie-cutter ::minute-key])]
-      (assert minute-key-array)
-      (crypto/random-bytes! minute-key-array))
+  (log/atomically! log-state-atom
+                   log/info
+                   ::hide-secrets!
+                   "Top")
+  ;; This is almost the top of the server's for(;;)
+  ;; Missing step: reset timeout
+  ;; Missing step: copy :minute-key into :last-minute-key
+  ;; (that's handled by key rotation. Don't need to bother
+  ;; if we're "just" cleaning up on exit)
+  (let [minute-key-array (get-in this [::cookie-cutter ::minute-key])]
+    ;; Q: Is assert really appropriate here?
+    ;; A: Honestly, yes. If we get here without one, the system's hosed.
+    ;; It should probably be a check that also happens in production
+    ;; mode. Maybe the way it gets produced changes in a way that could
+    ;; fail there but still pass at dev time.
+    ;; TODO: Worry about that later.
+    (assert minute-key-array)
+    ;; Overwriting the bytes in place feels wrong, but it's also the
+    ;; entire point. We do not want references to be able to leak.
+    (crypto/random-bytes! minute-key-array))
 
     ;; Missing step: update cookie-cutter's next-minute
     ;; (that happens in handle-key-rotation)
-    (when-let [client (this ::current-client)]
-      (crypto/random-bytes! (get-in client [::client-security ::shared/short-pk])))
-    ;; The shared secrets are all private, so I really can't touch them
-    ;; Q: What *is* the best approach to clearing them then?
-    ;; For now, just explicitly set my versions to nil once we get past these side-effects
-    ;; (i.e. at the bottom)
-    #_(crypto/random-bytes (-> this ::current-client ::shared-secrets :what?))
-    (when-let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
-      (crypto/random-bytes! (.getPublicKey short-term-keys))
-      (crypto/random-bytes! (.getSecretKey short-term-keys)))
-    ;; Clear the shared secrets in the current client
-    ;; Maintaning these anywhere I don't need them seems like an odd choice.
-    ;; Actually, keeping them in 2 different places seems odd.
-    ;; Q: What's the point to current-client at all?
-    (assoc-in this [::current-client ::shared-secrets] {::client-short<->server-long nil
-                                                        ::client-short<->server-short nil
-                                                        ::client-long<->server-long nil})))
+
+  (when-let [client (::current-client this)]
+    (crypto/random-bytes! (get-in client [::client-security ::shared/short-pk])))
+  ;; The shared secrets are all private, so I really can't touch them
+  ;; Q: What *is* the best approach to clearing them then?
+  ;; For now, just explicitly set my versions to nil once we get past these side-effects
+  ;; (i.e. at the bottom)
+  #_(crypto/random-bytes (-> this ::current-client ::shared-secrets :what?))
+
+  (when-let [^com.iwebpp.crypto.TweetNaclFast$Box$KeyPair short-term-keys (get-in this [::shared/my-keys ::shared/short-pair])]
+    (crypto/random-bytes! (.getPublicKey short-term-keys))
+    (crypto/random-bytes! (.getSecretKey short-term-keys)))
+  ;; Clear the shared secrets in the current client
+  ;; Maintaning these anywhere I don't need them seems like an odd choice.
+  ;; Actually, keeping them in 2 different places seems odd.
+  ;; Q: What's the point to current-client at all?
+  ;; A: This is really a "convenience" that I cobbled into place.
+  ;; DJB did not have such an idea. When a client sends a message,
+  ;; he finds the current client by index and uses that index.
+  ;; TODO: Something similar.
+  ;; I *do* want to lock most functionality down to a single client to
+  ;; reduce the possibility of data about the others leaking over.
+  ;; But storing both together is a mistake.
+  ;; Especially since this approach makes the return value matter when
+  ;; this function should be all about the side-effects.
+  (assoc-in this [::current-client ::shared-secrets] {::client-short<->server-long nil
+                                                      ::client-short<->server-short nil
+                                                      ::client-long<->server-long nil}))
 
 (s/fdef handle-key-rotation
   :args (s/cat :state ::state)
