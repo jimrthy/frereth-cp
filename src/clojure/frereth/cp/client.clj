@@ -215,58 +215,62 @@
         :args (s/cat :state ::state/state)
         :ret any?)
 (defn stop!
-  [{log-state ::weald/state
+  [{log-state-atom ::weald/state-atom
     :keys [::weald/logger
            ::state/chan->server]
-    :or {log-state (log/init ::stop!-missing-logs)
+    :or {log-state (atom (log/init ::stop!-missing-logs))
          logger (log/std-out-log-factory)}
     :as this}]
-  (let [log-state (log/flush-logs! logger
-                                   (log/debug log-state
-                                              ::stop!
-                                              "Trying to stop a client"
-                                              {::wrapper-content-class (class this)
-                                               ::state/state (dissoc this ::weald/state)}))
-        log-state
-        (try
-          (let [;; This is what signals the Child ioloop to stop
-                log-state (state/do-stop (assoc this
-                                                ::weald/state log-state))
-                log-state
-                (try
-                  (let [log-state (log/flush-logs! logger
-                                                   (log/trace log-state
-                                                              ::stop!
-                                                              "Possibly closing the channel to server"
-                                                              {::state/chan->server chan->server}))]
-                    (if chan->server
-                      (do
-                        (strm/close! chan->server)
-                        (log/debug log-state
-                                   ::stop!
-                                   "chan->server closed"))
-                      (log/warn log-state
-                                ::stop!
-                                "chan->server already nil"
-                                (dissoc this ::weald/state))))
-                  (catch Exception ex
-                    (log/exception log-state
-                                   ex
-                                   ::stop!)))]
-            (log/flush-logs! logger
-                             (log/info log-state
-                                       ::stop!
-                                       "Done")))
-          (catch Exception ex
-            (log/exception log-state
-                           ex
+  (log/atomically! log-state-atom
+                   log/debug
+                   ::stop!
+                   "Trying to stop a client"
+                   {::wrapper-content-class (class this)
+                    ::state/state (dissoc this ::weald/state)})
+  (log/flush-atomically! logger log-state-atom)
+  (try
+    ;; This is what signals the Child ioloop to stop
+    (state/stop! this)
+    (try
+      (log/atomically! log-state-atom
+                       log/trace
+                       ::stop!
+                       "Possibly closing the channel to server"
+                       {::state/chan->server chan->server})
+      (log/flush-atomically! logger log-state-atom)
+      (if chan->server
+        (do
+          (strm/close! chan->server)
+          (log/atomically! log-state-atom
+                           log/debug
                            ::stop!
-                           "Actual stop function failed")))]
-    (println "Successfully reached the bottom of client/stop!")
-    (assoc this
-           ::chan->server nil
-           ;; Q: What should this logging context be?
-           ::weald/state (log/init ::ended-during-stop!))))
+                           "chan->server closed"))
+        (log/atomically! log-state-atom
+                         log/warn
+                         ::stop!
+                         "chan->server already nil"
+                         (dissoc this ::weald/state)))
+      (catch Exception ex
+        (log/atomically! log-state-atom
+                         log/exception
+                         ex
+                         ::stop!)))
+    (log/atomically! log-state-atom
+                     log/info
+                     ::stop!
+                     "Done")
+    (log/flush-atomically! logger
+                           log-state-atom)
+    (catch Exception ex
+      (log/exception log-state-atom
+                     ex
+                     ::stop!
+                     "Actual stop function failed")))
+  (println "Successfully reached the bottom of client/stop!")
+  (assoc this
+         ::chan->server nil
+         ;; Q: What should this logging context be?
+         ::weald/state-atom (atom (log/init ::ended-during-stop!))))
 
 (s/fdef ctor
         :args (s/cat :opts ::ctor-options

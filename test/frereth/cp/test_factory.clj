@@ -140,10 +140,17 @@
                                :child-spawner! ::msg-specs/child-spawner!))
   :ret ::client-state/state)
 (defn raw-client
-  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long ->child child-spawner!]
+  ([message-loop-name
+    logger-init
+    log-state-atom
+    srvr-ip
+    srvr-port
+    srvr-pk-long
+    ->child
+    child-spawner!]
    (raw-client message-loop-name
                logger-init
-               log-state
+               log-state-atom
                srvr-ip
                srvr-port
                srvr-pk-long
@@ -153,7 +160,15 @@
                 0x0d 0x0e 0x0f 0x10]
                ->child
                child-spawner!))
-  ([message-loop-name logger-init log-state srvr-ip srvr-port srvr-pk-long srvr-xtn-vec ->child child-spawner!]
+  ([message-loop-name
+    logger-init
+    log-state-atom
+    srvr-ip
+    srvr-port
+    srvr-pk-long
+    srvr-xtn-vec
+    ->child
+    child-spawner!]
    (let [key-dir "client-test"
          nonce-key-resource (io/resource (str key-dir
                                               "/.expertsonly/noncekey"))]
@@ -173,7 +188,7 @@
            srvr-name (shared/encode-server-name "hypothet.i.cal")
            long-pair (crypto/random-key-pair)
            result (clnt/ctor {::client-state/chan<-server (strm/stream)
-                              ::weald/state log-state
+                              ::weald/state-atom log-state-atom
                               ::msg-specs/->child ->child
                               ::msg-specs/child-spawner! child-spawner!
                               ::msg-specs/message-loop-name message-loop-name

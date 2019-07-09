@@ -120,7 +120,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                      ;; course of the client's lifetime
                                      ::shared/extension
                                      ::weald/logger
-                                     ::weald/state
+                                     ::weald/state-atom
                                      ;; Q: Does this really make any sense?
                                      ;; A: Not in any sane reality.
                                      ::outgoing-message
@@ -176,8 +176,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                              ::weald/state
                                              ::shared/extension]))
 
-;; FIXME: This really should be ::message-building-params.
-;; Except that those are different.
+;; Note that these are totally distinct from ::message-building-params.
 (s/def ::initiate-building-params (s/keys :req [::weald/logger
                                                 ::weald/state
                                                 ::msg-specs/message-loop-name
@@ -205,6 +204,7 @@ The fact that this is so big says a lot about needing to re-think my approach"
                ::shared/network-packet]
         :as this}]
     ;; log-state is required
+    ;; Q: Should it be a state-atom?
     (when
         (and state
              ;; We must have all or none of these
@@ -226,24 +226,22 @@ The fact that this is so big says a lot about needing to re-think my approach"
 ;;;; Internal Implementation
 
 (s/fdef load-keys
-        :args (s/cat :logger ::weald/state
+        :args (s/cat :log-state-atom ::weald/state-atom
                      :my-keys ::shared/my-keys)
-        :ret (s/keys :req [::weald/state
-                           ::shared/my-keys]))
+        :ret ::shared/my-keys)
 (defn load-keys
-  [log-state my-keys]
+  [log-state-atom my-keys]
   (let [key-dir (::shared/keydir my-keys)
-        {log-state ::weald/state
-         long-pair ::crypto/java-key-pair} (crypto/do-load-keypair log-state key-dir)
-        short-pair (crypto/random-key-pair)
-        log-state (log/info log-state
-                            ::load-keys
-                            "Loaded leng-term client key pair"
-                            {::shared/keydir key-dir})]
-    {::shared/my-keys (assoc my-keys
-                             ::shared/long-pair long-pair
-                             ::shared/short-pair short-pair)
-     ::weald/state log-state}))
+        long-pair (crypto/do-load-keypair log-state-atom key-dir)
+        short-pair (crypto/random-key-pair)]
+    (log/atomically! log-state-atom
+                     log/info
+                     ::load-keys
+                     "Loaded long-term client key pair"
+                     {::shared/keydir key-dir})
+    (assoc my-keys
+           ::shared/long-pair long-pair
+           ::shared/short-pair short-pair)))
 
 (s/fdef ->message-exchange-mode
         :args (s/cat :this ::state
@@ -688,12 +686,13 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ::server-extension
            ::server-ips
            ::specs/executor]
-    log-state ::weald/state
+    log-state-atom ::weald/state-atom  ; This is no longer immutable
     ;; TODO: Play with the numbers here to come up with something reasonable
     :or {executor (exec/utilization-executor cpu-utilization-target)}
     :as this}
    log-initializer]
-  {:pre [message-loop-name
+  {:pre [log-state-atom
+         message-loop-name
          server-extension
          server-ips]}
   (when-not chan<-server
@@ -705,7 +704,8 @@ The fact that this is so big says a lot about needing to re-think my approach"
         (assoc ::weald/logger logger
                ::chan->server (strm/stream)
                ::specs/executor executor)
-        (into (load-keys log-state (::shared/my-keys this))))))
+        (into (load-keys log-state-atom
+                         (::shared/my-keys this))))))
 
 (s/fdef initialize-mutable-state!
   :args (s/cat :this ::mutable-state
@@ -716,10 +716,10 @@ The fact that this is so big says a lot about needing to re-think my approach"
            ::server-security
            ::weald/logger
            ::msg-specs/message-loop-name]
+    log-state-atom ::weald/state-atom
     :as this}
    packet-builder]
-  (let [log-state (log/init message-loop-name)
-        server-long-term-pk (::specs/public-long server-security)]
+  (let [server-long-term-pk (::specs/public-long server-security)]
     (when-not server-long-term-pk
       (throw (ex-info (str "Missing ::specs/public-long among"
                            (keys server-security))
@@ -729,14 +729,15 @@ The fact that this is so big says a lot about needing to re-think my approach"
           long-shared  (crypto/box-prepare
                         server-long-term-pk
                         (.getSecretKey long-pair))
-          log-state (log/info log-state
-                               ::initialize-mutable-state!
-                               "Combined keys"
-                               {::srvr-long-pk (b-t/->string server-long-term-pk)
-                                ::my-long-pk (b-t/->string (.getPublicKey long-pair))
-                                ;; FIXME: Don't log this
-                                ::shared-key (b-t/->string long-shared)})
           terminated (dfrd/deferred)]
+      (log/atomically! log-state-atom
+                       log/info
+                       ::initialize-mutable-state!
+                       "Combined keys (FIXME: Don't log the shared key)"
+                       {::srvr-long-pk (b-t/->string server-long-term-pk)
+                        ::my-long-pk (b-t/->string (.getPublicKey long-pair))
+                        ;; FIXME: Don't log this
+                        ::shared-key (b-t/->string long-shared)})
       (into this
             {::child-packets []
              ::client-extension-load-time 0
@@ -756,7 +757,6 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                                              server-long-term-pk
                                                              (.getSecretKey short-pair))}
              ::server-security server-security
-             ::weald/state log-state
              ::terminated terminated}))))
 
 (s/fdef fork!
@@ -813,17 +813,18 @@ The fact that this is so big says a lot about needing to re-think my approach"
                                     child->))))
 
 (s/fdef stop!
-        :args (s/cat :this ::state)
-        :ret ::weald/state)
-(defn do-stop
+  :args (s/cat :this ::state)
+  :ret any?)
+(defn stop!
   [{child-state ::child/state
-    log-state ::weald/state
+    log-state-atom ::weald/state-atom
     :as this}]
   (if child-state
-    (child/do-halt! log-state child-state)
-    (log/warn log-state
-              ::do-stop
-              "No child message io-loop to stop")))
+    (child/do-halt! log-state-atom child-state)
+    (log/atomically! log-state-atom
+                     log/warn
+                     ::do-stop
+                     "No child message io-loop to stop")))
 
 (s/fdef update-client-short-term-nonce
         :args (s/cat :nonce integer?)

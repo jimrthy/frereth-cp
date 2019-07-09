@@ -257,7 +257,7 @@
                   internal-client-chan (strm/stream)
                   client (factory/raw-client (gensym "client-hand-shaker-")
                                              (constantly clnt-logger)
-                                             clnt-log-state
+                                             (atom clnt-log-state)
                                              server-ip
                                              server-port
                                              srvr-pk-long

@@ -221,15 +221,16 @@
      ::weald/state (log/flush-logs! logger log-state)}))
 
 (s/fdef do-halt!
-  :args (s/cat :log-state ::weald/state
+  :args (s/cat :log-state-atom ::weald/state-atom
                :child ::state)
-  :ret ::weald/state)
+  :ret any?)
 (defn do-halt!
-  [log-state child]
-  (let [log-state (log/warn log-state
-                            ::do-halt!
-                            "Halting child's message io-loop")
-        message-loop-name (::specs/message-loop-name child)]
+  [log-state-atom child]
+  (log/atomically! log-state-atom
+                   log/warn
+                   ::do-halt!
+                   "Halting child's message io-loop")
+  (let [message-loop-name (::specs/message-loop-name child)]
     ;; It's tempting to refactor the functionality from message
     ;; into here, since this ns is so skimpy.
     ;; But that gets into the guts of the ioloop.
@@ -254,9 +255,10 @@
     ;; TODO: Revisit this.
     (swap! io-loop-registry
            #(registry/de-register % message-loop-name))
-    (log/warn log-state
-              ::do-stop
-              "Child's message io-loop halted")))
+    (log/atomically! log-state-atom
+                     log/warn
+                     ::do-stop
+                     "Child's message io-loop halted")))
 
 (s/fdef update-callback!
         :args (s/cat :io-handle ::msg-specs/io-handle

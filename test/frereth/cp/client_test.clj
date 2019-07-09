@@ -91,7 +91,7 @@
           log-state (log/init ::step-1)
           client (factory/raw-client "step-1"
                                      log/std-out-log-factory
-                                     log-state
+                                     (atom log-state)
                                      [127 0 0 1]
                                      64921
                                      srvr-pk-long
@@ -201,7 +201,7 @@
            :as client-state} (factory/raw-client (gensym "client/build-hello-")
                                                  (fn []
                                                    (log/file-writer-factory "/tmp/client/build-hello.log.edn"))
-                                                 (log/init ::build-hello)
+                                                 (atom (log/init ::build-hello))
                                                  [127 0 0 1]
                                                  65001
                                                  (.getPublicKey server-long-pair)
